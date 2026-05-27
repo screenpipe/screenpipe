@@ -282,7 +282,7 @@ fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &s
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::parse_meeting_deeplink;
+    use super::{fallback_local_api_config, parse_meeting_deeplink};
 
     #[test]
     fn parses_meeting_deeplink_path_id() {
@@ -307,6 +307,35 @@ mod tests {
             None
         );
         assert_eq!(parse_meeting_deeplink("screenpipe://settings"), None);
+    }
+
+    // Regression for b7dc02415: `get_local_api_config` returned {key: null}
+    // during the cold-spawn window between webview load and `spawn_screenpipe`
+    // populating `RecordingState.server`. The privacy panel's `loadLiveApiKey`
+    // runs once on mount and latches, so the input stayed empty until the user
+    // closed and reopened Settings. Fix: fall back to the process-global cache
+    // (`resolved_api_auth_key`) seeded at app start whenever apiAuth is on.
+    //
+    // The integration with `RecordingState` needs a tauri::AppHandle to
+    // exercise end-to-end, so these tests cover the contract of the pure
+    // fallback shape — the part that actually broke. Seeding the static and
+    // reading it back is covered by store.rs tests / the manual repro:
+    // open Settings → Privacy with recording paused; key field must populate.
+
+    #[test]
+    fn fallback_emits_seeded_key_with_auth_enabled() {
+        let v = fallback_local_api_config(Some("sp-cold-spawn-test".to_string()));
+        assert_eq!(v["key"].as_str(), Some("sp-cold-spawn-test"));
+        assert_eq!(v["port"], 3030);
+        assert_eq!(v["auth_enabled"], true);
+    }
+
+    #[test]
+    fn fallback_emits_null_key_with_auth_disabled_when_unseeded() {
+        let v = fallback_local_api_config(None);
+        assert!(v["key"].is_null());
+        assert_eq!(v["port"], 3030);
+        assert_eq!(v["auth_enabled"], false);
     }
 }
 
@@ -435,6 +464,18 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
     is_enterprise_build(&app_handle)
 }
 
+/// Return the macOS bundle identifier of the running app
+/// (e.g. `screenpi.pe`, `screenpi.pe.beta`, `screenpi.pe.dev`,
+/// `screenpi.pe.enterprise`). The onboarding stuck-screen surfaces this so
+/// users who switched build channels (prod ↔ beta ↔ dev) can see they're
+/// looking at a *different* TCC record from the one they may have already
+/// granted under a sibling bundle id.
+#[tauri::command]
+#[specta::specta]
+pub fn get_app_identifier(app_handle: tauri::AppHandle) -> String {
+    app_handle.config().identifier.clone()
+}
+
 /// Get the local API auth key and port for the frontend to use.
 /// Returns the local API config (key, port, auth flag).
 ///
@@ -459,10 +500,25 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
             });
         }
     }
+    // *guard is None — server hasn't been constructed yet (early-mount race
+    // against spawn_screenpipe, or pause window). The webview's
+    // `loadLiveApiKey` runs once on mount and latches; without this fallback
+    // the privacy panel's API-key input stays empty until the user closes
+    // and reopens Settings, even though the resolver already minted a key
+    // that the spawning server will adopt verbatim.
+    fallback_local_api_config(crate::store::resolved_api_auth_key())
+}
+
+/// Pure JSON shape used by the cold-spawn fallback. Extracted so the contract
+/// is covered by a unit test without needing a tauri::AppHandle. Port is the
+/// well-known default because the server hasn't bound yet — the UI will refresh
+/// once the server registers itself in `RecordingState`.
+fn fallback_local_api_config(cached_key: Option<String>) -> serde_json::Value {
+    let auth_enabled = cached_key.is_some();
     serde_json::json!({
-        "key": null,
+        "key": cached_key,
         "port": 3030,
-        "auth_enabled": false,
+        "auth_enabled": auth_enabled,
     })
 }
 
@@ -650,11 +706,145 @@ pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
 
     let path = dir.join("enterprise.json");
-    let json = serde_json::json!({ "license_key": license_key });
+    let mut json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    json["license_key"] = serde_json::Value::String(license_key);
     std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
         .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
 
     info!("enterprise: license key saved to {}", path.display());
+    Ok(())
+}
+
+/// Read the enterprise admin API token (`team_api_token`) from
+/// `~/.screenpipe/enterprise.json`. Returns None when the file is
+/// missing, malformed, or the field is empty.
+///
+/// Used by the Settings → Enterprise → Admin API token card to render
+/// "configured" state without round-tripping the plaintext value through
+/// the React state. The token itself is treated as a secret: the
+/// frontend only learns "yes there's a value" via this getter, never
+/// gets the value back.
+#[tauri::command]
+#[specta::specta]
+pub fn get_enterprise_team_api_token() -> Option<String> {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    parsed
+        .get("team_api_token")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Read the user's screenpipe cloud session JWT from `~/.screenpipe/
+/// auth.json`. Returns None when the file is missing, malformed, or the
+/// token field is empty.
+///
+/// The settings store (`store.bin → user.token`) is the canonical
+/// runtime cache for this token but is only populated after a fresh
+/// in-app sign-in. `auth.json` is the durable on-disk copy written by
+/// the pi-agent configuration flow — it survives store resets and dev-
+/// mode launches where the in-memory user object hasn't been hydrated
+/// yet. Used by the enterprise-policy hook to send the Bearer header
+/// even when the in-app user object is still null.
+#[tauri::command]
+#[specta::specta]
+pub fn get_cloud_token() -> Option<String> {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("auth.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    parsed
+        .get("token")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Push a fresh cloud-auth token into the running sidecar.
+///
+/// The frontend invokes this on every sign-in (after `loadUser` writes
+/// `settings.user`) and on sign-out (passing `None`). Without it, the
+/// `Server.cloud_token` and `PiExecutor.user_token` captured at engine
+/// boot would be permanent for the lifetime of the sidecar process —
+/// users who signed in AFTER the engine started would stay on the
+/// gateway's anonymous tier (allowed_models = haiku/gemini only) on
+/// every pipe run, surfacing as `403 "model_not_allowed"` for any
+/// Sonnet/Opus preset even with an active Pro subscription. Logout +
+/// log-in from the webview alone does NOT restart the sidecar, which
+/// is why the previous user-facing workaround was "fully quit the
+/// app from the tray."
+///
+/// Both the local `/v1/chat/completions` proxy and the pi-agent's
+/// `models.json` apiKey share the same `Arc<ArcSwap<Option<String>>>`,
+/// so one write here updates both readers on the next pipe run.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_cloud_token(
+    token: Option<String>,
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    let normalized = token.filter(|t| !t.is_empty());
+    state.cloud_token.store(std::sync::Arc::new(normalized));
+    Ok(())
+}
+
+/// Persist the user's enterprise admin status + team API token so the
+/// pi-agent's `screenpipe-team` skill knows whether to install itself.
+///
+/// Called by the frontend right after a policy fetch confirms admin
+/// role. Storing this alongside the license key in `enterprise.json`
+/// keeps everything pi-agent needs in one file the skill can read
+/// without a Tauri round-trip.
+///
+/// All fields are optional so callers can update one at a time —
+/// e.g. revoke admin without wiping the cached team token, or refresh
+/// just the token after a rotation. To FORCE a field to null, pass
+/// an empty string for strings or `false` for `is_admin`/`license_active`.
+#[tauri::command]
+#[specta::specta]
+pub fn save_enterprise_team_config(
+    is_admin: Option<bool>,
+    license_active: Option<bool>,
+    team_api_token: Option<String>,
+) -> Result<(), String> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
+
+    let path = dir.join("enterprise.json");
+    let mut json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if let Some(v) = is_admin {
+        json["is_admin"] = serde_json::Value::Bool(v);
+    }
+    if let Some(v) = license_active {
+        json["license_active"] = serde_json::Value::Bool(v);
+    }
+    let token_set = team_api_token.is_some();
+    if let Some(t) = team_api_token {
+        json["team_api_token"] = if t.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(t)
+        };
+    }
+
+    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
+        .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
+
+    info!(
+        "enterprise: team config saved to {} (is_admin set: {}, license_active set: {}, token set: {})",
+        path.display(),
+        is_admin.is_some(),
+        license_active.is_some(),
+        token_set
+    );
     Ok(())
 }
 
@@ -732,6 +922,11 @@ pub fn set_tray_health_icon(app_handle: tauri::AppHandle) {
 #[specta::specta]
 pub fn show_main_window(app_handle: tauri::AppHandle) {
     info!("show_main_window called");
+    if crate::enterprise_policy::is_app_ui_hidden() {
+        info!("enterprise: suppressing main window in hidden UI mode");
+        return;
+    }
+
     set_main_close_in_progress(false);
     let window_to_show = ShowRewindWindow::Main;
 
@@ -1246,7 +1441,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         use tauri_plugin_opener::OpenerExt;
         app_handle
             .opener()
-            .open_url("https://screenpi.pe/login", None::<&str>)
+            .open_url("https://screenpipe.com/login", None::<&str>)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -1267,7 +1462,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
-        const LOGIN_URL: &str = "https://screenpi.pe/login";
+        const LOGIN_URL: &str = "https://screenpipe.com/login";
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
@@ -3088,4 +3283,22 @@ fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+    let manager = app_handle.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    info!(
+        "autostart {}: is_enabled={}",
+        if enabled { "enabled" } else { "disabled" },
+        manager.is_enabled().unwrap_or(false)
+    );
+    Ok(())
 }

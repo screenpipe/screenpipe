@@ -1,0 +1,19 @@
+{
+  "name": "screenpipe-tauri-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vite": "vite",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@screenpipe/sdk": "file:../..",
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "vite": "^5.0.0"
+  }
+}

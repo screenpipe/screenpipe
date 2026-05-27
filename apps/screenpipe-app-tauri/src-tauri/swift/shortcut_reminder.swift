@@ -753,18 +753,64 @@ private class ReminderTrackingView: NSView {
 
 // MARK: - Draggable hosting view
 // NSHostingView swallows mouseDown so isMovableByWindowBackground can't work.
-// This subclass implements window drag for any mouseDown that SwiftUI doesn't
-// handle (i.e. not on buttons). performWindowDrag is the native Cocoa API for
-// this — no manual delta tracking needed.
+// Forwarding mouseDown/mouseUp to super synchronously (the obvious approach)
+// does not fire SwiftUI buttons — their gesture recognizers need events to
+// arrive through the real run loop. Instead we let mouseDown flow normally
+// and install an NSEvent local monitor for the press's lifetime: if the
+// mouse moves past a small threshold before mouseUp, we hand the event to
+// performDrag and swallow it (so the icon's Button never sees mouseUp);
+// otherwise events propagate untouched and clicks fire as usual.
 
 @available(macOS 13.0, *)
 private class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    private var dragMonitor: Any?
+    private var dragStartLocation: NSPoint = .zero
+
+    deinit {
+        if let m = dragMonitor {
+            NSEvent.removeMonitor(m)
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
-        // Let SwiftUI handle first (buttons etc.)
         super.mouseDown(with: event)
-        // Then start a window drag — if a button already handled the click
-        // this is a no-op because the run loop already processed the event.
-        window?.performDrag(with: event)
+
+        guard let window = window else { return }
+
+        // Replace any stale monitor from a prior press that didn't see mouseUp.
+        if let m = dragMonitor {
+            NSEvent.removeMonitor(m)
+            dragMonitor = nil
+        }
+
+        dragStartLocation = event.locationInWindow
+        let dragThreshold: CGFloat = 4.0
+
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self = self else { return event }
+            switch event.type {
+            case .leftMouseUp:
+                if let m = self.dragMonitor {
+                    NSEvent.removeMonitor(m)
+                    self.dragMonitor = nil
+                }
+                return event
+            case .leftMouseDragged:
+                let dx = event.locationInWindow.x - self.dragStartLocation.x
+                let dy = event.locationInWindow.y - self.dragStartLocation.y
+                if hypot(dx, dy) > dragThreshold {
+                    if let m = self.dragMonitor {
+                        NSEvent.removeMonitor(m)
+                        self.dragMonitor = nil
+                    }
+                    window.performDrag(with: event)
+                    return nil
+                }
+                return event
+            default:
+                return event
+            }
+        }
     }
 }
 

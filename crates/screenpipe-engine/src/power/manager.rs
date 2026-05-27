@@ -10,10 +10,35 @@
 
 use super::monitor::{poll_power_state, PowerState, POLL_INTERVAL};
 use super::profile::{PowerMode, PowerProfile, ProfileName};
+use crate::power::monitor::ThermalState;
+use screenpipe_events::{send_event, PowerProfileChangedEvent, POWER_PROFILE_CHANGED_EVENT};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{watch, RwLock};
 use tracing::{debug, info};
+
+/// Dominant cause of the current power state, used to label transitions in
+/// logs and user-facing notifications. The notification dispatcher uses this
+/// to avoid the old bug where unplugging at 100% battery showed
+/// "battery critical at 100%" — the real trigger was OS Low Power Mode.
+fn dominant_reason(state: &PowerState) -> &'static str {
+    match state.thermal_state {
+        ThermalState::Critical => return "thermal_critical",
+        ThermalState::Serious => return "thermal_serious",
+        _ => {}
+    }
+    if state.os_low_power {
+        return "os_low_power";
+    }
+    match state.battery_pct {
+        Some(pct) if pct <= 10 => "battery_critical",
+        Some(pct) if pct <= 20 => "battery_low",
+        Some(pct) if pct <= 40 => "battery_medium",
+        Some(_) if !state.on_ac => "battery",
+        _ if state.on_ac => "ac_power",
+        _ => "unknown",
+    }
+}
 
 /// Handle returned by `PowerManager::start()`.
 ///
@@ -115,11 +140,28 @@ pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManage
         let pref = *handle_ref.user_pref.read().await;
         let profile = PowerProfile::for_state(&power_state, pref);
         info!(
-            "initial power profile: {:?} (on_ac={}, battery={:?})",
-            profile.name, power_state.on_ac, power_state.battery_pct
+            "initial power profile: {:?} (on_ac={}, battery={:?}, os_low_power={}, thermal={:?}, reason={})",
+            profile.name,
+            power_state.on_ac,
+            power_state.battery_pct,
+            power_state.os_low_power,
+            power_state.thermal_state,
+            dominant_reason(&power_state)
         );
         // Apply audio VAD threshold from initial profile
+        // audio_disabled uses ratio=1.0 to block all VAD segments.
         screenpipe_audio::vad::set_min_speech_ratio(profile.vad_min_speech_ratio);
+        if profile.capture_paused {
+            info!(
+                "initial power state: capture paused (battery critical, battery={:?})",
+                power_state.battery_pct
+            );
+        } else if profile.audio_disabled {
+            info!(
+                "initial power state: audio disabled (battery <=20%, battery={:?})",
+                power_state.battery_pct
+            );
+        }
         let _ = handle_ref.profile_tx.send(profile);
 
         loop {
@@ -137,13 +179,31 @@ pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManage
             // Only log + broadcast on profile change
             let current_name = handle_ref.profile_rx.borrow().name;
             if new_profile.name != current_name {
+                let reason = dominant_reason(&power_state);
                 info!(
-                    "power profile changed: {:?} -> {:?} (on_ac={}, battery={:?}, thermal={:?})",
+                    "power profile changed: {:?} -> {:?} (on_ac={}, battery={:?}, os_low_power={}, thermal={:?}, reason={})",
                     current_name,
                     new_profile.name,
                     power_state.on_ac,
                     power_state.battery_pct,
-                    power_state.thermal_state
+                    power_state.os_low_power,
+                    power_state.thermal_state,
+                    reason
+                );
+
+                // Publish on the events bus so subscribers (notification
+                // dispatcher, WebSocket /ws/events consumers) can react to
+                // tier transitions. `is_downgrade` lets subscribers filter
+                // to only the throttling direction.
+                let _ = send_event(
+                    POWER_PROFILE_CHANGED_EVENT,
+                    PowerProfileChangedEvent {
+                        from: Some(format!("{:?}", current_name)),
+                        to: format!("{:?}", new_profile.name),
+                        battery_pct: power_state.battery_pct,
+                        is_downgrade: new_profile.name.is_downgrade_from(current_name),
+                        reason: Some(reason.to_string()),
+                    },
                 );
             } else {
                 debug!(
@@ -152,8 +212,32 @@ pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManage
                 );
             }
 
-            // Apply audio VAD threshold from profile
+            // Apply audio VAD threshold from profile.
+            // audio_disabled sets ratio=1.0 so no segment passes VAD — effectively
+            // pauses Whisper without needing a separate code path.
             screenpipe_audio::vad::set_min_speech_ratio(new_profile.vad_min_speech_ratio);
+
+            if new_profile.capture_paused && current_name != ProfileName::FullPause {
+                info!(
+                    "battery critical (<=10%) — pausing all capture \
+                    (server stays up for search/timeline); battery={:?}",
+                    power_state.battery_pct
+                );
+            } else if new_profile.audio_disabled
+                && !matches!(
+                    current_name,
+                    ProfileName::AudioPaused | ProfileName::FullPause
+                )
+            {
+                info!(
+                    "battery low (<=20%) — pausing audio transcription, \
+                    vision capture continues; battery={:?}",
+                    power_state.battery_pct
+                );
+            } else if !new_profile.capture_paused && matches!(current_name, ProfileName::FullPause)
+            {
+                info!("power restored — resuming capture");
+            }
 
             let _ = handle_ref.profile_tx.send(new_profile);
         }

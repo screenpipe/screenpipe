@@ -9,6 +9,11 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
 import ReactMarkdown from "react-markdown";
+import {
+  notificationUrlTransform,
+  openScreenpipeViewerLink,
+  screenpipeViewerPathFromHref,
+} from "@/components/markdown";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import localforage from "localforage";
 import { localFetch } from "@/lib/api";
@@ -48,27 +53,11 @@ function windowForDeeplink(url: string) {
     : "Main";
 }
 
-/** Extract `path` from a `screenpipe://view?path=…` deeplink, or null. */
-function viewerPathFromHref(href: string): string | null {
-  if (!href.startsWith("screenpipe://view")) return null;
-  try {
-    const u = new URL(href);
-    return u.searchParams.get("path");
-  } catch {
-    return null;
-  }
-}
-
 async function openNotificationLink(href: string) {
   const raw = href.trim();
   if (!raw) return;
 
-  // Viewer deeplink — opens the file in the in-app viewer window.
-  const viewerPath = viewerPathFromHref(raw);
-  if (viewerPath) {
-    await invoke("open_viewer_window", { path: viewerPath });
-    return;
-  }
+  if (await openScreenpipeViewerLink(raw)) return;
 
   let localPath: string | null = null;
   if (raw.startsWith("~/")) {
@@ -569,12 +558,13 @@ export default function NotificationPanelPage() {
             }}
           >
             <ReactMarkdown
+              urlTransform={notificationUrlTransform}
               components={{
                 a: ({ href, children }) => {
                   // Viewer deeplinks get a sibling ↗ button so the user can
                   // override and open in the OS default app (e.g. Obsidian
                   // for .md, Preview for .json).
-                  const viewerPath = href ? viewerPathFromHref(href) : null;
+                  const viewerPath = href ? screenpipeViewerPathFromHref(href) : null;
                   return (
                     <>
                       <a
@@ -709,24 +699,6 @@ export default function NotificationPanelPage() {
                 </button>
               ))
             )}
-            <span
-              onClick={() => hide(false)}
-              style={{
-                marginLeft: "auto",
-                fontSize: "10px",
-                color: "rgba(0, 0, 0, 0.3)",
-                cursor: "pointer",
-                fontFamily: '"IBM Plex Mono", monospace',
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")
-              }
-            >
-              dismiss →
-            </span>
           </div>
         )}
 

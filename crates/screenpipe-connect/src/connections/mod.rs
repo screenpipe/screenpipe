@@ -15,7 +15,9 @@ pub mod brex;
 pub mod browser;
 pub mod calcom;
 pub mod calendly;
+pub mod claude_code;
 pub mod clickup;
+pub mod codex;
 pub mod confluence;
 pub mod discord;
 pub mod email;
@@ -64,6 +66,7 @@ pub mod toggl;
 pub mod trello;
 pub mod vercel;
 pub mod whatsapp;
+pub mod workflowy;
 pub mod zapier;
 pub mod zendesk;
 pub mod zoom;
@@ -145,6 +148,30 @@ pub enum ProxyAuth {
     None,
 }
 
+/// How the background OAuth refresher should treat this integration.
+///
+/// Most providers issue long-lived refresh tokens (Google: ~6mo, Microsoft:
+/// 90d) — for those, leaning on natural access-token expiry is enough and
+/// [`RefreshPolicy::default`] returns `keep_alive: None`.
+///
+/// Providers that expire the *refresh* token on a sliding inactivity window
+/// need a `keep_alive` floor: the refresher will proactively call refresh
+/// whenever the last successful refresh is older than this duration, even
+/// if the access token is still valid. The value should leave headroom
+/// against the provider's published limit (e.g. Zoom's 15h ⇒ 12h floor).
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshPolicy {
+    /// Maximum gap between successful refreshes. `None` = no keep-alive
+    /// pressure beyond the access-token-expiry path.
+    pub keep_alive: Option<std::time::Duration>,
+}
+
+impl Default for RefreshPolicy {
+    fn default() -> Self {
+        Self { keep_alive: None }
+    }
+}
+
 #[async_trait]
 pub trait Integration: Send + Sync {
     /// Static metadata for this integration.
@@ -164,11 +191,29 @@ pub trait Integration: Send + Sync {
         None
     }
 
+    /// Background refresh policy. Defaults to "rely on access-token expiry".
+    /// Override when the provider expires the refresh token on inactivity.
+    fn refresh_policy(&self) -> RefreshPolicy {
+        RefreshPolicy::default()
+    }
+
     /// Return proxy config for credential-free API forwarding.
     /// When set, pipes can call `localhost:3030/connections/:id/proxy/*path`
     /// and the server injects auth automatically — no secrets in the LLM context.
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         None
+    }
+
+    /// Path-prefix routing overrides for the credential proxy.
+    ///
+    /// Each entry is `(path_prefix, replacement_base_url)`. When the incoming
+    /// proxy path starts with `path_prefix`, the proxy strips that prefix and
+    /// forwards to `replacement_base_url/<rest>` instead of the `ProxyConfig`
+    /// base_url. Useful when a single OAuth credential covers APIs on multiple
+    /// subdomains (e.g. Google Docs at docs.googleapis.com vs Drive at
+    /// www.googleapis.com). Default: no overrides (everything goes to base_url).
+    fn path_routes(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
     }
 
     /// Extra PEM-encoded root certificate to trust when calling this
@@ -270,6 +315,9 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(resend::Resend),
         Box::new(supabase::Supabase),
         Box::new(zoom::Zoom),
+        Box::new(claude_code::ClaudeCode),
+        Box::new(codex::Codex),
+        Box::new(workflowy::Workflowy),
     ]
 }
 
@@ -463,6 +511,15 @@ impl ConnectionManager {
             .iter()
             .find(|i| i.def().id == id)
             .and_then(|i| i.proxy_config())
+    }
+
+    /// Look up path-prefix routing overrides for a connection by ID.
+    pub fn find_path_routes(&self, id: &str) -> &'static [(&'static str, &'static str)] {
+        self.integrations
+            .iter()
+            .find(|i| i.def().id == id)
+            .map(|i| i.path_routes())
+            .unwrap_or(&[])
     }
 
     /// Look up the integration definition by ID.

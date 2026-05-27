@@ -1863,9 +1863,9 @@ export function RecordingSettings() {
           }),
         });
         const data = await response.json();
-        openUrl(data.url || "https://screenpi.pe/billing");
+        openUrl(data.url || "https://screenpipe.com/billing");
       } catch {
-        openUrl("https://screenpi.pe/billing");
+        openUrl("https://screenpipe.com/billing");
       }
       // Revert back to previous value in the Select component
       return;
@@ -2255,7 +2255,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                         size="sm"
                         className="h-7 px-2 text-xs"
                         data-testid="audio-engine-fallback-upgrade"
-                        onClick={() => openUrl("https://screenpi.pe/billing")}
+                        onClick={() => openUrl("https://screenpipe.com/billing")}
                       >
                         Upgrade
                       </Button>
@@ -2586,7 +2586,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       <SelectItem value="selected-engine">Current transcription engine</SelectItem>
                       <SelectItem value="screenpipe-cloud">screenpipe cloud live</SelectItem>
                       <SelectItem value="deepgram-live">Direct Deepgram live</SelectItem>
-                      <SelectItem value="openai-realtime">Direct OpenAI realtime</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2605,6 +2604,22 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 )}
               </div>
             )}
+            <div className="mt-2.5 pt-2.5 border-t border-border/50 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Append typed text to note
+                  <HelpTooltip text="When the meeting stops, screenpipe appends what you typed (and the files you edited) during the meeting to the meeting note. Turn off to keep notes clean." />
+                </h3>
+                <p className="text-xs text-muted-foreground">Auto-add your typed text + edited files at the end of the note</p>
+              </div>
+              <Switch
+                id="appendTypedTextToMeetingNote"
+                checked={settings.appendTypedTextToMeetingNote ?? true}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ appendTypedTextToMeetingNote: checked }, true)
+                }
+              />
+            </div>
           </CardContent>
         </Card>
         )}
@@ -2907,7 +2922,35 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* CoreAudio System Audio (macOS 14.4+ only; default on) */}
+        {/* macOS microphone AEC (VoiceProcessingIO on default input) */}
+        {!settings.disableAudio && isMacOS && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">
+                    Microphone echo cancellation
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Use Apple VoiceProcessingIO on the default microphone
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="macosInputVpioEnabled"
+                checked={Boolean(settings.macosInputVpioEnabled ?? false)}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ macosInputVpioEnabled: checked }, true)
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* CoreAudio System Audio (macOS 14.4+ only) */}
         {!settings.disableAudio && coreaudioTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

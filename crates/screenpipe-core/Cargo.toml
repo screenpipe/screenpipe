@@ -16,6 +16,7 @@ which = "6.0.1"
 ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", branch = "main" }
 log = "0.4.17"
 anyhow = "1.0.86"
+arc-swap = "1"
 
 tokio = { workspace = true }
 
@@ -46,7 +47,13 @@ reqwest = { workspace = true }
 hex = { version = "0.4", optional = true }
 async-trait = "0.1"
 screenpipe-secrets = { path = "../screenpipe-secrets", optional = true }
+screenpipe-vault = { path = "../screenpipe-vault", optional = true }
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"], optional = true }
+# Shared sync primitives. `upload_to_s3` delegates to
+# `screenpipe_sync::HttpPutDirect` so the retry / bytes-pool / cancellation
+# code path is the same one ee/ uses. Gated to the cloud-sync feature so
+# consumer builds without sync don't pay the dep cost.
+screenpipe-sync = { path = "../screenpipe-sync", optional = true }
 
 once_cell = "1.19.0"
 
@@ -63,7 +70,7 @@ default = ["security"]
 # without changing behavior (it's never enabled at compile time).
 cargo-clippy = []
 security = ["dep:regex", "dep:lazy_static"]
-secrets = ["dep:screenpipe-secrets", "dep:sqlx"]
+secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault", "dep:sqlx"]
 cloud-sync = [
     "dep:argon2",
     "dep:chacha20poly1305",
@@ -72,6 +79,7 @@ cloud-sync = [
     "dep:base64",
     "dep:zeroize",
     "dep:thiserror",
+    "dep:screenpipe-sync",
     "dep:hex",
 ]
 
@@ -93,3 +101,7 @@ core-graphics = { version = "0.24.0", features = ["highsierra"] }
 uiautomation = { version = "0.16.1" }
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
 
+[dev-dependencies]
+# Used by sync::client wire-compat test (asserts the PUT request shape
+# stays byte-identical after the upload_to_s3 → HttpPutDirect migration).
+wiremock = "0.6"

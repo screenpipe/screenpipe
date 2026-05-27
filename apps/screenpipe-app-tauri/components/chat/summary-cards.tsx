@@ -5,15 +5,19 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw, Sparkles } from "lucide-react";
+import posthog from "posthog-js";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { FALLBACK_TEMPLATES, type CustomTemplate } from "@/lib/summary-templates";
 import { type Suggestion } from "@/lib/hooks/use-auto-suggestions";
+import { IntegrationIcon } from "@/components/settings/connections-section";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 
 interface SummaryCardsProps {
   onSendMessage: (message: string, displayLabel?: string) => void;
+  onOpenConnection?: (connectionId: string) => void;
+  connectionSetupSuggestions?: ConnectionSetupSuggestion[];
   autoSuggestions: Suggestion[];
   suggestionsRefreshing?: boolean;
   onRefreshSuggestions?: () => void;
@@ -23,6 +27,13 @@ interface SummaryCardsProps {
   userName?: string;
   templatePipes?: TemplatePipe[];
   pipesLoading?: boolean;
+}
+
+export interface ConnectionSetupSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
 }
 
 // ─── Suggestion refresh animation ─────────────────────────────────────────────
@@ -44,7 +55,7 @@ function SuggestionSkeleton() {
   }, []);
 
   return (
-    <div className="divide-y divide-border/30 border-y border-border/20">
+    <div className="overflow-hidden rounded-md border border-border/35 bg-muted/[0.08] shadow-sm divide-y divide-border/25">
       {[0, 1].map((rowIdx) => {
         const rowOffset = rowIdx * 4;
 
@@ -95,66 +106,17 @@ function SuggestionSkeleton() {
   );
 }
 
-const CONNECTION_ICON_PATHS: Record<string, string> = {
-  "apple-calendar": "/images/apple.svg",
-  asana: "/images/asana.svg",
-  github: "/images/github.png",
-  "github-issues": "/images/github.png",
-  github_issues: "/images/github.png",
-  "google-calendar": "/images/google-calendar.svg",
-  "google calendar": "/images/google-calendar.svg",
-  "google-docs": "/images/google-docs.svg",
-  "google docs": "/images/google-docs.svg",
-  "google-sheets": "/images/google-sheets.svg",
-  "google sheets": "/images/google-sheets.svg",
-  hubspot: "/images/hubspot.png",
-  jira: "/images/jira.png",
-  linear: "/images/linear.svg",
-  notion: "/images/notion.svg",
-  posthog: "/images/posthog.svg",
-  zapier: "/images/zapier.png",
-};
-
 function normalizeConnectionIconKey(name: string) {
   return name.trim().toLowerCase().replace(/\.app$|\.exe$/i, "");
 }
 
 function ConnectionSuggestionIcon({ name }: { name: string }) {
   const key = normalizeConnectionIconKey(name);
-  const path = CONNECTION_ICON_PATHS[key];
-
-  if (key === "gmail") {
-    return (
-      <svg viewBox="0 0 999.517 749.831" className="w-3.5 h-3.5 flex-shrink-0" aria-hidden>
-        <path fill="#4285F4" d="M68.149 749.831h159.014V363.654L0 193.282v488.4C0 719.391 30.553 749.831 68.149 749.831"/>
-        <path fill="#34A853" d="M772.354 749.831h159.014c37.709 0 68.149-30.553 68.149-68.149v-488.4L772.354 363.654"/>
-        <path fill="#FBBC04" d="M772.354 68.342v295.312l227.163-170.372V102.417c0-84.277-96.203-132.322-163.557-81.779"/>
-        <path fill="#EA4335" d="M227.163 363.654V68.342l272.595 204.447 272.595-204.447v295.312L499.758 568.1"/>
-        <path fill="#C5221F" d="M0 102.417v90.865l227.163 170.372V68.342L163.557 20.638C96.09-29.906 0 18.139 0 102.417"/>
-      </svg>
-    );
-  }
-
-  if (key === "microsoft365" || key === "microsoft-365" || key === "outlook") {
-    return (
-      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 flex-shrink-0" aria-hidden>
-        <path fill="#F25022" d="M1 1h10v10H1z"/>
-        <path fill="#7FBA00" d="M13 1h10v10H13z"/>
-        <path fill="#00A4EF" d="M1 13h10v10H1z"/>
-        <path fill="#FFB900" d="M13 13h10v10H13z"/>
-      </svg>
-    );
-  }
-
-  if (path) {
-    return <img src={path} alt="" className="w-3.5 h-3.5 flex-shrink-0 object-contain" />;
-  }
-
   return (
-    <Plug
-      className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground/70 group-hover:text-background/70"
-      strokeWidth={1.5}
-      aria-hidden
+    <IntegrationIcon
+      icon={key}
+      className="flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center [&_img]:!h-3.5 [&_img]:!w-3.5 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+      fallbackClassName="h-3.5 w-3.5 text-muted-foreground/70 group-hover:text-foreground/70"
     />
   );
 }
@@ -163,6 +125,8 @@ function ConnectionSuggestionIcon({ name }: { name: string }) {
 
 export function SummaryCards({
   onSendMessage,
+  onOpenConnection,
+  connectionSetupSuggestions = [],
   autoSuggestions,
   suggestionsRefreshing = false,
   onRefreshSuggestions,
@@ -181,12 +145,27 @@ export function SummaryCards({
   const discover = templates.filter((t) => !t.featured);
 
   const handleCardClick = (pipe: TemplatePipe) => {
+    posthog.capture("home_card_clicked", {
+      kind: pipe.featured ? "template_featured" : "template_discover",
+      template_name: pipe.name,
+      template_title: pipe.title,
+    });
     onSendMessage(pipe.prompt, `${pipe.icon} ${pipe.title}`);
   };
 
   const handleCustomTemplateClick = (template: CustomTemplate) => {
+    posthog.capture("home_card_clicked", {
+      kind: "custom_template",
+      template_id: template.id,
+      template_title: template.title,
+    });
     onSendMessage(template.prompt, `\u{1F4CC} ${template.title}`);
   };
+
+  const visibleConnectionSetupSuggestions = [
+    ...connectionSetupSuggestions,
+    { id: "connections", title: "Connect Apps", description: "Browse all connections", icon: "connections" },
+  ];
 
   return (
     <div className="relative flex flex-col items-center py-4 px-4">
@@ -223,7 +202,10 @@ export function SummaryCards({
         ))}
         {/* Custom Summary card */}
         <button
-          onClick={() => setShowBuilder(true)}
+          onClick={() => {
+            posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
+            setShowBuilder(true);
+          }}
           className="group text-left p-2 border border-dashed border-border/40 bg-muted/5 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
         >
           <div className="text-sm mb-0.5">{"\u2728"}</div>
@@ -237,7 +219,13 @@ export function SummaryCards({
         {/* Discover / Show More card */}
         {discover.length > 0 && (
           <button
-            onClick={() => setShowAll(!showAll)}
+            onClick={() => {
+              posthog.capture("home_card_clicked", {
+                kind: showAll ? "discover_collapse" : "discover_expand",
+                discover_count: discover.length,
+              });
+              setShowAll(!showAll);
+            }}
             className="group text-left p-2 border border-border/40 bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
           >
             <div className="text-sm mb-0.5">{"\u{1F50D}"}</div>
@@ -253,6 +241,37 @@ export function SummaryCards({
             </div>
           </button>
         )}
+        {onOpenConnection && visibleConnectionSetupSuggestions.map((connection) => {
+          const openConnection = () => {
+            posthog.capture("home_card_clicked", {
+              kind: connection.id === "connections" ? "connection_browse_all" : "connection_setup",
+              connection_id: connection.id,
+            });
+            onOpenConnection(connection.id);
+          };
+          return (
+          <div
+            key={connection.id}
+            role="button"
+            tabIndex={0}
+            onClick={openConnection}
+            onKeyDown={(e) => e.key === "Enter" && openConnection()}
+            className="group relative text-left p-2 border border-border/40 bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
+          >
+            <div className="mb-0.5 flex h-4 w-4 items-center justify-center">
+              {connection.icon === "connections"
+                ? <Plug className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
+                : <ConnectionSuggestionIcon name={connection.icon} />}
+            </div>
+            <div className="text-[11px] font-medium group-hover:text-background mb-0.5 leading-tight pr-4">
+              {connection.title}
+            </div>
+            <div className="text-[10px] text-muted-foreground group-hover:text-background/60 leading-tight line-clamp-1">
+              {connection.description}
+            </div>
+          </div>
+          );
+        })}
       </div>
 
       {/* Expanded: more templates */}
@@ -321,20 +340,7 @@ export function SummaryCards({
       )}
 
       {/* ─── Dynamic AI suggestions ─────────────────────────────────────────── */}
-      <div className="w-full max-w-md">
-        <div className="mb-1 flex justify-end px-1">
-          {onRefreshSuggestions && (
-            <button
-              onClick={onRefreshSuggestions}
-              disabled={suggestionsRefreshing}
-              className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
-              title="refresh suggestions"
-            >
-              <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-            </button>
-          )}
-        </div>
-
+      <div className="w-full max-w-lg">
         {/* Persistent suggestions */}
         <AnimatePresence mode="wait">
         {suggestionsRefreshing ? (
@@ -354,7 +360,7 @@ export function SummaryCards({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="divide-y divide-border/30 border-y border-border/20"
+            className="overflow-hidden rounded-md border border-border/35 bg-muted/[0.08] shadow-sm divide-y divide-border/25"
           >
               {autoSuggestions.slice(0, 2).map((s, i) => {
                 return (
@@ -364,12 +370,23 @@ export function SummaryCards({
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.15, delay: i * 0.05 }}
                     type="button"
-                    onClick={() => onSendMessage(s.text)}
+                    onClick={() => {
+                      posthog.capture("home_card_clicked", {
+                        kind: "auto_suggestion",
+                        position: i,
+                        connection_icon: s.connectionIcon ?? null,
+                      });
+                      onSendMessage(s.text);
+                    }}
                     className="group flex min-h-[34px] w-full items-center gap-1.5 px-1.5 py-1.5 text-left font-mono text-muted-foreground transition-colors duration-150 hover:bg-muted/25 hover:text-foreground"
                     title={s.text}
                   >
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      {s.connectionIcon && <ConnectionSuggestionIcon name={s.connectionIcon} />}
+                      {s.connectionIcon ? (
+                        <ConnectionSuggestionIcon name={s.connectionIcon} />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5 text-muted-foreground/70 group-hover:text-foreground/70" strokeWidth={1.5} aria-hidden />
+                      )}
                     </span>
                     <span className="min-w-0 flex-1 text-xs leading-tight line-clamp-2">
                       {s.text}
@@ -380,6 +397,18 @@ export function SummaryCards({
           </motion.div>
         )}
         </AnimatePresence>
+        {onRefreshSuggestions && (
+          <div className="mt-1.5 flex justify-center">
+            <button
+              onClick={onRefreshSuggestions}
+              disabled={suggestionsRefreshing}
+              className="rounded-full p-1 text-muted-foreground/35 transition-colors duration-150 hover:bg-muted/30 hover:text-foreground disabled:opacity-30 cursor-pointer"
+              title="refresh suggestions"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Custom Summary Builder modal */}
@@ -388,6 +417,10 @@ export function SummaryCards({
           open={showBuilder}
           onClose={() => setShowBuilder(false)}
           onGenerate={(prompt, timeRange) => {
+            posthog.capture("home_card_clicked", {
+              kind: "custom_summary_generate",
+              time_range: timeRange,
+            });
             setShowBuilder(false);
             onSendMessage(prompt, `\u2728 Custom Summary \u2014 ${timeRange}`);
           }}

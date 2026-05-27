@@ -71,37 +71,84 @@ export function MeetingNotesSection({
   const [connectedCalendarSources, setConnectedCalendarSources] = useState<
     CalendarSource[]
   >([]);
+  // Raw input value (drives the search field). `appliedQuery` is the value
+  // actually sent to the server — debounced so we don't refetch on every
+  // keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
 
-  const fetchPage = useCallback(async (offset: number, append: boolean) => {
-    if (offset === 0) setLoading(true);
-    else setLoadingMore(true);
-    try {
-      const res = await localFetch(
-        `/meetings?limit=${PAGE_SIZE}&offset=${offset}`,
-      );
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(
-          `HTTP ${res.status}${body ? ` — ${body.slice(0, 160)}` : ""}`,
-        );
-      }
-      const data: MeetingRecord[] = await res.json();
-      if (data.length < PAGE_SIZE) setHasMore(false);
-      setMeetings((prev) => (append ? [...prev, ...data] : data));
-      setErrorText(null);
-    } catch (err) {
-      if (offset === 0) setErrorText(String(err));
-      console.error("meeting notes: failed to fetch /meetings", err);
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, []);
-
-  // Initial load
+  // Debounce the search input → applied query.
   useEffect(() => {
-    void fetchPage(0, false);
-  }, [fetchPage]);
+    const trimmed = searchInput.trim();
+    if (trimmed === appliedQuery) return;
+    const handle = setTimeout(() => setAppliedQuery(trimmed), 200);
+    return () => clearTimeout(handle);
+  }, [searchInput, appliedQuery]);
+
+  // Set once we've completed the very first fetch, so subsequent reloads
+  // (search keystrokes, visibility refresh) don't blank the list out with
+  // the skeleton.
+  const initialLoadDoneRef = useRef(false);
+  const [refetching, setRefetching] = useState(false);
+
+  const fetchPage = useCallback(
+    async (offset: number, append: boolean, query: string) => {
+      if (offset === 0) {
+        if (!initialLoadDoneRef.current) setLoading(true);
+        else setRefetching(true);
+      } else {
+        setLoadingMore(true);
+      }
+      try {
+        const params = new URLSearchParams({
+          limit: String(PAGE_SIZE),
+          offset: String(offset),
+        });
+        if (query) params.set("q", query);
+        const res = await localFetch(`/meetings?${params.toString()}`);
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(
+            `HTTP ${res.status}${body ? ` — ${body.slice(0, 160)}` : ""}`,
+          );
+        }
+        const data: MeetingRecord[] = await res.json();
+        setHasMore(data.length >= PAGE_SIZE);
+        setMeetings((prev) => (append ? [...prev, ...data] : data));
+        setErrorText(null);
+      } catch (err) {
+        if (offset === 0) setErrorText(String(err));
+        console.error("meeting notes: failed to fetch /meetings", err);
+      } finally {
+        initialLoadDoneRef.current = true;
+        setLoading(false);
+        setRefetching(false);
+        setLoadingMore(false);
+      }
+    },
+    [],
+  );
+
+  // Initial load + reload whenever the applied query changes. We always
+  // restart from offset 0 because the result set is different.
+  useEffect(() => {
+    void fetchPage(0, false, appliedQuery);
+  }, [fetchPage, appliedQuery]);
+
+  // Stable ref to the current query — other effects and handlers below
+  // depend on `fetchPage` (intentionally stable) and shouldn't re-bind
+  // when the query changes, but they still need to reuse it.
+  const appliedQueryRef = useRef(appliedQuery);
+  useEffect(() => {
+    appliedQueryRef.current = appliedQuery;
+  }, [appliedQuery]);
+
+  // Track an in-flight open-meeting-note request so the "selection
+  // vanished" effect below doesn't reset selectedId during the brief
+  // window where the row hasn't been inserted into `meetings` yet.
+  // The Rust side retries the emit 4× to survive cold window startup,
+  // so this also dedupes the burst — same meeting within 5s is a no-op.
+  const pendingOpenRef = useRef<{ id: number; at: number } | null>(null);
 
   useEffect(() => {
     const unlisten = listen<{ meetingId: number; transcript?: boolean }>(
@@ -110,11 +157,23 @@ export function MeetingNotesSection({
         const id = Number(event.payload.meetingId);
         if (!Number.isFinite(id)) return;
 
-        if (event.payload.transcript !== false) {
-          setOpenTranscriptRequest({ id, token: Date.now() });
+        const now = Date.now();
+        if (
+          pendingOpenRef.current?.id === id &&
+          now - pendingOpenRef.current.at < 5000
+        ) {
+          return;
         }
+        pendingOpenRef.current = { id, at: now };
 
-        setSelectedId(id);
+        // Fetch and insert into `meetings` BEFORE selecting. The
+        // "selection vanished" effect below resets selectedId to null
+        // whenever the id isn't in the list — if we set selectedId first
+        // and await the fetch after, that effect fires in the gap and
+        // drops the selection, leaving the user on the list view instead
+        // of the note. Notification-triggered opens (a freshly-started
+        // meeting) hit this every time because the new row isn't in the
+        // initial page yet.
         try {
           const res = await localFetch(`/meetings/${id}`);
           if (res.ok) {
@@ -126,15 +185,20 @@ export function MeetingNotesSection({
                 : [meeting, ...prev];
             });
           } else {
-            void fetchPage(0, false);
+            await fetchPage(0, false, appliedQueryRef.current);
           }
         } catch (err) {
           console.warn(
             "meeting notes: failed to open deep-linked meeting",
             err,
           );
-          void fetchPage(0, false);
+          await fetchPage(0, false, appliedQueryRef.current);
         }
+
+        if (event.payload.transcript !== false) {
+          setOpenTranscriptRequest({ id, token: Date.now() });
+        }
+        setSelectedId(id);
       },
     );
     return () => {
@@ -142,13 +206,22 @@ export function MeetingNotesSection({
     };
   }, [fetchPage]);
 
-  // Refetch on visibility change — picks up changes made elsewhere
+  // Refetch on visibility change — picks up changes made elsewhere.
+  // Skip the meetings list refetch when the user is inside a note: a Mac
+  // workspace swipe fires visibilitychange, and any churn on `meeting.note`
+  // (even a byte-identical reload) round-trips through the editor's
+  // setContent, which re-parses the markdown and visually tightens loose
+  // lists and paragraph spacing.
+  const selectedIdRef = useRef(selectedId);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
   useEffect(() => {
     const handler = () => {
-      if (document.visibilityState === "visible") {
-        void fetchPage(0, false);
-        void refreshUpcoming();
-      }
+      if (document.visibilityState !== "visible") return;
+      void refreshUpcoming();
+      if (selectedIdRef.current !== null) return;
+      void fetchPage(0, false, appliedQueryRef.current);
     };
     document.addEventListener("visibilitychange", handler);
     return () => document.removeEventListener("visibilitychange", handler);
@@ -215,7 +288,7 @@ export function MeetingNotesSection({
       // Refresh both the meetings list and the upcoming-events list:
       // a freshly-consumed Coming up event needs to disappear, and a
       // freshly-stopped one may re-surface in the picker.
-      void fetchPage(0, false).then(() => {
+      void fetchPage(0, false, appliedQueryRef.current).then(() => {
         if (active !== null && intendingToFocusRef.current) {
           intendingToFocusRef.current = false;
           setSelectedId(active);
@@ -247,10 +320,19 @@ export function MeetingNotesSection({
     };
   }, []);
 
-  // If selection vanishes (deleted elsewhere), drop selection
+  // If selection vanishes (deleted elsewhere), drop selection.
+  // Skip while a notification-triggered open for this id is in flight —
+  // the row hasn't been inserted yet, and resetting here strands the
+  // user on the list view instead of the note they asked to open.
   useEffect(() => {
     if (selectedId === null) return;
-    if (meetings.some((m) => m.id === selectedId)) return;
+    if (meetings.some((m) => m.id === selectedId)) {
+      if (pendingOpenRef.current?.id === selectedId) {
+        pendingOpenRef.current = null;
+      }
+      return;
+    }
+    if (pendingOpenRef.current?.id === selectedId) return;
     setSelectedId(null);
   }, [meetings, selectedId]);
 
@@ -403,14 +485,34 @@ export function MeetingNotesSection({
     setSelectedId((prev) => (prev === id ? null : prev));
   }, []);
 
+  const handleMerged = useCallback(
+    (merged: MeetingRecord, sourceIds: number[]) => {
+      // The backend keeps the lowest id and deletes the rest. Drop the
+      // losers, swap-in the survivor with its joined fields, and forward
+      // selection if it was pointing at a row that just vanished.
+      const removeIds = new Set(sourceIds.filter((id) => id !== merged.id));
+      setMeetings((prev) => {
+        const without = prev.filter((m) => !removeIds.has(m.id));
+        const exists = without.some((m) => m.id === merged.id);
+        return exists
+          ? without.map((m) => (m.id === merged.id ? merged : m))
+          : [merged, ...without];
+      });
+      setSelectedId((prev) =>
+        prev !== null && removeIds.has(prev) ? merged.id : prev,
+      );
+    },
+    [],
+  );
+
   const handleLoadMore = useCallback(() => {
-    void fetchPage(meetings.length, true);
-  }, [meetings.length, fetchPage]);
+    void fetchPage(meetings.length, true, appliedQuery);
+  }, [meetings.length, fetchPage, appliedQuery]);
 
   const handleRetry = useCallback(() => {
     setErrorText(null);
-    void fetchPage(0, false);
-  }, [fetchPage]);
+    void fetchPage(0, false, appliedQuery);
+  }, [fetchPage, appliedQuery]);
 
   const openCalendarConnections = useCallback(() => {
     window.dispatchEvent(
@@ -507,6 +609,7 @@ export function MeetingNotesSection({
       activeMeeting={activeMeeting}
       onSelect={setSelectedId}
       onDelete={handleDeleted}
+      onMerged={handleMerged}
       onStart={() => handleStart()}
       onStop={handleStop}
       onStartFromEvent={handleStartFromEvent}
@@ -522,6 +625,10 @@ export function MeetingNotesSection({
       onOpenCalendarConnections={openCalendarConnections}
       onCalendarConnectionChange={refreshUpcoming}
       meetingActive={meetingState.active === true}
+      searchInput={searchInput}
+      onSearchInputChange={setSearchInput}
+      searching={refetching}
+      hasSearchQuery={appliedQuery !== ""}
     />
   );
 }

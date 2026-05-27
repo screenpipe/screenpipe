@@ -24,7 +24,7 @@ export interface UsageStatus {
   resets_at: string;
 }
 
-const USAGE_URL = "https://api.screenpi.pe/v1/usage";
+const USAGE_URL = "https://api.screenpipe.com/v1/usage";
 /** Poll interval — 30s is frequent enough that a user who sends a burst
  *  sees the chip appear promptly, rare enough not to hammer the worker. */
 const POLL_INTERVAL_MS = 30_000;

@@ -251,7 +251,7 @@ RUSTFLAGS="-Z sanitizer=address" cargo run --bin screenpipe
 RUSTFLAGS="-Z sanitizer=leak" cargo run --bin screenpipe
 ```
 
-for performance monitoring, you can use the following command:
+for leak tracking, you can use the following command:
 
 ```bash
 cargo install cargo-instruments
@@ -260,6 +260,64 @@ cargo instruments -t Leaks --bin screenpipe --features metal --time-limit 600000
 ```
 
 then open the file in `target/release/instruments` using xcode -> open developer tool -> instruments.
+
+### profiling cpu
+
+to investigate "where is screenpipe burning cpu", capture a sampling profile + a cpu/mem time series against the running process. recipes below produce comparable output on macos and windows.
+
+**macos** (built-in, no install):
+
+```bash
+PID=$(pgrep -x screenpipe-app || pgrep -x screenpipe | head -1)
+
+# 1) cpu/mem time series — 10s interval for 10min
+( echo "ts,pcpu,pmem,rss_mb"
+  for i in $(seq 1 60); do
+    read pcpu pmem rss < <(ps -p $PID -o pcpu=,pmem=,rss=)
+    echo "$(date +%H:%M:%S),$pcpu,$pmem,$((rss/1024))"
+    sleep 10
+  done ) > /tmp/sp-cpu.csv
+
+# 2) sampling profile — 10min @ 1ms (call-tree, symbolicated)
+sample $PID 600 -file /tmp/sp-sample.txt
+```
+
+aggregate hot leaf functions:
+
+```bash
+awk '/Call graph/,/Binary Images/' /tmp/sp-sample.txt \
+  | grep '(in ' | sed -E 's/^[[:space:]+!|:]*//; s/  \(in .*$//' \
+  | grep -E "^[0-9]+ (screenpipe|AXUIElement|cidre|onnxruntime|sqlite)" \
+  | awk '{n=$1+0; $1=""; sub(/^ +/,"",$0); if(n>mx[$0])mx[$0]=n}
+         END{for(k in mx) printf "%8d  %s\n", mx[k], k}' \
+  | sort -rn | head -30
+```
+
+**windows** (samply, install once: `cargo install samply`):
+
+```powershell
+$sp = (Get-Process screenpipe-app,screenpipe -ErrorAction SilentlyContinue |
+       Sort-Object WorkingSet64 -Descending | Select-Object -First 1).Id
+
+# 1) cpu/mem time series — 10s interval for 10min
+"ts,pcpu,ws_mb,priv_mb" | Out-File $env:TEMP\sp-cpu.csv
+1..60 | ForEach-Object {
+  $p1=Get-Process -Id $sp; $c1=$p1.TotalProcessorTime.TotalSeconds
+  Start-Sleep 1
+  $p2=Get-Process -Id $sp; $c2=$p2.TotalProcessorTime.TotalSeconds
+  $pcpu=[math]::Round(($c2-$c1)*100,1)
+  "$(Get-Date -Format HH:mm:ss),$pcpu,$([math]::Round($p2.WorkingSet64/1MB)),$([math]::Round($p2.PrivateMemorySize64/1MB))" |
+    Add-Content $env:TEMP\sp-cpu.csv
+  Start-Sleep 9
+}
+
+# 2) sampling profile — 10min, view at https://profiler.firefox.com
+samply record --save-only -o $env:TEMP\sp.json.gz --duration 600 --pid $sp
+```
+
+fallback if samply unavailable: `wpr -start CPU -filemode; Start-Sleep 600; wpr -stop /tmp/sp.etl` and open the etl in [wpa](https://learn.microsoft.com/windows-hardware/test/wpt/windows-performance-analyzer) or perfview.
+
+share both files (`sp-cpu.csv` + `sp-sample.txt` / `sp.json.gz`) in the issue when reporting cpu regressions.
 
 ### benchmarks
 

@@ -12,9 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use screenpipe_audio::core::device::{
-    default_input_device, default_output_device, parse_audio_device,
-};
+use screenpipe_audio::core::device::resolve_audio_devices_for_capture;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -63,6 +61,13 @@ impl ServerCore {
         owned_browser: Option<
             std::sync::Arc<screenpipe_connect::connections::browser::OwnedBrowser>,
         >,
+        // App-scoped cloud-token handle. Outlives Server (which is recreated
+        // on every recording restart) so a token pushed via `set_cloud_token`
+        // survives capture toggles and is automatically picked up by the next
+        // Server + PiExecutor pair. Pre-existing per-Server cloud_token is
+        // replaced with this Arc so all three observers (cloud_proxy.rs,
+        // PiExecutor, the Tauri command writer) share one storage cell.
+        cloud_token_handle: std::sync::Arc<arc_swap::ArcSwap<Option<String>>>,
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
@@ -184,25 +189,17 @@ impl ServerCore {
         info!("Database initialized at {}", db_path);
 
         // --- Audio devices + manager (built but NOT started) ---
-        let mut audio_devices = Vec::new();
-        if !config.disable_audio {
-            if config.audio_devices.is_empty() {
-                if let Ok(input) = default_input_device() {
-                    audio_devices.push(input.to_string());
-                }
-                if let Ok(output) = default_output_device().await {
-                    audio_devices.push(output.to_string());
-                }
-            } else {
-                for d in &config.audio_devices {
-                    if let Ok(device) = parse_audio_device(d) {
-                        audio_devices.push(device.to_string());
-                    }
-                }
-            }
-            if audio_devices.is_empty() {
-                warn!("No audio devices available");
-            }
+        let audio_devices = if config.disable_audio {
+            Vec::new()
+        } else {
+            resolve_audio_devices_for_capture(
+                &config.audio_devices,
+                config.use_system_default_audio,
+            )
+            .await
+        };
+        if !config.disable_audio && audio_devices.is_empty() {
+            warn!("No audio devices available");
         }
 
         let openai_compatible_config =
@@ -313,10 +310,24 @@ impl ServerCore {
         // the Clerk JWT (despite the name — see line 96 where the same value
         // is used as the cloud transcription bearer). Pi's bash deliberately
         // can't see this token; the local proxy signs the upstream request.
+        //
+        // We replace the Server's per-instance cloud_token cell with the
+        // app-scoped Arc so writes from `set_cloud_token` (Tauri command,
+        // pushed on every sign-in/out from the webview) are visible to both
+        // cloud_proxy.rs AND the PiExecutor that shares this same Arc.
+        // Without this, a token captured at engine boot was permanent until
+        // restart — paying users who signed in after the sidecar started got
+        // anonymous-tier 403s on every Sonnet/Opus pipe.
+        server.cloud_token = cloud_token_handle.clone();
+        // Seed the shared cell from persisted settings, but ONLY when empty
+        // — if `set_cloud_token` has already pushed a fresher value (e.g. the
+        // user signed in between sidecar boots), don't clobber it with the
+        // stale `config.user_id` snapshot.
         if let Some(ref t) = config.user_id {
             if !t.is_empty() {
-                if let Ok(mut g) = server.cloud_token.try_write() {
-                    *g = Some(t.clone());
+                let existing = cloud_token_handle.load();
+                if existing.is_none() {
+                    cloud_token_handle.store(std::sync::Arc::new(Some(t.clone())));
                 }
             }
         }
@@ -364,7 +375,36 @@ impl ServerCore {
                         Err(e) => warn!("oauth: sweep_shadowed_default_slots failed: {}", e),
                     }
 
-                    server.secret_store = Some(Arc::new(store));
+                    let store_arc = Arc::new(store);
+
+                    // Background OAuth refresh scheduler. Keeps refresh-token
+                    // sliding windows alive on providers like Zoom (15h
+                    // inactivity expiry) — without this, a token can rot
+                    // overnight and recovery requires manual reconnect.
+                    // Owner-held so the JoinHandle isn't dropped (which would
+                    // cancel the task) and so `/health` can surface metrics
+                    // later via `server.oauth_refresher.snapshot()`.
+                    let refresher = Arc::new(
+                        screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler::new(),
+                    );
+                    refresher.start(store_arc.clone());
+                    server.oauth_refresher = Some(refresher);
+
+                    // Background sync of memories → Claude Code's CLAUDE.md
+                    // and Codex's AGENTS.md. Runs every 5 minutes; no-ops
+                    // when neither destination is enabled in the
+                    // connections store, so it's safe to always start.
+                    let memory_sync = Arc::new(
+                        screenpipe_engine::external_memory_sync::ExternalMemorySyncScheduler::new(),
+                    );
+                    memory_sync.start(
+                        db.clone(),
+                        Some(store_arc.clone()),
+                        local_data_dir.clone(),
+                    );
+                    server.external_memory_sync = Some(memory_sync);
+
+                    server.secret_store = Some(store_arc);
                 }
                 Err(e) => {
                     warn!("failed to initialize secret store: {}", e);
@@ -377,10 +417,17 @@ impl ServerCore {
         let pipes_dir = config.data_dir.join("pipes");
         std::fs::create_dir_all(&pipes_dir).ok();
 
-        let user_token = config.user_id.clone();
+        // Share the cloud-token Arc between Server (for cloud_proxy.rs) and
+        // PiExecutor (for pi-agent provider auth). With one shared Arc the
+        // `set_cloud_token` Tauri command updates both readers in one shot,
+        // so a fresh sign-in or sign-out takes effect on the very next pipe
+        // run without restarting the engine.
+        let cloud_token_handle = server.cloud_token.clone();
         let pi_executor = Arc::new(
-            screenpipe_core::agents::pi::PiExecutor::new(user_token)
-                .with_api_auth_key(config.api_auth_key.clone()),
+            screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
+                cloud_token_handle.clone(),
+            )
+            .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<
             String,
@@ -478,13 +525,25 @@ impl ServerCore {
         let backend = config.pii_backend.as_str();
         let use_tinfoil = matches!(backend, "tinfoil" | "cloud" | "enclave");
 
+        // Cloud Clerk JWT — same token used for the cloud transcription
+        // bearer (see line 96). Tinfoil's enclave is on the screenpipe
+        // cloud auth boundary, so the user's signed-in token is what
+        // authenticates redactor requests. Without this the worker logs
+        // "no api key — requests will be un-authenticated" on every
+        // restart even when the user is signed in.
+        let tinfoil_api_key = config
+            .user_id
+            .clone()
+            .filter(|s| !s.is_empty());
+
         // One shutdown signal, shared across both worker spawn paths and
         // stored on Self for `shutdown()` to fire on app quit.
         let redact_shutdown = Arc::new(Notify::new());
 
         if config.async_pii_redaction {
+            use screenpipe_redact::adapters::onnx::{OnnxConfig, OnnxRedactor};
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
-            use screenpipe_redact::adapters::tinfoil::TinfoilRedactor;
+            use screenpipe_redact::adapters::tinfoil::{TinfoilConfig, TinfoilRedactor};
             use screenpipe_redact::pipeline::{Pipeline, PipelineConfig};
             use screenpipe_redact::worker::{Worker, WorkerConfig, ALL_TARGET_TABLES};
             use screenpipe_redact::Redactor;
@@ -504,8 +563,14 @@ impl ServerCore {
             // removal" toggle means. The 20260507 migration drops the
             // dead duplicate columns the old non-destructive mode used.
             if use_tinfoil {
-                info!("starting async text-PII reconciliation worker (backend=tinfoil)");
-                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
+                info!(
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async text-PII reconciliation worker (backend=tinfoil)"
+                );
+                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::new(TinfoilConfig {
+                    api_key: tinfoil_api_key.clone(),
+                    ..Default::default()
+                }));
                 let pipeline = Pipeline::regex_then_ai(ai, PipelineConfig::default());
                 let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;
                 let cfg = WorkerConfig {
@@ -522,27 +587,51 @@ impl ServerCore {
                 let pool = db.pool.clone();
                 let shutdown = redact_shutdown.clone();
                 tokio::spawn(async move {
+                    // Prefer v45 phase 3 ONNX (~278 MB INT8, HIPAA 90.2%,
+                    // sub-10 ms p50, gets CoreML on macOS / DirectML on
+                    // Windows / CPU on Linux via the redact-onnx-* CI
+                    // feature). Fall back to the legacy OPF v6 candle
+                    // adapter (~2.8 GB) if the ONNX feature isn't
+                    // compiled in or the HF download fails.
                     info!(
-                        "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
-                         ~/.screenpipe/models/opf-v6/)"
+                        "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
+                         cached at ~/.screenpipe/models/v45_phase3_onnx/)"
                     );
-                    let pipeline = match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                    let onnx_result =
+                        OnnxRedactor::load_or_download(OnnxConfig::default()).await;
+                    let pipeline = match onnx_result {
                         Ok(adapter) => {
                             info!(
                                 "starting async text-PII reconciliation worker (backend=local, \
-                                 opf-rs)"
+                                 v45_phase3_onnx)"
                             );
                             let ai: Arc<dyn Redactor> = Arc::new(adapter);
                             Pipeline::regex_then_ai(ai, PipelineConfig::default())
                         }
-                        Err(e) => {
+                        Err(onnx_err) => {
                             warn!(
-                                "couldn't load local OPF redactor ({e}); running text-PII \
-                                 worker in regex-only mode. Switch backend to 'tinfoil' in \
-                                 Settings → Privacy → AI PII removal to use the cloud enclave \
-                                 instead."
+                                "couldn't load v45 phase 3 ONNX redactor ({onnx_err}); falling \
+                                 back to OPF v6 candle"
                             );
-                            Pipeline::regex_only()
+                            match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                                Ok(adapter) => {
+                                    info!(
+                                        "starting async text-PII reconciliation worker \
+                                         (backend=local, opf-rs fallback)"
+                                    );
+                                    let ai: Arc<dyn Redactor> = Arc::new(adapter);
+                                    Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "couldn't load OPF redactor either ({e}); running \
+                                         text-PII worker in regex-only mode. Switch backend \
+                                         to 'tinfoil' in Settings → Privacy → AI PII removal \
+                                         to use the cloud enclave instead."
+                                    );
+                                    Pipeline::regex_only()
+                                }
+                            }
                         }
                     };
                     let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;
@@ -557,14 +646,23 @@ impl ServerCore {
 
         if config.async_image_pii_redaction {
             use screenpipe_redact::adapters::rfdetr::{RfdetrConfig, RfdetrRedactor};
-            use screenpipe_redact::adapters::tinfoil_image::TinfoilImageRedactor;
+            use screenpipe_redact::adapters::tinfoil_image::{
+                TinfoilImageConfig, TinfoilImageRedactor,
+            };
             use screenpipe_redact::image::worker::{ImageWorker, ImageWorkerConfig};
             use screenpipe_redact::ImageRedactor;
 
             let pool = db.pool.clone();
             if use_tinfoil {
-                info!("starting async image-PII worker (backend=tinfoil)");
-                let detector = Arc::new(TinfoilImageRedactor::from_env()) as Arc<dyn ImageRedactor>;
+                info!(
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async image-PII worker (backend=tinfoil)"
+                );
+                let detector =
+                    Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
+                        api_key: tinfoil_api_key.clone(),
+                        ..Default::default()
+                    })) as Arc<dyn ImageRedactor>;
                 let _ = ImageWorker::new(pool, detector, ImageWorkerConfig::default())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {

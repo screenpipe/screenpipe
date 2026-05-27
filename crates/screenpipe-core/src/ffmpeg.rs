@@ -69,6 +69,30 @@ fn has_matching_ffprobe(ffmpeg_path: &std::path::Path) -> bool {
 fn find_ffmpeg_path_internal() -> Option<PathBuf> {
     debug!("Starting search for ffmpeg executable");
 
+    // macOS: prefer the app-bundled ffmpeg (Tauri sidecar lands in
+    // Contents/MacOS/ffmpeg, sometimes Contents/Resources/ffmpeg) before any
+    // system binary. A stale brew install (`/opt/homebrew/bin/ffmpeg` symlinked
+    // into a Cellar directory that `brew cleanup` already removed) makes dyld
+    // fail with "Library not loaded: …/Cellar/ffmpeg/8.x_y/lib/libavdevice.62.dylib"
+    // — we'd otherwise pick that broken binary over our own working bundle.
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_folder) = exe_path.parent() {
+                let bundled = exe_folder.join(EXECUTABLE_NAME);
+                if bundled.exists() {
+                    debug!("Found bundled ffmpeg next to executable: {:?}", bundled);
+                    return Some(bundled);
+                }
+                let in_resources = exe_folder.join("../Resources").join(EXECUTABLE_NAME);
+                if in_resources.exists() {
+                    debug!("Found bundled ffmpeg in Resources: {:?}", in_resources);
+                    return Some(in_resources);
+                }
+            }
+        }
+    }
+
     // Check in the same folder as the executable (only on Linux)
     #[cfg(target_os = "linux")]
     {

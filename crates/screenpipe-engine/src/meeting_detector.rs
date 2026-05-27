@@ -502,7 +502,12 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "butter.us",
                     "livestorm.co",
                     "ping.gg",
-                    "cal.com",
+                    // Cal.com is primarily a scheduling product — its booking
+                    // dashboard (app.cal.com/event-types) and booking pages
+                    // (cal.com/{user}/{event}) aren't calls. Only Cal Video
+                    // (app.cal.com/video/{uid}) is a live meeting URL. Matching
+                    // bare "cal.com" caused false positives on the dashboard.
+                    "cal.com/video",
                     "daily.co",
                     "app.daily.co",
                     "pop.com",
@@ -622,6 +627,7 @@ impl MeetingUiScanner {
         let max_depth = self.max_depth;
         let scan_timeout = self.scan_timeout;
         let precomputed = PrecomputedSignal::from_signals(&profile.call_signals);
+        let attr_needs = AttrNeeds::from_signals(&precomputed);
         let min_required = profile.min_signals_required;
 
         // Wrap in catch_unwind to survive cidre/ObjC FFI panics
@@ -662,6 +668,7 @@ impl MeetingUiScanner {
                     walk_for_signals(
                         window,
                         &precomputed,
+                        attr_needs,
                         0,
                         max_depth,
                         &start,
@@ -789,6 +796,7 @@ impl MeetingUiScanner {
 fn walk_for_signals(
     elem: &cidre::ax::UiElement,
     signals: &[PrecomputedSignal],
+    needs: AttrNeeds,
     depth: usize,
     max_depth: usize,
     start: &Instant,
@@ -808,9 +816,24 @@ fn walk_for_signals(
         Err(_) => return,
     };
 
-    let title = get_ax_string_attr(elem, cidre::ax::attr::title());
-    let desc = get_ax_string_attr(elem, cidre::ax::attr::desc());
-    let identifier = get_ax_identifier(elem);
+    // Only fetch attributes the current signal set actually consults — each
+    // get_* is a synchronous cross-process AX IPC and was the dominant cost
+    // in CPU profiling.
+    let title = if needs.title {
+        get_ax_string_attr(elem, cidre::ax::attr::title())
+    } else {
+        None
+    };
+    let desc = if needs.desc {
+        get_ax_string_attr(elem, cidre::ax::attr::desc())
+    } else {
+        None
+    };
+    let identifier = if needs.identifier {
+        get_ax_identifier(elem)
+    } else {
+        None
+    };
 
     // Lowercase node fields ONCE, not once per signal
     let title_lower = title.as_deref().map(|t| t.to_lowercase());
@@ -860,6 +883,7 @@ fn walk_for_signals(
             walk_for_signals(
                 child,
                 signals,
+                needs,
                 depth + 1,
                 max_depth,
                 start,
@@ -877,6 +901,56 @@ struct PrecomputedSignal {
     signal: CallSignal,
     /// Pre-lowercased match string (the substring to search for).
     lower: String,
+}
+
+/// Which AX attributes the current signal set actually consults.
+///
+/// Computed once per scan from a `PrecomputedSignal` slice and threaded
+/// through `walk_for_signals` so per-node AX IPC calls (each a cross-process
+/// roundtrip) are only paid for attrs at least one signal might match against.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AttrNeeds {
+    title: bool,
+    desc: bool,
+    identifier: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl AttrNeeds {
+    fn from_signals(signals: &[PrecomputedSignal]) -> Self {
+        Self::from_call_signals(signals.iter().map(|ps| &ps.signal))
+    }
+}
+
+impl AttrNeeds {
+    /// Derive needs from a sequence of `CallSignal`s. Kept generic over the
+    /// iterator source so the same derivation drives both production
+    /// (`PrecomputedSignal` on macOS) and unit tests.
+    fn from_call_signals<'a>(signals: impl IntoIterator<Item = &'a CallSignal>) -> Self {
+        let mut n = Self::default();
+        for s in signals {
+            match s {
+                CallSignal::AutomationId(_)
+                | CallSignal::AutomationIdContains(_)
+                | CallSignal::MenuItemId(_) => {
+                    n.identifier = true;
+                }
+                CallSignal::KeyboardShortcut(_)
+                | CallSignal::RoleWithName { .. }
+                | CallSignal::NameContains(_) => {
+                    n.title = true;
+                    n.desc = true;
+                }
+                CallSignal::MenuBarItem { .. } | CallSignal::WindowTitle { .. } => {
+                    n.title = true;
+                }
+            }
+            if n.title && n.desc && n.identifier {
+                break;
+            }
+        }
+        n
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -2908,7 +2982,12 @@ async fn insert_new_meeting(
             // Emit event so triggered pipes can react
             if let Err(e) = screenpipe_events::send_event(
                 "meeting_started",
-                serde_json::json!({ "meeting_id": id, "app": app, "title": title }),
+                serde_json::json!({
+                    "meeting_id": id,
+                    "app": app,
+                    "title": title,
+                    "detection_source": "ui_scan",
+                }),
             ) {
                 warn!("meeting v2: failed to emit meeting_started event: {}", e);
             }
@@ -2928,6 +3007,122 @@ async fn insert_new_meeting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── AttrNeeds tests ────────────────────────────────────────────────
+
+    #[test]
+    fn attr_needs_empty_signal_set_needs_nothing() {
+        let needs = AttrNeeds::from_call_signals(std::iter::empty());
+        assert_eq!(needs, AttrNeeds::default());
+    }
+
+    #[test]
+    fn attr_needs_identifier_only_signals() {
+        let signals = vec![
+            CallSignal::AutomationId("foo"),
+            CallSignal::AutomationIdContains("bar"),
+            CallSignal::MenuItemId("baz"),
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: false,
+                desc: false,
+                identifier: true
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_title_only_signals() {
+        let signals = vec![
+            CallSignal::MenuBarItem {
+                title_contains: "Meeting",
+            },
+            CallSignal::WindowTitle {
+                title_contains: "Zoom",
+            },
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: false,
+                identifier: false
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_title_and_desc_signals() {
+        let signals = vec![
+            CallSignal::NameContains("Leave call"),
+            CallSignal::KeyboardShortcut("⌘⇧M"),
+            CallSignal::RoleWithName {
+                role: "AXButton",
+                name_contains: "Mute",
+            },
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: true,
+                identifier: false
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_mixed_signals_unions_all_attrs() {
+        let signals = vec![
+            CallSignal::AutomationId("foo"),
+            CallSignal::NameContains("Leave"),
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: true,
+                identifier: true
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_covers_every_call_signal_variant() {
+        // Belt-and-suspenders: when a new CallSignal variant is added, this
+        // test forces an explicit match-arm decision in `from_call_signals`.
+        // If a contributor adds a variant without updating the derivation,
+        // they need to add it here too and consciously pick its attr needs.
+        let all_variants: Vec<CallSignal> = vec![
+            CallSignal::AutomationId(""),
+            CallSignal::AutomationIdContains(""),
+            CallSignal::KeyboardShortcut(""),
+            CallSignal::RoleWithName {
+                role: "",
+                name_contains: "",
+            },
+            CallSignal::MenuBarItem { title_contains: "" },
+            CallSignal::MenuItemId(""),
+            CallSignal::NameContains(""),
+            CallSignal::WindowTitle { title_contains: "" },
+        ];
+        let needs = AttrNeeds::from_call_signals(all_variants.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: true,
+                identifier: true
+            },
+            "all variants together should require every attribute"
+        );
+    }
 
     // ── Profile tests ──────────────────────────────────────────────────
 
@@ -3124,6 +3319,114 @@ mod tests {
             assert!(
                 mute_matches.is_empty(),
                 "profile should not match standalone 'Mute' button"
+            );
+        }
+    }
+
+    /// Returns the generic-fallback profile (the one with broad URL patterns
+    /// like `daily.co`, `cal.com/video`, `pop.com`). Picks it by detecting the
+    /// distinctive `meet.jit.si` URL pattern.
+    fn generic_profile() -> MeetingDetectionProfile {
+        load_detection_profiles()
+            .into_iter()
+            .find(|p| {
+                p.app_identifiers
+                    .browser_url_patterns
+                    .contains(&"meet.jit.si")
+            })
+            .expect("generic fallback profile present")
+    }
+
+    /// Mirrors the lowercase substring match used by `has_browser_meeting_url`
+    /// and `db_find_browser_meetings`.
+    fn url_matches_any_pattern(url: &str, patterns: &[&str]) -> bool {
+        let url_lower = url.to_lowercase();
+        patterns
+            .iter()
+            .any(|p| url_lower.contains(&p.to_lowercase()))
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_cal_dashboard_url() {
+        // Regression: bare `cal.com` URL pattern matched the cal.com booking
+        // dashboard, which then put Arc into the "candidate browser" set and
+        // let an unrelated tab's "Leave at the door" button fire a phantom
+        // meeting. Dashboard URLs are not calls.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://app.cal.com/event-types",
+            "https://app.cal.com/bookings/upcoming",
+            "https://cal.com/louis/30min",
+            "https://cal.com/pricing",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "cal.com dashboard URL {url:?} should NOT match a meeting profile"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_matches_cal_video_url() {
+        // The actual Cal Video URL (live meeting) must still match.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://app.cal.com/video/abc123",
+            "https://app.cal.com/video/8f3e-meeting-uid",
+        ] {
+            assert!(
+                url_matches_any_pattern(url, patterns),
+                "Cal Video URL {url:?} should match the generic profile"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_url_patterns_are_path_qualified_for_known_lookalikes() {
+        // Any URL pattern that is just `<service>.com` for a service that
+        // also runs a marketing/dashboard site at the same host will trip
+        // the same class of false positive that hit cal.com (regression in
+        // f9cdb1bb7). Lock in the path-qualified shape for services we've
+        // already narrowed — re-broadening them in the patterns list should
+        // require updating this test, which is the whole point.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+
+        let must_be_path_qualified = ["cal.com", "dialpad.com"];
+        for host in must_be_path_qualified {
+            let bare_present = patterns.iter().any(|p| *p == host);
+            assert!(
+                !bare_present,
+                "url pattern {host:?} must be path-qualified (e.g. {host}/<call-route>), \
+                 not a bare host — otherwise dashboard/marketing URLs match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_marketing_lookalikes_for_narrowed_hosts() {
+        // Concrete URL regression set for hosts we've already narrowed. If
+        // any of these match, we've silently re-broadened the pattern and
+        // the cal.com-class bug is back. Add hosts here as we narrow them.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            // cal.com marketing/dashboard — only /video is a call.
+            "https://cal.com/",
+            "https://cal.com/blog/how-to-schedule-meetings",
+            "https://cal.com/signup",
+            "https://app.cal.com/settings/billing",
+            // dialpad — only /meetings is a call route.
+            "https://www.dialpad.com/",
+            "https://www.dialpad.com/pricing",
+            "https://dialpad.com/blog",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "marketing/dashboard URL {url:?} should NOT match a meeting profile \
+                 (regression of the cal.com false-positive class)"
             );
         }
     }

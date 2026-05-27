@@ -1,0 +1,158 @@
+# screenpipe - AI that knows everything you've seen, said, or heard
+# https://screenpi.pe
+#
+# CI for the enterprise SDK in ee/sdk. The SDK is source-available under the
+# Screenpipe Enterprise License and intentionally kept outside the root Cargo
+# workspace so the MIT core build stays unchanged.
+
+name: SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ee/sdk/**"
+      - ".github/workflows/sdk.yml"
+  pull_request:
+    paths:
+      - "ee/sdk/**"
+      - ".github/workflows/sdk.yml"
+  workflow_dispatch:
+
+env:
+  DEBUG: napi:*
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+jobs:
+  cargo-test:
+    name: cargo test ${{ matrix.settings.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: aarch64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ee/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-cargo-test-${{ matrix.settings.target }}
+          workspaces: ee/sdk -> target
+          cache-bin: false
+      - name: Test Rust library
+        run: cargo test --lib --target ${{ matrix.settings.target }}
+
+  build:
+    name: build ${{ matrix.settings.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: x86_64-apple-darwin
+          - host: macos-latest
+            target: aarch64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ee/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-build-${{ matrix.settings.target }}
+          workspaces: ee/sdk -> target
+          cache-bin: false
+      - name: Install deps
+        run: bun install --frozen-lockfile
+      - name: Build
+        run: bun run build --target ${{ matrix.settings.target }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-bindings-${{ matrix.settings.target }}
+          path: |
+            ee/sdk/*.node
+            ee/sdk/index.js
+            ee/sdk/index.d.ts
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    name: integration ${{ matrix.host }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ee/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            brew install ffmpeg
+          fi
+          ffmpeg -version | head -1
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install -y --no-progress ffmpeg
+          ffmpeg -version | Select-Object -First 1
+      - name: Install deps
+        run: bun install --frozen-lockfile
+      - name: Download host-native binding
+        uses: actions/download-artifact@v4
+        with:
+          name: sdk-bindings-${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
+          path: ee/sdk
+      - name: Show downloaded bindings
+        shell: bash
+        run: ls *.node
+      - name: Run integration tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          files=$(find __test__ -name '*.test.mjs' | sort)
+          echo "running: $files"
+          node --test --test-concurrency=1 $files

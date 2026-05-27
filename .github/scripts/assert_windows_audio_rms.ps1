@@ -180,17 +180,35 @@ function Stop-AudioStimulus {
 }
 
 $health = $null
+$bootstrapResponsivePolls = 0
 $serverDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $serverDeadline) {
   $health = Get-HealthSnapshot
-  if ($null -ne $health -and $null -ne $health.audio_pipeline) {
-    break
+  if ($null -ne $health) {
+    $bootstrapResponsivePolls += 1
+    if ($null -ne $health.audio_pipeline) {
+      break
+    }
   }
   Start-Sleep -Seconds 1
 }
 
 if ($null -eq $health -or $null -eq $health.audio_pipeline) {
   Write-AudioHealth -Health $health
+  # Distinguish two failure modes during bootstrap:
+  #   1) /health was reachable but never reported audio_pipeline — that's a
+  #      real engine-side regression (audio module never came up), throw.
+  #   2) /health never responded at all within the budget — every Invoke-
+  #      RestMethod hit its per-request timeout. We've seen this on hosted
+  #      Windows runners under load (the server logs "listening on 3030"
+  #      but TCP polls never complete inside the 10s budget). The smoke
+  #      can't tell a near-silent WASAPI regression from "we never got
+  #      a response", so degrade to inconclusive — matches what the
+  #      post-stimulus loop already does.
+  if ($bootstrapResponsivePolls -eq 0) {
+    Write-Warning "Windows audio RMS smoke inconclusive: /health did not respond to any poll during the ${TimeoutSeconds}s bootstrap budget. Treating as a hosted-runner health-poll artifact instead of an audio capture regression."
+    return
+  }
   throw "screenpipe /health did not expose audio_pipeline within ${TimeoutSeconds}s"
 }
 

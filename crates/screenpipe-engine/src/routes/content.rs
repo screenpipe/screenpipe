@@ -69,6 +69,12 @@ pub struct OCRContent {
     pub browser_url: Option<String>,
     pub focused: Option<bool>,
     pub device_name: String,
+    /// Origin of `text`. `"accessibility"` (OS-native tree, primary path) or
+    /// `"ocr"` (fallback for terminals, canvas apps, weak a11y). `None` for
+    /// legacy rows captured before the field was tracked. The variant is
+    /// historically called OCR but most captures are accessibility-derived
+    /// — read this field to know which path produced the text.
+    pub text_source: Option<String>,
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]
@@ -136,6 +142,9 @@ pub struct InputContent {
     /// Element context from accessibility APIs
     pub element_role: Option<String>,
     pub element_name: Option<String>,
+    /// Frame the event triggered (linked by frame_linker)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<i64>,
 }
 
 // Response structs

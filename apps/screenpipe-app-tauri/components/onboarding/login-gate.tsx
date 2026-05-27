@@ -236,7 +236,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
   useButtonCanvas(btnRef, 200, 52, isHovered);
 
   useEffect(() => {
-    const timer = setTimeout(() => setShowSkip(true), 8000);
+    const timer = setTimeout(() => setShowSkip(true), 800);
     return () => clearTimeout(timer);
   }, []);
 
@@ -359,11 +359,11 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ duration: 2 }}
+              transition={{ duration: 0.4 }}
               onClick={handleSkip}
-              className="font-mono text-[9px] text-muted-foreground/25 hover:text-muted-foreground/45 transition-colors mt-8 tracking-wide"
+              className="font-mono text-xs text-muted-foreground/70 hover:text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors mt-8 tracking-wide"
             >
-              skip
+              skip for now — continue without an account
             </motion.button>
           )}
         </AnimatePresence>

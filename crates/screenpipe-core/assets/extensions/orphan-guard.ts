@@ -9,7 +9,7 @@
 // 1. stdin close — parent death closes our stdin pipe
 // 2. ppid poll — if parent PID changes to 1 (init/launchd), parent is dead
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   const parentPid = process.ppid;

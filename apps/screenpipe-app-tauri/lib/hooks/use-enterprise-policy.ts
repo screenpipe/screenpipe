@@ -8,6 +8,7 @@ import { commands } from "@/lib/utils/tauri";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getStore } from "./use-settings";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { localFetch } from "@/lib/api";
 import { platform as getPlatform } from "@tauri-apps/plugin-os";
 
@@ -20,12 +21,19 @@ import {
   isEnterpriseManagedPreset,
   normalizeEnterpriseAiPresetPolicy,
 } from "@/lib/enterprise-ai-preset-policy";
+import {
+  DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+  EnterpriseAppUpdatePolicy,
+  EnterpriseInstallMetadata,
+  normalizeEnterpriseAppUpdatePolicy,
+} from "@ee/lib/app-update-policy";
 
 interface EnterprisePolicy {
   hiddenSections: string[];
   lockedSettings: Record<string, unknown>;
   managedAiPreset: EnterpriseManagedAiPreset | null;
   aiPresetPolicy: EnterpriseAiPresetPolicy;
+  appUpdatePolicy: EnterpriseAppUpdatePolicy;
   managedPipes: ManagedPipe[];
   orgName: string;
 }
@@ -35,6 +43,7 @@ const EMPTY_POLICY: EnterprisePolicy = {
   lockedSettings: {},
   managedAiPreset: null,
   aiPresetPolicy: DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
+  appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
   managedPipes: [],
   orgName: "",
 };
@@ -121,6 +130,35 @@ async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<vo
   await store.save();
 }
 
+async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata> {
+  try {
+    return await commands.getEnterpriseInstallMetadata();
+  } catch {
+    return {
+      install_source: "unknown",
+      update_manager: "unknown",
+      managed: false,
+      detected_by: [],
+    };
+  }
+}
+
+async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<EnterpriseInstallMetadata> {
+  const store = await getStore();
+  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+  const metadata = await getEnterpriseInstallMetadata();
+  await store.set("settings", {
+    ...settings,
+    enterpriseAppUpdatePolicy: policy,
+    enterpriseInstallMetadata: metadata,
+    autoUpdate: policy.allow_employee_override
+      ? settings.autoUpdate ?? policy.default_auto_update
+      : policy.default_auto_update,
+  });
+  await store.save();
+  return metadata;
+}
+
 /**
  * Fire-and-forget heartbeat to report device status to the enterprise API.
  * Called after a successful policy fetch. Never throws, never blocks.
@@ -132,6 +170,10 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
     const deviceId = (settings.deviceId as string) || "unknown";
     const appVersion = await getVersion().catch(() => "unknown");
     const devicePlatform = getPlatform();
+    const appUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
+      settings.enterpriseAppUpdatePolicy
+    );
+    const installMetadata = await getEnterpriseInstallMetadata();
 
     let frameStatus = "unknown";
     let audioStatus = "unknown";
@@ -166,6 +208,16 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
         platform: devicePlatform,
         app_version: appVersion,
         recording_status: { frame_status: frameStatus, audio_status: audioStatus },
+        update_manager: installMetadata.update_manager,
+        management_detected: installMetadata.managed,
+        install_source: installMetadata.install_source,
+        management_detected_by: installMetadata.detected_by,
+        update_status: {
+          policy_mode: appUpdatePolicy.mode,
+          default_auto_update: appUpdatePolicy.default_auto_update,
+          allow_employee_override: appUpdatePolicy.allow_employee_override,
+          channel: appUpdatePolicy.channel,
+        },
         pipe_statuses: pipeStatuses,
       }),
     });
@@ -181,7 +233,14 @@ function cachePolicy(policy: EnterprisePolicy) {
 function loadCachedPolicy(): EnterprisePolicy | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const policy = JSON.parse(raw);
+      return {
+        ...EMPTY_POLICY,
+        ...policy,
+        appUpdatePolicy: normalizeEnterpriseAppUpdatePolicy(policy.appUpdatePolicy),
+      };
+    }
   } catch {}
   return null;
 }
@@ -215,17 +274,48 @@ export function useEnterprisePolicy() {
 
   const fetchPolicy = useCallback(async (licenseKey: string): Promise<FetchResult> => {
     try {
-      // Include device ID for pipe targeting
+      // Include device ID for pipe targeting + cloud session JWT so the
+      // server can tell us whether the signed-in user is an admin of this
+      // license. The admin bit gates installation of the screenpipe-team
+      // skill in the desktop pi-agent — see `Pi::is_enterprise_admin`.
       let deviceId = "unknown";
+      let cloudToken: string | null = null;
       try {
         const store = await getStore();
         const settings = (await store.get<Record<string, unknown>>("settings")) || {};
         deviceId = (settings.deviceId as string) || "unknown";
+        const user = settings.user as Record<string, unknown> | undefined;
+        const token = user?.token;
+        if (typeof token === "string" && token.length > 0) {
+          cloudToken = token;
+        }
       } catch {}
 
+      // Fallback: read directly from ~/.screenpipe/auth.json when the
+      // in-memory store hasn't been hydrated yet (dev launches before
+      // sign-in completes, or store resets). auth.json is the durable
+      // on-disk copy maintained by the pi-agent configuration flow.
+      if (!cloudToken) {
+        try {
+          const fallback = await commands.getCloudToken();
+          if (typeof fallback === "string" && fallback.length > 0) {
+            cloudToken = fallback;
+          }
+        } catch (e) {
+          console.warn("[enterprise] get_cloud_token failed:", e);
+        }
+      }
+
+      const headers: Record<string, string> = {
+        "X-License-Key": licenseKey,
+        "X-Device-Id": deviceId,
+      };
+      if (cloudToken) {
+        headers["Authorization"] = `Bearer ${cloudToken}`;
+      }
       const res = await tauriFetch("https://screenpi.pe/api/enterprise/policy", {
         method: "GET",
-        headers: { "X-License-Key": licenseKey, "X-Device-Id": deviceId },
+        headers,
       });
       if (res.status === 401 || res.status === 402) {
         console.error(`[enterprise] policy fetch: key rejected (${res.status})`);
@@ -239,6 +329,9 @@ export function useEnterprisePolicy() {
       const aiPresetPolicy = normalizeEnterpriseAiPresetPolicy(
         data.aiPresetPolicy ?? data.managedAiPreset ?? null
       );
+      const appUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
+        data.appUpdatePolicy ?? data.lockedSettings?.app_update_policy
+      );
       const lockedKeys = Object.keys(data.lockedSettings || {});
       const allHidden = [
         ...ENTERPRISE_DEFAULT_HIDDEN,
@@ -250,6 +343,7 @@ export function useEnterprisePolicy() {
         lockedSettings: data.lockedSettings || {},
         managedAiPreset: data.managedAiPreset || null,
         aiPresetPolicy,
+        appUpdatePolicy,
         managedPipes: data.managedPipes || [],
         orgName: data.orgName || "",
       };
@@ -257,9 +351,6 @@ export function useEnterprisePolicy() {
         `[enterprise] policy loaded: org=${result.orgName}, hidden=[${result.hiddenSections.join(",")}], locked=[${lockedKeys.join(",")}]`
       );
       cachePolicy(result);
-
-      // Fire-and-forget heartbeat
-      sendHeartbeat(licenseKey);
 
       // Apply enterprise AI preset policy to settings store.
       if (result.aiPresetPolicy) {
@@ -273,6 +364,18 @@ export function useEnterprisePolicy() {
         }
       }
 
+      try {
+        const metadata = await applyAppUpdatePolicy(result.appUpdatePolicy);
+        console.log(
+          `[enterprise] applied app update policy: mode=${result.appUpdatePolicy.mode}, manager=${metadata.update_manager}, managed=${metadata.managed}`
+        );
+      } catch (e) {
+        console.warn("[enterprise] failed to apply app update policy:", e);
+      }
+
+      // Fire-and-forget heartbeat
+      sendHeartbeat(licenseKey);
+
       // Sync managed pipes to local filesystem
       if (result.managedPipes.length > 0) {
         syncManagedPipes(result.managedPipes).catch((e) =>
@@ -285,6 +388,51 @@ export function useEnterprisePolicy() {
         await commands.setEnterprisePolicy(result.hiddenSections);
       } catch (e) {
         console.warn("[enterprise] failed to push policy to Rust:", e);
+      }
+
+      // Push per-stream sync toggles to Rust so the enterprise sync task
+      // gates each upload kind. Defaults to all-true server-side, so an
+      // older server that doesn't return syncStreams ends up here as
+      // undefined → all true (no behavior change). Uses `invoke` directly
+      // because the typed `commands.*` wrapper in lib/utils/tauri.ts is
+      // auto-generated by tauri-specta — adding a new command requires a
+      // tauri build to regenerate it.
+      try {
+        const streams = (data.syncStreams ?? {}) as Record<string, unknown>;
+        const pickBool = (key: string): boolean =>
+          typeof streams[key] === "boolean" ? (streams[key] as boolean) : true;
+        await invoke("set_sync_streams", {
+          frames: pickBool("frames"),
+          audio: pickBool("audio"),
+          uiEvents: pickBool("ui_events"),
+          memories: pickBool("memories"),
+          snapshots: pickBool("snapshots"),
+        });
+      } catch (e) {
+        console.warn("[enterprise] failed to push sync streams to Rust:", e);
+      }
+
+      // Persist admin status into ~/.screenpipe/enterprise.json so the
+      // pi-agent can decide whether to install the screenpipe-team skill
+      // on its next boot. Only meaningful when we sent a cloud token in
+      // the request — without one, the server has no way to identify the
+      // user, so `data.isAdmin` is always false (don't accidentally wipe
+      // an existing admin marker just because the user was signed-out at
+      // policy-fetch time).
+      if (cloudToken) {
+        try {
+          const adminFlag = Boolean(data.isAdmin);
+          console.log(
+            `[enterprise] persisting team config: is_admin=${adminFlag} (raw response.isAdmin=${data.isAdmin})`
+          );
+          await commands.saveEnterpriseTeamConfig(adminFlag, true, null);
+        } catch (e) {
+          console.warn("[enterprise] failed to persist team config:", e);
+        }
+      } else {
+        console.warn(
+          "[enterprise] no cloud token available — skipping team-config persist (sign in to screenpipe cloud to enable team queries)"
+        );
       }
       return { ok: true, policy: result };
     } catch (e) {

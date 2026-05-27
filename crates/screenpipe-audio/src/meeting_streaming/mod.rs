@@ -7,7 +7,6 @@ mod controller;
 mod deepgram_live;
 mod events;
 mod net;
-mod openai_realtime;
 mod selected_engine;
 
 pub use config::{MeetingStreamingConfig, MeetingStreamingProvider};

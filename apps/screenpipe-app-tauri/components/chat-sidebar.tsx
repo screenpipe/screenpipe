@@ -41,6 +41,9 @@ import {
   ChevronRight,
   MessageSquare,
   X,
+  MoreVertical,
+  Pencil,
+  Square,
 } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
@@ -52,18 +55,33 @@ import {
   formatPipeCountdown,
   formatPipeElapsed,
 } from "@/components/pipe-activity-indicator";
+import { LiveSignal } from "@/components/live-signal";
 import {
   useChatStore,
   useChatActions,
   useOrderedSessions,
+  sessionRecordFromMeta,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { deleteConversationFile, updateConversationFlags } from "@/lib/chat-storage";
+import {
+  conversationMetaFromJson,
+  deleteConversationFile,
+  loadConversationFile,
+  updateConversationFlags,
+} from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
 import { commands } from "@/lib/utils/tauri";
+import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -78,18 +96,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 interface ChatSidebarProps {
   className?: string;
+  onViewAll?: () => void;
 }
 
-function readCollapsedPref(key: string): boolean {
+function readCollapsedPref(key: string, defaultValue = false): boolean {
   try {
-    return localStorage.getItem(key) === "true";
+    const v = localStorage.getItem(key);
+    if (v == null) return defaultValue;
+    return v === "true";
   } catch {
-    return false;
+    return defaultValue;
   }
 }
 
-function useCollapsedPref(key: string) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => readCollapsedPref(key));
+function useCollapsedPref(key: string, defaultValue = false) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => readCollapsedPref(key, defaultValue));
   const setCollapsed = (v: boolean) => {
     setCollapsedRaw(v);
     try {
@@ -181,21 +202,12 @@ function useQueueDepths(): Map<string, number> {
  * vertical scroll for the conversation list. Does NOT add a width / border /
  * background — those belong to the parent.
  */
-export function ChatSidebar({ className }: ChatSidebarProps) {
+export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const currentId = useChatStore((s) => s.currentId);
   const diskHydrated = useChatStore((s) => s.diskHydrated);
   const actions = useChatActions();
   const queueDepths = useQueueDepths();
-  const [isPinnedScrolling, setIsPinnedScrolling] = useState(false);
-  const [isRecentsScrolling, setIsRecentsScrolling] = useState(false);
-  const [isArchivedScrolling, setIsArchivedScrolling] = useState(false);
-  const [isScheduledScrolling, setIsScheduledScrolling] = useState(false);
-  const scrollStopTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout> | null>>({
-    pinned: null,
-    recents: null,
-    archived: null,
-    scheduled: null,
-  });
+  const [openConversationMenuId, setOpenConversationMenuId] = useState<string | null>(null);
 
   // Sync currentId from standalone-chat. Whenever the chat panel switches
   // its piSessionIdRef (new chat, prefill auto-send, history click in the
@@ -217,6 +229,105 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       unlistenFn?.();
     };
   }, [actions]);
+
+  // Cross-window sidebar sync. The home sidebar and the standalone chat can
+  // live in separate WebViews with separate zustand stores, so a chat saved
+  // in one window must be mirrored into the other's in-memory sidebar list.
+  useEffect(() => {
+    let cancelled = false;
+    const unlistenFns: Array<() => void> = [];
+
+    const syncConversationFromDisk = async (id: string) => {
+      try {
+        const conv = await loadConversationFile(id);
+        if (cancelled || !conv) return;
+        const meta = conversationMetaFromJson(conv);
+        if (!meta) return;
+
+        const store = useChatStore.getState();
+        const existing = store.sessions[id];
+        if (existing) {
+          store.actions.patch(id, {
+            title: meta.title || existing.title,
+            messageCount: meta.messageCount,
+            pinned: meta.pinned,
+            hidden: meta.hidden,
+            lastUserMessageAt: meta.lastUserMessageAt,
+            updatedAt: Math.max(existing.updatedAt, meta.updatedAt),
+            kind: meta.kind,
+            pipeContext: meta.pipeContext,
+            draft: false,
+          });
+          return;
+        }
+
+        store.actions.upsert(sessionRecordFromMeta(meta));
+      } catch {
+        // ignore: a later save / hydrate can repair the row
+      }
+    };
+
+    (async () => {
+      const unlistenSaved = await listen<{ id: string }>(
+        "chat-conversation-saved",
+        (event) => {
+          const id = event.payload?.id;
+          if (!id) return;
+          void syncConversationFromDisk(id);
+        }
+      );
+      unlistenFns.push(unlistenSaved);
+
+      const unlistenDeleted = await listen<{ id: string }>("chat-deleted", (event) => {
+        const id = event.payload?.id;
+        if (!id) return;
+        useChatStore.getState().actions.drop(id);
+      });
+      unlistenFns.push(unlistenDeleted);
+
+      const unlistenVisibility = await listen<{ id: string; hidden: boolean }>(
+        "chat-visibility-changed",
+        (event) => {
+          const { id, hidden } = event.payload ?? {};
+          if (!id) return;
+          const existing = useChatStore.getState().sessions[id];
+          if (existing) {
+            useChatStore.getState().actions.patch(id, {
+              hidden,
+              unread: false,
+              ...(hidden ? { draft: false } : {}),
+            });
+            return;
+          }
+          if (!hidden) {
+            void syncConversationFromDisk(id);
+          }
+        }
+      );
+      unlistenFns.push(unlistenVisibility);
+
+      const unlistenRenamed = await listen<{ id: string; title: string }>(
+        "chat-renamed",
+        (event) => {
+          const { id, title } = event.payload ?? {};
+          if (!id || !title) return;
+          if (useChatStore.getState().sessions[id]) {
+            useChatStore.getState().actions.patch(id, { title });
+          } else {
+            void syncConversationFromDisk(id);
+          }
+        }
+      );
+      unlistenFns.push(unlistenRenamed);
+    })().catch(() => {
+      // ignore: sidebar still works without cross-window sync listeners
+    });
+
+    return () => {
+      cancelled = true;
+      for (const unlisten of unlistenFns) unlisten();
+    };
+  }, []);
 
   const runningPipes = useRunningPipes();
   const {
@@ -244,33 +355,44 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   };
 
   const { pinned, recents, archived } = useVisibleChatSections();
+  const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
+  // Resolve each running pipe to its SessionRecord so the Scheduled-row
+  // kebab can offer Pin / Rename / Archive / Delete with the same
+  // semantics as Recents. Subscribes to the raw sessions map (not
+  // useOrderedSessions) so lookups stay O(1) without re-sorting.
+  const sessionsMap = useChatStore((s) => s.sessions);
+  const runningPipeSessions = useMemo(() => {
+    const map = new Map<string, SessionRecord>();
+    for (const p of runningPipes) {
+      if (p.executionId === undefined) continue;
+      const sid = pipeSessionId(p.pipeName, p.executionId);
+      const sess = sessionsMap[sid];
+      if (sess) map.set(p.pipeName, sess);
+    }
+    return map;
+  }, [runningPipes, sessionsMap]);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
 
   const hasScheduledSlice = upcomingPipes.length > 0 || runningPipes.length > 0;
-  const [pinnedCollapsed, setPinnedCollapsed] = useCollapsedPref("screenpipe:pinned-collapsed");
+  const [pinnedCollapsed, setPinnedCollapsed] = useCollapsedPref(
+    "screenpipe:pinned-collapsed",
+    true
+  );
   const [recentsCollapsed, setRecentsCollapsed] = useCollapsedPref("screenpipe:recents-collapsed");
-  const [archivedCollapsed, setArchivedCollapsed] = useCollapsedPref("screenpipe:closed-collapsed");
+  const [archivedCollapsed, setArchivedCollapsed] = useCollapsedPref(
+    "screenpipe:closed-collapsed",
+    true
+  );
   const [scheduledCollapsed, setScheduledCollapsed] = useCollapsedPref("screenpipe:scheduled-collapsed");
   const [upcomingCollapsed, setUpcomingCollapsed] = useCollapsedPref("screenpipe:upcoming-collapsed");
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
-
-  const setScrolling = (key: "pinned" | "recents" | "archived" | "scheduled", v: boolean) => {
-    if (key === "pinned") setIsPinnedScrolling(v);
-    if (key === "recents") setIsRecentsScrolling(v);
-    if (key === "archived") setIsArchivedScrolling(v);
-    if (key === "scheduled") setIsScheduledScrolling(v);
-  };
-
-  const handleSliceScroll = (key: "pinned" | "recents" | "archived" | "scheduled") => {
-    setScrolling(key, true);
-    const t = scrollStopTimersRef.current[key];
-    if (t) clearTimeout(t);
-    scrollStopTimersRef.current[key] = setTimeout(() => setScrolling(key, false), 120);
-  };
   const recentsLoading = !diskHydrated && recents.length === 0;
 
   const handleSelect = (id: string) => {
+    setOpenConversationMenuId(null);
     // No early return for id === currentId. Two reasons:
     //   1. The user may be on a non-home section (Pipes/Memories/...);
     //      currentId is cleared in that case, but even if it weren't,
@@ -283,8 +405,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     emit("chat-load-conversation", { conversationId: id });
   };
 
-  const handleArchive = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
+  const handleArchive = async (id: string) => {
     // Stop any active session first to avoid immediate row resurrection
     // from trailing stream events.
     commands.piAbort(id).catch(() => {});
@@ -323,8 +444,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
-  const handleUnarchive = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
+  const handleUnarchive = async (id: string) => {
     actions.patch(id, { hidden: false, unread: false });
     try {
       await updateConversationFlags(id, { hidden: false });
@@ -369,8 +489,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
-  const handleTogglePin = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
+  const handleTogglePin = async (id: string) => {
     const session = useChatStore.getState().sessions[id];
     if (!session) return;
     const next = !session.pinned;
@@ -382,37 +501,69 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
+  const handleRenameRequest = (id: string) => {
+    const session = useChatStore.getState().sessions[id];
+    setRenamingSessionId(id);
+    setRenameTitle(session?.title || "");
+  };
+
+  const handleRenameConfirmed = async (id: string, nextTitleRaw: string) => {
+    const nextTitle = nextTitleRaw.trim() || "untitled";
+    actions.patch(id, { title: nextTitle });
+    try {
+      await updateConversationFlags(id, { title: nextTitle });
+    } catch {
+      // best-effort persistence — UI already updated
+    }
+  };
+
+  // Stop an in-flight pipe execution. Used by the Scheduled-row kebab so
+  // the user can cancel a run without dropping into Settings → Pipes. We
+  // don't optimistically remove the row — the next `useRunningPipes` poll
+  // (or the rust-side execution-end event) will clear it once the engine
+  // confirms the stop.
+  const handleStopRun = async (pipeName: string) => {
+    try {
+      await localFetch(`/pipes/${encodeURIComponent(pipeName)}/stop`, {
+        method: "POST",
+      });
+    } catch {
+      // best-effort — the user can retry; if the pipe already finished
+      // the next poll will remove the row anyway.
+    }
+  };
+
   return (
     // px-2 cancels the parent wrapper's -mx-2 (used to make the
     // border-t span the full sidebar width). Without this the chat
     // rows + section headers sit 8px left of the main nav items
     // (Timeline / Memories / ...) and look misaligned.
     <div
-      className={cn("flex flex-col min-h-full text-sm px-2", className)}
+      className={cn(
+        "flex flex-col min-h-0 text-sm px-2 overflow-y-auto overflow-x-hidden scrollbar-minimal",
+        className
+      )}
       data-testid="chat-sidebar"
+      onScroll={() => {
+        // Scrolling should dismiss any open row menu to avoid hover/focus glitches.
+        if (openConversationMenuId) setOpenConversationMenuId(null);
+      }}
     >
       <div className="flex-1 min-h-0 flex flex-col gap-1">
         {hasScheduledSlice && (
           <div
-            className={cn(
-              "min-h-0 flex flex-col shrink-0",
-              (scheduledCollapsed && upcomingCollapsed) ? "" : "max-h-[35%]"
-            )}
+            className="flex flex-col shrink-0"
           >
             {upcomingPipes.length > 0 && (
               <div
-                className={cn(
-                  "min-h-0 flex flex-col shrink-0",
-                  upcomingCollapsed ? "" : "flex-1"
-                )}
+                className="flex flex-col shrink-0"
               >
                 <Section
                   title="upcoming"
                   count={upcomingPipes.length}
                   collapsed={upcomingCollapsed}
                   onCollapsedChange={setUpcomingCollapsed}
-                  bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
-                  onBodyScroll={() => handleSliceScroll("scheduled")}
+                  bodyClassName=""
                 >
                   {upcomingPipes.map((p) => (
                     <UpcomingRow key={p.pipeName} pipe={p} onCancel={handleCancelUpcoming} />
@@ -422,21 +573,29 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
             )}
             {runningPipes.length > 0 && (
               <div
-                className={cn(
-                  "min-h-0 flex flex-col shrink-0",
-                  scheduledCollapsed ? "" : "flex-1"
-                )}
+                className="flex flex-col shrink-0"
               >
                 <Section
                   title="scheduled"
                   count={runningPipes.length}
                   collapsed={scheduledCollapsed}
                   onCollapsedChange={setScheduledCollapsed}
-                  bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
-                  onBodyScroll={() => handleSliceScroll("scheduled")}
+                  bodyClassName=""
                 >
                   {runningPipes.map((p) => (
-                    <ScheduledRow key={p.pipeName} pipe={p} />
+                    <ScheduledRow
+                      key={p.pipeName}
+                      pipe={p}
+                      session={runningPipeSessions.get(p.pipeName)}
+                      onStopRun={handleStopRun}
+                      onTogglePin={handleTogglePin}
+                      onArchive={handleArchive}
+                      onUnarchive={handleUnarchive}
+                      onDeleteRequest={setDeletingSessionId}
+                      onRenameRequest={handleRenameRequest}
+                      openConversationMenuId={openConversationMenuId}
+                      setOpenConversationMenuId={setOpenConversationMenuId}
+                    />
                   ))}
                 </Section>
               </div>
@@ -446,118 +605,102 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
 
         <div className="min-h-0 flex flex-col flex-1">
           {pinned.length > 0 && (
-            <div
-              className={cn(
-                "min-h-0 flex flex-col shrink-0",
-                pinnedCollapsed ? "" : "max-h-[40%]"
-              )}
-            >
+            <div className="shrink-0">
               <Section
                 title="pinned"
-                count={pinned.length}
+                tone="default"
                 collapsed={pinnedCollapsed}
                 onCollapsedChange={setPinnedCollapsed}
-                bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
-                onBodyScroll={() => handleSliceScroll("pinned")}
+                bodyClassName=""
               >
                 {pinned.map((s) => (
                   <SidebarChatRow
                     key={s.id}
                     session={s}
                     isCurrent={s.id === currentId}
-                    disableHover={isPinnedScrolling}
+                    tone="default"
                     queuedCount={queueDepths.get(s.id) ?? 0}
                     onSelect={handleSelect}
                     onArchive={handleArchive}
                     onUnarchive={handleUnarchive}
                     onDeleteRequest={setDeletingSessionId}
                     onTogglePin={handleTogglePin}
+                    onRenameRequest={handleRenameRequest}
+                    openConversationMenuId={openConversationMenuId}
+                    setOpenConversationMenuId={setOpenConversationMenuId}
                   />
                 ))}
               </Section>
             </div>
           )}
 
-          <div className="min-h-0 flex flex-col">
-            <div className="min-h-0 flex flex-col">
-              <div
-                className={cn(
-                  "min-h-0 flex flex-col",
-                  archived.length > 0 && !archivedCollapsed ? "max-h-[75%]" : "flex-1",
-                  recentsCollapsed ? "shrink-0" : ""
-                )}
-              >
-                <Section
-                  title="recents"
-                  collapsed={recentsCollapsed}
-                  onCollapsedChange={setRecentsCollapsed}
-                  bodyClassName="overflow-y-auto overflow-x-hidden scrollbar-hide"
-                  onBodyScroll={() => handleSliceScroll("recents")}
-                >
-                  {recentsLoading ? (
-                    <div className="px-2.5 py-2 space-y-1.5">
-                      {Array.from({ length: 3 }).map((_, i) => (
-                        <Skeleton key={i} className="h-6 w-full rounded-md" />
-                      ))}
-                    </div>
-                  ) : recents.length === 0 ? (
-                    <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                      {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
-                    </div>
-                  ) : (
-                    recents.map((s) => (
-                      <SidebarChatRow
-                        key={s.id}
-                        session={s}
-                        isCurrent={s.id === currentId}
-                        disableHover={isRecentsScrolling}
-                        queuedCount={queueDepths.get(s.id) ?? 0}
-                        onSelect={handleSelect}
-                        onArchive={handleArchive}
-                        onUnarchive={handleUnarchive}
-                        onDeleteRequest={setDeletingSessionId}
-                        onTogglePin={handleTogglePin}
-                      />
-                    ))
-                  )}
-                </Section>
-              </div>
-
-              {archived.length > 0 && (
-                <div
+          <div className="group/recents min-h-0 flex flex-col flex-1">
+            <Section
+              title="recents"
+              collapsed={recentsCollapsed}
+              onCollapsedChange={setRecentsCollapsed}
+              headerAction={
+                <span
+                  role="button"
+                  tabIndex={onViewAll ? 0 : -1}
                   className={cn(
-                    "min-h-0 flex flex-col",
-                    !archivedCollapsed ? "flex-1" : ""
+                    "ml-auto inline-flex items-center gap-0.5 select-none",
+                    "text-[10px] uppercase tracking-wider transition-colors",
+                    "opacity-0 group-hover/recents:opacity-100",
+                    recentsCollapsed && "hidden",
+                    onViewAll
+                      ? "text-muted-foreground/70 hover:text-muted-foreground cursor-pointer"
+                      : "text-muted-foreground/30 cursor-default"
                   )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!onViewAll) return;
+                    onViewAll();
+                  }}
+                  onKeyDown={(e) => {
+                    if (!onViewAll) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onViewAll();
+                    }
+                  }}
+                  aria-disabled={!onViewAll}
                 >
-                  <Section
-                    title="archived"
-                    count={archived.length}
-                    tone="subtle"
-                    collapsed={archivedCollapsed}
-                    onCollapsedChange={setArchivedCollapsed}
-                    bodyClassName="overflow-y-auto overflow-x-hidden scrollbar-hide"
-                    onBodyScroll={() => handleSliceScroll("archived")}
-                  >
-                    {archived.map((s) => (
-                      <SidebarChatRow
-                        key={s.id}
-                        session={s}
-                        isCurrent={s.id === currentId}
-                        disableHover={isArchivedScrolling}
-                        tone="subtle"
-                        queuedCount={0}
-                        onSelect={handleSelect}
-                        onArchive={handleArchive}
-                        onUnarchive={handleUnarchive}
-                        onDeleteRequest={setDeletingSessionId}
-                        onTogglePin={handleTogglePin}
-                      />
-                    ))}
-                  </Section>
+                  View all <ChevronRight className="h-3 w-3" aria-hidden />
+                </span>
+              }
+              bodyClassName=""
+            >
+              {recentsLoading ? (
+                <div className="px-2.5 py-2 space-y-1.5">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-6 w-full rounded-md" />
+                  ))}
                 </div>
+              ) : recentsLimited.length === 0 ? (
+                <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
+                  {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
+                </div>
+              ) : (
+                recentsLimited.map((s) => (
+                  <SidebarChatRow
+                    key={s.id}
+                    session={s}
+                    isCurrent={s.id === currentId}
+                    queuedCount={queueDepths.get(s.id) ?? 0}
+                    onSelect={handleSelect}
+                    onArchive={handleArchive}
+                    onUnarchive={handleUnarchive}
+                    onDeleteRequest={setDeletingSessionId}
+                    onTogglePin={handleTogglePin}
+                    onRenameRequest={handleRenameRequest}
+                    openConversationMenuId={openConversationMenuId}
+                    setOpenConversationMenuId={setOpenConversationMenuId}
+                  />
+                ))
               )}
-            </div>
+            </Section>
           </div>
         </div>
       </div>
@@ -587,6 +730,56 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
               }}
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!renamingSessionId}
+        onOpenChange={(open) => {
+          if (!open) setRenamingSessionId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename chat</DialogTitle>
+            <DialogDescription>Give this chat a new title.</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <input
+              value={renameTitle}
+              onChange={(e) => setRenameTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const id = renamingSessionId;
+                  if (!id) return;
+                  setRenamingSessionId(null);
+                  void handleRenameConfirmed(id, renameTitle);
+                }
+              }}
+              autoFocus
+              className={cn(
+                "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
+                "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+              )}
+              placeholder="Chat title"
+              aria-label="Chat title"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenamingSessionId(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                const id = renamingSessionId;
+                setRenamingSessionId(null);
+                if (!id) return;
+                await handleRenameConfirmed(id, renameTitle);
+              }}
+            >
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -621,6 +814,10 @@ export function CollapsedChatSidebarButton({
     !diskHydrated && pinned.length === 0 && recents.length === 0;
 
   useEffect(() => {
+    // Bail when all three sections are empty: every fallback target is also
+    // empty, so each setTab lands on another empty tab and re-triggers this
+    // effect → React #185 ("Maximum update depth exceeded").
+    if (pinned.length === 0 && recents.length === 0 && archived.length === 0) return;
     if (tab === "pinned" && pinned.length === 0) {
       setTab(recents.length > 0 ? "recents" : "archived");
     } else if (tab === "recents" && recents.length === 0) {
@@ -780,6 +977,7 @@ function CompactDrawerList({
             onUnarchive={() => {}}
             onDeleteRequest={() => {}}
             onTogglePin={() => {}}
+            onRenameRequest={() => {}}
             showActions={false}
           />
         ))}
@@ -822,85 +1020,28 @@ function ChatRowsSkeleton({ rows }: { rows: number }) {
   );
 }
 
-/** Scheduled (live pipe runs) container — own collapsible scroll
- *  viewport capped at ~25% of available height so even with many
- *  pipes running it never squeezes recents off the screen. Header
- *  shows the count + activity ring so it's obvious at a glance that
- *  something is running in the background. */
-function CollapsibleScheduled({
-  pipes,
-}: {
-  pipes: Array<{
-    pipeName: string;
-    title?: string;
-    executionId?: number;
-    startedAt?: string;
-  }>;
-}) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:scheduled-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:scheduled-collapsed", String(v));
-    } catch {
-      // ignore — collapse state is best-effort
-    }
-  };
-  return (
-    <div className="flex flex-col mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-scheduled"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-          scheduled
-        </span>
-        <PipeActivityIndicator
-          kind="running"
-          label={pipes.length}
-          className="shrink-0"
-          labelClassName="text-muted-foreground/60"
-          ariaLabel={`${pipes.length} running pipe${pipes.length === 1 ? "" : "s"}`}
-        />
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-scheduled"
-          // Cap the scheduled scroll so a long list doesn't take the
-          // whole sidebar. ~max-h-40 ≈ 6 rows; users can scroll within
-          // it. Recents below still gets the rest of the column via
-          // its own flex-1 + min-h-0.
-          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          <div className="flex flex-col">
-            {pipes.map((p) => (
-              <ScheduledRow key={p.pipeName} pipe={p} />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ScheduledRow({
   pipe,
+  session,
+  onStopRun,
+  onTogglePin,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
+  onRenameRequest,
+  openConversationMenuId,
+  setOpenConversationMenuId,
 }: {
   pipe: { pipeName: string; title?: string; startedAt?: string; executionId?: number };
+  session?: SessionRecord;
+  onStopRun: (pipeName: string) => void | Promise<void>;
+  onTogglePin: (id: string) => void | Promise<void>;
+  onArchive: (id: string) => void | Promise<void>;
+  onUnarchive: (id: string) => void | Promise<void>;
+  onDeleteRequest: (id: string | null) => void;
+  onRenameRequest: (id: string) => void;
+  openConversationMenuId?: string | null;
+  setOpenConversationMenuId?: (id: string | null) => void;
 }) {
   // Re-render once a minute so the elapsed badge ticks while the row is
   // mounted. Cheap — at most one timer per visible scheduled pipe and the
@@ -923,23 +1064,11 @@ function ScheduledRow({
     });
   };
   const interactive = pipe.executionId != null;
+  const menuOpen = session ? openConversationMenuId === session.id : false;
   return (
     <div
-      role={interactive ? "button" : undefined}
-      tabIndex={interactive ? 0 : undefined}
-      onClick={interactive ? onClick : undefined}
-      onKeyDown={
-        interactive
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
       className={cn(
-        "flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none",
+        "group relative flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none",
         interactive
           ? "cursor-pointer hover:bg-muted/40"
           : "cursor-default"
@@ -947,15 +1076,152 @@ function ScheduledRow({
       title={`pipe: ${pipe.pipeName}`}
       data-testid={`scheduled-row-${pipe.pipeName}`}
     >
-      <span className="truncate flex-1 text-xs">
-        {pipe.title || pipe.pipeName}
-      </span>
-      <PipeActivityIndicator
-        kind="running"
-        label={elapsed ?? "now"}
-        className="shrink-0"
-        ariaLabel={`running ${elapsed ?? "now"}`}
-      />
+      <div
+        role={interactive ? "button" : undefined}
+        tabIndex={interactive ? 0 : undefined}
+        onClick={interactive ? onClick : undefined}
+        onKeyDown={
+          interactive
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onClick();
+                }
+              }
+            : undefined
+        }
+        className="min-w-0 flex-1 flex items-center gap-2 text-left"
+      >
+        <span className="truncate flex-1 text-xs">
+          {pipe.title || pipe.pipeName}
+        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(
+                "min-w-5 shrink-0 inline-flex justify-end transition-opacity duration-150",
+                // Mirror the recents pattern: kebab overlays the status
+                // slot on hover so the right edge stays aligned with
+                // recents rows whether or not the menu is visible.
+                "group-hover:opacity-0",
+                menuOpen && "opacity-0"
+              )}
+            >
+              <LiveSignal ariaLabel={`running ${elapsed ?? "now"}`} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 lowercase">
+            {`running ${elapsed ?? "now"}`}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+
+      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
+        <DropdownMenu
+          open={menuOpen}
+          onOpenChange={(open) => {
+            if (!session) return;
+            setOpenConversationMenuId?.(open ? session.id : null);
+          }}
+        >
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
+                menuOpen
+                  ? "opacity-100 visible"
+                  : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
+              )}
+              aria-label="pipe actions"
+            >
+              <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            alignOffset={2}
+            side="bottom"
+            sideOffset={4}
+            collisionPadding={8}
+            className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <DropdownMenuItem
+              className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+              onSelect={(e) => {
+                e.stopPropagation();
+                void onStopRun(pipe.pipeName);
+              }}
+            >
+              <Square className="h-3 w-3 text-muted-foreground" />
+              Stop run
+            </DropdownMenuItem>
+            {session && (
+              <>
+                <DropdownMenuSeparator className="my-1 bg-border/70" />
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    void onTogglePin(session.id);
+                  }}
+                >
+                  <Pin className="h-3 w-3 text-muted-foreground" />
+                  {session.pinned ? "Unpin" : "Pin"}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    onRenameRequest(session.id);
+                  }}
+                >
+                  <Pencil className="h-3 w-3 text-muted-foreground" />
+                  Rename
+                </DropdownMenuItem>
+                {!session.hidden ? (
+                  <DropdownMenuItem
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    onSelect={(e) => {
+                      e.stopPropagation();
+                      void onArchive(session.id);
+                    }}
+                  >
+                    <Archive className="h-3 w-3 text-muted-foreground" />
+                    Archive
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    onSelect={(e) => {
+                      e.stopPropagation();
+                      void onUnarchive(session.id);
+                    }}
+                  >
+                    <Undo2 className="h-3 w-3 text-muted-foreground" />
+                    Unarchive
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator className="my-1 bg-border/70" />
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    onDeleteRequest(session.id);
+                  }}
+                >
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
@@ -1090,6 +1356,7 @@ function Section({
   tone = "default",
   collapsed,
   onCollapsedChange,
+  headerAction,
   bodyClassName,
   onBodyScroll,
   children,
@@ -1099,6 +1366,7 @@ function Section({
   tone?: "default" | "subtle";
   collapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
+  headerAction?: React.ReactNode;
   bodyClassName: string;
   onBodyScroll?: () => void;
   children: React.ReactNode;
@@ -1109,34 +1377,50 @@ function Section({
         type="button"
         onClick={() => onCollapsedChange(!collapsed)}
         className={cn(
-          "shrink-0 px-2.5 py-1.5 flex items-center gap-1 rounded-md text-left",
-          tone === "subtle" ? "hover:bg-muted/20" : "hover:bg-muted/30"
+          // Light header row — avoid the "boxed section" look.
+          "group/section shrink-0 px-2.5 py-1 flex items-center gap-1 rounded-sm text-left",
+          tone === "subtle" ? "hover:bg-muted/10" : "hover:bg-muted/15"
         )}
         aria-expanded={!collapsed}
       >
-        {collapsed ? (
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0",
-              tone === "subtle" ? "text-muted-foreground/45" : "text-muted-foreground/60"
-            )}
-          />
-        ) : (
-          <ChevronDown
-            className={cn(
-              "h-3 w-3 shrink-0",
-              tone === "subtle" ? "text-muted-foreground/45" : "text-muted-foreground/60"
-            )}
-          />
-        )}
         <span
           className={cn(
             "text-[10px] uppercase tracking-wider flex-1",
-            tone === "subtle" ? "text-muted-foreground/45" : "text-muted-foreground/60"
+            tone === "subtle" ? "text-muted-foreground/55" : "text-muted-foreground/70",
+            "group-hover/section:text-muted-foreground group-focus-within/section:text-muted-foreground"
           )}
         >
-          {title}
+          <span className="inline-flex items-center gap-1">
+            <span>{title}</span>
+            <span
+              className={cn(
+                "inline-flex items-center transition-opacity",
+                // Hidden by default; appears on hover/focus of the section group.
+                "opacity-0 group-hover/section:opacity-100 group-focus-visible/section:opacity-100"
+              )}
+              aria-hidden
+            >
+              {collapsed ? (
+                <ChevronRight
+                  className={cn(
+                    "h-3 w-3",
+                    tone === "subtle" ? "text-muted-foreground/55" : "text-muted-foreground/70",
+                    "group-hover/section:text-muted-foreground group-focus-visible/section:text-muted-foreground"
+                  )}
+                />
+              ) : (
+                <ChevronDown
+                  className={cn(
+                    "h-3 w-3",
+                    tone === "subtle" ? "text-muted-foreground/55" : "text-muted-foreground/70",
+                    "group-hover/section:text-muted-foreground group-focus-visible/section:text-muted-foreground"
+                  )}
+                />
+              )}
+            </span>
+          </span>
         </span>
+        {headerAction}
         {count !== undefined && (
           <span
             className={cn(
@@ -1148,11 +1432,16 @@ function Section({
           </span>
         )}
       </button>
-      {!collapsed && (
-        <div className={bodyClassName} onScroll={onBodyScroll}>
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200 ease-in-out",
+          collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
+        )}
+      >
+        <div className={cn("overflow-hidden", bodyClassName)} onScroll={collapsed ? undefined : onBodyScroll}>
           <div className="flex flex-col">{children}</div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1162,14 +1451,16 @@ interface ChatRowProps {
   isCurrent: boolean;
   disableHover?: boolean;
   tone?: "default" | "subtle";
-  leadingIndicator?: React.ReactNode;
   queuedCount: number;
   onSelect: (id: string) => void;
-  onArchive: (e: React.MouseEvent, id: string) => Promise<void> | void;
-  onUnarchive: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onArchive: (id: string) => Promise<void> | void;
+  onUnarchive: (id: string) => Promise<void> | void;
   onDeleteRequest: (id: string | null) => void;
-  onTogglePin: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onTogglePin: (id: string) => Promise<void> | void;
+  onRenameRequest: (id: string) => void;
   showActions?: boolean;
+  openConversationMenuId?: string | null;
+  setOpenConversationMenuId?: (id: string | null) => void;
 }
 
 /**
@@ -1181,8 +1472,7 @@ interface ChatRowProps {
  * (That's why "delete chat doesn't work" — the X click was eaten by the
  * outer button.)
  *
- * Left-side bullet stays stable; the right-side status slot carries
- * exactly one signal:
+ * Right-side status slot carries exactly one signal:
  *   loading dot → streaming/thinking/tool/queued
  *   unread dot  → new content
  *   compact age → idle/read
@@ -1196,14 +1486,16 @@ export function SidebarChatRow({
   isCurrent,
   disableHover = false,
   tone = "default",
-  leadingIndicator,
   queuedCount,
   onSelect,
   onArchive,
   onUnarchive,
   onDeleteRequest,
   onTogglePin,
+  onRenameRequest,
   showActions = true,
+  openConversationMenuId,
+  setOpenConversationMenuId,
 }: ChatRowProps) {
   const isLive =
     session.status === "streaming" ||
@@ -1215,19 +1507,12 @@ export function SidebarChatRow({
   const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
   const now = useMinuteTick(!isLive && !isUnread && !isError && queuedCount === 0);
   const age = formatCompactAge(activityAt, now);
+  const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
+  const menuOpen = openConversationMenuId === session.id;
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onSelect(session.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect(session.id);
-        }
-      }}
       className={cn(
-        "group relative flex flex-col items-stretch text-left px-2.5 py-1 rounded-md cursor-pointer select-none",
+        "group relative flex items-center gap-2 px-2.5 py-1 rounded-md select-none",
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
@@ -1236,25 +1521,25 @@ export function SidebarChatRow({
               ? "text-muted-foreground/75"
               : "text-muted-foreground"
             : tone === "subtle"
-              ? "text-muted-foreground/75 hover:bg-muted/25"
-              : "text-muted-foreground hover:bg-muted/40"
+              ? "text-muted-foreground/75 hover:bg-muted/12"
+              : "text-muted-foreground hover:bg-muted/20"
       )}
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
     >
-      <div className="flex items-center gap-2 min-w-0">
-          {leadingIndicator ? (
-            <span className="h-3 w-3 shrink-0 flex items-center justify-center" aria-label="pinned">
-              {leadingIndicator}
-            </span>
-          ) : (
-            <RowBullet />
-          )}
+      <button
+        type="button"
+        className="min-w-0 flex-1 flex items-center gap-2 text-left"
+        onClick={() => {
+          setOpenConversationMenuId?.(null);
+          onSelect(session.id);
+        }}
+      >
         <span
           className={cn(
-            "truncate flex-1 text-xs",
+            "truncate flex-1 text-xs font-normal",
             isUnread
-              ? "font-semibold text-foreground"
+              ? "font-medium text-foreground"
               : isCurrent
                 ? "text-foreground/80"
                 : tone === "subtle"
@@ -1262,13 +1547,14 @@ export function SidebarChatRow({
                 : "text-muted-foreground"
           )}
         >
-          {session.title || "untitled"}
+          {(isConversationHistorySyncPrompt(session.title) ? undefined : session.title) || "untitled"}
         </span>
-        <span className="ml-1 w-10 h-4 shrink-0 relative">
+        <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
           <span
             className={cn(
-              "absolute inset-0 inline-flex items-center justify-end transition-opacity duration-100",
-              canShowActions ? "opacity-100 group-hover:opacity-0" : "opacity-100"
+              "absolute inset-y-0 right-0 flex items-center justify-end transition-opacity duration-150",
+              canSwapAgeForMenu && "group-hover:opacity-0",
+              menuOpen && "opacity-0"
             )}
           >
             <RowRightSignal
@@ -1280,123 +1566,111 @@ export function SidebarChatRow({
               age={age}
             />
           </span>
-          {/* hover-only actions in a fixed slot to avoid row reflow flicker */}
-          <span
-            className={cn(
-              "absolute inset-0 inline-flex items-center justify-end gap-0.5 transition-opacity duration-100",
-              canShowActions
-                ? "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
-                : "opacity-0 pointer-events-none"
-            )}
-          >
-            {!session.hidden ? (
-              <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onTogglePin(e, session.id);
-                      }}
-                      className="p-0.5 rounded hover:bg-muted"
-                      title={session.pinned ? "unpin" : "pin"}
-                      aria-label={session.pinned ? "unpin" : "pin"}
-                    >
-                      <Pin
-                        className={cn(
-                          "h-3 w-3",
-                          session.pinned
-                            ? "text-foreground fill-current"
-                            : "text-muted-foreground"
-                        )}
-                      />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="text-xs">
-                    {session.pinned ? "Unpin" : "Pin"}
-                  </TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onArchive(e, session.id);
-                      }}
-                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-                      title="archive chat"
-                      aria-label="archive chat"
-                    >
-                      <Archive className="h-3 w-3" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="text-xs">
-                    Archive
-                  </TooltipContent>
-                </Tooltip>
-              </>
-            ) : (
-              <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onUnarchive(e, session.id);
-                      }}
-                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-                      title="unarchive"
-                      aria-label="unarchive"
-                    >
-                      <Undo2 className="h-3 w-3" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="text-xs">
-                    Unarchive
-                  </TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteRequest(session.id);
-                      }}
-                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-                      title="delete forever"
-                      aria-label="delete forever"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="text-xs">
-                    Delete forever
-                  </TooltipContent>
-                </Tooltip>
-              </>
-            )}
-          </span>
         </span>
-      </div>
+      </button>
+
+      {canShowActions && (
+        // Absolute so the menu overlays the age slot instead of reserving
+        // its own column. Without this, recents rows sit ~28px further from
+        // the right edge than scheduled rows (gap-2 + w-5) and read as
+        // misaligned even when the menu is invisible.
+        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
+          <DropdownMenu
+            open={menuOpen}
+            onOpenChange={(open) => {
+              setOpenConversationMenuId?.(open ? session.id : null);
+            }}
+          >
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                className={cn(
+                  "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
+                  menuOpen
+                    ? "opacity-100 visible"
+                    : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
+                )}
+                aria-label="conversation actions"
+              >
+                <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              alignOffset={2}
+              side="bottom"
+              sideOffset={4}
+              collisionPadding={8}
+              className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <DropdownMenuItem
+                className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                onSelect={(e) => {
+                  e.stopPropagation();
+                  void onTogglePin(session.id);
+                }}
+              >
+                <Pin className="h-3 w-3 text-muted-foreground" />
+                {session.pinned ? "Unpin" : "Pin"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                onSelect={(e) => {
+                  e.stopPropagation();
+                  onRenameRequest(session.id);
+                }}
+              >
+                <Pencil className="h-3 w-3 text-muted-foreground" />
+                Rename
+              </DropdownMenuItem>
+              {!session.hidden ? (
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    void onArchive(session.id);
+                  }}
+                >
+                  <Archive className="h-3 w-3 text-muted-foreground" />
+                  Archive
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    void onUnarchive(session.id);
+                  }}
+                >
+                  <Undo2 className="h-3 w-3 text-muted-foreground" />
+                  Unarchive
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator className="my-1 bg-border/70" />
+              <DropdownMenuItem
+                className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
+                onSelect={(e) => {
+                  e.stopPropagation();
+                  onDeleteRequest(session.id);
+                }}
+              >
+                <Trash2 className="h-3 w-3 text-destructive" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
     </div>
   );
 }
 
 /** Stable left-side bullet. State belongs in the right slot so each row
  *  reads as one clear signal instead of two competing indicators. */
-function RowBullet() {
-  return (
-    <span
-      className="h-1.5 w-1.5 rounded-full border border-muted-foreground/40 shrink-0"
-      aria-hidden
-    />
-  );
-}
-
 function RowRightSignal({
   isLive,
   isError,
@@ -1412,53 +1686,65 @@ function RowRightSignal({
   status: string;
   age: string | null;
 }) {
-  const content = (() => {
+  const { content, label } = ((): { content: React.ReactNode; label: string | null } => {
     if (isError) {
-      return (
-        <AlertCircle
-          className="h-3 w-3 text-red-500"
-          aria-label="error"
-        />
-      );
+      return {
+        content: <AlertCircle className="h-3 w-3 text-red-500" aria-label="error" />,
+        label: "error",
+      };
     }
     if (isLive) {
-      return <LiveSignal ariaLabel={status} />;
+      const live =
+        status === "thinking" ? "thinking" :
+        status === "tool" ? "using tool" :
+        "streaming";
+      return { content: <LiveSignal ariaLabel={live} />, label: live };
     }
     if (queuedCount > 0) {
-      return <LiveSignal ariaLabel={`${queuedCount} queued`} />;
+      const q = `${queuedCount} queued`;
+      return { content: <LiveSignal ariaLabel={q} />, label: q };
     }
     if (isUnread) {
-      return (
-        <span
-          className="h-1.5 w-1.5 rounded-full bg-foreground"
-          aria-label="unread"
-        />
-      );
+      return {
+        content: (
+          <span
+            className="font-mono text-[10px] leading-none text-foreground inline-flex items-center justify-center w-2.5 h-2.5"
+            aria-label="unread"
+          >
+            █
+          </span>
+        ),
+        label: "new",
+      };
     }
     if (age) {
-      return (
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {age}
-        </span>
-      );
+      return {
+        content: (
+          <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+            {age}
+          </span>
+        ),
+        label: null,
+      };
     }
-    return null;
+    return { content: null, label: null };
   })();
 
   if (!content) return null;
 
-  return <span className="min-w-5 shrink-0 inline-flex justify-end">{content}</span>;
-}
+  const wrapper = (
+    <span className="min-w-5 shrink-0 inline-flex justify-end">{content}</span>
+  );
 
-function LiveSignal({ ariaLabel = "loading" }: { ariaLabel?: string }) {
+  if (!label) return wrapper;
+
   return (
-    <span
-      className="relative h-2 w-2 shrink-0 flex items-center justify-center"
-      aria-label={ariaLabel}
-    >
-      <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-      <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>{wrapper}</TooltipTrigger>
+      <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 lowercase">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

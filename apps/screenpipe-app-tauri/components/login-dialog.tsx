@@ -19,7 +19,7 @@ export function LoginDialog() {
         <DialogHeader>
           <DialogTitle>login required</DialogTitle>
           <DialogDescription>
-            please login to continue. you will be redirected to screenpi.pe
+            please login to continue. you will be redirected to screenpipe.com
           </DialogDescription>
         </DialogHeader>
         <div className="flex justify-end">

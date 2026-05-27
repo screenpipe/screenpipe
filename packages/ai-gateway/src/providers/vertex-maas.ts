@@ -330,7 +330,50 @@ export class VertexMaasProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): any[] {
-		return messages.map((msg) => ({
+		// Drop orphan tool messages (tool_call_id with no matching assistant
+		// tool_calls earlier in the array, or a content `tool_result` part on
+		// a user/tool message whose id was never emitted). Vertex MaaS rejects
+		// the whole batch with 400 "No tool calls but found tool output" if
+		// even one orphan slips through — typically after chat history pruning
+		// or message edits.
+		const knownToolCallIds = new Set<string>();
+		const collectIds = (msg: Message) => {
+			if (msg.role !== 'assistant') return;
+			for (const call of ((msg as any).tool_calls ?? [])) {
+				if (call?.id) knownToolCallIds.add(call.id);
+			}
+			if (Array.isArray(msg.content)) {
+				for (const part of msg.content as any[]) {
+					if (part?.type === 'tool_use' && part.id) knownToolCallIds.add(part.id);
+				}
+			}
+		};
+		const isOrphanToolMessage = (msg: Message): boolean => {
+			if (msg.role === 'tool') {
+				// Missing OR unknown tool_call_id — Vertex 400s either way with
+				// "No tool calls but found tool output". The previous guard
+				// (`!!msg.tool_call_id && ...`) kept tool-role messages whose
+				// id was simply absent, which the output mapper below then
+				// stripped via conditional spread — Vertex saw a bare role:'tool'
+				// and rejected the whole batch.
+				return !msg.tool_call_id || !knownToolCallIds.has(msg.tool_call_id);
+			}
+			if (Array.isArray(msg.content)) {
+				const hasToolResult = (msg.content as any[]).some((p) => p?.type === 'tool_result');
+				if (!hasToolResult) return false;
+				return (msg.content as any[]).every(
+					(p) => p?.type !== 'tool_result' || (p?.tool_use_id && !knownToolCallIds.has(p.tool_use_id)),
+				);
+			}
+			return false;
+		};
+		const filtered: Message[] = [];
+		for (const msg of messages) {
+			collectIds(msg);
+			if (isOrphanToolMessage(msg)) continue;
+			filtered.push(msg);
+		}
+		return filtered.map((msg) => ({
 			role: msg.role,
 			...this.formatMessageContent(msg),
 			...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
@@ -339,12 +382,24 @@ export class VertexMaasProvider implements AIProvider {
 	}
 
 	private formatMessageContent(msg: Message): { content: any; tool_calls?: any[] } {
+		// Preserve top-level OpenAI-style tool_calls regardless of content shape.
+		// The common assistant payload is { content: '', tool_calls: [...] }
+		// (string content, not array) — dropping tool_calls here breaks the
+		// next tool-response message because Vertex sees the assistant with
+		// no tool_calls and rejects the batch with "No tool calls but found
+		// tool output".
+		const topLevelToolCalls: any[] = [...((msg as any).tool_calls ?? [])];
+
 		if (!Array.isArray(msg.content)) {
-			return { content: nonEmptyText(msg.content) ?? '' };
+			const out: { content: any; tool_calls?: any[] } = {
+				content: nonEmptyText(msg.content) ?? (topLevelToolCalls.length > 0 ? null : ''),
+			};
+			if (topLevelToolCalls.length > 0) out.tool_calls = topLevelToolCalls;
+			return out;
 		}
 
 		const content: any[] = [];
-		const toolCalls: any[] = [...((msg as any).tool_calls ?? [])];
+		const toolCalls: any[] = topLevelToolCalls;
 
 		for (const part of msg.content as any[]) {
 			const type = part?.type;

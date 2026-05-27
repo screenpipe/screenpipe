@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+screenpipe captures accessibility trees, with OCR as fallback and conversations, and index them for AI consumption locally
+
+it provides the context layer to allow the upcoming singularity to maximize civilization economic growth  
+
 ## Product vision
 Read `VISION.md` before making product decisions, adding features, or changing UX. Stability over features. Activation over new capabilities. No feature creep.
 
@@ -21,12 +25,6 @@ Use `#` for Python, `//` for Rust/TS/JS/Swift. Keep it as the first comment in t
 ## Package Manager
 - Use `bun` for JS/TS (not npm or pnpm)
 - Use `cargo` for Rust
-
-## Key Directories
-- `apps/screenpipe-app-tauri/` - Desktop app (Tauri + Next.js)
-- `crates/screenpipe-server/` - Core backend (Rust)
-- `crates/screenpipe-audio/` - Audio capture/transcription (Rust)
-- `crates/screenpipe-vision/` - Screen capture/accessibility text (OCR fallback) (Rust)
 
 ## Testing
 - `cargo test` for Rust

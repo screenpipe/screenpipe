@@ -5,6 +5,7 @@
 pub mod audio;
 pub mod auth;
 pub mod backup;
+mod browser;
 pub mod connection;
 pub mod db;
 pub mod install;
@@ -12,9 +13,12 @@ pub mod login;
 pub mod mcp;
 pub mod pipe;
 pub mod presets;
+pub mod search;
 pub mod status;
 mod store_file;
+pub mod survey;
 pub mod sync;
+pub mod team;
 pub mod vault;
 pub mod vision;
 
@@ -181,6 +185,19 @@ pub enum Command {
         port: u16,
     },
 
+    /// Search screen + audio history directly from the local SQLite DB
+    /// (no daemon required — opens `~/.screenpipe/db.sqlite` read-side
+    /// via WAL while sp may be writing).
+    Search(SearchArgs),
+
+    /// Enterprise: query teammates' screen + audio history via
+    /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a
+    /// `team_api_token` minted at https://screenpi.pe/enterprise?tab=tokens.
+    Team {
+        #[command(subcommand)]
+        subcommand: TeamCommand,
+    },
+
     /// Manage pipes (scheduled agents on screen data)
     Pipe {
         #[command(subcommand)]
@@ -241,6 +258,9 @@ pub enum Command {
 
     /// Show current auth status
     Whoami,
+
+    /// Open the screenpipe survey in your browser
+    Survey,
 
     /// Check system readiness (permissions, ffmpeg, etc.)
     Doctor,
@@ -303,6 +323,11 @@ pub struct RecordArgs {
     /// Ignored on non-Windows platforms and unsupported endpoints.
     #[arg(long, default_value_t = false)]
     pub windows_input_aec_enabled: bool,
+
+    /// [experimental, macOS] Request VoiceProcessingIO AEC on the default microphone.
+    /// Ignored on non-macOS platforms and non-default input devices.
+    #[arg(long, default_value_t = false)]
+    pub macos_input_vpio_enabled: bool,
 
     /// Data directory. Default to $HOME/.screenpipe
     #[arg(long, value_hint = ValueHint::DirPath)]
@@ -369,11 +394,17 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
 
-    /// Windows to ignore (by title, uses contains matching)
+    /// Windows to ignore (case-insensitive contains). Use `App::Title` to
+    /// scope to one window of one app (e.g. `Slack::#hr`). `::title` matches
+    /// any app whose focused window title contains `title`. `App::` blocks
+    /// the entire app (equivalent to bare `App`).
     #[arg(long)]
     pub ignored_windows: Vec<String>,
 
-    /// Windows to include (by title, uses contains matching)
+    /// Windows to include (case-insensitive contains). Scoped entries
+    /// (`App::Title`) create a per-app whitelist; other apps remain
+    /// unaffected. Unscoped entries keep the legacy "must match app or
+    /// title" global-include semantics.
     #[arg(long)]
     pub included_windows: Vec<String>,
 
@@ -400,6 +431,76 @@ pub struct RecordArgs {
     /// Video quality preset: low, balanced, high, max
     #[arg(long, default_value = "balanced")]
     pub video_quality: String,
+
+    /// Mitsukeru fork: override the active PowerProfile's idle_capture_interval_ms.
+    /// Forces this idle snapshot interval regardless of power mode. Useful for
+    /// fixed desktop / long-running recording where AC-power Performance defaults
+    /// (30s) are too aggressive. Reference: Balanced=60_000, Saver=120_000.
+    #[arg(long)]
+    pub idle_capture_interval_ms: Option<u64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::visual_check_interval_ms`.
+    /// Sets the interval between frame-diff checks (set to 0 to disable visual change detection).
+    #[arg(long)]
+    pub visual_check_interval_ms: Option<u64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::visual_change_threshold` (0.0–1.0).
+    /// Frame diff above this threshold triggers a VisualChange capture.
+    #[arg(long)]
+    pub visual_change_threshold: Option<f64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::min_capture_interval_ms`.
+    /// Debounce floor between any two captures.
+    #[arg(long)]
+    pub min_capture_interval_ms: Option<u64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_keystroke`.
+    /// When true, non-printable key events (Arrow/Enter/Tab/Esc, modifier
+    /// combos like Ctrl+S) fire a paired capture so `ui_events.frame_id`
+    /// is populated for the originating row. Off by default — fast typing
+    /// can flood the pipeline even with the min-capture-interval debounce.
+    #[arg(long)]
+    pub capture_on_keystroke: Option<bool>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_clipboard`.
+    /// When true, clipboard changes fire a paired capture so the clipboard
+    /// row's `frame_id` is linked. Off by default — adds 50-150ms of
+    /// blocking work per Ctrl+C/X/V (more with OCR fallback) which can
+    /// cause visible HID input lag on some USB devices.
+    #[arg(long)]
+    pub capture_on_clipboard: Option<bool>,
+
+    /// Override `UiRecorderConfig::capture_scroll` — record scroll wheel
+    /// events into `ui_events`. Off by default because wheel ticks fire
+    /// at ~60Hz and inflate the table fast. When on, the recorder's
+    /// `ScrollBurstTracker` coalesces a wheel flick into one
+    /// `ScrollStop` trigger at burst-end so only the last row in a burst
+    /// gets `frame_id` linked.
+    #[arg(long)]
+    pub capture_scroll: Option<bool>,
+
+    /// Prioritize mouse/keyboard input latency over a11y event metadata completeness.
+    /// When enabled, three opt-in optimizations are activated together:
+    ///   1. mouse/keyboard hook locks switch to try_lock (contended → app_name/window=None)
+    ///   2. a11y extraction threads self-deprioritize via SetThreadPriority
+    ///   3. UIA tree captures are skipped within N ms after the most recent input
+    ///
+    /// Fine-tune via --extraction-thread-priority and --pause-extraction-on-input-ms.
+    #[arg(long, default_value_t = false)]
+    pub prioritize_input_latency: bool,
+
+    /// OS thread priority for a11y extraction threads when --prioritize-input-latency is set.
+    /// Lower values yield CPU more aggressively to user input threads. Ignored otherwise.
+    /// Values: "normal" / "below_normal" / "lowest" / "idle".
+    #[arg(long, default_value = "below_normal")]
+    pub extraction_thread_priority: String,
+
+    /// Skip UIA tree captures within this many ms after the most recent mouse/keyboard input.
+    /// 0 disables. Ignored when --prioritize-input-latency is off.
+    /// Captures immediately after input are likely to be stale (next input is imminent),
+    /// so skipping costs little data and frees CPU for input responsiveness.
+    #[arg(long, default_value_t = 150)]
+    pub pause_extraction_on_input_ms: u64,
 
     /// Enable cloud sync
     #[arg(long, default_value_t = false)]
@@ -491,6 +592,7 @@ pub struct RecordArgSources {
     pub use_system_default_audio: bool,
     pub experimental_coreaudio_system_audio: bool,
     pub windows_input_aec_enabled: bool,
+    pub macos_input_vpio_enabled: bool,
     pub audio_transcription_engine: bool,
     pub monitor_id: bool,
     pub use_all_monitors: bool,
@@ -534,6 +636,7 @@ impl RecordArgSources {
                 "experimental_coreaudio_system_audio",
             ),
             windows_input_aec_enabled: from_command_line(record, "windows_input_aec_enabled"),
+            macos_input_vpio_enabled: from_command_line(record, "macos_input_vpio_enabled"),
             audio_transcription_engine: from_command_line(record, "audio_transcription_engine"),
             monitor_id: from_command_line(record, "monitor_id"),
             use_all_monitors: from_command_line(record, "use_all_monitors"),
@@ -569,6 +672,7 @@ impl RecordArgSources {
             || self.use_system_default_audio
             || self.experimental_coreaudio_system_audio
             || self.windows_input_aec_enabled
+            || self.macos_input_vpio_enabled
             || self.audio_transcription_engine
             || self.monitor_id
             || self.use_all_monitors
@@ -613,6 +717,11 @@ impl RecordArgs {
 
     /// Create UI recorder configuration from record arguments
     pub fn to_ui_recorder_config(&self) -> crate::ui_recorder::UiRecorderConfig {
+        // Mirror `--capture-on-keystroke` / `--capture-on-clipboard` into
+        // the recorder so it doesn't mint corr_ids for triggers the
+        // capture loop will drop. None = engine default (false), same as
+        // in `RecordingConfig::to_ui_recorder_config`.
+        let defaults = crate::ui_recorder::UiRecorderConfig::default();
         crate::ui_recorder::UiRecorderConfig {
             enabled: true,
             enable_tree_walker: true,
@@ -624,7 +733,14 @@ impl RecordArgs {
             // `true` for both, so opting out has to be explicit.
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
-            ..Default::default()
+            capture_on_keystroke: self
+                .capture_on_keystroke
+                .unwrap_or(defaults.capture_on_keystroke),
+            capture_on_clipboard: self
+                .capture_on_clipboard
+                .unwrap_or(defaults.capture_on_clipboard),
+            capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
+            ..defaults
         }
     }
 
@@ -652,6 +768,7 @@ impl RecordArgs {
             use_system_default_audio: self.use_system_default_audio,
             experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
             windows_input_aec_enabled: self.windows_input_aec_enabled,
+            macos_input_vpio_enabled: self.macos_input_vpio_enabled,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
             // Explicit `--monitor-id` implies opting out of `--use-all-monitors`.
             // `use_all_monitors` has `default_value_t = true`, so without this
@@ -670,6 +787,16 @@ impl RecordArgs {
             video_quality: self.video_quality.clone(),
             disable_snapshot_compaction: self.disable_snapshot_compaction,
             disable_meeting_detector: self.disable_meeting_detector,
+            idle_capture_interval_ms: self.idle_capture_interval_ms,
+            visual_check_interval_ms: self.visual_check_interval_ms,
+            visual_change_threshold: self.visual_change_threshold,
+            min_capture_interval_ms: self.min_capture_interval_ms,
+            capture_on_keystroke: self.capture_on_keystroke,
+            capture_on_clipboard: self.capture_on_clipboard,
+            capture_scroll: self.capture_scroll,
+            prioritize_input_latency: self.prioritize_input_latency,
+            extraction_thread_priority: self.extraction_thread_priority.clone(),
+            pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
@@ -840,6 +967,9 @@ impl RecordArgs {
         }
         if sources.windows_input_aec_enabled {
             settings.windows_input_aec_enabled = self.windows_input_aec_enabled;
+        }
+        if sources.macos_input_vpio_enabled {
+            settings.macos_input_vpio_enabled = self.macos_input_vpio_enabled;
         }
         if sources.audio_transcription_engine {
             settings.audio_transcription_engine =
@@ -1272,6 +1402,195 @@ pub enum AuthCommand {
 }
 
 // =============================================================================
+// Search args
+// =============================================================================
+
+/// Mirrors the HTTP `/search` query string so terminal use, jq filters, and
+/// pipe scripts share the same vocabulary. Output is the same `ContentItem`
+/// shape the API returns — `screenpipe search` and `curl /search` are
+/// interchangeable for downstream consumers.
+#[derive(Parser, Clone, Debug)]
+pub struct SearchArgs {
+    /// Search query (omit for a time-only browse — pair with `--start`).
+    #[arg(value_name = "QUERY")]
+    pub q: Option<String>,
+
+    /// Content kind: all | ocr | audio | accessibility | input | memory
+    #[arg(long, default_value = "all")]
+    pub content_type: String,
+
+    /// Max results returned (default 10 to protect terminals).
+    #[arg(short = 'n', long, default_value_t = 10)]
+    pub limit: u32,
+
+    /// Pagination offset.
+    #[arg(long, default_value_t = 0)]
+    pub offset: u32,
+
+    /// Start of the time window. Accepts ISO 8601 (`2026-01-15T10:00:00Z`)
+    /// or relative (`30m ago`, `2h ago`, `7d ago`, `now`).
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// End of the time window. Same accepted formats as `--start`. Defaults
+    /// to now if `--start` is set.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Filter by app name (case-insensitive substring).
+    #[arg(long)]
+    pub app: Option<String>,
+
+    /// Filter by window title (case-insensitive substring).
+    #[arg(long)]
+    pub window: Option<String>,
+
+    /// Filter by browser URL substring.
+    #[arg(long)]
+    pub browser_url: Option<String>,
+
+    /// Filter by frame_name substring.
+    #[arg(long)]
+    pub frame_name: Option<String>,
+
+    /// Filter by speaker name (audio rows, case-insensitive partial match).
+    #[arg(long)]
+    pub speaker: Option<String>,
+
+    /// Restrict to focused-window rows only.
+    #[arg(long)]
+    pub focused: bool,
+
+    /// Restrict accessibility hits to text visually present on the captured
+    /// frame (drops off-screen scrollback). Only meaningful for content_type
+    /// = `accessibility` or `all`.
+    #[arg(long)]
+    pub on_screen: bool,
+
+    /// Filter results by device name (e.g. "MacBook Pro").
+    #[arg(long)]
+    pub device_name: Option<String>,
+
+    /// Filter results by machine identifier (sync UUID).
+    #[arg(long)]
+    pub machine_id: Option<String>,
+
+    /// Drop rows whose text is shorter than this many chars.
+    #[arg(long)]
+    pub min_length: Option<usize>,
+
+    /// Drop rows whose text is longer than this many chars.
+    #[arg(long)]
+    pub max_length: Option<usize>,
+
+    /// Middle-truncate each result's text to this many chars before printing.
+    #[arg(long)]
+    pub max_content_length: Option<usize>,
+
+    /// Data directory. Default `$HOME/.screenpipe`.
+    #[arg(long, value_hint = ValueHint::DirPath)]
+    pub data_dir: Option<String>,
+
+    /// Emit JSON-lines (one ContentItem per line) instead of human text.
+    /// The schema matches `GET /search` exactly.
+    #[arg(long)]
+    pub json: bool,
+}
+
+// =============================================================================
+// Team (enterprise) subcommands
+// =============================================================================
+
+/// Mirrors the `screenpipe-team` skill 1:1 — same endpoints, same vocabulary.
+/// All three variants hit `https://screenpi.pe/api/enterprise/v1/*` directly
+/// with the admin's `team_api_token` from `~/.screenpipe/enterprise.json`
+/// (or `SCREENPIPE_TEAM_API_TOKEN` env override). No daemon needed.
+#[derive(Subcommand, Debug)]
+pub enum TeamCommand {
+    /// List devices reporting to this org
+    Devices(TeamDevicesArgs),
+    /// Substring search across the team's screen + audio history
+    Search(TeamSearchArgs),
+    /// Chronological dump for one device — use after `devices` + `search`
+    /// have narrowed down a person and a moment
+    Records(TeamRecordsArgs),
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamDevicesArgs {
+    /// Emit compact JSON-lines (one device per line). Default is pretty JSON.
+    #[arg(long)]
+    pub raw: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamSearchArgs {
+    /// Search query (case-insensitive substring across app, window, frame
+    /// text, audio transcript, speaker, device label, browser URL).
+    pub query: String,
+
+    /// Restrict to one device — get the id from `screenpipe team devices`.
+    #[arg(long)]
+    pub device_id: Option<String>,
+
+    /// Exact match on app_name (case-insensitive), e.g. `Excel`, `Slack`.
+    #[arg(long)]
+    pub app: Option<String>,
+
+    /// Relative time window — accepts `24h`, `2d`, `30m`, `1w`. Default 24h.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// ISO 8601 start (alternative to `--since`).
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// ISO 8601 end. Defaults to now.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Max results. Server caps at 200; default 20 to protect terminals.
+    #[arg(short = 'n', long, default_value_t = 20)]
+    pub limit: u32,
+
+    /// Emit compact JSON-lines (one result per line). Default is pretty JSON.
+    #[arg(long)]
+    pub raw: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamRecordsArgs {
+    /// Device id to dump records for (required — without it you'd get the
+    /// whole org, which is rarely useful).
+    #[arg(long)]
+    pub device_id: String,
+
+    /// Record kind: `frame` (screen) / `audio` / `all`. Default `all`.
+    #[arg(long, default_value = "all")]
+    pub kind: String,
+
+    /// Relative time window — `4h`, `1d`, `30m`. Default 4h.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// ISO 8601 start (alternative to `--since`).
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// ISO 8601 end. Defaults to now.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Max records. Server caps at 200; default 50.
+    #[arg(short = 'n', long, default_value_t = 50)]
+    pub limit: u32,
+
+    /// Emit compact JSON-lines (one record per line). Default is pretty JSON.
+    #[arg(long)]
+    pub raw: bool,
+}
+
+// =============================================================================
 // Other subcommands
 // =============================================================================
 
@@ -1477,6 +1796,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_survey_command_parses() {
+        let cli = Cli::try_parse_from(["screenpipe", "survey"]).unwrap();
+        match cli.command {
+            Command::Survey => {}
+            _ => panic!("expected Survey command"),
+        }
+    }
+
     /// `--monitor-id` must override the `--use-all-monitors=true` default so
     /// that users restricting capture for privacy actually get only the
     /// monitors they listed. Regression test for Francesco's report
@@ -1547,10 +1875,12 @@ mod tests {
             Cli::try_parse_from(["screenpipe", "record", "--port", "4040", "--disable-audio"])
                 .unwrap();
         let sources = record_sources(["screenpipe", "record", "--port", "4040", "--disable-audio"]);
-        let mut settings = screenpipe_config::RecordingSettings::default();
-        settings.port = 3030;
-        settings.disable_audio = false;
-        settings.use_pii_removal = false;
+        let mut settings = screenpipe_config::RecordingSettings {
+            port: 3030,
+            disable_audio: false,
+            use_pii_removal: false,
+            ..Default::default()
+        };
 
         match cli.command {
             Command::Record(args) => {

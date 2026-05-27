@@ -180,8 +180,8 @@ export class OpenRouterProvider implements AIProvider {
 						  })
 						: msg.content,
 					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id,
 					name: msg.name,
-					refusal: null,
 				} as ChatCompletionMessage)
 		);
 	}

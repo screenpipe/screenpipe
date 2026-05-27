@@ -30,13 +30,14 @@ use zerocopy::AsBytes;
 use futures::future::try_join_all;
 
 use crate::{
-    text_similarity::is_similar_transcription, AudioChunksResponse, AudioDevice, AudioEntry,
-    AudioResult, AudioResultRaw, ContentType, DeviceType, Element, ElementRow, ElementSource,
-    FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord,
-    MeetingTranscriptSegment, MemoryRecord, MemorySyncRow, NewDiarizationSegment, OCREntry,
-    OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order, ReplacementAudioTranscription,
-    SearchMatch, SearchMatchGroup, SearchResult, Speaker, TagContentType, TextBounds, TextPosition,
-    TimeSeriesChunk, UiContent, UiEventRecord, UiEventRow, VideoMetadata,
+    text_similarity::is_similar_transcription, AudioChunkProcessingSnapshot, AudioChunksResponse,
+    AudioDevice, AudioEntry, AudioResult, AudioResultRaw, ChunkOutcome, ContentType, DeviceType,
+    Element, ElementRow, ElementSource, FrameData, FrameRow, FrameRowLight, FrameWindowData,
+    InsertUiEvent, MeetingRecord, MeetingTranscriptSegment, MemoryRecord, MemorySyncRow,
+    NewDiarizationSegment, OCREntry, OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order,
+    ReplacementAudioTranscription, SearchMatch, SearchMatchGroup, SearchResult, Speaker,
+    TagContentType, TextBounds, TextPosition, TimeSeriesChunk, UiContent, UiEventRecord,
+    UiEventRow, VideoMetadata, MAX_TRANSCRIPTION_ATTEMPTS,
 };
 
 /// Time window (in seconds) to check for similar transcriptions across devices.
@@ -1063,20 +1064,25 @@ impl DatabaseManager {
         older_than: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<UntranscribedChunk>, sqlx::Error> {
+        // We pick `status = 'pending'` directly off the partial index
+        // (`idx_audio_chunks_pending_timestamp`) and gate on the attempts
+        // cap so chunks that have failed `MAX_TRANSCRIPTION_ATTEMPTS` times
+        // can't drag the worker forever.
         let rows = sqlx::query_as::<_, UntranscribedChunk>(
-            "SELECT ac.id, ac.file_path, ac.timestamp
-             FROM audio_chunks ac
-             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
-             WHERE at.id IS NULL
-               AND ac.timestamp >= ?1
-               AND ac.timestamp <= ?2
-               AND ac.file_path NOT LIKE 'cloud://%'
-             ORDER BY ac.timestamp ASC
+            "SELECT id, file_path, timestamp
+             FROM audio_chunks
+             WHERE transcription_status = 'pending'
+               AND transcription_attempts < ?4
+               AND timestamp >= ?1
+               AND timestamp <= ?2
+               AND file_path NOT LIKE 'cloud://%'
+             ORDER BY timestamp ASC
              LIMIT ?3",
         )
         .bind(since)
         .bind(older_than)
         .bind(limit)
+        .bind(MAX_TRANSCRIPTION_ATTEMPTS)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -1091,19 +1097,20 @@ impl DatabaseManager {
         older_than: DateTime<Utc>,
     ) -> Result<Option<UntranscribedChunk>, sqlx::Error> {
         let row = sqlx::query_as::<_, UntranscribedChunk>(
-            "SELECT ac.id, ac.file_path, ac.timestamp
-             FROM audio_chunks ac
-             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
-             WHERE ac.id = ?1
-               AND at.id IS NULL
-               AND ac.timestamp >= ?2
-               AND ac.timestamp <= ?3
-               AND ac.file_path NOT LIKE 'cloud://%'
+            "SELECT id, file_path, timestamp
+             FROM audio_chunks
+             WHERE id = ?1
+               AND transcription_status = 'pending'
+               AND transcription_attempts < ?4
+               AND timestamp >= ?2
+               AND timestamp <= ?3
+               AND file_path NOT LIKE 'cloud://%'
              LIMIT 1",
         )
         .bind(chunk_id)
         .bind(since)
         .bind(older_than)
+        .bind(MAX_TRANSCRIPTION_ATTEMPTS)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
@@ -1117,19 +1124,51 @@ impl DatabaseManager {
         older_than: DateTime<Utc>,
     ) -> Result<(i64, Option<DateTime<Utc>>), sqlx::Error> {
         let summary = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
-            "SELECT COUNT(*) as count, MIN(ac.timestamp) as oldest_timestamp
-             FROM audio_chunks ac
-             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
-             WHERE at.id IS NULL
-               AND ac.timestamp >= ?1
-               AND ac.timestamp <= ?2
-               AND ac.file_path NOT LIKE 'cloud://%'",
+            "SELECT COUNT(*) as count, MIN(timestamp) as oldest_timestamp
+             FROM audio_chunks
+             WHERE transcription_status = 'pending'
+               AND transcription_attempts < ?3
+               AND timestamp >= ?1
+               AND timestamp <= ?2
+               AND file_path NOT LIKE 'cloud://%'",
         )
         .bind(since)
         .bind(older_than)
+        .bind(MAX_TRANSCRIPTION_ATTEMPTS)
         .fetch_one(&self.pool)
         .await?;
         Ok(summary)
+    }
+
+    /// Compact processing-state snapshot of recent audio chunks. Used by the
+    /// health diagnostic to detect a genuine stall (real "pending older than
+    /// X" chunks) vs the previous heuristic (idle pool + stale metric, which
+    /// fired false positives whenever the live path's dedup short-circuited).
+    pub async fn audio_chunk_processing_snapshot(
+        &self,
+        within_secs: i64,
+    ) -> Result<AudioChunkProcessingSnapshot, sqlx::Error> {
+        let row = sqlx::query_as::<_, (i64, i64, i64, i64, Option<DateTime<Utc>>)>(
+            "SELECT \
+                SUM(CASE WHEN transcription_status = 'pending' THEN 1 ELSE 0 END) AS pending, \
+                SUM(CASE WHEN transcription_status = 'transcribed' THEN 1 ELSE 0 END) AS transcribed, \
+                SUM(CASE WHEN transcription_status = 'silent' THEN 1 ELSE 0 END) AS silent, \
+                SUM(CASE WHEN transcription_status = 'failed' THEN 1 ELSE 0 END) AS failed, \
+                MIN(CASE WHEN transcription_status = 'pending' THEN timestamp END) AS oldest_pending \
+             FROM audio_chunks \
+             WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1) \
+               AND file_path NOT LIKE 'cloud://%'",
+        )
+        .bind(format!("-{} seconds", within_secs))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(AudioChunkProcessingSnapshot {
+            pending: row.0,
+            transcribed: row.1,
+            silent: row.2,
+            failed: row.3,
+            oldest_pending: row.4,
+        })
     }
 
     /// Returns true if there are audio transcriptions from output devices
@@ -1247,13 +1286,23 @@ impl DatabaseManager {
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
-        // Skip empty transcriptions (no DB access needed)
+        // Empty STT result for an existing chunk → mark Silent so the
+        // reconciliation sweep doesn't keep re-picking it. Old code returned
+        // Ok(0) here, which left the chunk pending forever.
         let trimmed = transcription.trim();
         if trimmed.is_empty() {
+            if audio_chunk_id > 0 {
+                self.record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent)
+                    .await?;
+            }
             return Ok(0);
         }
 
-        // Pre-read phase: dedup check on read pool (no write lock)
+        // Pre-read phase: dedup check on read pool (no write lock).
+        // When a cross-device duplicate fires we still need to flip the
+        // chunk's status — otherwise this chunk loops in the reconciliation
+        // sweep even though we DID process it (the other device kept the
+        // text).
         if self
             .has_similar_recent_transcription(trimmed, DEDUP_TIME_WINDOW_SECS)
             .await?
@@ -1262,6 +1311,10 @@ impl DatabaseManager {
                 "Skipping duplicate transcription (cross-device): {:?}",
                 trimmed.chars().take(50).collect::<String>()
             );
+            if audio_chunk_id > 0 {
+                self.record_chunk_outcome(audio_chunk_id, ChunkOutcome::Duplicate)
+                    .await?;
+            }
             return Ok(0);
         }
 
@@ -1436,7 +1489,11 @@ impl DatabaseManager {
     ) -> Result<(), sqlx::Error> {
         let trimmed = transcription.trim();
         if trimmed.is_empty() {
-            return Ok(());
+            // Funnel through Silent — never let an empty input become a no-op
+            // status-wise. That no-op was the original zombie-chunk loop.
+            return self
+                .record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent)
+                .await;
         }
         let end_time = duration_secs.unwrap_or(0.0);
         let segments = vec![ReplacementAudioTranscription {
@@ -1466,44 +1523,212 @@ impl DatabaseManager {
         is_input_device: bool,
         timestamp: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        if segments.is_empty() {
-            return Ok(());
+        // Empty inputs are a legitimate "STT returned nothing" signal — translate
+        // them into a Silent outcome so the chunk stops being re-picked, instead
+        // of returning a no-op success the way the old helper did. That no-op
+        // was the root of the zombie-chunk loop.
+        if segments.is_empty() || segments.iter().all(|s| s.transcription.trim().is_empty()) {
+            return self
+                .record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent)
+                .await;
         }
 
-        let mut tx = self.begin_immediate_with_retry().await?;
+        self.record_chunk_outcome(
+            audio_chunk_id,
+            ChunkOutcome::Transcribed {
+                segments: segments.to_vec(),
+                engine: engine.to_string(),
+                device: device.to_string(),
+                is_input_device,
+                timestamp,
+            },
+        )
+        .await
+    }
 
-        sqlx::query("DELETE FROM audio_transcriptions WHERE audio_chunk_id = ?1")
-            .bind(audio_chunk_id)
-            .execute(&mut **tx.conn())
-            .await?;
+    /// Atomically record the outcome of processing an audio chunk.
+    ///
+    /// Every transcription writer funnels through this function (live path on
+    /// dedup-skip, reconciliation silent/text/failed paths, retranscribe).
+    /// One TX writes the transcription rows AND flips `audio_chunks.status`
+    /// so the reconciliation sweep can't re-pick a chunk between the row
+    /// insert and the status update.
+    ///
+    /// Edge cases handled inline:
+    /// - Empty / whitespace-only Transcribed segments → falls through to Silent.
+    /// - Duplicate text within Transcribed (diarization splits + same word) →
+    ///   first segment lands, rest collide on the UNIQUE index and are dropped
+    ///   by INSERT OR IGNORE. Per-speaker timing/identity is preserved in
+    ///   `diarization_segments` so nothing is lost analytics-wise.
+    /// - Chunk deleted between query and outcome → the UPDATE is a no-op, the
+    ///   INSERT fails the FK check and the whole TX rolls back. Reconciliation
+    ///   will not retry because the chunk row no longer exists.
+    /// - Failed with attempts >= cap → escalates to FailedPermanent.
+    pub async fn record_chunk_outcome(
+        &self,
+        audio_chunk_id: i64,
+        outcome: ChunkOutcome,
+    ) -> Result<(), sqlx::Error> {
+        let now = Utc::now();
 
-        for (offset_index, segment) in segments.iter().enumerate() {
-            let trimmed = segment.transcription.trim();
-            if trimmed.is_empty() {
-                continue;
+        match outcome {
+            ChunkOutcome::Transcribed {
+                segments,
+                engine,
+                device,
+                is_input_device,
+                timestamp,
+            } => {
+                let filtered: Vec<&ReplacementAudioTranscription> = segments
+                    .iter()
+                    .filter(|s| !s.transcription.trim().is_empty())
+                    .collect();
+                if filtered.is_empty() {
+                    return Box::pin(
+                        self.record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent),
+                    )
+                    .await;
+                }
+
+                let mut tx = self.begin_immediate_with_retry().await?;
+
+                sqlx::query("DELETE FROM audio_transcriptions WHERE audio_chunk_id = ?1")
+                    .bind(audio_chunk_id)
+                    .execute(&mut **tx.conn())
+                    .await?;
+
+                for (offset_index, segment) in filtered.iter().enumerate() {
+                    let trimmed = segment.transcription.trim();
+                    let text_length = trimmed.len() as i64;
+
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO audio_transcriptions \
+                         (audio_chunk_id, transcription, text_length, offset_index, timestamp, \
+                          transcription_engine, device, is_input_device, start_time, end_time, speaker_id) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    )
+                    .bind(audio_chunk_id)
+                    .bind(trimmed)
+                    .bind(text_length)
+                    .bind(offset_index as i64)
+                    .bind(timestamp)
+                    .bind(&engine)
+                    .bind(&device)
+                    .bind(is_input_device)
+                    .bind(segment.start_time)
+                    .bind(segment.end_time)
+                    .bind(segment.speaker_id)
+                    .execute(&mut **tx.conn())
+                    .await?;
+                }
+
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = 'transcribed', \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = NULL \
+                     WHERE id = ?2",
+                )
+                .bind(now)
+                .bind(audio_chunk_id)
+                .execute(&mut **tx.conn())
+                .await?;
+
+                tx.commit().await?;
+                Ok(())
             }
-            let text_length = trimmed.len() as i64;
 
-            sqlx::query(
-                "INSERT INTO audio_transcriptions (audio_chunk_id, transcription, text_length, offset_index, timestamp, transcription_engine, device, is_input_device, start_time, end_time, speaker_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            )
-            .bind(audio_chunk_id)
-            .bind(trimmed)
-            .bind(text_length)
-            .bind(offset_index as i64)
-            .bind(timestamp)
-            .bind(engine)
-            .bind(device)
-            .bind(is_input_device)
-            .bind(segment.start_time)
-            .bind(segment.end_time)
-            .bind(segment.speaker_id)
-            .execute(&mut **tx.conn())
-            .await?;
+            ChunkOutcome::Silent | ChunkOutcome::Duplicate => {
+                // Both terminal states from the pipeline's perspective: the
+                // chunk has been considered and we don't want to retry. We use
+                // `transcribed` for Duplicate (we DID transcribe — on the
+                // other device) and `silent` for Silent. The reconciliation
+                // sweep skips both.
+                let status = match outcome {
+                    ChunkOutcome::Silent => "silent",
+                    ChunkOutcome::Duplicate => "transcribed",
+                    _ => unreachable!(),
+                };
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = ?1, \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?2, \
+                         transcription_failure_reason = NULL \
+                     WHERE id = ?3",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(audio_chunk_id)
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
+
+            ChunkOutcome::Failed { reason } => {
+                // Transient failure: bump attempts. If we'd hit the cap, flip
+                // to `failed` so the sweep stops re-trying. We do this in one
+                // UPDATE statement so a concurrent attempt can't double-flip.
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = ?2, \
+                         transcription_status = CASE \
+                             WHEN transcription_attempts + 1 >= ?3 THEN 'failed' \
+                             ELSE transcription_status \
+                         END \
+                     WHERE id = ?4",
+                )
+                .bind(now)
+                .bind(&reason)
+                .bind(MAX_TRANSCRIPTION_ATTEMPTS)
+                .bind(audio_chunk_id)
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
+
+            ChunkOutcome::FailedPermanent { reason } => {
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = 'failed', \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = ?2 \
+                     WHERE id = ?3",
+                )
+                .bind(now)
+                .bind(&reason)
+                .bind(audio_chunk_id)
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
         }
+    }
 
-        tx.commit().await?;
+    /// Mark a chunk as pending for re-transcription. Used by the retranscribe
+    /// endpoint to opt a meeting back into reconciliation with a different
+    /// engine. Existing rows are kept so the UI doesn't flash empty —
+    /// `record_chunk_outcome(Transcribed)` will DELETE them in the same TX as
+    /// the new INSERTs land.
+    pub async fn reset_chunk_for_retranscription(
+        &self,
+        audio_chunk_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE audio_chunks \
+             SET transcription_status = 'pending', \
+                 transcription_attempts = 0, \
+                 last_transcription_attempt_at = NULL, \
+                 transcription_failure_reason = NULL \
+             WHERE id = ?1",
+        )
+        .bind(audio_chunk_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -3388,7 +3613,8 @@ impl DatabaseManager {
             COALESCE(video_chunks.device_name, frames.device_name) as device_name,
             GROUP_CONCAT(tags.name, ',') as tags,
             frames.browser_url,
-            frames.focused
+            frames.focused,
+            frames.text_source
         FROM frames
         LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
         LEFT JOIN ocr_text ON frames.id = ocr_text.frame_id
@@ -3458,6 +3684,7 @@ impl DatabaseManager {
                     .unwrap_or_default(),
                 browser_url: raw.browser_url,
                 focused: raw.focused,
+                text_source: raw.text_source,
             })
             .collect())
     }
@@ -5484,34 +5711,52 @@ impl DatabaseManager {
     pub async fn delete_speaker(&self, id: i64) -> Result<(), sqlx::Error> {
         let mut tx = self.begin_immediate_with_retry().await?;
 
-        // Array of (query, operation description) tuples
+        // Collect candidate chunk IDs before deleting transcriptions
+        let candidate_chunk_ids: Vec<(i64,)> = sqlx::query_as(
+            "SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // Delete in FK-safe order: transcriptions first (they reference chunks), then chunks
         let operations = [
             (
                 "DELETE FROM audio_transcriptions WHERE speaker_id = ?",
                 "audio transcriptions",
             ),
             (
-                "DELETE FROM audio_chunks WHERE id IN (SELECT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ? AND start_time IS NULL)",
-                "audio chunks",
-            ),
-            (
                 "DELETE FROM speaker_embeddings WHERE speaker_id = ?",
                 "speaker embeddings",
             ),
-            (
-                "DELETE FROM speakers WHERE id = ?",
-                "speaker",
-            ),
+            ("DELETE FROM speakers WHERE id = ?", "speaker"),
         ];
 
-        // Execute each deletion operation
         for (query, operation) in operations {
             if let Err(e) = sqlx::query(query).bind(id).execute(&mut **tx.conn()).await {
                 error!("Failed to delete {} for speaker {}: {}", operation, id, e);
-                // tx will rollback automatically on drop
                 return Err(e);
             }
             debug!("Successfully deleted {} for speaker {}", operation, id);
+        }
+
+        // Delete only orphaned chunks (not referenced by any remaining transcription)
+        for (chunk_id,) in &candidate_chunk_ids {
+            if let Err(e) = sqlx::query(
+                "DELETE FROM audio_chunks WHERE id = ? \
+                 AND NOT EXISTS (SELECT 1 FROM audio_transcriptions WHERE audio_chunk_id = ?)",
+            )
+            .bind(chunk_id)
+            .bind(chunk_id)
+            .execute(&mut **tx.conn())
+            .await
+            {
+                error!(
+                    "Failed to delete audio chunk {} for speaker {}: {}",
+                    chunk_id, id, e
+                );
+                return Err(e);
+            }
         }
 
         tx.commit().await.map_err(|e| {
@@ -6890,7 +7135,7 @@ impl DatabaseManager {
             // the entire result set, hiding results from other apps.
             format!(
                 r#"
-SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibility_tree_json FROM (
+SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibility_tree_json, text_source FROM (
     SELECT
         f.id,
         f.timestamp,
@@ -6900,6 +7145,7 @@ SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibi
         COALESCE(f.full_text, o.text, f.accessibility_text, '') as ocr_text,
         o.text_json,
         f.accessibility_tree_json,
+        f.text_source,
         ROW_NUMBER() OVER (
             PARTITION BY COALESCE(f.app_name, o.app_name, '')
             ORDER BY f.timestamp {order_dir}, {relevance} DESC
@@ -6928,7 +7174,8 @@ SELECT
     COALESCE(f.window_name, o.window_name) as window_name,
     COALESCE(f.full_text, o.text, f.accessibility_text, '') as ocr_text,
     o.text_json,
-    f.accessibility_tree_json
+    f.accessibility_tree_json,
+    f.text_source
 FROM frames f
 LEFT JOIN ocr_text o ON f.id = o.frame_id
 WHERE {}
@@ -6996,6 +7243,7 @@ LIMIT ? OFFSET ?
                     confidence: calculate_confidence(&positions),
                     text: row.ocr_text.clone(),
                     url: row.url.clone(),
+                    text_source: row.text_source.clone(),
                 }
             })
             .collect())
@@ -7319,6 +7567,9 @@ LIMIT ? OFFSET ?
                 confidence: 0.0,
                 text: String::new(),
                 url: row.url,
+                // FrameRowLight skips text/text_source for speed; grouped
+                // results don't surface text to clients, so None is fine.
+                text_source: None,
             })
             .collect())
     }
@@ -7787,35 +8038,10 @@ LIMIT ? OFFSET ?
     /// Insert a UI event via the write coalescing queue.
     pub async fn insert_ui_event(&self, event: &InsertUiEvent) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
-        let text_length = event.text_content.as_ref().map(|s| s.len() as i32);
         let result = self
             .write_queue
             .submit(WriteOp::InsertUiEvent {
-                timestamp: event.timestamp.to_rfc3339(),
-                session_id: event.session_id.clone(),
-                relative_ms: event.relative_ms,
-                event_type: event.event_type.to_string(),
-                x: event.x,
-                y: event.y,
-                delta_x: event.delta_x.map(|v| v as i32),
-                delta_y: event.delta_y.map(|v| v as i32),
-                button: event.button.map(|v| v as i32),
-                click_count: event.click_count.map(|v| v as i32),
-                key_code: event.key_code.map(|v| v as i32),
-                modifiers: event.modifiers.map(|v| v as i32),
-                text_content: event.text_content.clone(),
-                text_length,
-                app_name: event.app_name.clone(),
-                app_pid: event.app_pid,
-                window_title: event.window_title.clone(),
-                browser_url: event.browser_url.clone(),
-                element_role: event.element_role.clone(),
-                element_name: event.element_name.clone(),
-                element_value: event.element_value.clone(),
-                element_description: event.element_description.clone(),
-                element_automation_id: event.element_automation_id.clone(),
-                element_bounds: event.element_bounds.clone(),
-                frame_id: event.frame_id,
+                event: Self::ui_event_write(event),
             })
             .await?;
         match result {
@@ -7824,20 +8050,77 @@ LIMIT ? OFFSET ?
         }
     }
 
-    /// Insert multiple UI events via the write coalescing queue.
+    /// Insert multiple UI events via the write coalescing queue. Returns
+    /// one row id per inserted event, in the same order as `events`. The
+    /// frame linker pairs these with correlation ids assigned by the
+    /// recorder before flush.
     pub async fn insert_ui_events_batch(
         &self,
         events: &[InsertUiEvent],
-    ) -> Result<usize, sqlx::Error> {
+    ) -> Result<Vec<i64>, sqlx::Error> {
         if events.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
-        let mut count = 0;
-        for event in events {
-            self.insert_ui_event(event).await?;
-            count += 1;
+        use crate::write_queue::{WriteOp, WriteResult};
+        let events = events.iter().map(Self::ui_event_write).collect();
+        let result = self
+            .write_queue
+            .submit(WriteOp::InsertUiEventsBatch { events })
+            .await?;
+        match result {
+            WriteResult::Ids(ids) => Ok(ids),
+            _ => unreachable!(),
         }
-        Ok(count)
+    }
+
+    /// Set `ui_events.frame_id` for a previously inserted row. Idempotent:
+    /// the `WHERE frame_id IS NULL` guard prevents overwriting an
+    /// already-linked frame if a duplicate update arrives.
+    pub async fn update_ui_event_frame_id(
+        &self,
+        row_id: i64,
+        frame_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        use crate::write_queue::{WriteOp, WriteResult};
+        let result = self
+            .write_queue
+            .submit(WriteOp::UpdateUiEventFrameId { row_id, frame_id })
+            .await?;
+        match result {
+            WriteResult::Unit => Ok(()),
+            _ => unreachable!(),
+        }
+    }
+
+    fn ui_event_write(event: &InsertUiEvent) -> crate::write_queue::UiEventWrite {
+        let text_length = event.text_content.as_ref().map(|s| s.len() as i32);
+        crate::write_queue::UiEventWrite {
+            timestamp: event.timestamp.to_rfc3339(),
+            session_id: event.session_id.clone(),
+            relative_ms: event.relative_ms,
+            event_type: event.event_type.to_string(),
+            x: event.x,
+            y: event.y,
+            delta_x: event.delta_x.map(|v| v as i32),
+            delta_y: event.delta_y.map(|v| v as i32),
+            button: event.button.map(|v| v as i32),
+            click_count: event.click_count.map(|v| v as i32),
+            key_code: event.key_code.map(|v| v as i32),
+            modifiers: event.modifiers.map(|v| v as i32),
+            text_content: event.text_content.clone(),
+            text_length,
+            app_name: event.app_name.clone(),
+            app_pid: event.app_pid,
+            window_title: event.window_title.clone(),
+            browser_url: event.browser_url.clone(),
+            element_role: event.element_role.clone(),
+            element_name: event.element_name.clone(),
+            element_value: event.element_value.clone(),
+            element_description: event.element_description.clone(),
+            element_automation_id: event.element_automation_id.clone(),
+            element_bounds: event.element_bounds.clone(),
+            frame_id: event.frame_id,
+        }
     }
 
     // ============================================================================
@@ -8287,6 +8570,7 @@ LIMIT ? OFFSET ?
         &self,
         start_time: Option<&str>,
         end_time: Option<&str>,
+        query: Option<&str>,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<MeetingRecord>, SqlxError> {
@@ -8295,34 +8579,34 @@ LIMIT ? OFFSET ?
              detection_source, created_at FROM meetings WHERE 1=1",
         );
         if start_time.is_some() {
-            sql.push_str(" AND meeting_start >= ?1");
+            sql.push_str(" AND meeting_start >= ?");
         }
         if end_time.is_some() {
-            sql.push_str(if start_time.is_some() {
-                " AND meeting_start <= ?2"
-            } else {
-                " AND meeting_start <= ?1"
-            });
+            sql.push_str(" AND meeting_start <= ?");
         }
-        sql.push_str(" ORDER BY meeting_start DESC");
-        sql.push_str(if start_time.is_some() && end_time.is_some() {
-            " LIMIT ?3 OFFSET ?4"
-        } else if start_time.is_some() || end_time.is_some() {
-            " LIMIT ?2 OFFSET ?3"
-        } else {
-            " LIMIT ?1 OFFSET ?2"
-        });
+        if query.is_some() {
+            sql.push_str(
+                " AND (LOWER(IFNULL(title, '')) LIKE ? \
+                 OR LOWER(IFNULL(attendees, '')) LIKE ? \
+                 OR LOWER(IFNULL(note, '')) LIKE ?)",
+            );
+        }
+        sql.push_str(" ORDER BY meeting_start DESC LIMIT ? OFFSET ?");
 
-        let mut query = sqlx::query_as::<_, MeetingRecord>(&sql);
+        let mut q = sqlx::query_as::<_, MeetingRecord>(&sql);
         if let Some(st) = start_time {
-            query = query.bind(st);
+            q = q.bind(st);
         }
         if let Some(et) = end_time {
-            query = query.bind(et);
+            q = q.bind(et);
         }
-        query = query.bind(limit).bind(offset);
+        if let Some(qs) = query {
+            let pattern = format!("%{}%", qs.to_lowercase());
+            q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
+        }
+        q = q.bind(limit).bind(offset);
 
-        let meetings = query.fetch_all(&self.pool).await?;
+        let meetings = q.fetch_all(&self.pool).await?;
         Ok(meetings)
     }
 
@@ -8440,6 +8724,64 @@ LIMIT ? OFFSET ?
         Ok((deleted, inserted))
     }
 
+    /// Mark `audio_chunks` within a meeting's window as `transcribed` when a
+    /// live `meeting_transcript_segments` row sits within
+    /// `coverage_window_secs` of the chunk's timestamp. This stops the
+    /// background reconciler from re-running STT on audio the live provider
+    /// already covered — without that, every live-transcribed meeting also
+    /// gets fully re-transcribed by Whisper after it ends, doubling battery,
+    /// CPU, storage, and the rows the UI reads back.
+    ///
+    /// Chunks far from any live segment (live dropped mid-meeting, etc.)
+    /// stay `pending` so reconciliation can still backfill those gaps.
+    ///
+    /// Trade-off: marked chunks won't get a background-engine row in
+    /// `audio_transcriptions`, so they don't contribute to global speaker
+    /// embedding/backfill. Users who need full-quality archival can run the
+    /// retranscribe API, which resets `transcription_status='pending'`.
+    pub async fn mark_chunks_covered_by_live(
+        &self,
+        meeting_id: i64,
+        coverage_window_secs: f64,
+    ) -> Result<u64, SqlxError> {
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        let coverage_days = coverage_window_secs / 86_400.0;
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let rows = sqlx::query(
+            r#"
+            UPDATE audio_chunks
+            SET transcription_status = 'transcribed',
+                last_transcription_attempt_at = ?1,
+                transcription_failure_reason = NULL
+            WHERE transcription_status = 'pending'
+              AND julianday(timestamp) >= julianday(
+                    (SELECT meeting_start FROM meetings WHERE id = ?2)
+                  )
+              AND julianday(timestamp) <= julianday(
+                    COALESCE(
+                        (SELECT meeting_end FROM meetings WHERE id = ?2),
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    )
+                  )
+              AND EXISTS (
+                  SELECT 1 FROM meeting_transcript_segments mts
+                  WHERE mts.meeting_id = ?2
+                    AND ABS(julianday(mts.captured_at) - julianday(audio_chunks.timestamp)) <= ?3
+              )
+            "#,
+        )
+        .bind(&now)
+        .bind(meeting_id)
+        .bind(coverage_days)
+        .execute(&mut **tx.conn())
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(rows)
+    }
+
     pub async fn list_meeting_transcript_segments(
         &self,
         meeting_id: i64,
@@ -8508,6 +8850,18 @@ LIMIT ? OFFSET ?
                   AND TRIM(at.transcription) != ''
                   AND ac.file_path NOT LIKE 'cloud://%'
                   AND (s.id IS NULL OR s.hallucination = 0)
+                  -- Drop background rows already covered by a live segment in the
+                  -- same meeting (within ±15s). Live + background both writing the
+                  -- same audio is by design (live = real-time, background = post-hoc
+                  -- archival via reconciliation), but consumers should see one copy.
+                  -- The window is half a typical chunk; gaps in live coverage stay
+                  -- visible because their background rows won't have a nearby live row.
+                  AND NOT EXISTS (
+                      SELECT 1 FROM meeting_transcript_segments mts
+                      WHERE mts.meeting_id = mw.meeting_id
+                        AND ABS(julianday(mts.captured_at) - julianday(at.timestamp))
+                            <= (15.0 / 86400.0)
+                  )
             )
             SELECT * FROM (
                 SELECT * FROM live_segments
@@ -9490,7 +9844,12 @@ pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
             }
 
             // Parse confidence, defaulting to 0.0 if invalid
-            let confidence = block.conf.parse::<f32>().unwrap_or(0.0);
+            let confidence = block
+                .conf
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0);
 
             // Skip blocks with very low confidence (likely noise)
             if confidence < 0.0 {
@@ -9498,10 +9857,26 @@ pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
             }
 
             // Parse bounding box (already screen space, top-left origin, normalized 0–1)
-            let left = block.left.parse::<f32>().unwrap_or(0.0);
-            let top = block.top.parse::<f32>().unwrap_or(0.0);
-            let width = block.width.parse::<f32>().unwrap_or(0.0);
-            let height = block.height.parse::<f32>().unwrap_or(0.0);
+            let left = block
+                .left
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
+            let top = block
+                .top
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
+            let width = block
+                .width
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
+            let height = block
+                .height
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
 
             // Skip blocks with invalid dimensions
             if width <= 0.0 || height <= 0.0 {
@@ -9614,6 +9989,21 @@ mod tests {
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0].text, "Test");
         assert!((positions[0].confidence - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_all_text_positions_filters_nan_bounds() {
+        let blocks = vec![
+            create_test_block("Valid", "95.5", "0.1", "0.5", "0.08", "0.02"),
+            create_test_block("NaNLeft", "90.0", "NaN", "0.5", "0.1", "0.02"),
+            create_test_block("NaNWidth", "90.0", "0.2", "0.5", "NaN", "0.02"),
+            create_test_block("NaNHeight", "90.0", "0.3", "0.5", "0.1", "NaN"),
+        ];
+
+        let positions = parse_all_text_positions(&blocks);
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].text, "Valid");
     }
 
     #[test]
@@ -9978,6 +10368,7 @@ mod tests {
             confidence,
             text: String::new(),
             url: url.to_string(),
+            text_source: None,
         }
     }
 

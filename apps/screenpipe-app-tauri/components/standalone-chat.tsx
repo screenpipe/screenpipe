@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   mountAgentEventBus,
@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
+import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
@@ -27,9 +27,11 @@ import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { MemoizedReactMarkdown } from "@/components/markdown";
-import { VideoComponent } from "@/components/rewind/video";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  MemoizedReactMarkdown,
+  chatUrlTransform,
+  openScreenpipeViewerLink,
+} from "@/components/markdown";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
@@ -57,13 +59,19 @@ import {
   buildAppMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
+  isConversationHistorySyncPrompt,
+  type ChatLoadConversationPayload,
+  shouldHandleChatLoadConversationForWindow,
 } from "@/lib/chat-utils";
+import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
-import { SummaryCards } from "@/components/chat/summary-cards";
+import { SummaryCards, type ConnectionSetupSuggestion } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
+import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
 import {
+  computeChatCitationPlan,
   formatSourceCitationsMarkdown,
   sourceCitationsFromMessage,
   type SourceCitation,
@@ -76,7 +84,6 @@ import {
   isQueuedItemCancelShortcut,
   isQueuedItemSteerShortcut,
   normalizeQueueEventPayload,
-  queuedPreviewMatchesText,
 } from "@/lib/chat-queue-controls";
 
 const MermaidDiagram = React.lazy(() =>
@@ -110,6 +117,7 @@ interface MentionSuggestion {
 
 const APP_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
+const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
@@ -123,6 +131,25 @@ type ConnectedIntegration = {
   category?: string;
   description?: string;
 };
+
+type ConnectionListItem = ConnectedIntegration & { connected: boolean };
+type ActivityAppItem = { name: string; count: number; app_name?: string };
+
+function normalizeConnectionForPlatform<T extends ConnectedIntegration>(connection: T, isWindows: boolean): T {
+  if (isWindows && connection.id === "apple-calendar") {
+    return {
+      ...connection,
+      name: "Windows Calendar",
+      icon: "windows-calendar",
+    };
+  }
+  return connection;
+}
+
+function connectionMentionTag(connection: ConnectedIntegration, isWindows: boolean) {
+  if (isWindows && connection.id === "apple-calendar") return "@windows-calendar";
+  return `@${connection.id}`;
+}
 
 type PreviewCalendarEvent = {
   title?: string;
@@ -387,6 +414,95 @@ function mergeConnectionSuggestions(
   return rotateVisible(deduped);
 }
 
+function setupDescriptionForConnection(connection: ConnectionListItem): string {
+  const lower = `${connection.id} ${connection.name} ${connection.category ?? ""}`.toLowerCase();
+  if (lower.includes("gmail") || lower.includes("email")) return "Bring email into chat";
+  if (lower.includes("slack")) return "Search team threads";
+  if (lower.includes("github")) return "Use repos and issues";
+  if (lower.includes("linear") || lower.includes("jira")) return "Track project work";
+  if (lower.includes("calendar")) return "Prep from events";
+  if (lower.includes("notion") || lower.includes("docs") || lower.includes("obsidian")) return "Search your docs";
+  if (lower.includes("browser")) return "Read current pages";
+  return connection.description ? compactSuggestionPart(connection.description, 34) : "Add more context";
+}
+
+function buildConnectionSetupSuggestions(
+  connections: ConnectionListItem[],
+  appItems: ActivityAppItem[]
+): ConnectionSetupSuggestion[] {
+  const fallbackConnectionOrder = [
+    "gmail",
+    "slack",
+    "github",
+    "github-issues",
+    "linear",
+    "google-calendar",
+    "notion",
+    "google-docs",
+    "obsidian",
+    "jira",
+    "google-sheets",
+  ];
+
+  const fallbackRank = (connection: ConnectionListItem) => {
+    const keys = [connection.id, connection.icon, connection.name]
+      .filter((key): key is string => Boolean(key))
+      .map((key) => key.toLowerCase());
+    const index = fallbackConnectionOrder.findIndex((preferred) =>
+      keys.some((key) => key === preferred || key.includes(preferred))
+    );
+    return index === -1 ? fallbackConnectionOrder.length : index;
+  };
+
+  const activityAffinity = (connection: ConnectionListItem) => {
+    const connectionText = `${connection.id} ${connection.name} ${connection.category ?? ""}`.toLowerCase();
+    const connectionParts = connectionText.split(/[\s_-]+/).filter((part) => part.length > 3);
+
+    return appItems.reduce(
+      (match, item, index) => {
+        const appText = `${item.name} ${item.app_name ?? ""}`.toLowerCase();
+        if (!appText) return match;
+
+        const isMatch =
+          appText.includes(connection.id.toLowerCase()) ||
+          appText.includes(connection.name.toLowerCase()) ||
+          connectionParts.some((part) => appText.includes(part));
+
+        if (!isMatch) return match;
+
+        return {
+          count: match.count + item.count,
+          firstSeenIndex: Math.min(match.firstSeenIndex, index),
+        };
+      },
+      { count: 0, firstSeenIndex: Number.MAX_SAFE_INTEGER }
+    );
+  };
+
+  return connections
+    .filter((connection) => !connection.connected && connection.id !== "owned-default")
+    .map((connection) => {
+      return {
+        suggestion: {
+          id: connection.id,
+          title: `Connect ${connection.name || connection.id}`,
+          description: setupDescriptionForConnection(connection),
+          icon: connection.icon || connection.id,
+        },
+        activity: activityAffinity(connection),
+        fallbackRank: fallbackRank(connection),
+      };
+    })
+    .sort((a, b) =>
+      b.activity.count - a.activity.count ||
+      a.activity.firstSeenIndex - b.activity.firstSeenIndex ||
+      a.fallbackRank - b.fallbackRank ||
+      a.suggestion.title.localeCompare(b.suggestion.title)
+    )
+    .slice(0, 2)
+    .map((entry) => entry.suggestion);
+}
+
 interface Speaker {
   id: number;
   name: string;
@@ -526,11 +642,11 @@ Never POST, PUT, or PATCH to a connection proxy unless the user explicitly asks 
 - "meeting / call / conversation / what did I/they say" → search with content_type: "audio", no q param (for past meetings/calls captured by screenpipe)
 - "how long / time spent / which apps / most used" → activity-summary (not raw frame counts or SQL)
 - "what was on screen / what was I reading" → search with content_type: "all" or "accessibility"
-- "what was I doing" → activity-summary first; the windows field usually has enough without further searches
+- "what was I doing / recent activity / summarize my day" → activity-summary first. Check its data_status before claiming "no data". /search only for verbatim quotes or frame_ids.
 
 # Local server auth
 
-The local screenpipe server (localhost:3030) requires a bearer token, exposed as env var SCREENPIPE_API_AUTH_KEY. Every curl to localhost:3030 must include \`-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"\`. Don't ask the user for a key — you already have it. On 401, retry without the header (auth is disabled on that install).
+The local screenpipe server (localhost:3030) requires a bearer token, exposed as env var SCREENPIPE_LOCAL_API_KEY. Every curl to localhost:3030 must include \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`. Don't ask the user for a key — you already have it. On 401, retry without the header (auth is disabled on that install).
 
 # Search rules (DB has 600k+ rows)
 
@@ -543,8 +659,9 @@ The local screenpipe server (localhost:3030) requires a bearer token, exposed as
 
 # Showing media
 
-- Markdown only: \`![description](/path/to/file.mp4)\` or \`![description](/path/to/image.jpg)\`
-- Use the exact file_path / audio_file_path from results. Never construct or guess paths.
+- Markdown only: use \`![description](</absolute/path/to/file.mp4>)\` or \`![description](</absolute/path/to/image.jpg>)\`.
+- Always wrap local file paths in angle brackets because screenpipe paths often contain spaces or parentheses.
+- Use the exact file_path / audio_file_path from results inside the angle brackets. Never construct or guess paths.
 - Verify the file exists (\`ls\` / \`Test-Path\`) before showing it. If missing, retry the search instead of rendering a broken player.
 
 # Deep links — sparingly
@@ -587,7 +704,7 @@ function buildConnectionsContext(
   const entries = withDesc
     .map((c) => `## ${c.name} (${c.id})\n${c.description}`)
     .join("\n\n");
-  return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"\`.\n\n${entries}`;
+  return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`.\n\n${entries}`;
 }
 
 interface SearchResult {
@@ -613,6 +730,15 @@ interface ToolCall {
   isRunning: boolean;
 }
 
+function queuedSnapshotsEqual(a: PiQueuedPrompt[], b: PiQueuedPrompt[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].preview !== b[i].preview) return false;
+  }
+  return true;
+}
+
 type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool"; toolCall: ToolCall }
@@ -623,6 +749,8 @@ interface Message {
   role: "user" | "assistant";
   content: string; // full text for copy/history
   displayContent?: string; // short label shown in chat (e.g. template name)
+  intent?: "steer";
+  turnIntentId?: string;
   images?: string[]; // base64 data URLs of attached images
   timestamp: number;
   contentBlocks?: ContentBlock[];
@@ -630,12 +758,50 @@ interface Message {
   model?: string;
   provider?: string;
   retryPrompt?: string; // when set, renders a retry CTA on error messages
-  /** True between optimistic enqueue and the moment Pi's drain loop picks
-   *  the prompt up (`agent_start` for this turn). Drives a lighter visual
-   *  treatment so the user can tell at-a-glance which messages are still
-   *  waiting in line vs. already in-flight. Cleared by handleAgentStart. */
-  queued?: boolean;
+  interruptedBySteer?: boolean;
+  steeredResponse?: boolean;
+  workDurationMs?: number; // wall-clock work duration for coalesced pipe-run assistants
 }
+
+type QueuedDisplayPayload = {
+  preview: string;
+  images: string[];
+  displayContent?: string;
+  optimisticUserId?: string;
+  turnIntentId?: string;
+};
+
+type OptimisticSteerPayload = {
+  id: string;
+  content: string;
+  turnIntentId?: string;
+};
+
+type TurnIntentRecord = {
+  id: string;
+  sessionId: string;
+  kind: "normal" | "queued" | "steer";
+  content: string;
+  preview: string;
+  displayedUserId?: string;
+  queueId?: string;
+  createdAt: number;
+  consumedAssistantId?: string;
+};
+
+type PendingSteerBatchItem = {
+  turnIntentId: string;
+  sessionId: string;
+  content: string;
+  originalUserMessage: string;
+  interruptedAssistantId?: string;
+  images: string[];
+  displayContent?: string;
+  optimisticUserId: string;
+  createdAt: number;
+};
+
+const TURN_INTENT_LEDGER_TTL_MS = 10 * 60 * 1000;
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -1005,14 +1171,108 @@ function classifyCurl(cmd: string): CurlPresentation | null {
     return { label: "Listed connections", connectionIconName: "connections" };
   }
   if (path.startsWith("/connections/")) {
-    const name = path.split("/")[2];
+    const segments = path.split("/").slice(2); // [name, ...sub]
+    const name = segments[0];
+    const sub = segments.slice(1).join("/");
+    const icon = name;
+
+    // --- Gmail-specific labels (the connection has custom endpoints, not a proxy) ---
+    if (name === "gmail") {
+      if (sub === "send" && method === "POST") {
+        const body = curlBodyJson(cmd);
+        const to = typeof body?.to === "string" ? body.to : null;
+        return {
+          label: to ? `Sent email to ${trunc(to, 40)}` : "Sent email via Gmail",
+          connectionIconName: icon,
+        };
+      }
+      if (sub === "messages") {
+        const q = url.searchParams.get("q");
+        return {
+          label: q ? `Searched Gmail "${trunc(q, 30)}"` : "Listed Gmail messages",
+          connectionIconName: icon,
+        };
+      }
+      if (sub.startsWith("messages/")) {
+        return { label: "Read Gmail message", connectionIconName: icon };
+      }
+      if (sub === "instances") {
+        return { label: "Listed Gmail accounts", connectionIconName: icon };
+      }
+    }
+
+    // --- Google Calendar ---
+    if (name === "google-calendar") {
+      if (sub === "events") {
+        return { label: "Listed calendar events", connectionIconName: icon };
+      }
+      if (sub === "status") {
+        return { label: "Checked calendar connection", connectionIconName: icon };
+      }
+    }
+
+    // --- Proxy endpoints (Google Docs/Sheets, Notion, etc.) ---
+    if (sub.startsWith("proxy/")) {
+      const proxyPath = sub.slice("proxy/".length);
+      // Google Docs API
+      if (proxyPath.startsWith("docs/v1/documents")) {
+        if (method === "POST" && proxyPath.endsWith(":batchUpdate")) {
+          return { label: "Edited Google Doc", connectionIconName: icon };
+        }
+        if (method === "POST") {
+          return { label: "Created Google Doc", connectionIconName: icon };
+        }
+        return { label: "Read Google Doc", connectionIconName: icon };
+      }
+      // Drive API (used by google-docs for file listing + creation)
+      if (proxyPath.startsWith("drive/v3/files")) {
+        if (proxyPath.includes("/export")) {
+          return { label: "Exported Drive file", connectionIconName: icon };
+        }
+        if (method === "POST") {
+          return { label: "Created Drive file", connectionIconName: icon };
+        }
+        return { label: "Listed Drive files", connectionIconName: icon };
+      }
+      // Drive resumable/multipart upload
+      if (proxyPath.startsWith("upload/")) {
+        return { label: "Uploaded file to Drive", connectionIconName: icon };
+      }
+      // Google Sheets API
+      if (name === "google-sheets") {
+        if (proxyPath.endsWith(":append")) {
+          return { label: "Appended to sheet", connectionIconName: icon };
+        }
+        if (proxyPath.includes("/values/")) {
+          return {
+            label: method === "GET" ? "Read sheet values" : "Updated sheet values",
+            connectionIconName: icon,
+          };
+        }
+        return { label: "Sheets request", connectionIconName: icon };
+      }
+      // Generic proxy fallback — name the action by verb, not "Configured"
+      if (method === "POST") return { label: `Posted to ${name}`, connectionIconName: icon };
+      if (method === "PATCH" || method === "PUT") {
+        return { label: `Updated via ${name}`, connectionIconName: icon };
+      }
+      return { label: `Read from ${name}`, connectionIconName: icon };
+    }
+
+    // --- Catch-all for connection root + unrecognized subpaths ---
     if (method === "DELETE") {
-      return { label: `Removed ${name} connection`, connectionIconName: name };
+      return { label: `Removed ${name} connection`, connectionIconName: icon };
     }
-    if (method === "POST" || method === "PATCH" || method === "PUT") {
-      return { label: `Configured ${name} connection`, connectionIconName: name };
+    // Root POST/PATCH/PUT on /connections/<id> is the actual "configure" action.
+    if (!sub && (method === "POST" || method === "PATCH" || method === "PUT")) {
+      return { label: `Configured ${name} connection`, connectionIconName: icon };
     }
-    return { label: `${name} connection`, connectionIconName: name };
+    // Sub-path POST/PATCH/PUT is an action, not a configuration change.
+    if (method === "POST") return { label: `Posted to ${name}`, connectionIconName: icon };
+    if (method === "PATCH" || method === "PUT") {
+      return { label: `Updated via ${name}`, connectionIconName: icon };
+    }
+    return { label: `${name} connection`, connectionIconName: icon };
   }
 
   if (path === "/pipes") {
@@ -1070,11 +1330,12 @@ function friendlyToolLabel(toolCall: ToolCall): string {
       if (result) return result.label;
       // Fallback for non-API curls / arbitrary shell — strip the auth-header
       // boilerplate so the truncation surfaces the meaningful tail, not the
-      // 80-char "-H Authorization: Bearer $SCREENPIPE_API_AUTH_KEY" header.
+      // 80-char "-H Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" header.
+      // Matches both the canonical and deprecated alias name.
       const stripped = cmd
         .replace(/^\s*curl\s+/, "curl ")
         .replace(/\s-s\s+/g, " ")
-        .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+\$?SCREENPIPE_API_AUTH_KEY['"]\s*/g, " ")
+        .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+\$?SCREENPIPE_(LOCAL_API|API_AUTH)_KEY['"]\s*/g, " ")
         .replace(/\s-H\s+['"]Content-Type:\s*application\/json['"]\s*/g, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -1177,7 +1438,23 @@ function endpointFamily(path: string): string {
   if (path === "/search") return "Screen search";
   if (path === "/activity-summary") return "Activity";
   if (path === "/raw_sql") return "Database";
-  if (path.startsWith("/connections/")) return "Connection";
+  if (path.startsWith("/connections/")) {
+    // Narrow the chip to the action surface, not just "Connection", so the AI's
+    // user-visible card matches the verb in the title (Sent email → EMAIL).
+    const segments = path.split("/").slice(2);
+    const name = segments[0];
+    const sub = segments.slice(1).join("/");
+    if (name === "gmail" && sub === "send") return "Email";
+    if (name === "gmail") return "Gmail";
+    if (name === "google-calendar") return "Calendar";
+    if (name === "google-docs") return "Doc";
+    if (name === "google-sheets") return "Sheet";
+    if (name === "slack") return "Slack";
+    if (name === "notion") return "Notion";
+    if (name === "telegram") return "Telegram";
+    if (name === "discord") return "Discord";
+    return "Connection";
+  }
   if (path.startsWith("/meetings")) return "Meetings";
   if (path.startsWith("/speakers")) return "Speakers";
   if (path.startsWith("/pipes")) return "Pipes";
@@ -1196,6 +1473,29 @@ function parseToolResultJson(result: string | undefined): any | null {
 function summarizeToolResult(result: string | undefined, family: string): string | undefined {
   const json = parseToolResultJson(result);
   if (!json) return result?.trim() ? trunc(result.trim().replace(/\s+/g, " "), 120) : undefined;
+
+  // Connection-specific successes: read the actual response shape so the
+  // summary reflects what just happened ("Email sent", "Doc created") instead
+  // of the generic "JSON response returned" fallback.
+  if (family.startsWith("/connections/")) {
+    if (family === "/connections/gmail/send" && (json?.data?.id || json?.id || json?.threadId)) {
+      return "Email sent";
+    }
+    if (family.startsWith("/connections/google-docs/proxy/docs/v1/documents")) {
+      if (family.endsWith(":batchUpdate")) return "Document updated";
+      if (json?.documentId) return "Document created";
+    }
+    if (family.startsWith("/connections/google-docs/proxy/drive/v3/files") && json?.id) {
+      return json?.mimeType?.includes("spreadsheet") ? "Spreadsheet created" : "Drive file created";
+    }
+    if (family.startsWith("/connections/google-docs/proxy/upload/drive/v3/files") && json?.id) {
+      return "File uploaded";
+    }
+    if (family.endsWith(":append") && json?.updates?.updatedCells) {
+      return `Appended ${json.updates.updatedCells} cell${json.updates.updatedCells === 1 ? "" : "s"}`;
+    }
+    if (typeof json?.error === "string") return trunc(json.error, 120);
+  }
 
   const noun = family === "/memories" ? "memories"
     : family === "/search" ? "results"
@@ -1653,6 +1953,9 @@ function ConnectionToolIcon({ name }: { name: string }) {
   if (key === "connections") {
     return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label="connections" />;
   }
+  if (key === "windows-calendar") {
+    return <Calendar className="w-3.5 h-3.5 text-muted-foreground" aria-label="Windows Calendar" />;
+  }
   if (key === "gmail") {
     return (
       <svg viewBox="0 0 999.517 749.831" className="w-3.5 h-3.5" aria-label="Gmail">
@@ -1730,6 +2033,10 @@ function AppStatsBlock({ content }: { content: string }) {
 
 // Markdown renderer for text blocks
 function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
+  // Assistant messages occasionally contain raw tool-call XML the model emitted
+  // as text — rewrite it to a fenced code block so rehypeRaw doesn't collapse
+  // the unknown tags and bleed the args into the prose. See sanitize-tool-call-xml.ts.
+  const renderText = isUser ? text : sanitizeToolCallXml(text);
   return (
     <MemoizedReactMarkdown
       className={cn(
@@ -1739,6 +2046,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
           : "dark:prose-invert"
       )}
       remarkPlugins={[remarkGfm]}
+      urlTransform={chatUrlTransform}
       rehypePlugins={[rehypeRaw]}
       components={{
         p({ children }) {
@@ -1772,15 +2080,16 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
           );
         },
         a({ href, children, ...props }) {
-          const isMediaLink = href?.toLowerCase().match(/\.(mp4|mp3|wav|webm)$/);
-          if (isMediaLink && href) {
-            return <VideoComponent filePath={href} className="my-2" />;
-          }
-
-          if (href?.startsWith("screenpipe://timeline") || href?.startsWith("screenpipe://frame")) {
-            const handleTimelineClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+          if (
+            href?.startsWith("screenpipe://timeline") ||
+            href?.startsWith("screenpipe://frame") ||
+            href?.startsWith("screenpipe://view")
+          ) {
+            const handleScreenpipeLinkClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
               e.preventDefault();
               try {
+                if (await openScreenpipeViewerLink(href)) return;
+
                 if (href.startsWith("screenpipe://frame")) {
                   const frameId = href.split("frame/")[1]?.replace(/^\//, "");
                   if (frameId) {
@@ -1801,14 +2110,14 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
                   }
                 }
               } catch (error) {
-                console.error("Failed to navigate to timeline:", error);
+                console.error("Failed to open screenpipe link:", error);
               }
             };
 
             return (
               <a
                 href="#"
-                onClick={handleTimelineClick}
+                onClick={handleScreenpipeLinkClick}
                 className="underline underline-offset-2 text-blue-500 hover:text-blue-400 cursor-pointer inline"
                 {...props}
               >
@@ -1823,39 +2132,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             </a>
           );
         },
-        img({ src, alt, ...props }) {
-          if (!src) return null;
-          if (src.toLowerCase().endsWith(".mp4")) {
-            return <VideoComponent filePath={src} className="my-2" />;
-          }
-          // try asset protocol for local paths, fall back to http serve
-          let imgSrc = src;
-          if (src.startsWith("/")) {
-            try {
-              imgSrc = convertFileSrc(src);
-            } catch {
-              imgSrc = `${getApiBaseUrl()}/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
-            }
-          }
-          return (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imgSrc}
-              alt={alt || ""}
-              className="max-w-full h-auto rounded-md my-2 border border-border"
-              loading="lazy"
-              onError={(e) => {
-                // fallback: if asset protocol fails, try convertFileSrc or raw path
-                const target = e.currentTarget;
-                if (src.startsWith("/") && !target.dataset.retried) {
-                  target.dataset.retried = "1";
-                  target.src = convertFileSrc(src);
-                }
-              }}
-              {...props}
-            />
-          );
-        },
         pre({ children, ...props }) {
           return (
             <pre className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-neutral-950 p-3 my-2 text-xs max-w-full not-prose" {...props}>
@@ -1865,7 +2141,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
         },
         code({ className, children, ...props }) {
           const content = String(children).replace(/\n$/, "");
-          const isMedia = content.trim().toLowerCase().match(/\.(mp4|mp3|wav|webm)$/);
           const match = /language-(\w+)/.exec(className || "");
           const language = match?.[1] || "";
           const isCodeBlock = className?.includes("language-");
@@ -1876,10 +2151,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
 
           if (language === "app-stats") {
             return <AppStatsBlock content={content} />;
-          }
-
-          if (isMedia) {
-            return <VideoComponent filePath={content.trim()} className="my-2" />;
           }
 
           if (isCodeBlock) {
@@ -1898,7 +2169,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
         },
       }}
     >
-      {text}
+      {renderText}
     </MemoizedReactMarkdown>
   );
 }
@@ -1937,7 +2208,11 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
 }
 
 function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: boolean): GroupedBlock[] {
-  if (!hideThinkingBlocks) return grouped;
+  // Run always: collapsing consecutive tool-groups into a single
+  // "Worked for X min" rail is useful regardless of the thinking-block
+  // visibility setting. `hideThinkingBlocks` only controls whether
+  // thinking blocks get absorbed into the work-group (true) or shown
+  // as separate pills (false).
 
   const out: GroupedBlock[] = [];
   let pendingToolCalls: ToolCall[] = [];
@@ -1980,8 +2255,15 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: b
     }
 
     if (group.type === "thinking") {
-      pendingDurationMs += group.durationMs ?? 0;
-      pendingKey ??= group.key;
+      if (hideThinkingBlocks) {
+        pendingDurationMs += group.durationMs ?? 0;
+        pendingKey ??= group.key;
+        continue;
+      }
+      // Show thinking pills inline — flush pending tool work first so
+      // ordering is preserved and the thinking pill renders separately.
+      flushPending();
+      out.push(group);
       continue;
     }
 
@@ -2057,19 +2339,15 @@ function ToolCallGroup({
         className="w-full flex items-center gap-2 py-1 text-left min-w-0 group"
       >
         {/* Status indicator */}
-        {!hideCount && (
+        {!hideCount && hasRunning && (
           <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
-            {hasRunning ? (
-              <motion.span
-                className="inline-block"
-                animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
-                transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
-              >
-                [{doneCount}/{total}]
-              </motion.span>
-            ) : (
-              <span>[{total}]</span>
-            )}
+            <motion.span
+              className="inline-block"
+              animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
+              transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
+            >
+              [{doneCount}/{total}]
+            </motion.span>
           </span>
         )}
 
@@ -2125,10 +2403,12 @@ function ToolCallGroup({
 // Renders message content with interleaved text and tool call blocks
 function MessageContent({
   message,
+  deferSourceFooter = false,
   onImageClick,
   onRetry,
 }: {
   message: Message;
+  deferSourceFooter?: boolean;
   onImageClick?: (images: string[], index: number) => void;
   onRetry?: (prompt: string) => void;
 }) {
@@ -2136,7 +2416,7 @@ function MessageContent({
   const { settings } = useSettings();
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
-  const sourceFooter = sourceCitations.length > 0 ? (
+  const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
     <SourceCitationFooter citations={sourceCitations} />
   ) : null;
 
@@ -2186,12 +2466,17 @@ function MessageContent({
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
           }
           if (group.type === "work-group") {
+            // Fall back to message-level workDurationMs when the
+            // grouping pass collected no thinking-block duration (e.g.
+            // pipe runs whose agent emits no thinking deltas — the
+            // parser captures wall-clock time on the ChatMessage).
+            const durationMs = group.durationMs > 0 ? group.durationMs : (message.workDurationMs ?? 0);
             return (
               <ToolCallGroup
                 key={`work-${group.key}`}
                 toolCalls={group.toolCalls}
                 defaultExpanded={!hasText}
-                summaryOverride={formatWorkDuration(group.durationMs)}
+                summaryOverride={formatWorkDuration(durationMs)}
                 hideCount={hasText}
               />
             );
@@ -2238,6 +2523,192 @@ function MessageContent({
       {sourceFooter}
       {retryCta}
     </div>
+  );
+}
+
+function getMessageIntentLabel(message: Message): string | null {
+  if (message.role === "assistant" && (message.intent === "steer" || message.steeredResponse)) {
+    return "Steered conversation";
+  }
+  return null;
+}
+
+function isSteeredAssistantMessage(message: Message): boolean {
+  return message.role === "assistant" && (message.intent === "steer" || message.steeredResponse === true);
+}
+
+function hasRenderableAssistantBody(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  if (message.content && message.content !== "Processing...") return true;
+  return Boolean(message.contentBlocks?.length);
+}
+
+function isNormalUserMessage(message: Message): boolean {
+  return message.role === "user" && message.intent !== "steer";
+}
+
+type ChatRenderItem =
+  | {
+      type: "message";
+      message: Message;
+      hideWhenCollapsedBy?: string;
+      hideIntentLabelWhenCollapsedBy?: string;
+      showActionsWhenExpandedBy?: string;
+    }
+  | {
+      type: "collapsed-steer-work";
+      id: string;
+      rootUser: Message;
+      hiddenAssistants: Message[];
+      segmentMessages: Message[];
+    };
+
+function buildCollapsedSteerRenderItems(
+  messages: Message[],
+  options: { canCollapseSteerWork: boolean }
+): ChatRenderItem[] {
+  const items: ChatRenderItem[] = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const root = messages[i];
+    if (!root || !isNormalUserMessage(root)) {
+      items.push({ type: "message", message: root });
+      continue;
+    }
+
+    let end = i + 1;
+    while (end < messages.length && !isNormalUserMessage(messages[end])) {
+      end += 1;
+    }
+
+    const segment = messages.slice(i, end);
+    const steerUsers = segment.filter((message) => message.role === "user" && message.intent === "steer");
+    if (steerUsers.length === 0 || !options.canCollapseSteerWork) {
+      items.push(...segment.map((message) => ({ type: "message" as const, message })));
+      i = end - 1;
+      continue;
+    }
+
+    const latestSteer = steerUsers[steerUsers.length - 1];
+    const latestSteerIndex = segment.findIndex((message) => message.id === latestSteer?.id);
+    const assistants = segment.filter((message) => message.role === "assistant");
+    const finalAssistant =
+      (latestSteer?.turnIntentId
+        ? [...assistants].reverse().find((message) => message.turnIntentId === latestSteer.turnIntentId && hasRenderableAssistantBody(message))
+        : undefined) ??
+      [...segment.slice(Math.max(0, latestSteerIndex + 1))]
+        .reverse()
+        .find((message) => message.role === "assistant" && hasRenderableAssistantBody(message)) ??
+      [...assistants].reverse().find(hasRenderableAssistantBody) ??
+      assistants[assistants.length - 1];
+    const hasCompletedLatestSteerResponse = Boolean(
+      finalAssistant &&
+      finalAssistant.content !== "Processing..." &&
+      hasRenderableAssistantBody(finalAssistant)
+    );
+    if (!hasCompletedLatestSteerResponse) {
+      items.push(...segment.map((message) => ({ type: "message" as const, message })));
+      i = end - 1;
+      continue;
+    }
+    const hiddenAssistantIds = new Set(
+      assistants
+        .filter((message) => message.id !== finalAssistant?.id)
+        .map((message) => message.id)
+    );
+    const hiddenAssistants = assistants.filter((message) => hiddenAssistantIds.has(message.id));
+    const collapsedWorkId = `collapsed-steer-${root.id}`;
+
+    items.push({ type: "message", message: root });
+    let collapsedWorkInserted = false;
+    const pushCollapsedWork = () => {
+      if (collapsedWorkInserted || hiddenAssistants.length === 0) return;
+      items.push({
+        type: "collapsed-steer-work",
+        id: collapsedWorkId,
+        rootUser: root,
+        hiddenAssistants,
+        segmentMessages: segment,
+      });
+      collapsedWorkInserted = true;
+    };
+
+    for (const message of segment.slice(1)) {
+      if (hiddenAssistantIds.has(message.id)) {
+        pushCollapsedWork();
+        items.push({
+          type: "message",
+          message,
+          hideWhenCollapsedBy: collapsedWorkId,
+        });
+        continue;
+      }
+      const isFinalAssistant = message.id === finalAssistant?.id;
+      items.push({
+        type: "message",
+        message,
+        hideIntentLabelWhenCollapsedBy: isFinalAssistant && hiddenAssistants.length > 0
+          ? collapsedWorkId
+          : undefined,
+        showActionsWhenExpandedBy: message.role === "user" && message.intent === "steer" && hiddenAssistants.length > 0
+          ? collapsedWorkId
+          : undefined,
+      });
+    }
+    pushCollapsedWork();
+
+    i = end - 1;
+  }
+
+  return items;
+}
+
+function collapsedSteerWorkDuration(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): string {
+  const timestamps = item.segmentMessages
+    .map((message) => message.timestamp)
+    .filter((timestamp) => Number.isFinite(timestamp));
+  if (timestamps.length < 2) return "Worked";
+  const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
+  if (durationMs <= 0) return "Worked";
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return `Worked for ${seconds}s`;
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `Worked for ${minutes} min${minutes === 1 ? "" : "s"}`;
+}
+
+function CollapsedSteerWorkRow({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const label = collapsedSteerWorkDuration(item);
+
+  return (
+    <motion.div
+      key={item.id}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.2 }}
+      className="relative flex min-w-0 justify-start"
+      data-testid="chat-collapsed-steer-work"
+    >
+      <div className="group/message flex flex-col items-start w-full min-w-0">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex items-center gap-1 py-0.5 text-left text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+        >
+          <span className="text-xs leading-none">{label}</span>
+          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </button>
+        <div className="mt-0.5 w-full border-t border-border/20" />
+      </div>
+    </motion.div>
   );
 }
 
@@ -2308,10 +2779,15 @@ function ChatTitleMenu({
     conversationId ? s.sessions[conversationId] : undefined
   );
   const isPinned = session?.pinned ?? false;
-  const firstUserMsg = messages.find((m) => m.role === "user");
+  const firstUserMsg = messages.find(
+    (m) => m.role === "user" && !isConversationHistorySyncPrompt(m.content)
+  );
   const derivedTitle = firstUserMsg?.content?.slice(0, 50);
   const title =
-    storeTitle && storeTitle !== "new chat" && storeTitle !== "untitled"
+    storeTitle &&
+    storeTitle !== "new chat" &&
+    storeTitle !== "untitled" &&
+    !isConversationHistorySyncPrompt(storeTitle)
       ? storeTitle
       : derivedTitle || "";
 
@@ -2471,7 +2947,7 @@ export function StandaloneChat({
   hideInlineHistory?: boolean;
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
-  const { isMac } = usePlatform();
+  const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   // Drop the macOS traffic-light reservation when the window is fullscreen
   // (the buttons hide). Only relevant in standalone mode (no parent
   // className) — the embedded variant is below the host's chrome anyway.
@@ -2483,8 +2959,38 @@ export function StandaloneChat({
   // filter popover so users can mention them directly with @id — helps the
   // agent pick the right connection for a query instead of having to guess.
   const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
+  const [allConnectionItems, setAllConnectionItems] = useState<ConnectionListItem[]>([]);
   const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
   const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
+  const connectionSetupSuggestions = React.useMemo(
+    () => buildConnectionSetupSuggestions(allConnectionItems, appItems),
+    [allConnectionItems, appItems]
+  );
+  const refreshConnectionState = React.useCallback(async () => {
+    if (isPlatformLoading) return;
+    try {
+      const res = await localFetch("/connections");
+      if (!res.ok) return;
+      const json = (await res.json()) as { data?: ConnectionListItem[] };
+      const allConnections = (json.data ?? []).map((connection) =>
+        normalizeConnectionForPlatform(connection, isWindows)
+      );
+      const connectedConnections = allConnections
+        .filter((connection) => connection.connected)
+        .map((connection) => ({
+          id: connection.id,
+          name: connection.name,
+          icon: connection.icon,
+          category: connection.category,
+          description: connection.description,
+        }));
+
+      setAllConnectionItems(allConnections);
+      setConnections(connectedConnections);
+    } catch {
+      // silent — connection-aware UI simply won't surface stale data
+    }
+  }, [isPlatformLoading, isWindows]);
   const visibleSuggestionSignature = React.useMemo(
     () =>
       [...autoSuggestions, ...connectionPreviewSuggestions]
@@ -2513,49 +3019,25 @@ export function StandaloneChat({
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await localFetch("/connections");
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          data?: Array<{ id: string; name: string; icon?: string; connected: boolean; category?: string; description?: string }>;
-        };
-        const list = (json.data ?? [])
-          .filter((c) => c.connected)
-          .map((c) => ({ id: c.id, name: c.name, icon: c.icon, category: c.category, description: c.description }));
-        if (!cancelled) setConnections(list);
-      } catch {
-        // silent — filter just won't surface connections, no UI regression
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void refreshConnectionState();
+  }, [refreshConnectionState]);
 
   // Re-fetch connections whenever the window becomes visible — picks up any
   // integrations connected in Settings while the chat was open.
   useEffect(() => {
-    const fetchConnections = async () => {
-      try {
-        const res = await localFetch("/connections");
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          data?: Array<{ id: string; name: string; icon?: string; connected: boolean; category?: string; description?: string }>;
-        };
-        const list = (json.data ?? [])
-          .filter((c) => c.connected)
-          .map((c) => ({ id: c.id, name: c.name, icon: c.icon, category: c.category, description: c.description }));
-        setConnections(list);
-      } catch { /* silent */ }
-    };
     const onVisible = () => {
-      if (document.visibilityState === "visible") fetchConnections();
+      if (document.visibilityState === "visible") void refreshConnectionState();
     };
+    const onFocus = () => void refreshConnectionState();
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, []);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener(CONNECTIONS_UPDATED_EVENT, onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(CONNECTIONS_UPDATED_EVENT, onFocus);
+    };
+  }, [refreshConnectionState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2614,14 +3096,17 @@ export function StandaloneChat({
 
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   // Prompts the user has queued while a previous one is still streaming.
   // Sourced from rust via the `pi-queue-changed` event — single source of
   // truth lives in `pi_command_queue.rs`. Cleared as soon as the drain loop
   // pulls a queued item and writes it to stdin (it's then in-flight).
-  const [queuedPrompts, setQueuedPrompts] = useState<PiQueuedPrompt[]>([]);
+  const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, PiQueuedPrompt[]>>({});
+  const queuedDisplayBySessionRef = useRef<Record<string, Record<string, QueuedDisplayPayload>>>({});
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
+  const queuedScrollRef = useRef<HTMLDivElement | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   // Cursor-style inline edit: click a sent user message to tweak and resend
@@ -2636,6 +3121,23 @@ export function StandaloneChat({
   // handler can distinguish a real click (enter edit mode) from a drag-
   // select (let the browser select text — don't swallow it).
   const pendingEditDownXYRef = useRef<{ x: number; y: number } | null>(null);
+
+  const enterEditMode = (message: Message, caretPos?: number) => {
+    setEditDraft(message.content);
+    pendingCaretRef.current = caretPos ?? message.content.length;
+    setEditingMessageId(message.id);
+  };
+
+  const commitEditedMessage = (message: Message, draft: string) => {
+    const trimmed = draft.trim();
+    setEditingMessageId(null);
+    pendingCaretRef.current = null;
+    if (!trimmed || trimmed === message.content) return;
+    const idx = messages.findIndex((m) => m.id === message.id);
+    if (idx === -1) return;
+    setMessages((prev) => prev.slice(0, idx));
+    sendMessage(trimmed, message.displayContent);
+  };
 
   // Given a click on a rendered message bubble, compute the character offset
   // into `content` that corresponds to where the user clicked. Falls back to
@@ -2684,6 +3186,8 @@ export function StandaloneChat({
   const [renameValue, setRenameValue] = useState("");
   const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
+  const pendingPresetRef = useRef<AIPreset | null>(null);
+  const isStreamingRef = useRef(false);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -2695,6 +3199,8 @@ export function StandaloneChat({
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const autoScrollFrameRef = useRef<number | null>(null);
   // Tracks the input section's width so we can collapse the auto-suggestion
   // chips into a popover when the chat column is narrow (e.g. when the
   // BrowserSidebar opens and squeezes the chat). Updated by a ResizeObserver
@@ -2713,6 +3219,7 @@ export function StandaloneChat({
   const [pastedImages, setPastedImages] = useState<string[]>([]); // Base64 data URLs
   const [imageViewer, setImageViewer] = useState<{ images: string[]; index: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const steerShortcutInFlightRef = useRef(false);
   const isEmbedded = !!className; // embedded in settings vs overlay panel
 
   // Pi agent state
@@ -2722,20 +3229,98 @@ export function StandaloneChat({
   const piStreamingTextRef = useRef<string>("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
+  const pendingNextPiUserIntentRef = useRef<"steer" | null>(null);
+  const pendingNextPiUserDisplayRef = useRef<QueuedDisplayPayload | null>(null);
+  const optimisticSteerRef = useRef<OptimisticSteerPayload | null>(null);
+  const turnIntentLedgerRef = useRef<TurnIntentRecord[]>([]);
+  const pendingSteerBatchRef = useRef<PendingSteerBatchItem[]>([]);
+  const pendingSteerFlushInFlightRef = useRef(false);
+  const steerAbortAtBoundaryRef = useRef(false);
+  const steerAbortInFlightRef = useRef(false);
   const streamRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
   // no explicit stopReason=error on any message (some providers drop that flag).
   const piLastErrorRef = useRef<string | null>(null);
   const piStartInFlightRef = useRef(false);
+  const sendDispatchInFlightRef = useRef(false);
+  const forceQueueModeRef = useRef(false);
   const piFirstCallRetried = useRef(false);
   const sessionActivityLastEmitAtRef = useRef<Record<string, number>>({});
   const sessionActivityLastSigRef = useRef<Record<string, string>>({});
   const piStoppedIntentionallyRef = useRef(false);
   const piIntentionallyStoppedPidsRef = useRef<Set<number>>(new Set());
+  const piActiveStopRequestedRef = useRef(false);
+
+  const normalizeTurnIntentText = (value: string) => value.replace(/\s+/g, " ").trim();
+
+  const turnIntentTextValuesMatch = (leftValue: string, rightValue: string) => {
+    const left = normalizeTurnIntentText(leftValue);
+    const right = normalizeTurnIntentText(rightValue);
+    if (!left || !right) return false;
+    return left === right;
+  };
+
+  const turnIntentMatchesText = (record: TurnIntentRecord, text: string) => {
+    return turnIntentTextValuesMatch(record.content, text) || turnIntentTextValuesMatch(record.preview, text);
+  };
+
+  const pruneTurnIntentLedger = () => {
+    const cutoff = Date.now() - TURN_INTENT_LEDGER_TTL_MS;
+    turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) => record.createdAt >= cutoff);
+  };
+
+  const registerTurnIntent = (record: TurnIntentRecord) => {
+    pruneTurnIntentLedger();
+    turnIntentLedgerRef.current = [
+      ...turnIntentLedgerRef.current.filter((item) => item.id !== record.id),
+      record,
+    ];
+  };
+
+  const removeTurnIntent = (id: string) => {
+    turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) => record.id !== id);
+  };
+
+  const findTurnIntentForUserStart = (
+    sessionId: string | null | undefined,
+    text: string,
+    display?: QueuedDisplayPayload | null,
+  ): TurnIntentRecord | null => {
+    if (!sessionId) return null;
+    pruneTurnIntentLedger();
+    const sessionTurnIntents = turnIntentLedgerRef.current.filter((record) => record.sessionId === sessionId);
+    const hasIncomingText = Boolean(normalizeTurnIntentText(text));
+    const displayPreviewMatchesIncoming = display?.preview
+      ? turnIntentTextValuesMatch(display.preview, text)
+      : false;
+    const canUseDisplayIdentity = Boolean(display && (!hasIncomingText || displayPreviewMatchesIncoming));
+    const recordMatchesIncoming = (record: TurnIntentRecord) =>
+      turnIntentMatchesText(record, text) ||
+      (displayPreviewMatchesIncoming && turnIntentMatchesText(record, display?.preview ?? ""));
+
+    const byDisplayId = canUseDisplayIdentity && display?.turnIntentId
+      ? sessionTurnIntents.find((record) => record.id === display.turnIntentId)
+      : null;
+    if (byDisplayId && recordMatchesIncoming(byDisplayId)) return byDisplayId;
+
+    const byOptimisticUser = canUseDisplayIdentity && display?.optimisticUserId
+      ? sessionTurnIntents.find((record) => record.displayedUserId === display.optimisticUserId)
+      : null;
+    if (byOptimisticUser && recordMatchesIncoming(byOptimisticUser)) return byOptimisticUser;
+
+    return sessionTurnIntents.find((record) => turnIntentMatchesText(record, text)) ?? null;
+  };
+
+  const markTurnIntentConsumed = (id: string, assistantId: string) => {
+    turnIntentLedgerRef.current = turnIntentLedgerRef.current.map((record) =>
+      record.id === id ? { ...record, consumedAssistantId: assistantId } : record
+    );
+  };
   const piPresetSwitchPromiseRef = useRef<Promise<void> | null>(null);
   const piCrashCountRef = useRef(0);
   const piLastCrashRef = useRef(0);
+  const piTerminationDedupRef = useRef<Record<string, number>>({});
   const piThinkingStartRef = useRef<number | null>(null);
   const piSessionSyncedRef = useRef(false);
   // Initial Pi session id. The chat panel's foreground bus registration
@@ -2795,6 +3380,15 @@ export function StandaloneChat({
   const [conversationId, setConversationId] = useState<string | null>(
     initialSessionIdRef.current,
   );
+  const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
+  const queuedPrompts = useMemo(
+    () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
+    [queuedPromptsBySession, currentQueueSessionId]
+  );
+
+  useEffect(() => {
+    void refreshConnectionState();
+  }, [conversationId, refreshConnectionState]);
 
   const cancelStreamingMessageRender = useCallback(() => {
     if (streamRenderTimerRef.current) {
@@ -3129,6 +3723,7 @@ export function StandaloneChat({
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            optimisticSteerRef.current = null;
             piLastErrorRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
@@ -3183,7 +3778,13 @@ export function StandaloneChat({
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [piInfo]);
+    // Register once. The handler only touches refs and stable setters, so it
+    // doesn't need to re-subscribe on piInfo changes — and re-subscribing
+    // creates a teardown/attach gap where an in-flight chat-prefill event can
+    // be lost (e.g. meeting-notes Summarize → page reload → 120ms emit), which
+    // leaves isPreparingPrefill stuck true and the chat blank.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Listen for chat-load-conversation events. Sources:
   //   - timeline (clicking a previous chat in the timeline view)
@@ -3210,62 +3811,66 @@ export function StandaloneChat({
   loadConversationRef.current = loadConversation;
   startNewConversationRef.current = startNewConversation;
 
-  useEffect(() => {
-    const unlisten = listen<{ conversationId: string }>("chat-load-conversation", async (event) => {
-      const { conversationId: convId } = event.payload;
-      const { loadConversationFile } = await import("@/lib/chat-storage");
-      const { useChatStore } = await import("@/lib/stores/chat-store");
+  const openConversationLocally = useCallback(async (convId: string) => {
+    const { loadConversationFile } = await import("@/lib/chat-storage");
+    const { useChatStore } = await import("@/lib/stores/chat-store");
 
-      // 0) Already on this conversation — skip the snapshot+swap. The
-      //    page-level listener handles navigation back to home; we
-      //    just make sure currentId reflects the panel so the sidebar
-      //    re-highlights the row. Without this short-circuit, clicking
-      //    the already-loaded chat from a non-home section would
-      //    snapshot+reset+rehydrate the same id and briefly blank the
-      //    panel.
-      if (convId === piSessionIdRef.current) {
-        useChatStore.getState().actions.setCurrent(convId);
-        emit("chat-current-session", { id: convId });
-        return;
-      }
-
-      // 1) Disk first — saved conversations are the canonical source.
-      const conv = await loadConversationFile(convId);
-      if (conv) {
-        loadConversationRef.current(conv);
-        return;
-      }
-
-      // 2) Store fallback — the conversation may exist only in memory
-      //    because it was started in this session and hasn't completed
-      //    a turn yet (no agent_end → no save). Without this branch,
-      //    clicking back to a chat that's been streaming in the
-      //    background would fall through to startNewConversation and
-      //    silently WIPE the in-memory state.
-      const session = useChatStore.getState().sessions[convId];
-      if (session?.messages && session.messages.length > 0) {
-        // Stub conversation — loadConversation prefers store messages
-        // over the conv arg whenever the store has them, so the empty
-        // messages array here is just a satisfaction of the type.
-        loadConversationRef.current({
-          id: convId,
-          title: session.title || "untitled",
-          messages: [],
-          createdAt: Date.now(),
-          updatedAt: session.updatedAt,
-        });
-        return;
-      }
-
-      // 3) Truly new id (sidebar's "+ new chat" path) — adopt the
-      //    requested id so sidebar + chat (and the chat-store's
-      //    currentId) all agree from message 0.
-      await startNewConversationRef.current(convId);
-      // Mirror the new id back to the sidebar so its currentId matches.
+    // Already on this conversation — keep the store/sidebar in sync without
+    // forcing a redundant snapshot+swap.
+    if (convId === piSessionIdRef.current) {
+      useChatStore.getState().actions.setCurrent(convId);
       emit("chat-current-session", { id: convId });
+      return;
+    }
+
+    const conv = await loadConversationFile(convId);
+    if (conv) {
+      loadConversationRef.current(conv);
+      return;
+    }
+
+    const session = useChatStore.getState().sessions[convId];
+    if (session?.messages && session.messages.length > 0) {
+      // `loadConversation` will prefer the store's live message list for this
+      // id, but the metadata here should still mirror the session as closely
+      // as possible so this fallback stays behaviorally aligned with disk loads.
+      loadConversationRef.current({
+        id: convId,
+        title: session.title || "untitled",
+        messages: [],
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      });
+      return;
+    }
+
+    await startNewConversationRef.current(convId);
+    emit("chat-current-session", { id: convId });
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
+      const { conversationId: convId, targetWindow } = event.payload;
+      const windowLabel = getCurrentWindow().label;
+      if (!shouldHandleChatLoadConversationForWindow(
+        { conversationId: convId, targetWindow },
+        windowLabel === "chat" ? "chat" : "home",
+      )) {
+        return;
+      }
+      await openConversationLocally(convId);
     });
     return () => { unlisten.then((fn) => fn()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openConversationLocally]);
+
+  // Cmd+N / Ctrl+N from home/page emits this so the user can immediately type
+  // after a new chat is created without having to click into the textarea.
+  useEffect(() => {
+    const unlisten = listen("chat-focus-input", () => {
+      inputRef.current?.focus();
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, []);
 
   // Tell the sidebar which session is current whenever the chat panel
@@ -3282,12 +3887,11 @@ export function StandaloneChat({
   }, [conversationId]);
 
   // E2E hook: expose a function to seed a user message into a session.
-  // Required by parallel-chat.spec.ts because `ensureAssistantPlaceholder`
-  // (added 2026-04-29 in e1f55023d) only creates an assistant bubble when
+  // Required by chat-streaming-performance.spec.ts because
+  // `ensureAssistantPlaceholder` only creates an assistant bubble when
   // the last message in LOCAL React state is `role: "user"`. Without a
   // way to inject a user message, the test's pure pi_event-faking path
-  // can't materialize any assistant DOM and CI has been red on every PR
-  // since.
+  // can't materialize any assistant DOM.
   //
   // Three places get updated:
   //   1. Local React state (`setMessages`) — what `ensureAssistantPlaceholder`
@@ -3419,10 +4023,25 @@ export function StandaloneChat({
         if (!mountedRef.current) return;
         handleAgentEventDataRef.current?.(envelope.event);
       });
+      // E2E seam: agent_event delivery to the panel is gated on this
+      // foreground registration completing. Tests can wait on this
+      // signal before emitting events; without it, deltas race the
+      // registration window and go to the default router, which
+      // early-returns for `store.currentId === sid`, silently dropping
+      // them. Cleared in the cleanup below so successive switches don't
+      // see a stale id.
+      if (typeof window !== "undefined") {
+        (window as any).__e2eForegroundReady = conversationId;
+      }
     })();
     return () => {
       cancelled = true;
       try { off?.(); } catch { /* ignore */ }
+      if (typeof window !== "undefined") {
+        if ((window as any).__e2eForegroundReady === conversationId) {
+          (window as any).__e2eForegroundReady = null;
+        }
+      }
     };
   }, [conversationId]);
 
@@ -3490,10 +4109,18 @@ export function StandaloneChat({
     if (!sess || sess.kind === "pipe-watch") return undefined;
     return !!sess.isLoading;
   });
+  const currentStreamingMessageId = useChatStore((s) => {
+    if (!conversationId) return null;
+    return s.sessions[conversationId]?.streamingMessageId ?? null;
+  });
   useEffect(() => {
     if (storeChatIsStreaming === false) setIsStreaming(false);
     if (storeChatIsLoading === false) setIsLoading(false);
   }, [storeChatIsStreaming, storeChatIsLoading]);
+
+  useEffect(() => {
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
 
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
@@ -3758,8 +4385,12 @@ export function StandaloneChat({
 
     if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown) {
       e.preventDefault();
-      if (input.trim() || pastedImages.length > 0) {
-        steerMessage(input.trim());
+      e.stopPropagation();
+      if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerMessage(input.trim())).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
       return;
     }
@@ -3797,13 +4428,16 @@ export function StandaloneChat({
     const handleComposerSteerShortcut = (event: KeyboardEvent) => {
       if (showMentionDropdown) return;
       if (isComposing || event.isComposing || event.keyCode === 229) return;
-      if (document.activeElement !== inputRef.current && event.target !== inputRef.current) return;
       if (!isComposerSteerShortcut(event, isMac)) return;
+      if (document.activeElement === inputRef.current || event.target === inputRef.current) return;
 
       event.preventDefault();
       event.stopPropagation();
-      if (input.trim() || pastedImages.length > 0) {
-        void steerMessage(input.trim());
+      if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerMessage(input.trim())).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
     };
 
@@ -3818,14 +4452,28 @@ export function StandaloneChat({
     if (!isSettingsLoaded) return;
     // Don't overwrite pipe-specific preset when watching a pipe execution
     if (activePipeExecution) return;
-    const defaultPreset = settings.aiPresets?.find((p) => p.defaultPreset);
-    const next = defaultPreset || settings.aiPresets?.[0];
-    // Only update if the preset actually changed (avoid triggering downstream restart)
+    const presets = settings.aiPresets ?? [];
+    const fallback = presets.find((p) => p.defaultPreset) ?? presets[0];
     setActivePreset((prev) => {
-      if (prev && next && prev.provider === next.provider && prev.model === next.model) {
-        return prev; // same reference → no re-render → no restart
+      // First load — pick the default.
+      if (!prev) return fallback;
+      // User's selection still exists. Re-bind to the latest object so edits
+      // in the Settings tab flow through, but keep the same id (don't snap
+      // back to the default just because settings got rewritten by an
+      // unrelated update — loadUser, team sync, device discovery, etc).
+      const stillThere = presets.find((p) => p.id === prev.id);
+      if (stillThere) {
+        return stillThere.provider === prev.provider &&
+          stillThere.model === prev.model &&
+          stillThere.url === prev.url &&
+          (stillThere as any).apiKey === (prev as any).apiKey &&
+          (stillThere as any).maxTokens === (prev as any).maxTokens &&
+          stillThere.prompt === prev.prompt
+          ? prev
+          : stillThere;
       }
-      return next;
+      // Preset was deleted — fall back to default.
+      return fallback;
     });
   }, [settings.aiPresets, isSettingsLoaded]);
 
@@ -3860,8 +4508,9 @@ export function StandaloneChat({
       if (e.key === "Escape" && !showMentionDropdown) {
         if (isLoading || isStreaming) {
           // Stop the agent
+          piActiveStopRequestedRef.current = true;
           try {
-            await commands.piAbort(piSessionIdRef.current);
+            await commands.piAbortActive(piSessionIdRef.current);
           } catch (err) {
             console.warn("[Pi] Failed to abort on Escape:", err);
           }
@@ -3876,35 +4525,89 @@ export function StandaloneChat({
     return () => window.removeEventListener("keydown", handleEscape);
   }, [showMentionDropdown, isLoading, isStreaming]);
 
-  // Smart auto-scroll: only scroll to bottom if user is near the bottom.
-  // If user scrolled up to read, don't interrupt them.
-  useEffect(() => {
-    if (!isUserScrolledUp) {
-      if (isStreaming || isLoading) {
-        const container = scrollContainerRef.current;
-        if (container) {
-          container.scrollTop = container.scrollHeight;
-        } else {
-          messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-        }
-        return;
-      }
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const isNearScrollBottom = useCallback((container: HTMLDivElement) => {
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= 150;
+  }, []);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior });
     }
-  }, [messages, isUserScrolledUp, isLoading, isStreaming]);
+  }, []);
+
+  const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    if (autoScrollFrameRef.current != null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+    }
+
+    scrollMessagesToBottom(behavior);
+    autoScrollFrameRef.current = requestAnimationFrame(() => {
+      scrollMessagesToBottom("auto");
+      autoScrollFrameRef.current = requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+        autoScrollFrameRef.current = null;
+      });
+    });
+  }, [scrollMessagesToBottom]);
 
   const handleMessagesScroll = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    // Consider "near bottom" if within 150px of the bottom
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-    setIsUserScrolledUp(!nearBottom);
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const nearBottom = isNearScrollBottom(container);
+    stickToBottomRef.current = nearBottom;
+    setIsUserScrolledUp((prev) => (prev === !nearBottom ? prev : !nearBottom));
+  }, [isNearScrollBottom]);
+
+  // Loading a saved conversation should land at the newest message. Keep the
+  // panel pinned while markdown media loads and changes the message height.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    setIsUserScrolledUp(false);
+    scheduleScrollToBottom("auto");
+  }, [conversationId, scheduleScrollToBottom]);
+
+  // Smart auto-scroll: only follow new content while the user remains near the
+  // bottom. Once they scroll upward, leave the viewport alone.
+  useEffect(() => {
+    if (stickToBottomRef.current) {
+      scheduleScrollToBottom("auto");
+    }
+  }, [messages, isLoading, isStreaming, scheduleScrollToBottom]);
+
+  // Media players and collapsible sections can change height after the message
+  // array is already stable. ResizeObserver keeps old chats pinned through
+  // those late layout changes without treating them as a user scroll.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const content = container?.firstElementChild;
+    if (!container || !content || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) {
+        scheduleScrollToBottom("auto");
+      }
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scheduleScrollToBottom]);
+
+  useEffect(() => {
+    return () => {
+      if (autoScrollFrameRef.current != null) {
+        cancelAnimationFrame(autoScrollFrameRef.current);
+      }
+    };
   }, []);
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    stickToBottomRef.current = true;
+    scheduleScrollToBottom("smooth");
     setIsUserScrolledUp(false);
-  }, []);
+  }, [scheduleScrollToBottom]);
 
   // Preload recent speakers when filter popover opens
   useEffect(() => {
@@ -4056,6 +4759,12 @@ export function StandaloneChat({
   //
   // Called directly from the AIPresetsSelector onPresetSaved callback.
   const handlePiRestart = useCallback((preset: AIPreset) => {
+    if (isStreamingRef.current) {
+      pendingPresetRef.current = preset;
+      toast({ title: "model will switch after this response finishes" });
+      return;
+    }
+
     const providerConfig = buildProviderConfig(preset);
     if (!providerConfig) return;
 
@@ -4126,6 +4835,14 @@ export function StandaloneChat({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.user?.token, setRunningConfigFromProviderConfig, restartCurrentPiSession]);
 
+  useEffect(() => {
+    if (!isStreaming && pendingPresetRef.current) {
+      const preset = pendingPresetRef.current;
+      pendingPresetRef.current = null;
+      handlePiRestart(preset);
+    }
+  }, [isStreaming, handlePiRestart]);
+
   // Listen for Pi / pipe events.
   //
   // Stage 3 of the events refactor: the panel registers with the
@@ -4167,20 +4884,29 @@ export function StandaloneChat({
       const newAssistantId = (Date.now() + 1).toString();
       let created = false;
       setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last || last.role !== "user") return prev;
+        let targetIdx = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]?.role === "user") {
+            targetIdx = i;
+            break;
+          }
+        }
+        if (targetIdx === -1) return prev;
+
+        const target = prev[targetIdx];
+        if (!target || target.role !== "user") return prev;
         created = true;
-        return [
-          ...prev,
-          {
-            id: newAssistantId,
-            role: "assistant",
-            content: "Processing...",
-            timestamp: Date.now(),
-            model: activePreset?.model,
-            provider: activePreset?.provider,
-          },
-        ];
+
+        const base = [...prev];
+        base.splice(targetIdx + 1, 0, {
+          id: newAssistantId,
+          role: "assistant",
+          content: "Processing...",
+          timestamp: Date.now(),
+          model: activePreset?.model,
+          provider: activePreset?.provider,
+        });
+        return base;
       });
       if (!created) return false;
       piMessageIdRef.current = newAssistantId;
@@ -4301,6 +5027,7 @@ export function StandaloneChat({
         ) {
           const evt = data.assistantMessageEvent;
           if (evt.type === "text_delta" && evt.delta) {
+            void maybeInterruptForPendingSteer("text_delta");
             // First delta of a queued turn → create the placeholder lazily.
             if (!ensureAssistantPlaceholder()) return;
             piStreamingTextRef.current += evt.delta;
@@ -4341,6 +5068,7 @@ export function StandaloneChat({
             }
             scheduleStreamingMessageRender();
           } else if (evt.type === "thinking_end") {
+            void maybeInterruptForPendingSteer("thinking_end");
             const blocks = piContentBlocksRef.current;
             const thinkingBlock = blocks[blocks.length - 1];
             if (thinkingBlock && thinkingBlock.type === "thinking") {
@@ -4358,6 +5086,7 @@ export function StandaloneChat({
             }
           }
         } else if (data.type === "tool_execution_start") {
+          void maybeInterruptForPendingSteer("tool_execution_start");
           if (!ensureAssistantPlaceholder()) return;
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
@@ -4375,6 +5104,7 @@ export function StandaloneChat({
             );
           }
         } else if (data.type === "tool_execution_end") {
+          void maybeInterruptForPendingSteer("tool_execution_end");
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
             const toolCallId = data.toolCallId;
@@ -4471,14 +5201,10 @@ export function StandaloneChat({
             }
           }
         } else if (data.type === "message_start" && data.message?.role === "user") {
-          // pi-mono fires `message_start` for a user message at the start of
-          // every turn that introduces one — i.e. (a) the original prompt
-          // and (b) each queued followUp processed inside the SAME agent run
-          // (only one `agent_end` fires for the whole run, after all
-          // followUps drain). If we relied on `agent_end` to close out the
-          // current assistant message, the followUp's text_delta would land
-          // on the previous turn's assistant bubble (the user saw responses
-          // mashed together: "...Which?Hey. What do you need?").
+          // Pi fires `message_start` for each user turn. When a queued
+          // follow-up starts, close the previous streaming target here so the
+          // next text_delta creates a fresh assistant bubble instead of
+          // appending to the prior reply.
           //
           // Clear the streaming refs here so the next text_delta lazily
           // creates a fresh assistant placeholder via `ensureAssistantPlaceholder`.
@@ -4498,32 +5224,138 @@ export function StandaloneChat({
             // processing the followUp turn.
           }
 
-          // The user message tied to this turn just left the queue and is
-          // now in-flight — clear the `queued` flag so the bubble drops
-          // its muted treatment. We match on content text since pi-mono
-          // doesn't echo our optimistic message id back.
-          {
-            const text = (() => {
-              const c = data.message?.content;
-              if (typeof c === "string") return c;
-              if (Array.isArray(c)) {
-                return c
-                  .filter((p: any) => p?.type === "text" && typeof p.text === "string")
-                  .map((p: any) => p.text)
-                  .join("");
+          const text = (() => {
+            const c = data.message?.content;
+            if (typeof c === "string") return c;
+            if (Array.isArray(c)) {
+              return c
+                .filter((p: any) => p?.type === "text" && typeof p.text === "string")
+                .map((p: any) => p.text)
+                .join("");
+            }
+            return "";
+          })();
+          const eventImages = imageDataUrlsFromPiContent(data.message?.content);
+          const pendingOptimisticSteer = optimisticSteerRef.current;
+          const isPendingOptimisticSteerEcho = Boolean(
+            pendingOptimisticSteer &&
+            pendingOptimisticSteer.content.trim() === text.trim()
+          );
+          const shouldConsumePendingOptimisticSteer = isPendingOptimisticSteerEcho;
+          const preMatchedTurnIntent = findTurnIntentForUserStart(piSessionIdRef.current, text, pendingNextPiUserDisplayRef.current);
+
+          // Skip the chat panel's own injected `<conversation_history>...`
+          // sync prompt (see promptMessage construction at the piPrompt call).
+          // Pi echoes it back as a message_start (user) event; we've already
+          // stored the real user-typed message locally via sendPiMessage, so
+          // adding this would create a phantom user bubble whose first 50
+          // chars look like `<conversation_history>\nassistant: [tool: ...`
+          // and corrupt the chat title on next save.
+          if (text.startsWith("<conversation_history>")) {
+            return;
+          }
+
+          if (!piMessageIdRef.current || isPendingOptimisticSteerEcho || preMatchedTurnIntent?.kind === "steer") {
+            const sidForStartedUser = piSessionIdRef.current;
+            const pendingDisplay = pendingNextPiUserDisplayRef.current &&
+              (!text || turnIntentTextValuesMatch(pendingNextPiUserDisplayRef.current.preview, text))
+                ? pendingNextPiUserDisplayRef.current
+                : null;
+            const queuedDisplay = pendingDisplay ?? consumeQueuedDisplayForStartedMessage(sidForStartedUser, text);
+            const matchedTurnIntent = preMatchedTurnIntent ?? findTurnIntentForUserStart(sidForStartedUser, text, queuedDisplay);
+            if (matchedTurnIntent?.consumedAssistantId) {
+              pendingNextPiUserIntentRef.current = null;
+              if (pendingNextPiUserDisplayRef.current?.turnIntentId === matchedTurnIntent.id) {
+                pendingNextPiUserDisplayRef.current = null;
               }
-              return "";
-            })();
-            if (text) {
-              setMessages((prev) => {
-                let cleared = false;
-                return prev.map((m) => {
-                  if (cleared || !m.queued || m.role !== "user" || m.content !== text) {
-                    return m;
-                  }
-                  cleared = true;
-                  return { ...m, queued: false };
-                });
+              if (optimisticSteerRef.current?.turnIntentId === matchedTurnIntent.id) {
+                optimisticSteerRef.current = null;
+              }
+              return;
+            }
+            const queuedImages = queuedDisplay?.images.length ? queuedDisplay.images : eventImages;
+            if (pendingDisplay) {
+              pendingNextPiUserDisplayRef.current = null;
+            }
+            if (!text && !queuedImages.length && !queuedDisplay?.displayContent) {
+              return;
+            }
+            const nextUserIntent = matchedTurnIntent
+              ? (matchedTurnIntent.kind === "steer" ? "steer" : null)
+              : pendingNextPiUserIntentRef.current;
+            pendingNextPiUserIntentRef.current = null;
+            const queuedTurnUserId = Date.now().toString();
+            const queuedTurnAssistantId = (Date.now() + 1).toString();
+            const optimisticSteer = optimisticSteerRef.current;
+            const isOptimisticSteerEcho = Boolean(
+              matchedTurnIntent?.kind === "steer" && matchedTurnIntent.displayedUserId ||
+              queuedDisplay?.optimisticUserId ||
+              (
+                optimisticSteer &&
+                optimisticSteer.content.trim() === text.trim()
+              ),
+            );
+            if (isOptimisticSteerEcho || shouldConsumePendingOptimisticSteer) {
+              optimisticSteerRef.current = null;
+            }
+            if (matchedTurnIntent?.kind === "steer") {
+              markTurnIntentConsumed(matchedTurnIntent.id, queuedTurnAssistantId);
+            }
+            const startedUser: Message | null = isOptimisticSteerEcho ? null : {
+              id: queuedTurnUserId,
+              role: "user",
+              content: text,
+              ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+              ...(queuedImages.length ? { images: [...queuedImages] } : {}),
+              ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
+              ...(matchedTurnIntent ? { turnIntentId: matchedTurnIntent.id } : {}),
+              timestamp: Date.now(),
+            };
+            const assistantPlaceholder: Message = {
+              id: queuedTurnAssistantId,
+              role: "assistant",
+              content: "Processing...",
+              ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
+              ...(matchedTurnIntent ? { turnIntentId: matchedTurnIntent.id } : {}),
+              ...(nextUserIntent === "steer" ? { steeredResponse: true } : {}),
+              timestamp: Date.now(),
+              model: activePreset?.model,
+              provider: activePreset?.provider,
+            };
+
+            let nextRows: Message[] | null = null;
+            setMessages((prev) => {
+              const rows = startedUser
+                ? [...prev, startedUser, assistantPlaceholder]
+                : [...prev, assistantPlaceholder];
+              nextRows = rows;
+              return rows;
+            });
+            if (nextRows) {
+              void saveConversation(nextRows, {
+                refreshHistory: false,
+                syncActiveConversation: false,
+              });
+            }
+
+            piMessageIdRef.current = queuedTurnAssistantId;
+            piStreamingTextRef.current = "";
+            piContentBlocksRef.current = [];
+            setIsLoading(true);
+            setIsStreaming(true);
+
+            if (sidForStartedUser) {
+              const storeState = useChatStore.getState();
+              if (startedUser) {
+                storeState.actions.appendMessage(sidForStartedUser, startedUser as any);
+              }
+              storeState.actions.appendMessage(sidForStartedUser, assistantPlaceholder as any);
+              storeState.actions.setStreaming(sidForStartedUser, {
+                streamingMessageId: queuedTurnAssistantId,
+                streamingText: "",
+                contentBlocks: [],
+                isStreaming: true,
+                isLoading: true,
               });
             }
           }
@@ -4612,6 +5444,7 @@ export function StandaloneChat({
             // functional updater until after the refs are cleared below.
             const blocksSnapshot = [...piContentBlocksRef.current];
             const streamedText = piStreamingTextRef.current;
+            const wasStoppedByUser = piActiveStopRequestedRef.current;
 
             // Check if content was already set by error handlers above
             setMessages((prev) => {
@@ -4633,6 +5466,9 @@ export function StandaloneChat({
                 return prev;
               }
               const contentBlocks = [...blocksSnapshot];
+              if (wasStoppedByUser && !content && contentBlocks.length === 0) {
+                return prev.filter((m) => m.id !== msgId);
+              }
               // If no text content but we have tool/thinking blocks, don't show "no response"
               const hasNonTextBlocks = contentBlocks.some((b) => b.type === "tool" || b.type === "thinking");
               let emptyResponseRetryPrompt: string | undefined;
@@ -4703,11 +5539,18 @@ export function StandaloneChat({
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
             piLastErrorRef.current = null;
+            piActiveStopRequestedRef.current = false;
             piThinkingStartRef.current = null;
             followUpFiredRef.current = false;
+            forceQueueModeRef.current = false;
             setIsLoading(false);
             setIsStreaming(false);
             emitSessionActivity({ status: "idle" });
+            if (steerAbortAtBoundaryRef.current) {
+              finishPendingSteerInterrupt();
+            } else if (pendingSteerBatchRef.current.some((item) => item.sessionId === piSessionIdRef.current)) {
+              void flushPendingSteerBatch();
+            }
           }
         } else if (data.type === "response" && data.success === false) {
           const errorStr = data.error || "Unknown error";
@@ -4721,7 +5564,7 @@ export function StandaloneChat({
               // Re-send the last prompt
               const lastUserMsg = messages.findLast(m => m.role === "user");
               if (lastUserMsg?.content) {
-                commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null).catch(() => {});
+                commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null, null).catch(() => {});
               }
             }
             return;
@@ -4783,6 +5626,7 @@ export function StandaloneChat({
             error_type: errorCategory,
           });
           piStreamingTextRef.current = "";
+          optimisticSteerRef.current = null;
           if (piMessageIdRef.current?.startsWith("pipe-")) {
             setActivePipeExecution(null);
           }
@@ -4825,10 +5669,17 @@ export function StandaloneChat({
       // Replaces the prior `listen("pi_terminated", ...)`. The bus
       // mirrors `agent_terminated`; legacy `pi_terminated` is a Stage 5
       // cleanup target.
-      busUnregistrations.push(onAgentTerminated((payload) => {
+      busUnregistrations.push(onAgentTerminated(async (payload) => {
         if (!mounted) return;
         if (payload.sessionId !== piSessionIdRef.current) return;
         const terminatedPid = payload.pid;
+        const termKey = `${payload.sessionId}:${typeof terminatedPid === "number" ? terminatedPid : "unknown"}`;
+        const nowMs = Date.now();
+        const lastSeen = piTerminationDedupRef.current[termKey] ?? 0;
+        if (nowMs - lastSeen < 4000) {
+          return;
+        }
+        piTerminationDedupRef.current[termKey] = nowMs;
         if (typeof terminatedPid === "number" && piIntentionallyStoppedPidsRef.current.delete(terminatedPid)) {
           return;
         }
@@ -4836,7 +5687,31 @@ export function StandaloneChat({
           piStoppedIntentionallyRef.current = false;
           return;
         }
+        const shouldResumePendingSteer = steerAbortAtBoundaryRef.current &&
+          pendingSteerBatchRef.current.some((item) => item.sessionId === payload.sessionId);
         console.log("[Pi] Process terminated, pid:", terminatedPid);
+        try {
+          const info = await commands.piInfo(piSessionIdRef.current);
+          if (info.status === "ok" && info.data.running && info.data.pid !== terminatedPid) {
+            setPiInfo(info.data);
+            return;
+          }
+        } catch {}
+
+        if (shouldResumePendingSteer) {
+          piStreamingTextRef.current = "";
+          piMessageIdRef.current = null;
+          piContentBlocksRef.current = [];
+          piLastErrorRef.current = null;
+          piActiveStopRequestedRef.current = false;
+          piThinkingStartRef.current = null;
+          followUpFiredRef.current = false;
+          forceQueueModeRef.current = false;
+          setIsLoading(false);
+          setIsStreaming(false);
+          finishPendingSteerInterrupt();
+          return;
+        }
 
         // If a message was in flight, append error to the message so the user
         // knows the agent stopped unexpectedly (not just "completed").
@@ -4973,18 +5848,36 @@ export function StandaloneChat({
     // session this panel is bound to. Single source of truth lives in
     // `pi_command_queue.rs`; this listener just mirrors it into local state.
     let unlistenQueue: UnlistenFn | undefined;
-    listen<{ sessionId?: string; session_id?: string; queued?: PiQueuedPrompt[] }>("pi-queue-changed", (event) => {
+    listen<{
+      sessionId?: string;
+      session_id?: string;
+      queued?: PiQueuedPrompt[];
+    }>("pi-queue-changed", (event) => {
       if (!mounted) return;
       const { sessionId, queued } = normalizeQueueEventPayload(event.payload);
-      if (sessionId !== piSessionIdRef.current) return;
-      setQueuedPrompts(queued);
+      if (!sessionId) return;
+      setQueuedPromptsBySession((prev) => {
+        const existing = prev[sessionId] ?? [];
+        if (queuedSnapshotsEqual(existing, queued)) return prev;
+        return { ...prev, [sessionId]: queued };
+      });
     }).then(fn => { unlistenQueue = fn; });
 
     // Initial fetch — closes the gap between component mount and first event.
     (async () => {
+      const sidAtFetch = piSessionIdRef.current;
       try {
-        const res = await commands.piPending(piSessionIdRef.current);
-        if (mounted && res.status === "ok") setQueuedPrompts(res.data);
+        const res = await commands.piPending(sidAtFetch);
+        if (!mounted) return;
+        const nextQueue = res.status === "ok" ? res.data : [];
+        setQueuedPromptsBySession((prev) => {
+          const existing = prev[sidAtFetch] ?? [];
+          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
+          return {
+            ...prev,
+            [sidAtFetch]: nextQueue,
+          };
+        });
       } catch { /* ignore — queue may not be initialized yet */ }
     })();
 
@@ -5288,78 +6181,128 @@ export function StandaloneChat({
     return piImages;
   }
 
+  function imageDataUrlsFromPiContent(content: unknown) {
+    if (!Array.isArray(content)) return [];
+    const images: string[] = [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const item = part as { type?: unknown; mimeType?: unknown; mime_type?: unknown; data?: unknown };
+      if (item.type !== "image" || typeof item.data !== "string") continue;
+      if (item.data.startsWith("data:image/")) {
+        images.push(item.data);
+        continue;
+      }
+      const mime = typeof item.mimeType === "string"
+        ? item.mimeType
+        : typeof item.mime_type === "string"
+          ? item.mime_type
+          : "image/png";
+      images.push(`data:${mime};base64,${item.data}`);
+    }
+    return images;
+  }
+
+  function queuedPreviewForText(text: string) {
+    return Array.from(text).slice(0, 200).join("");
+  }
+
+  function shouldKeepQueuedDisplay(payload: QueuedDisplayPayload) {
+    return payload.images.length > 0 || !!payload.displayContent;
+  }
+
+  function restoreQueuedDisplay(sessionId: string | null, promptId: string, payload: QueuedDisplayPayload | null) {
+    if (!sessionId || !payload || !shouldKeepQueuedDisplay(payload)) return;
+    queuedDisplayBySessionRef.current = {
+      ...queuedDisplayBySessionRef.current,
+      [sessionId]: {
+        ...(queuedDisplayBySessionRef.current[sessionId] ?? {}),
+        [promptId]: payload,
+      },
+    };
+  }
+
+  function takeQueuedDisplayById(sessionId: string | null, promptId: string): QueuedDisplayPayload | null {
+    if (!sessionId) return null;
+    const current = queuedDisplayBySessionRef.current[sessionId];
+    const payload = current?.[promptId] ?? null;
+    if (!payload) return null;
+    const { [promptId]: _removed, ...rest } = current;
+    queuedDisplayBySessionRef.current = {
+      ...queuedDisplayBySessionRef.current,
+      [sessionId]: rest,
+    };
+    return payload;
+  }
+
+  function payloadMatchesText(payload: QueuedDisplayPayload, text: string) {
+    const preview = queuedPreviewForText(text);
+    if (!payload.preview) return !preview;
+    return preview === payload.preview || text.startsWith(payload.preview);
+  }
+
+  function consumeQueuedDisplayForStartedMessage(sessionId: string | null, text: string): QueuedDisplayPayload | null {
+    if (!sessionId) return null;
+    const queued = queuedDisplayBySessionRef.current[sessionId] ?? {};
+    const match = Object.entries(queued).find(([, payload]) => payloadMatchesText(payload, text));
+    if (!match) return null;
+    return takeQueuedDisplayById(sessionId, match[0]);
+  }
+
   async function enqueuePiMessage(userMessage: string, displayLabel?: string) {
     if (!piInfo?.running) {
       // No Pi running → fall back to the normal start-and-send path.
       return sendPiMessage(userMessage, displayLabel);
     }
 
-    // Local optimistic message + chat-store mirror. Skips assistant placeholder
-    // entirely; the new turn's `agent_start` (downstream from the rust queue
-    // dequeue) will create one through the existing event flow.
-    // Mark queued=true so the bubble renders with a muted/lighter treatment
-    // until Pi actually starts streaming this turn (cleared in handleAgentStart).
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: userMessage,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(pastedImages.length > 0 ? { images: [...pastedImages] } : {}),
-      timestamp: Date.now(),
-      queued: true,
-    };
-    setMessages((prev) => {
-      const next = [...prev, newUserMessage];
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "new chat",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-    }
-
-    posthog.capture("chat_message_enqueued", {
-      provider: activePreset?.provider,
-      model: activePreset?.model,
-      pending_count: queuedPrompts.length + 1,
-    });
-
     // Convert any data-URL pastes to the Pi image-content shape (same format
     // used by the normal send path further down in this file).
     const piImages = imageDataUrlsToPiImages(pastedImages);
-    if (pastedImages.length > 0) setPastedImages([]);
+    const queuedImageDataUrls = pastedImages.length > 0 ? [...pastedImages] : [];
+    const prevInput = input;
+    const hadPastedImages = pastedImages.length > 0;
+
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    if (hadPastedImages) setPastedImages([]);
 
     try {
-      const result = await commands.piPrompt(
+      const result = await commands.piQueuePrompt(
         piSessionIdRef.current,
         userMessage,
         piImages.length > 0 ? piImages : null,
       );
+      const queuedTurnIntentId = `queued-${result.status === "ok" ? result.data : Date.now()}`;
       if (result.status !== "ok") {
+        setInput(prevInput);
+        if (hadPastedImages) setPastedImages(queuedImageDataUrls);
         toast({ title: "failed to queue message", description: result.error, variant: "destructive" });
+        return;
       }
+
+      registerTurnIntent({
+        id: queuedTurnIntentId,
+        sessionId: piSessionIdRef.current,
+        kind: "queued",
+        content: userMessage,
+        preview: queuedPreviewForText(userMessage),
+        queueId: result.data,
+        createdAt: Date.now(),
+      });
+      restoreQueuedDisplay(piSessionIdRef.current, result.data, {
+        preview: queuedPreviewForText(userMessage),
+        images: queuedImageDataUrls,
+        ...(displayLabel ? { displayContent: displayLabel } : {}),
+        turnIntentId: queuedTurnIntentId,
+      });
+
+      posthog.capture("chat_message_enqueued", {
+        provider: activePreset?.provider,
+        model: activePreset?.model,
+        pending_count: queuedPrompts.length + 1,
+      });
     } catch (e) {
+      setInput(prevInput);
+      if (hadPastedImages) setPastedImages(queuedImageDataUrls);
       console.warn("[Pi] failed to enqueue follow-up:", e);
     }
   }
@@ -5369,6 +6312,7 @@ export function StandaloneChat({
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
+    forceQueueModeRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
   }
@@ -5406,6 +6350,8 @@ export function StandaloneChat({
   }
 
   async function sendPiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
+    clearPendingSteerTransportState();
+
     // Auto-start Pi if it's not running yet (new session or crash recovery)
     if (!piInfo?.running) {
       if (piStartInFlightRef.current) {
@@ -5438,12 +6384,12 @@ export function StandaloneChat({
             }
           } else {
             const providerLabel = providerConfig?.provider || "AI";
-            toast({ title: `failed to start ${providerLabel}`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
+            toast({ title: `failed to start AI assistant (${providerLabel})`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
             return;
           }
         } catch (e) {
           const providerLabel = providerConfig?.provider || "AI";
-          toast({ title: `failed to start ${providerLabel}`, description: String(e), variant: "destructive" });
+          toast({ title: `failed to start AI assistant (${providerLabel})`, description: String(e), variant: "destructive" });
           return;
         } finally {
           setPiStarting(false);
@@ -5457,6 +6403,7 @@ export function StandaloneChat({
     }
 
     await interruptActivePiTurn();
+    forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
@@ -5485,11 +6432,15 @@ export function StandaloneChat({
     }
     lastUserMessageRef.current = userMessage;
 
+    let nextRowsAfterUserAppend: Message[] | null = null;
     setMessages((prev) => {
       const next = [...prev, newUserMessage];
-      void saveConversation(next, { refreshHistory: false });
+      nextRowsAfterUserAppend = next;
       return next;
     });
+    if (nextRowsAfterUserAppend) {
+      void saveConversation(nextRowsAfterUserAppend, { refreshHistory: false });
+    }
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
     setIsLoading(true);
@@ -5645,6 +6596,7 @@ export function StandaloneChat({
         piSessionIdRef.current,
         promptMessage,
         piImages.length > 0 ? piImages : null,
+        null,
       );
 
       // Race: user hit "+ NEW" before Pi finished registering the new session
@@ -5671,6 +6623,7 @@ export function StandaloneChat({
               piSessionIdRef.current,
               promptMessage,
               piImages.length > 0 ? piImages : null,
+              null,
             );
           }
         } catch (e) {
@@ -5708,6 +6661,7 @@ export function StandaloneChat({
               : m
           )
         );
+        forceQueueModeRef.current = false;
         setIsLoading(false);
         setIsStreaming(false);
       }
@@ -5721,6 +6675,7 @@ export function StandaloneChat({
             : m
         )
       );
+      forceQueueModeRef.current = false;
       setIsLoading(false);
       setIsStreaming(false);
     }
@@ -5812,79 +6767,83 @@ export function StandaloneChat({
 
   async function sendMessage(userMessage: string, displayLabel?: string) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
+    const trimmed = userMessage.trim();
+    if (!trimmed && pastedImages.length === 0) return;
 
-    // If Pi is mid-reply, the default composer action is native steering:
-    // the new message should interrupt and redirect the current reply. Queued
-    // follow-up is still available through the clock button.
-    if (isLoading || isStreaming) {
-      return steerMessage(userMessage, displayLabel);
+    // Guard the tiny gap between submit and React's loading state update.
+    // During this window, rapid Enter presses must queue (not start a second
+    // normal turn), otherwise user bubbles can drift.
+    if (forceQueueModeRef.current || sendDispatchInFlightRef.current || piMessageIdRef.current || isLoading || isStreaming) {
+      return enqueuePiMessage(trimmed, displayLabel);
     }
 
-    // All providers route through Pi agent
-    return sendPiMessage(userMessage, displayLabel);
+    sendDispatchInFlightRef.current = true;
+    try {
+      // All providers route through Pi agent
+      return await sendPiMessage(trimmed, displayLabel);
+    } finally {
+      sendDispatchInFlightRef.current = false;
+    }
   }
+
+  const openConnectionSetup = useCallback((connectionId: string) => {
+    window.dispatchEvent(
+      new CustomEvent("open-settings", {
+        detail: {
+          section: "connections",
+          connectionId: connectionId === "connections" ? null : connectionId,
+        },
+      }),
+    );
+  }, []);
 
   async function queueFollowUpMessage(userMessage: string, displayLabel?: string) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
     return enqueuePiMessage(userMessage, displayLabel);
   }
 
-  function findLocalQueuedMessage(prompt: PiQueuedPrompt): Message | undefined {
-    return messages.find(
-      (message) =>
-        message.role === "user" &&
-        message.queued &&
-        queuedPreviewMatchesText(prompt.preview, message.content),
-    );
-  }
-
-  function removeLocalQueuedMessage(prompt: PiQueuedPrompt) {
-    const matchesPrompt = (message: unknown) => {
-      if (!message || typeof message !== "object") return false;
-      const candidate = message as { role?: unknown; queued?: unknown; content?: unknown };
-      return (
-        candidate.role === "user" &&
-        candidate.queued === true &&
-        typeof candidate.content === "string" &&
-        queuedPreviewMatchesText(prompt.preview, candidate.content)
-      );
-    };
-
-    setMessages((prev) => {
-      let removed = false;
-      const next = prev.filter((message) => {
-        if (!removed && matchesPrompt(message)) {
-          removed = true;
-          return false;
-        }
-        return true;
-      });
-      if (!removed) return prev;
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
-
-    const sid = piSessionIdRef.current;
-    if (!sid) return;
-    const storeState = useChatStore.getState();
-    const sessionMessages = storeState.sessions[sid]?.messages;
-    if (!sessionMessages?.length) return;
-
-    let removed = false;
-    const nextMessages = sessionMessages.filter((message) => {
-      if (!removed && matchesPrompt(message)) {
-        removed = true;
-        return false;
-      }
-      return true;
-    });
-    if (removed) {
-      storeState.actions.setMessages(sid, nextMessages);
+  // Queue UI is session-scoped. On chat switch, hydrate pending items for the
+  // active session key without mutating other session queues.
+  useEffect(() => {
+    const sid = currentQueueSessionId;
+    if (!sid) {
+      return;
     }
-  }
+
+    let cancelled = false;
+    setQueuedActionPromptId(null);
+
+    (async () => {
+      try {
+        const queuedRes = await commands.piPending(sid);
+        if (cancelled) return;
+        const nextQueue = queuedRes.status === "ok" ? queuedRes.data : [];
+        setQueuedPromptsBySession((prev) => {
+          const existing = prev[sid] ?? [];
+          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
+          return {
+            ...prev,
+            [sid]: nextQueue,
+          };
+        });
+      } catch {
+        if (!cancelled) {
+          setQueuedPromptsBySession((prev) => {
+            const existing = prev[sid] ?? [];
+            if (existing.length === 0) return prev;
+            return {
+              ...prev,
+              [sid]: [],
+            };
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentQueueSessionId]);
 
   async function cancelQueuedPrompt(prompt: PiQueuedPrompt, options: { silent?: boolean } = {}) {
     setQueuedActionPromptId(prompt.id);
@@ -5905,8 +6864,15 @@ export function StandaloneChat({
         }
         return false;
       }
-      setQueuedPrompts((prev) => prev.filter((queued) => queued.id !== prompt.id));
-      removeLocalQueuedMessage(prompt);
+      if (currentQueueSessionId) {
+        takeQueuedDisplayById(currentQueueSessionId, prompt.id);
+        setQueuedPromptsBySession((prev) => ({
+          ...prev,
+          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
+            (queued) => queued.id !== prompt.id,
+          ),
+        }));
+      }
       return true;
     } catch (e) {
       if (!options.silent) {
@@ -5919,6 +6885,302 @@ export function StandaloneChat({
       return false;
     } finally {
       setQueuedActionPromptId((current) => current === prompt.id ? null : current);
+    }
+  }
+
+  function setAssistantInterruptedState(activeAssistantId: string | null, interruptedBySteer: boolean) {
+    if (!activeAssistantId) return;
+    let changed = false;
+    let nextRows: Message[] | null = null;
+    setMessages((prev) => {
+      const next = prev.map((message) => {
+        if (
+          message.id !== activeAssistantId ||
+          message.role !== "assistant" ||
+          Boolean(message.interruptedBySteer) === interruptedBySteer
+        ) {
+          return message;
+        }
+        changed = true;
+        return { ...message, interruptedBySteer };
+      });
+      if (changed) nextRows = next;
+      return changed ? next : prev;
+    });
+    if (!changed || !nextRows) return;
+    void saveConversation(nextRows, {
+      refreshHistory: false,
+      syncActiveConversation: false,
+    });
+    const sidNow = piSessionIdRef.current;
+    if (sidNow) {
+      useChatStore.getState().actions.setMessages(sidNow, nextRows as any);
+    }
+  }
+
+  function markCurrentAssistantInterrupted() {
+    setAssistantInterruptedState(piMessageIdRef.current, true);
+  }
+
+  function clearCurrentAssistantInterrupted() {
+    setAssistantInterruptedState(piMessageIdRef.current, false);
+  }
+
+  function buildSteerPrompt(batch: PendingSteerBatchItem[]) {
+    const latest = batch[batch.length - 1];
+    if (!latest) return "";
+
+    const originalUserMessage = latest.originalUserMessage.trim();
+    const steerMessages = batch
+      .map((item, index) => `${index + 1}. ${item.content}`)
+      .join("\n");
+
+    return [
+      "The user sent steering messages while the previous assistant response was still running.",
+      "Treat them as live steering for that turn: they may refine the original request, replace it, or redirect to a new request.",
+      "Infer the user's intent from the original request and the steering messages. If a steering message is a complete request, answer that request directly.",
+      "Apply steering messages in order. If they conflict, the final steering message has highest priority.",
+      "Do not explain the steering mechanism unless the user asks about it.",
+      "",
+      "Original user request:",
+      originalUserMessage || "(unknown previous request)",
+      "",
+      "Steering messages:",
+      steerMessages,
+      "",
+      "Final steering message:",
+      latest.content,
+      "",
+      "Now answer according to the final steered intent.",
+    ].join("\n");
+  }
+
+  function clearPendingSteerTransportState(sessionId = piSessionIdRef.current) {
+    pendingNextPiUserIntentRef.current = null;
+    pendingNextPiUserDisplayRef.current = null;
+    optimisticSteerRef.current = null;
+    if (sessionId) {
+      pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter((item) => item.sessionId !== sessionId);
+      turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) =>
+        record.sessionId !== sessionId ||
+        record.kind !== "steer" ||
+        Boolean(record.consumedAssistantId)
+      );
+    }
+  }
+
+  async function flushPendingSteerBatch() {
+    const sessionId = piSessionIdRef.current;
+    if (!sessionId || pendingSteerFlushInFlightRef.current) return;
+
+    const batch = pendingSteerBatchRef.current.filter((item) => item.sessionId === sessionId);
+    if (batch.length === 0) return;
+    pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter((item) => item.sessionId !== sessionId);
+    pendingSteerFlushInFlightRef.current = true;
+
+    const latest = batch[batch.length - 1];
+    const interruptedAssistantId = batch.find((item) => item.interruptedAssistantId)?.interruptedAssistantId ?? null;
+    const prompt = buildSteerPrompt(batch);
+    const preview = queuedPreviewForText(latest.content);
+    const combinedImages = imageDataUrlsToPiImages(batch.flatMap((item) => item.images));
+    const hasActiveAssistant = Boolean(piMessageIdRef.current);
+
+    const labelMarkers: Message[] = batch.slice(0, -1).map((item, index) => ({
+      id: `${item.turnIntentId}-label`,
+      role: "assistant",
+      content: "",
+      intent: "steer",
+      turnIntentId: item.turnIntentId,
+      timestamp: Date.now() + index,
+      model: activePreset?.model,
+      provider: activePreset?.provider,
+    }));
+    const labelMarkerIds = new Set(labelMarkers.map((marker) => marker.id));
+
+    let nextRowsAfterLabels: Message[] | null = null;
+    if (labelMarkers.length > 0) {
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((message) => message.id));
+        const markersToAppend = labelMarkers.filter((marker) => !existingIds.has(marker.id));
+        if (markersToAppend.length === 0) return prev;
+        const next = [...prev, ...markersToAppend];
+        nextRowsAfterLabels = next;
+        return next;
+      });
+      if (nextRowsAfterLabels) {
+        void saveConversation(nextRowsAfterLabels, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterLabels as any);
+      }
+    }
+
+    pendingNextPiUserIntentRef.current = "steer";
+    pendingNextPiUserDisplayRef.current = {
+      preview,
+      images: [...latest.images],
+      ...(latest.displayContent ? { displayContent: latest.displayContent } : {}),
+      optimisticUserId: latest.optimisticUserId,
+      turnIntentId: latest.turnIntentId,
+    };
+    optimisticSteerRef.current = {
+      id: latest.optimisticUserId,
+      content: prompt,
+      turnIntentId: latest.turnIntentId,
+    };
+    batch.slice(0, -1).forEach((item) => removeTurnIntent(item.turnIntentId));
+    registerTurnIntent({
+      id: latest.turnIntentId,
+      sessionId,
+      kind: "steer",
+      content: prompt,
+      preview,
+      displayedUserId: latest.optimisticUserId,
+      createdAt: latest.createdAt,
+    });
+
+    let precreatedSteerAssistantId: string | null = null;
+    if (hasActiveAssistant) {
+      const steerAssistantId = `${latest.turnIntentId}-assistant`;
+      precreatedSteerAssistantId = steerAssistantId;
+      const steerAssistantPlaceholder: Message = {
+        id: steerAssistantId,
+        role: "assistant",
+        content: "Processing...",
+        intent: "steer",
+        turnIntentId: latest.turnIntentId,
+        steeredResponse: true,
+        timestamp: Date.now(),
+        model: activePreset?.model,
+        provider: activePreset?.provider,
+      };
+      let nextRowsAfterAssistant: Message[] | null = null;
+      setMessages((prev) => {
+        if (prev.some((message) => message.id === steerAssistantId)) return prev;
+        const steerUserIndex = prev.findIndex((message) => message.id === latest.optimisticUserId);
+        const insertIndex = steerUserIndex >= 0 ? steerUserIndex + 1 : prev.length;
+        const next = [
+          ...prev.slice(0, insertIndex),
+          steerAssistantPlaceholder,
+          ...prev.slice(insertIndex),
+        ];
+        nextRowsAfterAssistant = next;
+        return next;
+      });
+      if (nextRowsAfterAssistant) {
+        void saveConversation(nextRowsAfterAssistant, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterAssistant as any);
+      }
+      markTurnIntentConsumed(latest.turnIntentId, steerAssistantId);
+      piMessageIdRef.current = steerAssistantId;
+      piStreamingTextRef.current = "";
+      piContentBlocksRef.current = [];
+      useChatStore.getState().actions.setStreaming(sessionId, {
+        streamingMessageId: steerAssistantId,
+        streamingText: "",
+        contentBlocks: [],
+        isStreaming: true,
+        isLoading: true,
+      });
+    }
+
+    lastUserMessageRef.current = latest.content;
+    setIsLoading(true);
+    setIsStreaming(true);
+
+    try {
+      const result = hasActiveAssistant
+        ? await commands.piSteer(
+            sessionId,
+            prompt,
+            combinedImages.length > 0 ? combinedImages : null,
+          )
+        : await commands.piPrompt(
+            sessionId,
+            prompt,
+            combinedImages.length > 0 ? combinedImages : null,
+            preview,
+          );
+
+      if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        optimisticSteerRef.current = null;
+        removeTurnIntent(latest.turnIntentId);
+        setAssistantInterruptedState(interruptedAssistantId, false);
+        if (labelMarkerIds.size > 0) {
+          setMessages((prev) => prev.filter((message) => !labelMarkerIds.has(message.id)));
+        }
+        if (precreatedSteerAssistantId) {
+          setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
+          piMessageIdRef.current = null;
+          piStreamingTextRef.current = "";
+          piContentBlocksRef.current = [];
+        }
+        pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
+        setIsLoading(false);
+        setIsStreaming(false);
+        toast({ title: "failed to send steered message", description: result.error, variant: "destructive" });
+      }
+    } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      optimisticSteerRef.current = null;
+      removeTurnIntent(latest.turnIntentId);
+      setAssistantInterruptedState(interruptedAssistantId, false);
+      if (labelMarkerIds.size > 0) {
+        setMessages((prev) => prev.filter((message) => !labelMarkerIds.has(message.id)));
+      }
+      if (precreatedSteerAssistantId) {
+        setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
+        piMessageIdRef.current = null;
+        piStreamingTextRef.current = "";
+        piContentBlocksRef.current = [];
+      }
+      pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
+      setIsLoading(false);
+      setIsStreaming(false);
+      const description = e instanceof Error ? e.message : String(e);
+      toast({ title: "failed to send steered message", description, variant: "destructive" });
+    } finally {
+      pendingSteerFlushInFlightRef.current = false;
+    }
+  }
+
+  function finishPendingSteerInterrupt(options?: { flush?: boolean }) {
+    steerAbortAtBoundaryRef.current = false;
+    steerAbortInFlightRef.current = false;
+    if (options?.flush !== false) {
+      void flushPendingSteerBatch();
+    }
+  }
+
+  async function maybeInterruptForPendingSteer(_reason: string) {
+    if (!steerAbortAtBoundaryRef.current) return;
+    if (steerAbortInFlightRef.current) return;
+    const sid = piSessionIdRef.current;
+    if (!sid) return;
+    const hasPending = pendingSteerBatchRef.current.some((item) => item.sessionId === sid);
+    if (!hasPending) {
+      finishPendingSteerInterrupt({ flush: false });
+      return;
+    }
+    if (!piMessageIdRef.current || (!isLoading && !isStreaming)) {
+      finishPendingSteerInterrupt();
+      return;
+    }
+
+    steerAbortInFlightRef.current = true;
+    try {
+      piActiveStopRequestedRef.current = true;
+      await commands.piAbortActive(sid);
+    } catch (e) {
+      console.warn("[steer] boundary abort failed", e);
+      steerAbortInFlightRef.current = false;
     }
   }
 
@@ -5941,15 +7203,7 @@ export function StandaloneChat({
 
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
-
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: trimmed,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
-      timestamp: Date.now(),
-    };
+    const fallbackOriginalUserMessage = lastUserMessageRef.current;
 
     setFollowUpSuggestions([]);
     followUpFiredRef.current = false;
@@ -5958,84 +7212,209 @@ export function StandaloneChat({
       followUpAbortRef.current = null;
     }
     lastUserMessageRef.current = trimmed;
-
+    const turnIntentId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticUser: Message = {
+      id: turnIntentId,
+      role: "user",
+      content: trimmed,
+      ...(displayLabel ? { displayContent: displayLabel } : {}),
+      ...(outgoingImages.length ? { images: [...outgoingImages] } : {}),
+      intent: "steer",
+      turnIntentId,
+      timestamp: Date.now(),
+    };
+    markCurrentAssistantInterrupted();
+    const activeAssistantId = piMessageIdRef.current;
+    let originalUserMessage = fallbackOriginalUserMessage;
+    let nextRowsAfterOptimisticAppend: Message[] | null = null;
     setMessages((prev) => {
-      const next = [...prev, newUserMessage];
-      void saveConversation(next, {
+      const activeAssistantIndex = activeAssistantId
+        ? prev.findIndex((message) => message.id === activeAssistantId)
+        : -1;
+      if (activeAssistantIndex >= 0) {
+        for (let i = activeAssistantIndex - 1; i >= 0; i -= 1) {
+          const candidate = prev[i];
+          if (candidate?.role === "user" && candidate.intent !== "steer") {
+            originalUserMessage = candidate.content;
+            break;
+          }
+        }
+      }
+      if (activeAssistantIndex < 0) {
+        const next = [...prev, optimisticUser];
+        nextRowsAfterOptimisticAppend = next;
+        return next;
+      }
+
+      const activeAssistant = prev[activeAssistantIndex];
+      const hasVisibleAssistantContent = Boolean(
+        activeAssistant?.content &&
+        activeAssistant.content !== "Processing..."
+      ) || Boolean(activeAssistant?.contentBlocks?.length);
+      let insertIndex = hasVisibleAssistantContent
+        ? activeAssistantIndex + 1
+        : activeAssistantIndex;
+      while (
+        insertIndex < prev.length &&
+        prev[insertIndex]?.role === "user" &&
+        prev[insertIndex]?.intent === "steer"
+      ) {
+        insertIndex += 1;
+      }
+      const next = [
+        ...prev.slice(0, insertIndex),
+        optimisticUser,
+        ...prev.slice(insertIndex),
+      ];
+      nextRowsAfterOptimisticAppend = next;
+      return next;
+    });
+    if (nextRowsAfterOptimisticAppend) {
+      void saveConversation(nextRowsAfterOptimisticAppend, {
         refreshHistory: false,
         syncActiveConversation: false,
       });
-      return next;
-    });
+    }
+    const sidNow = piSessionIdRef.current;
+    if (sidNow && nextRowsAfterOptimisticAppend) {
+      useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterOptimisticAppend as any);
+    }
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
 
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "new chat",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-    }
-
-    const piImages = imageDataUrlsToPiImages(outgoingImages);
     if (shouldClearPastedImages) setPastedImages([]);
 
-    try {
-      const result = await commands.piSteer(
-        piSessionIdRef.current,
-        trimmed,
-        piImages.length > 0 ? piImages : null,
-      );
-      if (result.status !== "ok") {
-        toast({ title: "failed to steer message", description: result.error, variant: "destructive" });
-      }
-    } catch (e) {
-      console.warn("[Pi] failed to steer message:", e);
-      toast({
-        title: "failed to steer message",
-        description: e instanceof Error ? e.message : String(e),
-        variant: "destructive",
-      });
+    pendingSteerBatchRef.current = [
+      ...pendingSteerBatchRef.current,
+      {
+        turnIntentId,
+        sessionId: piSessionIdRef.current,
+        content: trimmed,
+        originalUserMessage,
+        interruptedAssistantId: activeAssistantId ?? undefined,
+        images: [...outgoingImages],
+        ...(displayLabel ? { displayContent: displayLabel } : {}),
+        optimisticUserId: optimisticUser.id,
+        createdAt: Date.now(),
+      },
+    ];
+    if (hadActiveReply) {
+      // Request interruption at the next safe boundary event.
+      steerAbortAtBoundaryRef.current = true;
+      void maybeInterruptForPendingSteer("steer_message");
+      return;
+    }
+    if (!piMessageIdRef.current) {
+      void flushPendingSteerBatch();
     }
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
-    const queuedMessage = findLocalQueuedMessage(prompt);
-    if (!queuedMessage && (!prompt.preview || prompt.preview.length >= 200)) {
-      toast({
-        title: "full queued prompt unavailable",
-        description: "Cancel it or let it run next; ScreenPipe only has a preview for this item.",
+    setQueuedActionPromptId(prompt.id);
+    const queuedDisplay = takeQueuedDisplayById(currentQueueSessionId, prompt.id);
+    const existingTurnIntent = queuedDisplay?.turnIntentId
+      ? turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.id === queuedDisplay.turnIntentId)
+      : turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.queueId === prompt.id);
+    const turnIntentId = existingTurnIntent?.id ?? `queued-steer-${prompt.id}`;
+    const optimisticQueuedContent = existingTurnIntent?.kind === "steer"
+      ? existingTurnIntent.preview
+      : existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview;
+    const optimisticQueuedUser: Message = {
+      id: turnIntentId,
+      role: "user",
+      content: optimisticQueuedContent,
+      ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+      ...(queuedDisplay?.images.length ? { images: [...queuedDisplay.images] } : {}),
+      intent: "steer",
+      turnIntentId,
+      timestamp: Date.now(),
+    };
+    try {
+      pendingNextPiUserIntentRef.current = "steer";
+      pendingNextPiUserDisplayRef.current = {
+        preview: existingTurnIntent?.preview ?? queuedDisplay?.preview ?? prompt.preview,
+        images: queuedDisplay?.images ? [...queuedDisplay.images] : [],
+        ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+        optimisticUserId: optimisticQueuedUser.id,
+        turnIntentId,
+      };
+      registerTurnIntent({
+        id: turnIntentId,
+        sessionId: currentQueueSessionId,
+        kind: "steer",
+        content: existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview,
+        preview: existingTurnIntent?.preview ?? queuedDisplay?.preview ?? prompt.preview,
+        displayedUserId: optimisticQueuedUser.id,
+        queueId: prompt.id,
+        createdAt: existingTurnIntent?.createdAt ?? Date.now(),
       });
-      return;
-    }
-
-    const cancelled = await cancelQueuedPrompt(prompt, { silent: true });
-    if (!cancelled) {
-      toast({
-        title: "message already started",
-        description: "That follow-up has moved out of the queue.",
+      markCurrentAssistantInterrupted();
+      let nextRowsAfterQueuedSteer: Message[] | null = null;
+      setMessages((prev) => {
+        if (prev.some((message) => message.turnIntentId === turnIntentId || message.id === optimisticQueuedUser.id)) {
+          return prev;
+        }
+        const next = [...prev, optimisticQueuedUser];
+        nextRowsAfterQueuedSteer = next;
+        return next;
       });
-      return;
+      if (nextRowsAfterQueuedSteer) {
+        void saveConversation(nextRowsAfterQueuedSteer, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        const sidNow = piSessionIdRef.current;
+        if (sidNow) {
+          useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterQueuedSteer as any);
+        }
+      }
+      const result = await commands.piSteerQueued(piSessionIdRef.current, prompt.id);
+      if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        removeTurnIntent(turnIntentId);
+        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+        clearCurrentAssistantInterrupted();
+        toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
+        return;
+      }
+      if (!result.data) {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        removeTurnIntent(turnIntentId);
+        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+        clearCurrentAssistantInterrupted();
+        toast({
+          title: "message already started",
+          description: "That follow-up has moved out of the queue.",
+        });
+        return;
+      }
+      if (currentQueueSessionId) {
+        setQueuedPromptsBySession((prev) => ({
+          ...prev,
+          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
+            (queued) => queued.id !== prompt.id,
+          ),
+        }));
+      }
+    } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      removeTurnIntent(turnIntentId);
+      setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+      restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+      clearCurrentAssistantInterrupted();
+      toast({
+        title: "failed to steer queued message",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setQueuedActionPromptId((current) => current === prompt.id ? null : current);
     }
-
-    await steerMessage(
-      queuedMessage?.content ?? prompt.preview,
-      queuedMessage?.displayContent,
-      queuedMessage?.images ?? [],
-    );
   }
 
   // Keep ref in sync so useEffect callbacks can call sendMessage
@@ -6069,9 +7448,24 @@ export function StandaloneChat({
     }
 
     if (m.role === "assistant") {
-      const citationsMarkdown = formatSourceCitationsMarkdown(sourceCitationsFromMessage(m));
-      if (citationsMarkdown) {
-        body = body ? `${body}\n\n${citationsMarkdown}` : citationsMarkdown;
+      // Mirror the in-app aggregation: if this message's per-message footer
+      // was folded into a turn-level aggregate, skip its Sources block here
+      // so we don't repeat the same files across every step of an agentic
+      // loop. The aggregated Sources block is appended after the last
+      // assistant of the turn instead.
+      const isDeferred = citationPlan.deferredMessageIds.has(m.id);
+      const turnAggregate = citationPlan.aggregatedAfter.get(m.id);
+      if (!isDeferred) {
+        const citationsMarkdown = formatSourceCitationsMarkdown(sourceCitationsFromMessage(m));
+        if (citationsMarkdown) {
+          body = body ? `${body}\n\n${citationsMarkdown}` : citationsMarkdown;
+        }
+      }
+      if (turnAggregate && turnAggregate.length > 0) {
+        const aggregateMarkdown = formatSourceCitationsMarkdown(turnAggregate);
+        if (aggregateMarkdown) {
+          body = body ? `${body}\n\n${aggregateMarkdown}` : aggregateMarkdown;
+        }
       }
     }
 
@@ -6110,8 +7504,9 @@ export function StandaloneChat({
   };
 
   const handleStop = async () => {
+    piActiveStopRequestedRef.current = true;
     try {
-      await commands.piAbort(piSessionIdRef.current);
+      await commands.piAbortActive(piSessionIdRef.current);
     } catch (e) {
       console.warn("[Pi] Failed to abort:", e);
     }
@@ -6141,7 +7536,7 @@ export function StandaloneChat({
         <div className="p-1 border-b border-border/50">
           <button
             type="button"
-            disabled={isLoading || !canChat}
+            disabled={!canChat}
             onClick={async () => {
               setAppFilterOpen(false);
               await handleFilePicker();
@@ -6160,7 +7555,7 @@ export function StandaloneChat({
                   onClick={() => {
                     if (!isPro) {
                       setAppFilterOpen(false);
-                      openUrl("https://screenpi.pe/onboarding");
+                      openUrl("https://screenpipe.com/onboarding");
                       return;
                     }
                     updateSettings({ piPrivacyFilter: !privacyOn });
@@ -6324,7 +7719,7 @@ export function StandaloneChat({
               connections
             </div>
             {connections.map((c) => {
-              const tag = `@${c.id}`;
+              const tag = connectionMentionTag(c, isWindows);
               return (
                 <button
                   key={`conn-${c.id}`}
@@ -6384,6 +7779,26 @@ export function StandaloneChat({
       </>
     );
   };
+
+  const activeSourceFooterMessageId =
+    isLoading || isStreaming
+      ? piMessageIdRef.current ?? currentStreamingMessageId ?? null
+      : null;
+
+  // Per-turn aggregation plan. Pipe sessions (pipe-run, pipe-watch) and any
+  // chat with an agentic loop (≥2 assistant messages with citations between
+  // user turns) fold their per-message footers into one aggregated footer
+  // rendered after the last assistant of the turn. Single-step turns keep
+  // their per-message footer untouched.
+  const isPipeSessionChat =
+    currentSessionKind === "pipe-run" || currentSessionKind === "pipe-watch";
+  const citationPlan = React.useMemo(
+    () =>
+      computeChatCitationPlan(messages, {
+        forceAggregate: isPipeSessionChat,
+      }),
+    [isPipeSessionChat, messages],
+  );
 
   return (
     <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -6550,7 +7965,7 @@ export function StandaloneChat({
                         >
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-medium truncate">
-                              {conv.title}
+                              {(isConversationHistorySyncPrompt(conv.title) ? undefined : conv.title) || "untitled"}
                             </p>
                             <p className="text-[10px] text-muted-foreground">
                               {conv.messageCount} messages
@@ -6576,7 +7991,7 @@ export function StandaloneChat({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setOpenConvMenuId(null);
-                                  setRenameValue(conv.title);
+                                  setRenameValue(isConversationHistorySyncPrompt(conv.title) ? "" : conv.title);
                                   setRenamingConvId(conv.id);
                                 }}
                               >
@@ -6610,13 +8025,13 @@ export function StandaloneChat({
         {/* Messages */}
         <div
           ref={scrollContainerRef}
-          onScroll={handleMessagesScroll}
           // min-w-0 lets this flex child shrink when the BrowserSidebar
           // opens. Without it, flex's default `min-width: auto` keeps the
           // chat content at content-width and the sidebar overflows past
           // the right edge of the window — the native webview faithfully
           // follows the placeholder rect off-screen.
           className="relative flex-1 min-w-0 overflow-y-auto overflow-x-hidden"
+          onScroll={handleMessagesScroll}
           onContextMenu={(e) => {
             if (messages.length === 0) return;
             e.preventDefault();
@@ -6663,7 +8078,7 @@ export function StandaloneChat({
             executionId={activePipeExecution.executionId}
           />
         )}
-        {messages.length === 0 && !isPreparingPrefill && disabledReason && (!hasPresets || !hasValidModel || needsLogin) && (
+        {messages.length === 0 && !isPreparingPrefill && !activePipeExecution && !isLoading && !isStreaming && disabledReason && (!hasPresets || !hasValidModel || needsLogin) && (
           <div className="relative flex flex-col items-center justify-center py-12 space-y-4">
             <div className="relative p-6 rounded-2xl border bg-muted/50 border-border/50">
               {needsLogin ? (
@@ -6704,9 +8119,11 @@ export function StandaloneChat({
             )}
           </div>
         )}
-        {messages.length === 0 && !isPreparingPrefill && hasPresets && hasValidModel && (
+        {messages.length === 0 && !isPreparingPrefill && !activePipeExecution && !isLoading && !isStreaming && hasPresets && hasValidModel && (
           <SummaryCards
             onSendMessage={sendMessage}
+            onOpenConnection={openConnectionSetup}
+            connectionSetupSuggestions={connectionSetupSuggestions}
             autoSuggestions={connectionAwareSuggestions}
             suggestionsRefreshing={suggestionsRefreshing}
             onRefreshSuggestions={refreshVisibleSuggestions}
@@ -6719,16 +8136,66 @@ export function StandaloneChat({
           />
         )}
         <AnimatePresence mode="popLayout">
-          {messages
-            .filter((m) => {
+          {(() => {
+            const visibleMessages = messages.filter((m) => {
               if (m.role !== "assistant") return true;
               // hide placeholder "Processing..." messages (the grid dissolve loader handles this state)
               if (m.content === "Processing..." && !m.contentBlocks?.length) return false;
               // hide empty messages with no content blocks
-              if (!m.content && !m.contentBlocks?.length) return false;
+              if (!m.content && !m.contentBlocks?.length && !isSteeredAssistantMessage(m)) return false;
               return true;
-            })
-            .map((message) => (
+            });
+
+            const renderItems = buildCollapsedSteerRenderItems(visibleMessages, {
+              canCollapseSteerWork: !isLoading && !isStreaming && !piMessageIdRef.current,
+            });
+
+            return renderItems.map((item) => {
+              if (item.type === "collapsed-steer-work") {
+                const expanded = expandedSteerWorkIds.has(item.id);
+                return (
+                  <CollapsedSteerWorkRow
+                    key={item.id}
+                    item={item}
+                    expanded={expanded}
+                    onToggle={() => {
+                      setExpandedSteerWorkIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(item.id)) {
+                          next.delete(item.id);
+                        } else {
+                          next.add(item.id);
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                );
+              }
+
+              const message = item.message;
+              if (item.hideWhenCollapsedBy && !expandedSteerWorkIds.has(item.hideWhenCollapsedBy)) {
+                return null;
+              }
+              const messageIndex = visibleMessages.findIndex((candidate) => candidate.id === message.id);
+              const shouldSuppressIntentLabel = item.hideIntentLabelWhenCollapsedBy &&
+                !expandedSteerWorkIds.has(item.hideIntentLabelWhenCollapsedBy);
+              const intentLabel = shouldSuppressIntentLabel ? null : getMessageIntentLabel(message);
+              const isSteerUserMessage = message.role === "user" && message.intent === "steer";
+              const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
+              const canShowMessageActions = !item.showActionsWhenExpandedBy ||
+                expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
+              const nextAssistant = visibleMessages
+                .slice(messageIndex + 1)
+                .find((candidate) => candidate.role === "assistant");
+              const hideSupersededSteerBody = isSteeredAssistantMessage(message) && Boolean(
+                nextAssistant &&
+                isSteeredAssistantMessage(nextAssistant) &&
+                !message.content &&
+                !message.contentBlocks?.length
+              );
+              const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
+              return [
             <motion.div
               key={message.id}
               initial={{ opacity: 0, y: 10 }}
@@ -6746,13 +8213,24 @@ export function StandaloneChat({
                 className={cn(
                   "group/message flex flex-col min-w-0",
                   message.role === "user"
-                    ? "items-end max-w-[82%]"
+                    ? (editingMessageId === message.id ? "items-end w-full" : "items-end max-w-[82%]")
                     : "items-start w-full"
                 )}
               >
-              <div
+              {intentLabel ? (
+                <div
+                  className={cn(
+                    "mb-1 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80",
+                    message.role === "user" ? "text-right" : "text-left"
+                  )}
+                >
+                  {intentLabel}
+                </div>
+              ) : null}
+              {hideSupersededSteerBody ? null : (
+                <div
                 onMouseDown={(e) => {
-                  if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  if (!canEditMessage || editingMessageId === message.id) return;
                   // Stage caret position from the click coords (still on live
                   // DOM), but defer entering edit mode to mouseup. Letting
                   // the user drag-select text inside their own messages
@@ -6763,7 +8241,7 @@ export function StandaloneChat({
                   pendingEditDownXYRef.current = { x: e.clientX, y: e.clientY };
                 }}
                 onMouseUp={(e) => {
-                  if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  if (!canEditMessage || editingMessageId === message.id) return;
                   const down = pendingEditDownXYRef.current;
                   pendingEditDownXYRef.current = null;
                   // If the mouse moved more than ~3px between down and up,
@@ -6775,83 +8253,130 @@ export function StandaloneChat({
                     return;
                   }
                   // Real click — enter edit mode.
-                  setEditDraft(message.content);
-                  setEditingMessageId(message.id);
+                  enterEditMode(message, pendingCaretRef.current ?? undefined);
                 }}
                 className={cn(
                   "relative rounded-xl text-sm overflow-hidden max-w-full transition-all",
                   message.role === "user"
                     ? "bg-muted/60 text-foreground px-4 py-3"
                     : "bg-background text-foreground py-1",
-                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text",
-                  // Queued user messages — visually de-emphasised so the eye stays on
-                  // the active turn. Cleared when pi-mono fires message_start for
-                  // this turn (see handler above).
-                  message.queued && "bg-muted/35 text-muted-foreground opacity-80"
+                  canEditMessage && editingMessageId !== message.id && "cursor-text",
+                  // In edit mode, keep the bubble at full available width so it
+                  // doesn't shrink or look like a separate small input.
+                  editingMessageId === message.id && message.role === "user" && "w-full"
                 )}
               >
                 {editingMessageId === message.id ? (
-                  <textarea
-                    ref={(el) => {
-                      editTextareaRef.current = el;
-                      // Synchronous focus + caret placement BEFORE the browser
-                      // paints. Using the ref callback (instead of useEffect)
-                      // guarantees the cursor lands where the user clicked on
-                      // the very first frame — no flash-of-start-of-text.
-                      if (el && pendingCaretRef.current != null) {
-                        const pos = pendingCaretRef.current;
-                        pendingCaretRef.current = null;
-                        el.focus({ preventScroll: true });
-                        try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
-                      }
-                    }}
-                    value={editDraft}
-                    onChange={(e) => setEditDraft(e.target.value)}
-                    onBlur={() => {
-                      const trimmed = editDraft.trim();
-                      setEditingMessageId(null);
-                      if (!trimmed || trimmed === message.content) return;
-                      const idx = messages.findIndex((m) => m.id === message.id);
-                      if (idx === -1) return;
-                      setMessages((prev) => prev.slice(0, idx));
-                      sendMessage(trimmed, message.displayContent);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") { e.preventDefault(); setEditingMessageId(null); }
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        (e.currentTarget as HTMLTextAreaElement).blur();
-                      }
-                    }}
-                    rows={Math.min(8, Math.max(1, editDraft.split("\n").length))}
-                    className="w-full resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none"
-                  />
+                  <div className="flex flex-col gap-2 w-full min-w-0">
+                    <textarea
+                      ref={(el) => {
+                        editTextareaRef.current = el;
+                        // Synchronous focus + caret placement BEFORE the browser
+                        // paints. Using the ref callback (instead of useEffect)
+                        // guarantees the cursor lands where the user clicked on
+                        // the very first frame — no flash-of-start-of-text.
+                        if (el && pendingCaretRef.current != null) {
+                          const pos = pendingCaretRef.current;
+                          pendingCaretRef.current = null;
+                          el.focus({ preventScroll: true });
+                          try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                        }
+                      }}
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      onBlur={() => commitEditedMessage(message, editDraft)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setEditingMessageId(null);
+                          pendingCaretRef.current = null;
+                          setEditDraft(message.content);
+                        }
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          (e.currentTarget as HTMLTextAreaElement).blur();
+                        }
+                      }}
+                      rows={Math.min(10, Math.max(1, editDraft.split("\n").length))}
+                      className="block w-full min-w-0 resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none leading-relaxed"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseUp={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingMessageId(null);
+                          pendingCaretRef.current = null;
+                          setEditDraft(message.content);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseUp={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          commitEditedMessage(message, editDraft);
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <MessageContent
                     message={message}
+                    deferSourceFooter={
+                      citationPlan.deferredMessageIds.has(message.id) ||
+                      message.id === activeSourceFooterMessageId
+                    }
                     onImageClick={(images, index) => setImageViewer({ images, index })}
                     onRetry={(prompt) => sendMessage(prompt)}
                   />
                 )}
               </div>
+              )}
+              {!hideSupersededSteerBody && canShowMessageActions ? (
+                <>
                 {/* Action buttons - appear on hover, outside the message box */}
-                <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 transition-all duration-200">
-                  <button
-                    onClick={async () => {
-                      await navigator.clipboard.writeText(message.content);
-                      setCopiedMessageId(message.id);
-                      setTimeout(() => setCopiedMessageId(null), 2000);
-                    }}
-                    className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                    title="Copy message"
-                  >
-                    {copiedMessageId === message.id ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <Copy className="h-3 w-3" />
+                {editingMessageId !== message.id && (
+                  <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 transition-all duration-200">
+                    <button
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(message.content);
+                        setCopiedMessageId(message.id);
+                        setTimeout(() => setCopiedMessageId(null), 2000);
+                      }}
+                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                      title="Copy message"
+                    >
+                      {copiedMessageId === message.id ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                    {canEditMessage && (
+                      <button
+                        type="button"
+                        onMouseUp={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          enterEditMode(message);
+                        }}
+                        className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                        title="Edit"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
                     )}
-                  </button>
-                  {message.role === "assistant" && !isLoading && (
+                    {message.role === "assistant" && !isLoading && (
                     <button
                       onClick={() => {
                         const msgIndex = messages.findIndex((m) => m.id === message.id);
@@ -6871,8 +8396,8 @@ export function StandaloneChat({
                     >
                       <RefreshCw className="h-3 w-3" />
                     </button>
-                  )}
-                  {message.role === "assistant" && (
+                    )}
+                    {message.role === "assistant" && (
                     <Popover
                       open={openMessageMenuId === message.id}
                       onOpenChange={(open) => setOpenMessageMenuId(open ? message.id : null)}
@@ -6925,11 +8450,29 @@ export function StandaloneChat({
                         </button>
                       </PopoverContent>
                     </Popover>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
+                </>
+              ) : null}
               </div>
-            </motion.div>
-          ))}
+            </motion.div>,
+            turnAggregatedCitations && turnAggregatedCitations.length > 0 ? (
+              <motion.div
+                key={`turn-sources-${message.id}`}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className="w-full"
+                data-testid="chat-turn-sources"
+              >
+                <SourceCitationFooter citations={turnAggregatedCitations} />
+              </motion.div>
+            ) : null,
+              ];
+            });
+          })()}
         </AnimatePresence>
         <AnimatePresence>
           {isLoading && (() => {
@@ -7086,7 +8629,11 @@ export function StandaloneChat({
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px]"
                   title={s.preview ? `${s.text} — ${s.preview}` : s.text}
                 >
-                  {s.connectionIcon && <ConnectionToolIcon name={s.connectionIcon} />}
+                  {s.connectionIcon ? (
+                    <ConnectionToolIcon name={s.connectionIcon} />
+                  ) : (
+                    <Sparkles className="w-3 h-3 shrink-0 text-muted-foreground/70" strokeWidth={1.5} aria-hidden />
+                  )}
                   <span className="truncate">{s.text}</span>
                 </button>
               ))}
@@ -7128,7 +8675,11 @@ export function StandaloneChat({
                         className="text-left px-2 py-1.5 text-[11px] font-mono rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-start gap-1.5"
                         title={s.preview ? `${s.text} — ${s.preview}` : s.text}
                       >
-                        {s.connectionIcon && <ConnectionToolIcon name={s.connectionIcon} />}
+                        {s.connectionIcon ? (
+                          <ConnectionToolIcon name={s.connectionIcon} />
+                        ) : (
+                          <Sparkles className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground/70" strokeWidth={1.5} aria-hidden />
+                        )}
                         <span className="line-clamp-2">{s.text}</span>
                       </button>
                     ))}
@@ -7201,72 +8752,75 @@ export function StandaloneChat({
             </AnimatePresence>
           )}
 
-          <AnimatePresence>
-            {queuedPrompts.length > 0 && (
-              <motion.div
-                key="composer-queued-rail"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                transition={{ duration: 0.18 }}
-                className="mb-2 rounded-lg border border-border/60 bg-background/95 shadow-sm overflow-hidden"
-              >
-                <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                      queued
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono text-muted-foreground/60">
-                    {queuedPrompts.length}
+          {queuedPrompts.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18 }}
+              className="mb-2 rounded-lg border border-border/60 bg-background/95 backdrop-blur-sm shadow-sm overflow-hidden"
+            >
+              <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50 bg-background">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                    Queued
                   </span>
                 </div>
-                <TooltipProvider delayDuration={150}>
-                  <div className="max-h-[156px] overflow-y-auto scrollbar-minimal">
-                    {queuedPrompts.map((p, i) => {
-                      const isBusy = queuedActionPromptId === p.id;
-                      const label = p.preview || "image follow-up";
-                      return (
-                        <motion.div
-                          key={p.id}
-                          layout
-                          initial={{ opacity: 0, y: 4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 8, scale: 0.98 }}
-                          transition={{ duration: 0.16 }}
-                          tabIndex={0}
-                          role="listitem"
-                          onKeyDown={(e) => {
-                            if (isBusy) return;
-                            if (isQueuedItemSteerShortcut(e, isMac)) {
-                              e.preventDefault();
-                              steerQueuedPrompt(p);
-                            } else if (isQueuedItemCancelShortcut(e)) {
-                              e.preventDefault();
-                              cancelQueuedPrompt(p);
-                            }
-                          }}
-                          className="group/qcard flex items-center gap-2 px-3 py-2 border-b border-border/40 last:border-b-0 text-sm text-muted-foreground/90 focus-visible:outline-none focus-visible:bg-muted/40 hover:bg-muted/30 transition-colors"
-                          title={label.length > 90 ? label : undefined}
-                        >
-                          <span className="font-mono text-[10px] text-muted-foreground/50 shrink-0 w-4 text-right">
-                            {i + 1}
-                          </span>
-                          <span className="truncate flex-1 min-w-0">{label}</span>
+                <span className="text-[10px] font-mono text-muted-foreground/60">
+                  {queuedPrompts.length}
+                </span>
+              </div>
+              <TooltipProvider delayDuration={150}>
+                <div ref={queuedScrollRef} className="max-h-[112px] overflow-y-auto scrollbar-minimal">
+                  {queuedPrompts.map((p, i) => {
+                    const isBusy = queuedActionPromptId === p.id;
+                    const queuedDisplay = queuedDisplayBySessionRef.current[currentQueueSessionId]?.[p.id];
+                    const label = queuedDisplay?.preview || p.preview || "image follow-up";
+                    return (
+                      <motion.div
+                        key={p.id}
+                        layout
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.16 }}
+                        tabIndex={0}
+                        role="listitem"
+                        onKeyDown={(e) => {
+                          if (isBusy) return;
+                          if (isQueuedItemSteerShortcut(e, isMac)) {
+                            e.preventDefault();
+                            steerQueuedPrompt(p);
+                          } else if (isQueuedItemCancelShortcut(e)) {
+                            e.preventDefault();
+                            cancelQueuedPrompt(p);
+                          }
+                        }}
+                        className="group/qcard select-none flex min-h-[36px] items-center gap-2 px-2.5 py-1.5 border-b border-border/40 last:border-b-0 text-sm text-foreground/90 focus-visible:outline-none focus-visible:bg-muted/20 hover:bg-muted/15 transition-colors"
+                        title={label.length > 90 ? label : undefined}
+                      >
+                        <span className="w-4 shrink-0 text-right font-mono text-[10px] text-muted-foreground/50">
+                          {i + 1}
+                        </span>
+                        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[12px]">
+                          {label}
+                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
                                 type="button"
                                 disabled={isBusy}
                                 onClick={() => steerQueuedPrompt(p)}
-                                className="h-7 w-7 rounded-md inline-flex items-center justify-center text-foreground bg-muted/70 hover:bg-muted disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                                className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
                                 aria-label={`steer queued message ${i + 1}`}
                               >
                                 {isBusy ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
-                                  <CornerDownRight className="h-3 w-3" />
+                                  <>
+                                    <CornerDownRight className="h-2.5 w-2.5" />
+                                    <span className="text-[10px] font-medium">Steer</span>
+                                  </>
                                 )}
                               </button>
                             </TooltipTrigger>
@@ -7280,22 +8834,22 @@ export function StandaloneChat({
                                 type="button"
                                 disabled={isBusy}
                                 onClick={() => cancelQueuedPrompt(p)}
-                                className="h-7 w-7 rounded-md inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                                className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
                                 aria-label={`remove queued message ${i + 1}`}
                               >
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <Trash2 className="h-3 w-3" />
                               </button>
                             </TooltipTrigger>
                             <TooltipContent side="top">Remove queued message</TooltipContent>
                           </Tooltip>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </TooltipProvider>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </TooltipProvider>
+            </motion.div>
+          )}
 
           <div
             className={cn(
@@ -7317,7 +8871,7 @@ export function StandaloneChat({
                   disabledReason
                     ? disabledReason
                     : isLoading || isStreaming
-                      ? "Steer current reply..."
+                      ? "Message will be queued..."
                       : "Ask about your screen... (type @ for filters, paste images)"
                 }
                 disabled={!canChat}
@@ -7435,49 +8989,27 @@ export function StandaloneChat({
                 showModelOnly
                 containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
                 triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
-                onPresetChange={setActivePreset}
                 onPresetSaved={handlePiRestart}
-                controlledPresetId={activePipeExecution ? activePreset?.id : undefined}
-                onControlledSelect={activePipeExecution ? (id) => {
+                controlledPresetId={
+                  activePreset?.id ??
+                  settings.aiPresets?.find((p) => p.defaultPreset)?.id ??
+                  settings.aiPresets?.[0]?.id ??
+                  null
+                }
+                onControlledSelect={(id) => {
+                  if (!id) return;
                   const match = settings.aiPresets?.find((p) => p.id === id);
-                  if (match) setActivePreset(match);
-                } : undefined}
+                  if (!match) return;
+                  setActivePreset(match);
+                  if (!activePipeExecution) handlePiRestart(match);
+                }}
               />
               {(() => {
                 const hasInput = input.trim().length > 0 || pastedImages.length > 0;
                 const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
-                const isSteerMode = primaryAction === "steer";
                 const isStopMode = primaryAction === "stop";
                 return (
                   <>
-                    {isSteerMode && (
-                      <TooltipProvider delayDuration={150}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              disabled={!canChat}
-                              onClick={() => queueFollowUpMessage(input.trim())}
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/60 relative"
-                              aria-label="queue follow-up after current reply"
-                              title="queue follow-up after current reply"
-                            >
-                              <Clock className="h-3.5 w-3.5" />
-                              {queuedPrompts.length > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-1 rounded-full bg-muted text-foreground text-[9px] font-mono font-semibold flex items-center justify-center border border-background">
-                                  {queuedPrompts.length}
-                                </span>
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">
-                            Queue follow-up after current reply
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                     <Button
                       type={isStopMode ? "button" : "submit"}
                       size="icon"
@@ -7490,22 +9022,16 @@ export function StandaloneChat({
                       title={
                         isStopMode
                           ? "stop"
-                          : isSteerMode
-                            ? "steer current reply"
-                            : "send"
+                          : "send"
                       }
                       aria-label={
                         isStopMode
                           ? "stop reply"
-                          : isSteerMode
-                            ? "steer current reply"
-                            : "send message"
+                          : "send message"
                       }
                     >
                       {isStopMode ? (
                         <Square className="h-4 w-4" />
-                      ) : isSteerMode ? (
-                        <CornerDownRight className="h-4 w-4" />
                       ) : (
                         <Send className="h-4 w-4" />
                       )}

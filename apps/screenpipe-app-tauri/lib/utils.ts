@@ -2,7 +2,7 @@ import { stat } from "@tauri-apps/plugin-fs";
 import { platform } from "@tauri-apps/plugin-os";
 import { twMerge } from "tailwind-merge";
 type ContentItem =
-	| { type: "OCR"; content: { text: string } }
+	| { type: "OCR"; content: { text: string; text_source?: "accessibility" | "ocr" | null } }
 	| { type: "Audio"; content: { transcription: string } }
 	| { type: "UI"; content: { text: string } }
 	| { type: "Input"; content: Record<string, unknown> };

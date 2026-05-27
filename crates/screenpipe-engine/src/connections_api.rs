@@ -721,15 +721,8 @@ async fn gmail_list_messages_inner(
             pairs.append_pair("pageToken", pt);
         }
     }
-    let data: Value = client
-        .get(url)
-        .bearer_auth(&token)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(data)
+    let resp = client.get(url).bearer_auth(&token).send().await?;
+    gmail_json_or_upstream(resp).await
 }
 
 /// GET /connections/gmail/messages/:id — read a full Gmail message.
@@ -756,14 +749,8 @@ async fn gmail_get_message_inner(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=full",
         id
     );
-    let msg: Value = client
-        .get(&url)
-        .bearer_auth(&token)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let resp = client.get(&url).bearer_auth(&token).send().await?;
+    let msg = gmail_json_or_upstream(resp).await?;
     Ok(parse_gmail_message(&msg))
 }
 
@@ -790,31 +777,33 @@ async fn gmail_send_inner(
     let from = body.from.unwrap_or_default();
     let raw = build_rfc2822_message(&from, &body.to, &body.subject, &body.body);
     let encoded = URL_SAFE_NO_PAD.encode(raw.as_bytes());
-    let data: Value = client
+    let resp = client
         .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
         .bearer_auth(&token)
         .json(&json!({ "raw": encoded }))
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
-    Ok(data)
+    gmail_json_or_upstream(resp).await
 }
 
-/// Retrieve a valid Gmail OAuth token or return an error.
+/// Retrieve a valid Gmail OAuth token or return an error. Distinguishes
+/// "not connected" from "ambiguous, multiple accounts connected" so the
+/// caller (AI tool, pipe, user) gets actionable context instead of an
+/// always-wrong "reconnect Gmail" string.
 async fn gmail_token(
     client: &reqwest::Client,
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    oauth_store::get_valid_token_instance(secret_store.as_deref(), client, "gmail", instance)
-        .await
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Gmail not connected — use 'Connect with Gmail' in Settings > Connections"
-            )
-        })
+    let store = secret_store.as_deref();
+    if let Some(token) =
+        oauth_store::get_valid_token_instance(store, client, "gmail", instance).await
+    {
+        return Ok(token);
+    }
+    Err(anyhow::anyhow!(
+        oauth_store::describe_oauth_error(store, "gmail", "Gmail", instance).await
+    ))
 }
 
 /// GET /connections/gmail/instances — list all connected Gmail accounts.
@@ -834,8 +823,50 @@ async fn gmail_list_instances(State(state): State<ConnectionsState>) -> (StatusC
     (StatusCode::OK, Json(json!({ "data": accounts })))
 }
 
-/// Convert an anyhow error into the standard `(StatusCode, Json)` handler return.
+/// Carries the upstream Gmail API status + body so [`gmail_err`] can
+/// surface a meaningful status to the caller instead of collapsing every
+/// failure to 500. Without this, a stale OAuth token (401) is
+/// indistinguishable from a real internal bug from the chat UI.
+#[derive(Debug)]
+struct GmailUpstreamError {
+    status: reqwest::StatusCode,
+    body: String,
+}
+
+impl std::fmt::Display for GmailUpstreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "gmail api {}: {}", self.status.as_u16(), self.body)
+    }
+}
+
+impl std::error::Error for GmailUpstreamError {}
+
+/// Parse a Gmail API response, preserving the upstream status/body when
+/// the call fails. Replaces ad-hoc `error_for_status()?` + `json()` chains
+/// that swallowed the response body before anyone could read it.
+async fn gmail_json_or_upstream(resp: reqwest::Response) -> anyhow::Result<Value> {
+    let status = resp.status();
+    if status.is_success() {
+        let v: Value = resp.json().await?;
+        return Ok(v);
+    }
+    let body = resp.text().await.unwrap_or_default();
+    Err(GmailUpstreamError { status, body }.into())
+}
+
+/// Convert an anyhow error into the standard `(StatusCode, Json)` handler
+/// return, forwarding the upstream Gmail status when present.
 fn gmail_err(e: anyhow::Error) -> (StatusCode, Json<Value>) {
+    if let Some(up) = e.downcast_ref::<GmailUpstreamError>() {
+        let status = StatusCode::from_u16(up.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        return (
+            status,
+            Json(json!({
+                "error": up.body,
+                "upstream_status": up.status.as_u16(),
+            })),
+        );
+    }
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": e.to_string() })),
@@ -953,24 +984,23 @@ pub struct GoogleCalendarInstanceQuery {
     pub instance: Option<String>,
 }
 
-/// Retrieve a valid Google Calendar OAuth token or return an error.
+/// Retrieve a valid Google Calendar OAuth token or return an error. See
+/// [`gmail_token`] for why "not connected" is split into distinct cases.
 async fn gcal_token(
     client: &reqwest::Client,
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    oauth_store::get_valid_token_instance(
-        secret_store.as_deref(),
-        client,
-        "google-calendar",
-        instance,
-    )
-    .await
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "Google Calendar not connected — use 'Connect Google Calendar' in Settings > Connections"
-        )
-    })
+    let store = secret_store.as_deref();
+    if let Some(token) =
+        oauth_store::get_valid_token_instance(store, client, "google-calendar", instance).await
+    {
+        return Ok(token);
+    }
+    Err(anyhow::anyhow!(
+        oauth_store::describe_oauth_error(store, "google-calendar", "Google Calendar", instance)
+            .await
+    ))
 }
 
 /// GET /connections/google-calendar/status — check connection + email.
@@ -1027,10 +1057,22 @@ async fn gcal_events(
     let client = reqwest::Client::new();
     match gcal_events_inner(&client, params, &state.secret_store).await {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Err(e) => {
+            let message = e.to_string();
+            // Recognize every variant of the OAuth-failure message from
+            // `describe_oauth_error` (not-connected, single-instance broken,
+            // multi-instance ambiguous, explicit-instance broken) and surface
+            // them as 401 so callers can distinguish auth from upstream 5xx.
+            let is_oauth_failure = message.contains("Google Calendar not connected")
+                || message.contains("Google Calendar account")
+                || message.contains("multiple Google Calendar accounts connected");
+            let status = if is_oauth_failure {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": message })))
+        }
     }
 }
 
@@ -1131,7 +1173,7 @@ fn normalize_meeting_url(raw: Option<String>) -> Option<String> {
     let trimmed = raw?
         .trim()
         .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
-        .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'))
+        .trim_end_matches([')', ']', ',', '.', ';'])
         .to_string();
     if trimmed.is_empty() {
         return None;
@@ -1538,11 +1580,31 @@ async fn connection_proxy(
             id,
             instance_ref
         );
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": format!("connection '{}' has no stored credentials — connect it first in Settings", id) })),
-        )
-            .into_response();
+        // For OAuth-style integrations (Google Docs/Sheets, etc.) the
+        // generic "no stored credentials" message is wrong when the real
+        // problem is multi-account ambiguity — the user *is* connected,
+        // they just need to pick which account. `describe_oauth_error`
+        // produces the actionable string from the actual instance list.
+        let has_oauth_state =
+            !screenpipe_connect::oauth::list_oauth_instances(state.secret_store.as_deref(), &id)
+                .await
+                .is_empty();
+        let error = if has_oauth_state {
+            let display_name = mgr.find_def(&id).map(|d| d.name).unwrap_or(id.as_str());
+            screenpipe_connect::oauth::describe_oauth_error(
+                state.secret_store.as_deref(),
+                &id,
+                display_name,
+                instance_ref,
+            )
+            .await
+        } else {
+            format!(
+                "connection '{}' has no stored credentials — connect it first in Settings",
+                id
+            )
+        };
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": error }))).into_response();
     }
 
     // Resolve dynamic base_url
@@ -1554,22 +1616,32 @@ async fn connection_proxy(
         }
     };
 
-    // Capture the extra-root-CA PEM (if any) BEFORE releasing the lock, so
-    // we can build the right reqwest client without keeping the manager
-    // borrow alive across the network call.
+    // Capture the extra-root-CA PEM (if any) and path-prefix routing rules
+    // BEFORE releasing the lock, so we can build the right reqwest client and
+    // target URL without keeping the manager borrow alive across the network call.
     let extra_root_pem = mgr.find_extra_root_pem(&id);
+    let path_routes = mgr.find_path_routes(&id);
 
     drop(mgr); // release lock before making external request
 
-    // Build the target URL. Query params from the caller (e.g.
-    // `?valueInputOption=USER_ENTERED` for Google Sheets appends) must be
-    // forwarded verbatim — without this, callers silently hit defaults and
-    // bad requests like 400s on `values:append`.
+    // Build the target URL. Path-prefix routes (e.g. Google Docs "docs/" →
+    // docs.googleapis.com) override base_url for specific path prefixes.
+    // Query params from the caller must be forwarded verbatim — without this,
+    // callers silently hit defaults and get 400s on endpoints like `values:append`.
+    let api_path_clean = api_path.trim_start_matches('/');
+    let (effective_base, effective_path) = path_routes
+        .iter()
+        .find(|(prefix, _)| api_path_clean.starts_with(prefix))
+        .map(|(prefix, new_base)| {
+            let rest = api_path_clean
+                .strip_prefix(prefix)
+                .unwrap_or(api_path_clean);
+            (new_base.trim_end_matches('/').to_string(), rest.to_string())
+        })
+        .unwrap_or_else(|| (base_url.clone(), api_path_clean.to_string()));
     let target_url = match forwarded_query.as_deref() {
-        Some(q) if !q.is_empty() => {
-            format!("{}/{}?{}", base_url, api_path.trim_start_matches('/'), q)
-        }
-        _ => format!("{}/{}", base_url, api_path.trim_start_matches('/')),
+        Some(q) if !q.is_empty() => format!("{}/{}?{}", effective_base, effective_path, q),
+        _ => format!("{}/{}", effective_base, effective_path),
     };
 
     // Audit log
@@ -1996,6 +2068,13 @@ async fn browser_eval(
     crate::routes::browser::browser_eval_handler(State(state.browser_bridge), body).await
 }
 
+async fn browser_cookies(
+    State(state): State<ConnectionsState>,
+    body: Json<crate::routes::browser::CookieRequestBody>,
+) -> impl axum::response::IntoResponse {
+    crate::routes::browser::browser_cookies_handler(State(state.browser_bridge), body).await
+}
+
 async fn browser_status(
     State(state): State<ConnectionsState>,
 ) -> impl axum::response::IntoResponse {
@@ -2396,6 +2475,7 @@ where
         // (Chrome v0.2.x and v0.3.0) hardcode these. Keep until usage drops.
         .route("/browser/ws", get(browser_ws))
         .route("/browser/eval", post(browser_eval))
+        .route("/browser/cookies", post(browser_cookies))
         .route("/browser/status", get(browser_status))
         // OAuth callback (must be before /:id to avoid conflict)
         .route("/oauth/callback", get(oauth_callback))

@@ -1143,9 +1143,68 @@ mod tests {
         let speakers = db.search_speakers("").await.unwrap();
         assert_eq!(speakers.len(), 0);
 
-        // make sure audio_chunks are deleted
-        let audio_chunks = db.get_audio_chunks_for_speaker(speaker.id).await.unwrap();
-        assert_eq!(audio_chunks.len(), 0);
+        // Directly verify the orphaned chunk row was deleted
+        assert!(
+            !db.audio_chunk_exists(audio_chunk_id).await.unwrap(),
+            "orphaned audio_chunk row should be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_speaker_shared_chunk_preserved() {
+        let db = setup_test_db().await;
+
+        let speaker_a = db.insert_speaker(&vec![0.1; 512]).await.unwrap();
+        let speaker_b = db.insert_speaker(&vec![0.2; 512]).await.unwrap();
+
+        // Both speakers reference the same audio chunk
+        let shared_chunk_id = db.insert_audio_chunk("shared.mp4", None).await.unwrap();
+        let device = AudioDevice {
+            name: "test".to_string(),
+            device_type: DeviceType::Output,
+        };
+        db.insert_audio_transcription(
+            shared_chunk_id,
+            "speaker a says hello",
+            0,
+            "",
+            &device,
+            Some(speaker_a.id),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_audio_transcription(
+            shared_chunk_id,
+            "speaker b says goodbye",
+            1,
+            "",
+            &device,
+            Some(speaker_b.id),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Delete speaker_a -- shared chunk must survive
+        db.delete_speaker(speaker_a.id).await.unwrap();
+
+        assert!(
+            db.audio_chunk_exists(shared_chunk_id).await.unwrap(),
+            "shared chunk still referenced by speaker_b must not be deleted"
+        );
+
+        // Delete speaker_b -- now the chunk is orphaned and should be removed
+        db.delete_speaker(speaker_b.id).await.unwrap();
+
+        assert!(
+            !db.audio_chunk_exists(shared_chunk_id).await.unwrap(),
+            "chunk should be deleted once all referencing transcriptions are gone"
+        );
     }
 
     #[tokio::test]

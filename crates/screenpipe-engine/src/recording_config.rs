@@ -61,6 +61,8 @@ pub struct RecordingConfig {
     pub experimental_coreaudio_system_audio: bool,
     /// Experimental: request Windows WASAPI microphone AEC when supported.
     pub windows_input_aec_enabled: bool,
+    /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
+    pub macos_input_vpio_enabled: bool,
     pub monitor_ids: Vec<String>,
     pub use_all_monitors: bool,
 
@@ -145,6 +147,30 @@ pub struct RecordingConfig {
     /// See `RecordingSettings.disable_meeting_detector` for details.
     pub disable_meeting_detector: bool,
 
+    /// Mitsukeru fork: overrides for event-driven capture parameters.
+    /// None = follow active PowerProfile.
+    pub idle_capture_interval_ms: Option<u64>,
+    pub visual_check_interval_ms: Option<u64>,
+    pub visual_change_threshold: Option<f64>,
+    pub min_capture_interval_ms: Option<u64>,
+    /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
+    /// None = engine default (false). See `RecordingSettings.capture_on_keystroke`.
+    pub capture_on_keystroke: Option<bool>,
+    /// Override `EventDrivenCaptureConfig::capture_on_clipboard`.
+    /// None = engine default (false). See `RecordingSettings.capture_on_clipboard`.
+    pub capture_on_clipboard: Option<bool>,
+    /// Override `UiRecorderConfig::capture_scroll`.
+    /// None = engine default (false). See `RecordingSettings.capture_scroll`.
+    pub capture_scroll: Option<bool>,
+
+    /// Prioritize input latency over a11y event completeness.
+    /// See `RecordingSettings.prioritize_input_latency` for details.
+    pub prioritize_input_latency: bool,
+    /// A11y extraction thread priority ("normal"/"below_normal"/"lowest"/"idle").
+    pub extraction_thread_priority: String,
+    /// Skip UIA tree captures within this many ms after the most recent input.
+    pub pause_extraction_on_input_ms: u64,
+
     /// Require authentication for remote (non-localhost) API access.
     /// When true, requests from other devices must include
     /// `Authorization: Bearer <SCREENPIPE_API_KEY>`.
@@ -222,6 +248,7 @@ impl RecordingConfig {
             use_system_default_audio: settings.use_system_default_audio,
             experimental_coreaudio_system_audio: settings.experimental_coreaudio_system_audio,
             windows_input_aec_enabled: settings.windows_input_aec_enabled,
+            macos_input_vpio_enabled: settings.macos_input_vpio_enabled,
             monitor_ids: settings.monitor_ids.clone(),
             use_all_monitors: settings.use_all_monitors,
             ignored_windows: settings.ignored_windows.clone(),
@@ -284,6 +311,16 @@ impl RecordingConfig {
             max_snapshot_width: settings.max_snapshot_width,
             disable_snapshot_compaction: settings.disable_snapshot_compaction,
             disable_meeting_detector: settings.disable_meeting_detector,
+            idle_capture_interval_ms: settings.idle_capture_interval_ms,
+            visual_check_interval_ms: settings.visual_check_interval_ms,
+            visual_change_threshold: settings.visual_change_threshold,
+            min_capture_interval_ms: settings.min_capture_interval_ms,
+            capture_on_keystroke: settings.capture_on_keystroke,
+            capture_on_clipboard: settings.capture_on_clipboard,
+            capture_scroll: settings.capture_scroll,
+            prioritize_input_latency: settings.prioritize_input_latency,
+            extraction_thread_priority: settings.extraction_thread_priority.clone(),
+            pause_extraction_on_input_ms: settings.pause_extraction_on_input_ms,
             // LAN exposure is opt-in. We force `api_auth` on whenever
             // `listen_on_lan` is true so a user can never accidentally
             // publish an unauthenticated API on their local network. The
@@ -303,6 +340,12 @@ impl RecordingConfig {
 
     /// Build a `UiRecorderConfig` from this recording config.
     pub fn to_ui_recorder_config(&self) -> crate::ui_recorder::UiRecorderConfig {
+        // `capture_on_keystroke` / `capture_on_clipboard` are mirrored
+        // from the corresponding `EventDrivenCaptureConfig` overrides so
+        // the recorder doesn't mint correlation_ids for triggers the
+        // capture loop will drop. `None` means "engine default" — same
+        // semantics as in `to_vision_manager_config`.
+        let defaults = crate::ui_recorder::UiRecorderConfig::default();
         crate::ui_recorder::UiRecorderConfig {
             enabled: true,
             enable_tree_walker: true,
@@ -312,7 +355,19 @@ impl RecordingConfig {
             included_windows: self.included_windows.clone(),
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
-            ..Default::default()
+            // Input-latency tuning. `extraction_thread_priority` is parsed from its
+            // string form; an unrecognized value falls back to the enum default.
+            prioritize_input_latency: self.prioritize_input_latency,
+            extraction_thread_priority: self.extraction_thread_priority.parse().unwrap_or_default(),
+            pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
+            capture_on_keystroke: self
+                .capture_on_keystroke
+                .unwrap_or(defaults.capture_on_keystroke),
+            capture_on_clipboard: self
+                .capture_on_clipboard
+                .unwrap_or(defaults.capture_on_clipboard),
+            capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
+            ..defaults
         }
     }
 
@@ -334,6 +389,7 @@ impl RecordingConfig {
             .use_system_default_audio(self.use_system_default_audio)
             .experimental_coreaudio_system_audio(self.experimental_coreaudio_system_audio)
             .windows_input_aec_enabled(self.windows_input_aec_enabled)
+            .macos_input_vpio_enabled(self.macos_input_vpio_enabled)
             .deepgram_config(self.deepgram_config.clone())
             .output_path(output_path)
             .use_pii_removal(self.use_pii_removal)
@@ -363,6 +419,12 @@ impl RecordingConfig {
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
             video_quality: self.video_quality.clone(),
+            idle_capture_interval_ms: self.idle_capture_interval_ms,
+            visual_check_interval_ms: self.visual_check_interval_ms,
+            visual_change_threshold: self.visual_change_threshold,
+            min_capture_interval_ms: self.min_capture_interval_ms,
+            capture_on_keystroke: self.capture_on_keystroke,
+            capture_on_clipboard: self.capture_on_clipboard,
         }
     }
 }
@@ -373,10 +435,11 @@ mod tests {
     use std::net::Ipv4Addr;
 
     fn settings_with(lan: bool, api_auth: bool) -> screenpipe_config::RecordingSettings {
-        let mut s = screenpipe_config::RecordingSettings::default();
-        s.listen_on_lan = lan;
-        s.api_auth = api_auth;
-        s
+        screenpipe_config::RecordingSettings {
+            listen_on_lan: lan,
+            api_auth,
+            ..Default::default()
+        }
     }
 
     fn build(s: &screenpipe_config::RecordingSettings) -> RecordingConfig {

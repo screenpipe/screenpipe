@@ -179,14 +179,23 @@ impl Default for ChannelConfig {
 }
 
 /// Detect the macOS major version, or `None` on other platforms.
+///
+/// Cached for process lifetime — the value cannot change at runtime, and the
+/// underlying detection forks `sw_vers`, which showed up as a hot leaf frame
+/// in CPU profiling (~33 hits/15s sample) when called from the engine-pick
+/// and is-engine-unsafe paths.
 #[cfg(target_os = "macos")]
 pub fn macos_major_version() -> Option<u32> {
-    let output = std::process::Command::new("sw_vers")
-        .arg("-productVersion")
-        .output()
-        .ok()?;
-    let version_str = String::from_utf8_lossy(&output.stdout);
-    version_str.trim().split('.').next()?.parse().ok()
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Option<u32>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let output = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        let version_str = String::from_utf8_lossy(&output.stdout);
+        version_str.trim().split('.').next()?.parse().ok()
+    })
 }
 
 #[cfg(not(target_os = "macos"))]

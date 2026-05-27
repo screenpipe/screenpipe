@@ -22,6 +22,12 @@ use tracing::{error, info};
 pub struct OAuthStatus {
     pub connected: bool,
     pub display_name: Option<String>,
+    /// True when a token row exists in the secret store but we can't read it
+    /// (keychain key unavailable — usually a dev↔prod bundle ACL split). The
+    /// UI should surface this as "needs attention" rather than "not connected"
+    /// since the user can't fix it by reconnecting in the broken bundle.
+    #[serde(default)]
+    pub needs_attention: bool,
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
@@ -406,6 +412,7 @@ pub async fn oauth_connect(
     Ok(OAuthStatus {
         connected: true,
         display_name,
+        needs_attention: false,
     })
 }
 
@@ -437,11 +444,11 @@ pub async fn oauth_status(
     instance: Option<String>,
 ) -> Result<OAuthStatus, String> {
     let store = open_secret_store().await;
-    let token =
-        oauth::read_oauth_token_instance(store.as_ref(), &integration_id, instance.as_deref())
+    let connected =
+        oauth::is_oauth_instance_connected(store.as_ref(), &integration_id, instance.as_deref())
             .await;
 
-    let display_name = if token.is_some() {
+    let display_name = if connected {
         oauth::load_oauth_json(store.as_ref(), &integration_id, instance.as_deref())
             .await
             .and_then(|v| {
@@ -455,9 +462,22 @@ pub async fn oauth_status(
         None
     };
 
+    // If we couldn't recover a token but a row exists in the store, the most
+    // likely cause is a keychain ACL mismatch (e.g. dev↔prod bundle split) —
+    // not a user-initiated disconnect. Surface that distinction so the UI can
+    // show "needs attention" instead of pushing the user to reconnect blindly.
+    let needs_attention = !connected
+        && oauth::oauth_instance_token_exists(
+            store.as_ref(),
+            &integration_id,
+            instance.as_deref(),
+        )
+        .await;
+
     Ok(OAuthStatus {
-        connected: token.is_some(),
+        connected,
         display_name,
+        needs_attention,
     })
 }
 
@@ -504,7 +524,7 @@ pub async fn oauth_list_instances(
     integration_id: String,
 ) -> Result<Vec<OAuthInstanceInfo>, String> {
     let store = open_secret_store().await;
-    let instances = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
+    let instances = oauth::list_connected_oauth_instances(store.as_ref(), &integration_id).await;
     let mut result = Vec::new();
 
     for inst in instances {

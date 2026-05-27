@@ -74,7 +74,8 @@ jobs:
             libssl-dev \
             cmake \
             build-essential \
-            libopenblas-dev
+            libopenblas-dev \
+            libwayland-dev
           sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a

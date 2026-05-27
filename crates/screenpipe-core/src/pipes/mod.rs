@@ -881,6 +881,50 @@ fn refresh_chatgpt_token(token_data: &mut serde_json::Value, now: u64) {
     }
 }
 
+/// Magic prefix written by the app/CLI when `store.bin` is encrypted.
+/// Matches `STORE_MAGIC` in `screenpipe-engine/src/cli/store_file.rs`.
+const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
+
+/// Read `store.bin`, decrypting via the secrets keychain key if it starts with
+/// the `SPSTORE1` magic prefix. Keeps `resolve_preset` and `pipe models list`
+/// in agreement on encrypted stores; before this helper the runner did a plain
+/// `read_to_string` and silently failed when the file was encrypted.
+fn read_store_bin(path: &Path) -> Option<serde_json::Value> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() >= STORE_MAGIC.len() && &data[..STORE_MAGIC.len()] == STORE_MAGIC {
+        #[cfg(feature = "secrets")]
+        {
+            use screenpipe_secrets::keychain::{get_key, KeyResult};
+            let key = match get_key() {
+                KeyResult::Found(k) => k,
+                _ => {
+                    warn!(
+                        "store.bin is encrypted but keychain key is unavailable; \
+                         pipe preset resolution will fail. Open the app once or \
+                         disable store encryption."
+                    );
+                    return None;
+                }
+            };
+            let plaintext =
+                screenpipe_vault::crypto::decrypt_small(&data[STORE_MAGIC.len()..], &key).ok()?;
+            return serde_json::from_slice(&plaintext).ok();
+        }
+        #[cfg(not(feature = "secrets"))]
+        {
+            warn!(
+                "store.bin is encrypted but this build lacks the `secrets` feature; \
+                 cannot read AI presets"
+            );
+            return None;
+        }
+    }
+    if data.iter().all(|b| b.is_ascii_whitespace()) {
+        return Some(serde_json::json!({}));
+    }
+    serde_json::from_slice(&data).ok()
+}
+
 /// Read `~/.screenpipe/store.bin` and find the preset by id.
 /// Falls back to the default preset if `preset_id` is `"default"`.
 /// Creates store.bin with a default preset if it doesn't exist (CLI mode).
@@ -926,8 +970,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         }
     }
 
-    let content = std::fs::read_to_string(&store_path).ok()?;
-    let store: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let store = read_store_bin(&store_path)?;
     let presets = store.get("settings")?.get("aiPresets")?.as_array()?;
 
     // Normalize legacy preset IDs to current names
@@ -1004,6 +1047,28 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         api_key,
         prompt,
     })
+}
+
+/// Enumerate the preset IDs currently in `store.bin`, for surfacing in error
+/// messages. Returns an empty vec if the store is missing or unreadable —
+/// callers should phrase the message accordingly.
+fn list_available_preset_ids(pipes_dir: &Path) -> Vec<String> {
+    let Some(parent) = pipes_dir.parent() else {
+        return Vec::new();
+    };
+    let Some(store) = read_store_bin(&parent.join("store.bin")) else {
+        return Vec::new();
+    };
+    store
+        .get("settings")
+        .and_then(|s| s.get("aiPresets"))
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1297,12 +1362,15 @@ impl PipeManager {
         self.api_port
     }
 
-    /// Set the local API auth key. Injected into pipe subprocesses as
-    /// `SCREENPIPE_LOCAL_API_KEY` so they can authenticate to localhost.
-    ///
-    /// Sets it as a process-level env var so child processes inherit it
-    /// automatically via cmd.spawn(). Called once during initialization
-    /// before any async tasks are spawned.
+    /// Set the local API auth key. Stored on the manager so it can be
+    /// plumbed into `render_pipe_system_prompt` (so the prompt's
+    /// "auth required" note matches reality), and also mirrored into
+    /// the process env so in-process consumers (the privacy-filter
+    /// tinfoil adapters, which read env on construction) pick it up
+    /// without a second wiring path. The pipe-subprocess env is set
+    /// directly on each child cmd in `agents/pi.rs` — it does NOT
+    /// rely on inheriting this process-level set_var.
+    /// Called once during initialization before any async tasks spawn.
     pub fn set_local_api_key(&mut self, key: Option<String>) {
         self.local_api_key = key.clone();
         if let Some(ref k) = key {
@@ -1864,6 +1932,7 @@ impl PipeManager {
             self.api_port,
             preset_prompt.as_deref(),
             self.connections_context.as_deref(),
+            self.local_api_key.as_deref(),
         );
         let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
         let pipe_name = name.to_string();
@@ -1905,8 +1974,9 @@ impl PipeManager {
         // Pre-configure pi
         let mut pipe_token: Option<String> = None;
         if config.agent == "pi" {
+            let cloud_token = executor.user_token();
             if let Err(e) = PiExecutor::ensure_pi_config(
-                executor.user_token(),
+                cloud_token.as_deref(),
                 SCREENPIPE_API_URL,
                 run_provider.as_deref(),
                 Some(&run_model),
@@ -2268,12 +2338,20 @@ impl PipeManager {
                         )
                     }
                     None => {
+                        let available = list_available_preset_ids(&self.pipes_dir);
+                        let available_hint = if available.is_empty() {
+                            String::from("no presets are configured")
+                        } else {
+                            format!("available presets: {}", available.join(", "))
+                        };
                         return Err(anyhow!(
-                            "pipe '{}': preset '{}' not found in settings — \
-                             create the preset in Settings → AI or remove the \
-                             'preset: {}' line from the pipe config",
+                            "pipe '{}': preset '{}' not found in settings — {}. \
+                             Set one of those in the pipe's `preset:` field, or \
+                             create a new preset with `screenpipe pipe models create {} --provider … --model …`, \
+                             or remove the `preset:` line to use the default.",
                             name,
                             preset_id,
+                            available_hint,
                             preset_id
                         ));
                     }
@@ -2345,6 +2423,7 @@ impl PipeManager {
                 self.api_port,
                 preset_prompt.as_deref(),
                 self.connections_context.as_deref(),
+                self.local_api_key.as_deref(),
             );
             let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
 
@@ -3094,7 +3173,7 @@ impl PipeManager {
         let token_registry = self.token_registry.clone();
         let extra_context = self.extra_context.clone();
         let connections_context = self.connections_context.clone();
-        let _local_api_key = self.local_api_key.clone();
+        let local_api_key = self.local_api_key.clone();
 
         let handle = tokio::spawn(async move {
             info!("pipe scheduler started (generation {})", generation);
@@ -3427,8 +3506,9 @@ impl PipeManager {
                     // Pre-configure pi with the pipe's provider
                     let mut pipe_token: Option<String> = None;
                     if config.agent == "pi" {
+                        let cloud_token = executor.user_token();
                         if let Err(e) = PiExecutor::ensure_pi_config(
-                            executor.user_token(),
+                            cloud_token.as_deref(),
                             SCREENPIPE_API_URL,
                             provider.as_deref(),
                             Some(&model),
@@ -3461,6 +3541,7 @@ impl PipeManager {
                         api_port,
                         preset_prompt.as_deref(),
                         connections_context.as_deref(),
+                        local_api_key.as_deref(),
                     );
                     let prompt = render_prompt_with_port(
                         config,
@@ -4073,6 +4154,7 @@ fn render_pipe_system_prompt(
     api_port: u16,
     system_prompt: Option<&str>,
     connections_context: Option<&str>,
+    local_api_key: Option<&str>,
 ) -> String {
     let os = std::env::consts::OS;
     let mut sys = String::new();
@@ -4083,7 +4165,10 @@ fn render_pipe_system_prompt(
         sys.push_str("\n\n");
     }
 
-    let api_auth_note = if std::env::var("SCREENPIPE_LOCAL_API_KEY").is_ok() {
+    // Pass the key explicitly instead of reading the parent's process env —
+    // the parent env is only populated via the `set_local_api_key` side-effect
+    // and may be empty when api_auth_key was resolved late or never set.
+    let api_auth_note = if local_api_key.is_some() {
         "\nAPI Authentication: REQUIRED. Add `-H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"` to ALL curl requests to the Screenpipe API. The env var is already set in your environment.\n"
     } else {
         ""
@@ -4161,6 +4246,15 @@ Pipe name: {}
 /// longer than this, the user almost certainly didn't expect the task to
 /// run "now" — they expected it then. Better to no-op than surprise them.
 const ONE_OFF_STALE_THRESHOLD: chrono::Duration = chrono::Duration::hours(1);
+
+/// Grace window for catching a missed cron slot. A cron schedule means
+/// wall-clock time — "every day at 7am" should fire at 7am, not "the moment
+/// the app notices it hasn't run today." Without this, a pipe installed at
+/// 6pm with a 7am cron fires immediately (cron.after(epoch).next() is a
+/// 1970 slot, now >= 1970 ⇒ fire); same trap when the app was off across
+/// a scheduled slot. We absorb scheduler-tick latency and brief downtime,
+/// but skip catch-up beyond that — wait for the next scheduled slot.
+const CRON_GRACE_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
 
 /// Validate that a `schedule: at <iso>` timestamp isn't already stale.
 /// Returns `Ok(())` for any non-one-off schedule. Called from `install_pipe`
@@ -4407,9 +4501,16 @@ fn should_run(schedule: &str, last_run: DateTime<Utc>) -> bool {
         }
         Some(ParsedSchedule::Cron(cron)) => {
             let now = Utc::now();
-            // Find the next occurrence after last_run — if it's in the past, we should run
-            match cron.after(&last_run).next() {
-                Some(next) => now >= next,
+            // Anchor at max(last_run, now - grace) so we only consider slots that
+            // (a) haven't already been claimed by a prior run, and (b) aren't so
+            // stale that firing now would surprise the user. Without the grace
+            // anchor, a newly-installed pipe (last_run = epoch) or one whose app
+            // was off across a scheduled slot would fire immediately on the next
+            // tick — wrong for wall-clock cron. With it, those cases wait for the
+            // next future slot, which is what "every day at 7am" actually means.
+            let search_from = std::cmp::max(last_run, now - CRON_GRACE_WINDOW);
+            match cron.after(&search_from).next() {
+                Some(next) => next <= now,
                 None => false,
             }
         }
@@ -4632,6 +4733,7 @@ impl Drop for PipeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     // -- scheduler lifecycle tests ------------------------------------------
 
@@ -4996,9 +5098,62 @@ mod tests {
 
     #[test]
     fn test_should_run_human_daily() {
-        // "every day at 9am" should fire if last run was yesterday
-        let yesterday = Utc::now() - chrono::Duration::hours(25);
-        assert!(should_run("every day at 9am", yesterday));
+        // Wall-clock cron only fires when we're actually inside the scheduled
+        // slot (within CRON_GRACE_WINDOW). Anchor to the current hour:minute
+        // so the slot is "right now" regardless of when the test runs.
+        let now = Utc::now();
+        let cron_str = format!("0 {} {} * * * *", now.minute(), now.hour());
+        let yesterday = now - chrono::Duration::hours(25);
+        // Last run was yesterday, current minute's slot just passed → fire.
+        assert!(should_run(&cron_str, yesterday));
+
+        // Same cron, but last_run is "right now" (this slot already claimed) →
+        // don't re-fire. `cron.after(last_run)` is strictly after, so the next
+        // candidate is tomorrow's slot.
+        assert!(!should_run(&cron_str, now));
+    }
+
+    #[test]
+    fn test_should_run_cron_fresh_install_waits() {
+        // Pipe just installed (last_run = epoch) — must NOT fire immediately
+        // just because today's cron slot already passed. Should wait until the
+        // next future slot. Regression test: a user reported creating an
+        // "every day at 7am" pipe at 5:39pm that fired 12 seconds later.
+        let now = Utc::now();
+        // Pick an hour that's unambiguously outside the grace window from now
+        // (6h away in either direction).
+        let safe_hour = (now.hour() + 6) % 24;
+        let cron_str = format!("0 0 {} * * * *", safe_hour);
+        assert!(
+            !should_run(&cron_str, DateTime::UNIX_EPOCH),
+            "newly-installed cron pipe must not fire immediately on install — \
+             should wait for the next scheduled slot, not catch up from 1970"
+        );
+    }
+
+    #[test]
+    fn test_should_run_cron_stale_last_run_waits() {
+        // App was off for days. On restart, a daily cron whose slot passed
+        // hours ago must NOT fire immediately — wait for the next slot.
+        let now = Utc::now();
+        let safe_hour = (now.hour() + 6) % 24;
+        let cron_str = format!("0 0 {} * * * *", safe_hour);
+        let three_days_ago = now - chrono::Duration::days(3);
+        assert!(
+            !should_run(&cron_str, three_days_ago),
+            "after extended downtime, cron must wait for the next slot \
+             instead of firing stale catch-up runs"
+        );
+    }
+
+    #[test]
+    fn test_should_run_cron_within_grace_fires() {
+        // Slot was hit moments ago (typical: scheduler tick lag, brief sleep).
+        // Within grace → fire even though last_run is far in the past.
+        let now = Utc::now();
+        let cron_str = format!("0 {} {} * * * *", now.minute(), now.hour());
+        let yesterday = now - chrono::Duration::hours(25);
+        assert!(should_run(&cron_str, yesterday));
     }
 
     #[test]
@@ -5199,7 +5354,7 @@ mod tests {
         assert!(prompt.contains("Time range:"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
-        let sys = render_pipe_system_prompt("body text", 3031, None, None);
+        let sys = render_pipe_system_prompt("body text", 3031, None, None, None);
         assert!(sys.contains("http://localhost:3031"));
         assert!(!sys.contains("http://localhost:3030"));
         assert!(sys.contains("body text"));
@@ -5226,7 +5381,7 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys = render_pipe_system_prompt("hello", 3030, None, None);
+        let sys = render_pipe_system_prompt("hello", 3030, None, None, None);
         assert!(sys.contains("http://localhost:3030"));
     }
 
@@ -5251,8 +5406,13 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys =
-            render_pipe_system_prompt("body text", 3030, Some("You are a helpful assistant"), None);
+        let sys = render_pipe_system_prompt(
+            "body text",
+            3030,
+            Some("You are a helpful assistant"),
+            None,
+            None,
+        );
         assert!(sys.starts_with("You are a helpful assistant\n\n"));
         assert!(sys.contains("body text"));
         assert!(sys.contains("http://localhost:3030"));
@@ -5279,16 +5439,38 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys = render_pipe_system_prompt("body text", 3030, None, None);
+        let sys = render_pipe_system_prompt("body text", 3030, None, None, None);
         assert!(!sys.contains("System prompt:"));
         assert!(sys.contains("body text"));
     }
 
     #[test]
     fn test_system_prompt_contains_anti_recursion_warning() {
-        let sys = render_pipe_system_prompt("task body", 3030, None, None);
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None);
         assert!(sys.contains("NEVER run `screenpipe pipe run`"));
         assert!(sys.contains("You ARE this pipe"));
+    }
+
+    #[test]
+    fn test_system_prompt_emits_auth_note_when_local_api_key_present() {
+        // Pass the key explicitly — the renderer must not depend on parent
+        // process env (which is empty in tests and was the root cause of the
+        // 403 reported by the security-requests-grc pipe in prod).
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, Some("sp-test-key"));
+        assert!(
+            sys.contains("API Authentication: REQUIRED"),
+            "auth note must be emitted when local_api_key is Some"
+        );
+        assert!(sys.contains("SCREENPIPE_LOCAL_API_KEY"));
+    }
+
+    #[test]
+    fn test_system_prompt_omits_auth_note_when_no_key() {
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None);
+        assert!(
+            !sys.contains("API Authentication: REQUIRED"),
+            "auth note must not be emitted when local_api_key is None"
+        );
     }
 
     // -- PipeExecution / SchedulerState serde roundtrip ----------------------

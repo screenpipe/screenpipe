@@ -104,10 +104,14 @@ pub struct OAuthConfig {
 // SecretStore key helper
 // ---------------------------------------------------------------------------
 
+/// Prefix every OAuth secret key starts with. Public so the background
+/// refresh scheduler can enumerate stored tokens via `SecretStore::list`.
+pub const STORE_KEY_PREFIX: &str = "oauth:";
+
 fn store_key(integration_id: &str, instance: Option<&str>) -> String {
     match instance {
-        Some(inst) => format!("oauth:{}:{}", integration_id, inst),
-        None => format!("oauth:{}", integration_id),
+        Some(inst) => format!("{}{}:{}", STORE_KEY_PREFIX, integration_id, inst),
+        None => format!("{}{}", STORE_KEY_PREFIX, integration_id),
     }
 }
 
@@ -186,29 +190,98 @@ pub async fn load_oauth_json(
     integration_id: &str,
     instance: Option<&str>,
 ) -> Option<Value> {
+    load_oauth_json_with_instance(store, integration_id, instance)
+        .await
+        .map(|(v, _)| v)
+}
+
+/// Same as [`load_oauth_json`] but also returns the *effective* instance the
+/// value was loaded from. When the caller passes `instance=None` and the
+/// fallback resolves to a named instance, the returned instance is `Some`.
+/// Write paths (notably `refresh_token_instance`) MUST use this so they
+/// write back under the same key they read from — otherwise the refreshed
+/// token is stranded in the default slot without a `refresh_token` (Google
+/// only echoes it on rotation) and the connection rots inside an hour.
+pub(crate) async fn load_oauth_json_with_instance(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> Option<(Value, Option<String>)> {
     if let Some(v) = load_oauth_json_exact(store, integration_id, instance).await {
-        return Some(v);
+        if instance.is_some() || oauth_json_is_recoverable(&v) {
+            return Some((v, instance.map(String::from)));
+        }
+
+        tracing::warn!(
+            "oauth: {} default token is not recoverable, checking for a single healthy named instance",
+            integration_id,
+        );
     }
 
-    // Fallback: callers that don't know about instances (instance=None)
-    // should still find the token when the user has a single named
-    // instance. Skip when instance is explicitly set — the caller wants
-    // that exact one.
+    // Fallback A: explicit instance that has no keyed entry but exactly one
+    // default-slot token exists. Happens when the user connected once before
+    // multi-account support (token stored under None), then passes
+    // ?instance=their@email.com. We know there is only one account so it is
+    // safe to serve it — we are not guessing between multiple accounts.
     if instance.is_some() {
+        let instances = list_oauth_instances(store, integration_id).await;
+        if matches!(instances.as_slice(), [None]) {
+            tracing::debug!(
+                "oauth: {} explicit instance {:?} not found, falling back to sole default-slot token",
+                integration_id,
+                instance,
+            );
+            let v = load_oauth_json_exact(store, integration_id, None).await?;
+            return Some((v, None));
+        }
         return None;
     }
+
+    // Fallback B: callers that don't know about instances (instance=None)
+    // should still find the token when the user has a single named instance.
     let instances = list_oauth_instances(store, integration_id).await;
-    let named: Vec<Option<String>> = instances.into_iter().filter(|i| i.is_some()).collect();
-    if named.len() == 1 {
-        let inst = named[0].as_deref();
-        tracing::debug!(
-            "oauth: {} default lookup empty, falling back to single instance {:?}",
-            integration_id,
-            inst
-        );
-        return load_oauth_json_exact(store, integration_id, inst).await;
+    let named: Vec<String> = instances.into_iter().flatten().collect();
+    match named.len() {
+        0 => None,
+        1 => {
+            let inst = named.into_iter().next().unwrap();
+            tracing::debug!(
+                "oauth: {} default lookup empty, falling back to single instance {:?}",
+                integration_id,
+                inst,
+            );
+            let v = load_oauth_json_exact(store, integration_id, Some(&inst)).await?;
+            Some((v, Some(inst)))
+        }
+        _ => {
+            // Ambiguous: multiple instances, caller didn't pick. Surface
+            // the available list so debugging beats grep. The caller still
+            // gets None (returning a random instance would be worse — we
+            // could leak the wrong account's data).
+            tracing::warn!(
+                "oauth: {} default lookup empty and {} instances exist ({}) — caller passed instance=None; pick one explicitly",
+                integration_id,
+                named.len(),
+                named.join(", "),
+            );
+            None
+        }
     }
-    None
+}
+
+fn oauth_json_has_valid_access_token(v: &Value) -> bool {
+    if v["access_token"].as_str().is_none() {
+        return false;
+    }
+
+    match v["expires_at"].as_u64() {
+        Some(expires_at) => unix_now() < expires_at.saturating_sub(60),
+        None => true,
+    }
+}
+
+fn oauth_json_is_recoverable(v: &Value) -> bool {
+    oauth_json_has_valid_access_token(v) || v["refresh_token"].as_str().is_some()
 }
 
 /// Exact-key variant with no instance fallback. Everything `load_oauth_json`
@@ -221,8 +294,21 @@ async fn load_oauth_json_exact(
     // Try SecretStore first
     if let Some(s) = store {
         let key = store_key(integration_id, instance);
-        if let Ok(Some(val)) = s.get_json::<Value>(&key).await {
-            return Some(val);
+        match s.get_json::<Value>(&key).await {
+            Ok(Some(val)) => return Some(val),
+            Ok(None) => {}
+            Err(e) => {
+                // Most common cause: encrypted token row exists but the keychain
+                // key is unavailable (dev↔prod bundle ACL split, recent encryption
+                // toggle, revoked keychain item). Without this log the disconnect
+                // looks like a missing token and the user has to reconnect to
+                // recover, which silently rewrites under the active bundle's key.
+                tracing::warn!(
+                    "oauth: secret store read failed for {} (instance={:?}): {e:#}",
+                    integration_id,
+                    instance,
+                );
+            }
         }
     }
 
@@ -296,20 +382,87 @@ pub async fn is_oauth_instance_connected(
     integration_id: &str,
     instance: Option<&str>,
 ) -> bool {
-    let v = match load_oauth_json(store, integration_id, instance).await {
-        Some(v) => v,
-        None => return false,
-    };
+    load_oauth_json(store, integration_id, instance)
+        .await
+        .as_ref()
+        .is_some_and(oauth_json_is_recoverable)
+}
 
-    // Valid (non-expired) access token → connected
-    if let Some(expires_at) = v["expires_at"].as_u64() {
-        if unix_now() < expires_at.saturating_sub(60) {
-            return v["access_token"].as_str().is_some();
+/// True when at least one token row exists in the store for this integration,
+/// regardless of whether the value can be decrypted. Lets callers distinguish
+/// "user disconnected / never connected" from "keychain key is currently
+/// unavailable" — the former requires a reconnect, the latter just needs the
+/// keychain to come back (or a bundle-id check).
+pub async fn oauth_instance_token_exists(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> bool {
+    let instances = list_oauth_instances(store, integration_id).await;
+    match instance {
+        Some(name) => instances.iter().any(|i| i.as_deref() == Some(name)),
+        None => !instances.is_empty(),
+    }
+}
+
+/// List only instances that are recoverable: either the access token is still
+/// valid, or a refresh token exists and can keep the connection alive.
+pub async fn list_connected_oauth_instances(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+) -> Vec<Option<String>> {
+    let instances = list_oauth_instances(store, integration_id).await;
+    let mut connected = Vec::new();
+    for inst in instances {
+        if load_oauth_json_exact(store, integration_id, inst.as_deref())
+            .await
+            .as_ref()
+            .is_some_and(oauth_json_is_recoverable)
+        {
+            connected.push(inst);
         }
     }
+    connected
+}
 
-    // Expired but has refresh token → recoverable (still "connected")
-    v["refresh_token"].as_str().is_some()
+/// Build a human/AI-readable explanation of why an OAuth lookup failed for
+/// `(integration_id, instance)`. Without this, every miss collapses to the
+/// same "not connected" string — which is wrong (and infuriating) when the
+/// user *is* connected and the real problem is multi-account ambiguity, the
+/// shape that hit Gmail when two accounts were authorized.
+///
+/// Four cases the caller cares about:
+/// - no instances at all                       → "not connected, please connect"
+/// - one instance, default lookup unhealthy    → "instance X token can't refresh, reconnect"
+/// - multiple instances, none specified        → "ambiguous: pick one of [X, Y]"
+/// - explicit instance specified but unhealthy → "instance X token can't refresh, reconnect"
+pub async fn describe_oauth_error(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    display_name: &str,
+    instance: Option<&str>,
+) -> String {
+    let instances: Vec<String> = list_oauth_instances(store, integration_id)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    match (instance, instances.as_slice()) {
+        (Some(inst), _) => format!(
+            "{display_name} account '{inst}' is not connected or its token can't be refreshed — reconnect it in Settings > Connections"
+        ),
+        (None, []) => format!(
+            "{display_name} not connected — use 'Connect {display_name}' in Settings > Connections"
+        ),
+        (None, [only]) => format!(
+            "{display_name} account '{only}' token can't be refreshed — reconnect it in Settings > Connections"
+        ),
+        (None, many) => format!(
+            "multiple {display_name} accounts connected ({}) — specify which one with `instance`. On JSON-body endpoints add `\"instance\": \"<email>\"` to the request body; on proxy/query endpoints add `?instance=<email>` (e.g. instance=\"{}\")",
+            many.join(", "),
+            many[0],
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +491,13 @@ pub async fn write_oauth_token_instance(
     if let Some(expires_in) = data["expires_in"].as_u64() {
         stored["expires_at"] = Value::from(unix_now() + expires_in);
     }
+    // Stamp every write. Every path into this function — initial
+    // `exchange_code`, lazy `refresh_token_instance`, and the background
+    // scheduler — has just round-tripped the provider's token endpoint,
+    // so "last_refreshed_at" is accurate for all of them. The background
+    // scheduler uses this field to decide whether providers with sliding
+    // refresh-token windows (Zoom: 15h) need a keep-alive refresh.
+    stored["last_refreshed_at"] = Value::from(unix_now());
 
     // SecretStore path — no plaintext shadow on disk.
     if let Some(s) = store {
@@ -530,12 +690,14 @@ pub async fn refresh_token_instance(
     integration_id: &str,
     instance: Option<&str>,
 ) -> Result<String> {
-    let stored = load_oauth_json(store, integration_id, instance)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no stored token for {}", integration_id))?;
+    let (stored, effective_instance) =
+        load_oauth_json_with_instance(store, integration_id, instance)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no stored token for {}", integration_id))?;
     let refresh_tok = stored["refresh_token"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("no refresh_token stored for {}", integration_id))?;
+        .ok_or_else(|| anyhow::anyhow!("no refresh_token stored for {}", integration_id))?
+        .to_string();
 
     let raw = client
         .post(EXCHANGE_PROXY_URL)
@@ -559,12 +721,81 @@ pub async fn refresh_token_instance(
     let resp: Value = serde_json::from_str(&body)
         .map_err(|e| anyhow::anyhow!("oauth refresh returned non-JSON body: {e}: {body}"))?;
 
-    write_oauth_token_instance(store, integration_id, instance, &resp).await?;
+    // Merge response over stored, then write back to the SAME instance we
+    // loaded from. Two reasons this matters:
+    //
+    // 1. Refresh responses for most providers (Google, Microsoft, Slack, …)
+    //    only echo access_token + expires_in + token_type + scope (+ sometimes
+    //    id_token / refresh_token on rotation). Writing the raw response
+    //    silently DROPS refresh_token plus the identity metadata stamped at
+    //    exchange_code time (email, workspace_name, cloud_id, realmId,
+    //    project_url, service_key, team_id, …). The connection then
+    //    self-bricks at the next refresh because there's no refresh_token
+    //    to send.
+    //
+    // 2. When the caller passes instance=None but the token actually lives
+    //    under a named instance (multi-account fallback), writing back under
+    //    `instance` would create a brand-new default-slot entry that
+    //    subsequent lookups find first (exact-match wins over fallback) —
+    //    a stranded entry which, per (1), also lacks refresh_token. This is
+    //    the "google calendar reconnects every hour" loop.
+    let merged = merge_refresh_response(&stored, &resp);
+    write_oauth_token_instance(
+        store,
+        integration_id,
+        effective_instance.as_deref(),
+        &merged,
+    )
+    .await?;
 
     resp["access_token"]
         .as_str()
         .map(String::from)
         .ok_or_else(|| anyhow::anyhow!("no access_token in refresh response"))
+}
+
+/// Overlay `resp` on top of `stored`. Fields in `resp` win; fields only in
+/// `stored` are preserved. Used by `refresh_token_instance` to keep
+/// `refresh_token` and identity metadata that providers don't echo on
+/// refresh.
+///
+/// Two subtleties beyond a naive overlay:
+///
+/// 1. `expires_at` / `expires_in` describe the lifetime of a *specific*
+///    access_token. When `resp` carries a new access_token, the stored
+///    lifetime fields no longer apply — they're stripped before overlay
+///    so a stale `expires_at` from the old token can't shadow the new
+///    one. Otherwise providers that omit `expires_in` on refresh (Slack
+///    V1 long-lived tokens, some webhook flows) trigger an infinite
+///    refresh loop: read sees stale expiry → refresh → write keeps stale
+///    expiry → read sees stale expiry → …
+///
+/// 2. JSON `null` in `resp` is treated as "field absent". Per RFC 6749
+///    §5.1 the refresh response MAY omit `refresh_token`; a few providers
+///    instead set it explicitly to `null`. Treating null as "field
+///    present" would erase the long-lived refresh_token we already have
+///    and self-brick the connection.
+fn merge_refresh_response(stored: &Value, resp: &Value) -> Value {
+    let mut merged = stored.clone();
+    let Some(merged_obj) = merged.as_object_mut() else {
+        // Stored wasn't a JSON object — caller corrupted the slot. Best we
+        // can do is take the response verbatim; matches pre-fix behavior.
+        return resp.clone();
+    };
+    if resp.get("access_token").is_some() {
+        merged_obj.remove("expires_at");
+        merged_obj.remove("expires_in");
+    }
+    let Some(resp_obj) = resp.as_object() else {
+        return merged;
+    };
+    for (k, v) in resp_obj {
+        if v.is_null() {
+            continue;
+        }
+        merged_obj.insert(k.clone(), v.clone());
+    }
+    merged
 }
 
 /// Read a valid token, refreshing automatically if expired.
@@ -665,13 +896,14 @@ mod tests {
     #[tokio::test]
     async fn load_with_none_prefers_exact_match_over_fallback() {
         // When BOTH a no-instance entry and a named one exist, the exact
-        // match wins — don't accidentally prefer a random named instance.
+        // recoverable match wins — don't accidentally prefer a random named
+        // instance.
         let store = mem_store().await;
         let id = "_t_prefer";
         store
             .set_json(
                 &format!("oauth:{}", id),
-                &json!({"access_token": "default"}),
+                &json!({"access_token": "default", "refresh_token": "default-rt"}),
             )
             .await
             .unwrap();
@@ -685,6 +917,39 @@ mod tests {
 
         let got = load_oauth_json(Some(&store), id, None).await.unwrap();
         assert_eq!(got["access_token"], "default");
+    }
+
+    #[tokio::test]
+    async fn load_with_none_falls_back_when_default_is_unrecoverable() {
+        // A stale default slot must not shadow a healthy named Google account.
+        // This is the calendar "reconnect every hour" failure mode: status
+        // checked the default key, found an expired non-refreshable token, and
+        // ignored the refreshable token saved under the user's email.
+        let store = mem_store().await;
+        let id = "_t_shadowed_unrecoverable";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "stale-default", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:louis@screenpi.pe", id),
+                &json!({
+                    "access_token": "fresh-named",
+                    "refresh_token": "named-rt",
+                    "expires_at": expired,
+                }),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, None).await.unwrap();
+        assert_eq!(got["access_token"], "fresh-named");
+        assert_eq!(got["refresh_token"], "named-rt");
     }
 
     #[tokio::test]
@@ -733,6 +998,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_instance_falls_back_to_sole_default_slot() {
+        // Bug: user connected once (token in default slot), then passes
+        // ?instance=their@email.com. The exact key doesn't exist but there's
+        // only one account — we should serve it rather than 401.
+        let store = mem_store().await;
+        let id = "_t_default_fallback";
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "default-tok", "refresh_token": "rt"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, Some("user@example.com")).await;
+        assert!(got.is_some(), "expected fallback to default slot");
+        assert_eq!(got.unwrap()["access_token"], "default-tok");
+    }
+
+    #[tokio::test]
+    async fn explicit_instance_does_not_fall_back_when_multiple_exist() {
+        // Two named accounts — passing a non-matching explicit instance must
+        // still return None; we cannot guess which account was meant.
+        let store = mem_store().await;
+        let id = "_t_no_fallback_multi";
+        store
+            .set_json(
+                &format!("oauth:{}:a@example.com", id),
+                &json!({"access_token": "A", "refresh_token": "ra"}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:b@example.com", id),
+                &json!({"access_token": "B", "refresh_token": "rb"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, Some("c@example.com")).await;
+        assert!(
+            got.is_none(),
+            "must not fall back when multiple accounts exist"
+        );
+    }
+
+    #[tokio::test]
     async fn load_with_none_returns_none_when_store_empty() {
         let store = mem_store().await;
         let got = load_oauth_json(Some(&store), "_t_empty", None).await;
@@ -759,6 +1072,78 @@ mod tests {
             .unwrap();
 
         assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_treats_expired_refresh_token_as_connected() {
+        let store = mem_store().await;
+        let id = "_t_expired_refreshable";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({
+                    "access_token": "expired",
+                    "refresh_token": "rt",
+                    "expires_at": expired,
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_accepts_legacy_token_without_expiry() {
+        let store = mem_store().await;
+        let id = "_t_legacy_no_expiry";
+        store
+            .set_json(&format!("oauth:{}", id), &json!({"access_token": "legacy"}))
+            .await
+            .unwrap();
+
+        assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_rejects_expired_token_without_refresh() {
+        let store = mem_store().await;
+        let id = "_t_expired_unrecoverable";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "expired", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+
+        assert!(!is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn list_connected_oauth_instances_filters_unrecoverable_slots() {
+        let store = mem_store().await;
+        let id = "_t_list_connected";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "stale-default", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:connected@example.com", id),
+                &json!({"access_token": "expired", "refresh_token": "rt", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+
+        let got = list_connected_oauth_instances(Some(&store), id).await;
+        assert_eq!(got, vec![Some("connected@example.com".to_string())]);
     }
 
     // ---- sweep_shadowed_default_slots --------------------------------
@@ -906,6 +1291,230 @@ mod tests {
     async fn sweep_empty_store_is_noop() {
         let store = mem_store().await;
         assert_eq!(sweep_shadowed_default_slots(&store).await.unwrap(), 0);
+    }
+
+    // ---- merge_refresh_response --------------------------------------
+    //
+    // Google's refresh response only echoes refresh_token when it rotates,
+    // which it almost never does. Before this merge helper, every refresh
+    // silently dropped the stored refresh_token and the connection
+    // self-bricked at the next refresh cycle (the "google calendar
+    // reconnects every hour" loop customers hit for weeks).
+
+    #[test]
+    fn merge_preserves_refresh_token_when_response_omits_it() {
+        let stored = json!({
+            "access_token": "old",
+            "refresh_token": "long-lived-rt",
+            "expires_at": 100,
+            "email": "louis@screenpi.pe",
+        });
+        let resp = json!({
+            "access_token": "new",
+            "expires_in": 3599,
+            "token_type": "Bearer",
+            "scope": "calendar.readonly",
+        });
+        let merged = merge_refresh_response(&stored, &resp);
+        assert_eq!(merged["access_token"], "new");
+        assert_eq!(merged["refresh_token"], "long-lived-rt");
+        assert_eq!(merged["email"], "louis@screenpi.pe");
+        assert_eq!(merged["token_type"], "Bearer");
+    }
+
+    #[test]
+    fn merge_lets_response_override_stored_refresh_token_on_rotation() {
+        let stored = json!({"refresh_token": "rotated-out", "access_token": "old"});
+        let resp = json!({"refresh_token": "rotated-in", "access_token": "new"});
+        let merged = merge_refresh_response(&stored, &resp);
+        assert_eq!(merged["refresh_token"], "rotated-in");
+        assert_eq!(merged["access_token"], "new");
+    }
+
+    #[test]
+    fn merge_strips_stale_expires_at_when_response_omits_expires_in() {
+        // The infinite-refresh-loop regression. If we naively overlay
+        // resp on stored, a stored expires_at (tied to the OLD
+        // access_token) survives next to the NEW access_token. When the
+        // response doesn't carry a fresh expires_in (e.g. Slack V1
+        // long-lived tokens), write_oauth_token_instance has no value to
+        // derive a new expires_at from, so the merged record ships with
+        // a stale (past) expiry. Every subsequent read returns None,
+        // triggering another refresh — forever.
+        let stored = json!({
+            "access_token": "old",
+            "refresh_token": "rt",
+            "expires_at": 100u64, // way in the past
+        });
+        let resp = json!({
+            "access_token": "new",
+            "token_type": "Bearer",
+            // intentionally no expires_in
+        });
+        let merged = merge_refresh_response(&stored, &resp);
+        assert_eq!(merged["access_token"], "new");
+        assert_eq!(merged["refresh_token"], "rt");
+        assert!(
+            merged.get("expires_at").map_or(true, Value::is_null),
+            "stale expires_at must not survive a refresh that produced a new access_token; got {:?}",
+            merged.get("expires_at"),
+        );
+    }
+
+    #[test]
+    fn merge_lets_write_layer_stamp_expires_at_from_response_expires_in() {
+        // When the response DOES carry expires_in, merge strips the
+        // stored expires_at so write_oauth_token_instance is free to
+        // derive a fresh expires_at from expires_in. Both stripped, then
+        // expires_in overlaid: write_oauth_token_instance sees expires_in
+        // and stamps expires_at = now + expires_in. We only assert on
+        // the merge step here; the stamp is exercised by the broader
+        // integration tests.
+        let stored = json!({
+            "access_token": "old",
+            "refresh_token": "rt",
+            "expires_at": 100u64,
+        });
+        let resp = json!({
+            "access_token": "new",
+            "expires_in": 3599u64,
+        });
+        let merged = merge_refresh_response(&stored, &resp);
+        assert!(
+            merged.get("expires_at").map_or(true, Value::is_null),
+            "merge should defer expires_at to write_oauth_token_instance"
+        );
+        assert_eq!(merged["expires_in"], 3599);
+    }
+
+    #[test]
+    fn merge_treats_response_nulls_as_field_absent() {
+        // RFC 6749 §5.1 lets refresh responses OMIT refresh_token. Some
+        // providers instead serialize it as explicit JSON null. A naive
+        // overlay would replace our long-lived refresh_token string with
+        // Value::Null, which next refresh would read as "no refresh_token
+        // stored" and bail. Treat null as absent.
+        let stored = json!({
+            "access_token": "old",
+            "refresh_token": "long-lived-rt",
+            "email": "louis@screenpi.pe",
+        });
+        let resp = json!({
+            "access_token": "new",
+            "expires_in": 3599,
+            "refresh_token": Value::Null,
+            "email": Value::Null,
+        });
+        let merged = merge_refresh_response(&stored, &resp);
+        assert_eq!(merged["access_token"], "new");
+        assert_eq!(merged["refresh_token"], "long-lived-rt");
+        assert_eq!(merged["email"], "louis@screenpi.pe");
+    }
+
+    #[test]
+    fn merge_preserves_stored_expires_at_when_no_new_access_token() {
+        // Pathological response shape: provider returns metadata fields
+        // (e.g. just an updated scope) without a new access_token. The
+        // stored access_token + expires_at still describe the live
+        // token, so we MUST NOT strip them.
+        let stored = json!({
+            "access_token": "current",
+            "refresh_token": "rt",
+            "expires_at": 9_999_999_999u64,
+        });
+        let resp = json!({
+            "scope": "calendar.readonly userinfo.email",
+        });
+        let merged = merge_refresh_response(&stored, &resp);
+        assert_eq!(merged["access_token"], "current");
+        assert_eq!(merged["expires_at"], 9_999_999_999u64);
+        assert_eq!(merged["scope"], "calendar.readonly userinfo.email");
+    }
+
+    #[test]
+    fn merge_preserves_provider_identity_metadata() {
+        // QuickBooks stamps realmId, Jira stamps cloud_id, Supabase stamps
+        // project_url/service_key, Slack stamps team_id/workspace_name —
+        // all at exchange_code time. Refresh responses don't echo these.
+        let stored = json!({
+            "access_token": "old",
+            "refresh_token": "rt",
+            "realmId": "9341454322218551",
+            "cloud_id": "uuid-1234",
+            "project_url": "https://abc.supabase.co",
+            "service_key": "sb-secret",
+            "workspace_name": "Acme",
+            "team_id": "T123",
+        });
+        let resp = json!({"access_token": "new", "expires_in": 3599});
+        let merged = merge_refresh_response(&stored, &resp);
+        assert_eq!(merged["realmId"], "9341454322218551");
+        assert_eq!(merged["cloud_id"], "uuid-1234");
+        assert_eq!(merged["project_url"], "https://abc.supabase.co");
+        assert_eq!(merged["service_key"], "sb-secret");
+        assert_eq!(merged["workspace_name"], "Acme");
+        assert_eq!(merged["team_id"], "T123");
+    }
+
+    // ---- load_oauth_json_with_instance --------------------------------
+
+    #[tokio::test]
+    async fn load_with_instance_reports_fallback_target() {
+        // The key scenario for the refresh-write-back fix: caller passes
+        // instance=None, only a named instance exists. We need to know
+        // that the value came from the named instance so refresh writes
+        // back there instead of creating a stranded default-slot entry.
+        let store = mem_store().await;
+        let id = "_t_with_instance_fallback";
+        store
+            .set_json(
+                &format!("oauth:{}:louis@screenpi.pe", id),
+                &json!({"access_token": "a", "refresh_token": "rt"}),
+            )
+            .await
+            .unwrap();
+
+        let (v, inst) = load_oauth_json_with_instance(Some(&store), id, None)
+            .await
+            .expect("fallback should resolve to named instance");
+        assert_eq!(v["access_token"], "a");
+        assert_eq!(inst.as_deref(), Some("louis@screenpi.pe"));
+    }
+
+    #[tokio::test]
+    async fn load_with_instance_reports_default_when_default_recoverable() {
+        let store = mem_store().await;
+        let id = "_t_with_instance_default";
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "a", "refresh_token": "rt"}),
+            )
+            .await
+            .unwrap();
+
+        let (_, inst) = load_oauth_json_with_instance(Some(&store), id, None)
+            .await
+            .unwrap();
+        assert_eq!(inst, None);
+    }
+
+    #[tokio::test]
+    async fn load_with_instance_preserves_explicit_instance() {
+        let store = mem_store().await;
+        let id = "_t_with_instance_explicit";
+        store
+            .set_json(
+                &format!("oauth:{}:alice@x.com", id),
+                &json!({"access_token": "a"}),
+            )
+            .await
+            .unwrap();
+
+        let (_, inst) = load_oauth_json_with_instance(Some(&store), id, Some("alice@x.com"))
+            .await
+            .unwrap();
+        assert_eq!(inst.as_deref(), Some("alice@x.com"));
     }
 }
 

@@ -30,6 +30,7 @@ import { useChatStore, type SessionStatus } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
+import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
@@ -42,6 +43,7 @@ import {
   ChatSidebar,
   CollapsedChatSidebarButton,
 } from "@/components/chat-sidebar";
+import { ChatHistoryView } from "@/components/chat/chat-history-view";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
@@ -52,7 +54,11 @@ import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
-import { formatShortcutDisplay } from "@/lib/chat-utils";
+import {
+  formatShortcutDisplay,
+  type ChatLoadConversationPayload,
+  shouldActivateHomeSectionForChatLoadConversation,
+} from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -70,10 +76,11 @@ import {
 } from "@/components/ui/tooltip";
 
 type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "meetings" | "help";
+type ConnectionFocusRequest = { id: string | null; requestId: number };
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "memories", "connections", "meetings",
+  "home", "timeline", "pipes", "help", "memories", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
 ];
 
@@ -101,6 +108,7 @@ function HomeContent() {
     },
     serialize: (value) => value,
   });
+  const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
 
   const { settings } = useSettings();
   const { isTranslucent } = useSidebarContext();
@@ -111,6 +119,28 @@ function HomeContent() {
   const selectChatConversation = useCallback((id: string) => {
     setActiveSection("home");
     useChatStore.getState().actions.setCurrent(id);
+    void emit("chat-load-conversation", { conversationId: id });
+  }, [setActiveSection]);
+
+  const startNewChat = useCallback(() => {
+    const id = crypto.randomUUID();
+    const store = useChatStore.getState();
+    Object.values(store.sessions).forEach((s) => {
+      if (s.draft) store.actions.drop(s.id);
+    });
+    store.actions.upsert({
+      id,
+      title: "new chat",
+      preview: "",
+      status: "idle",
+      messageCount: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      draft: true,
+    });
+    store.actions.setCurrent(id);
     void emit("chat-load-conversation", { conversationId: id });
   }, [setActiveSection]);
 
@@ -282,8 +312,9 @@ function HomeContent() {
     let cancelled = false;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
-      const u = await listen("chat-load-conversation", () => {
+      const u = await listen<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
         if (cancelled) return;
+        if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
         setActiveSection("home");
       });
       unlistenFn = u;
@@ -372,6 +403,23 @@ function HomeContent() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [toggleSidebar]);
+
+  // Cmd+N / Ctrl+N to start a new chat (matches the "New chat" sidebar button)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setActiveSection("home");
+        startNewChat();
+        // Focus the chat input. When standalone-chat is already mounted (home→home)
+        // it catches this; when mounting fresh from another section, its on-mount
+        // auto-focus handles it instead.
+        void emit("chat-focus-input", {});
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setActiveSection, startNewChat]);
   const overlayData = useOverlayData({
     includeDeviceLevels: false,
     includeOcrPulse: false,
@@ -555,7 +603,10 @@ function HomeContent() {
         const res = await localFetch("/meetings/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: targetId }),
+          body: JSON.stringify({
+            id: targetId,
+            append_typed_text: settings.appendTypedTextToMeetingNote ?? true,
+          }),
         });
         if (res.ok) {
           const meeting: MeetingRecord = await res.json();
@@ -610,7 +661,7 @@ function HomeContent() {
     } finally {
       setMeetingLoading(false);
     }
-  }, [meetingState]);
+  }, [meetingState, settings.appendTypedTextToMeetingNote]);
 
   // Native overlay already toggles the meeting in Rust. Refresh local state
   // here instead of toggling again, otherwise one click can create or stop
@@ -668,6 +719,10 @@ function HomeContent() {
       const section = detail?.section ?? "general";
       // connections is a top-level main-sidebar section now, not in settings
       if (section === "connections") {
+        setConnectionFocusRequest({
+          id: typeof detail?.connectionId === "string" ? detail.connectionId : null,
+          requestId: Date.now(),
+        });
         setActiveSection("connections");
         return;
       }
@@ -699,7 +754,12 @@ function HomeContent() {
       case "pipes":
         return <PipeStoreView />;
       case "connections":
-        return <ConnectionsSection />;
+        return (
+          <ConnectionsSection
+            focusConnectionId={connectionFocusRequest?.id ?? null}
+            focusRequestId={connectionFocusRequest?.requestId ?? 0}
+          />
+        );
       case "meetings":
         return (
           <MeetingNotesSection
@@ -711,6 +771,16 @@ function HomeContent() {
         );
       case "help":
         return <FeedbackSection />;
+      case "history":
+        return (
+          <ChatHistoryView
+            onBack={() => setActiveSection("home")}
+            onNewChat={() => startNewChat()}
+            onSelectConversation={(id) => {
+              selectChatConversation(id);
+            }}
+          />
+        );
       default:
         return (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -755,7 +825,8 @@ function HomeContent() {
   const isFullHeight =
     activeSection === "home" ||
     activeSection === "timeline" ||
-    activeSection === "meetings";
+    activeSection === "meetings" ||
+    activeSection === "history";
 
   return (
     <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
@@ -1055,33 +1126,7 @@ function HomeContent() {
                         // clicking it (from any view) always spawns a
                         // new chat session and switches to it.
                         if (section.id === "home") {
-                          // Always start a brand-new session. Reusing an
-                          // empty row (getOrCreateEmptyChatId) felt like
-                          // "nothing happened" / jumping to an old blank
-                          // row in recents instead of a fresh compose view.
-                          const id = crypto.randomUUID();
-                          const store = useChatStore.getState();
-                          // Drop stale drafts before creating a new one so
-                          // repeated "New chat" clicks don't accumulate empty rows.
-                          Object.values(store.sessions).forEach((s) => {
-                            if (s.draft) store.actions.drop(s.id);
-                          });
-                          store.actions.upsert({
-                            id,
-                            title: "new chat",
-                            preview: "",
-                            status: "idle",
-                            messageCount: 0,
-                            createdAt: Date.now(),
-                            updatedAt: Date.now(),
-                            pinned: false,
-                            unread: false,
-                            draft: true,
-                          });
-                          store.actions.setCurrent(id);
-                          void emit("chat-load-conversation", {
-                            conversationId: id,
-                          });
+                          startNewChat();
                         }
                       }}
                       className={cn(
@@ -1105,23 +1150,14 @@ function HomeContent() {
                         {section.icon}
                       </div>
                       {!sidebarCollapsed && <span className={cn("text-xs truncate", section.id === "pipes" && runningPipeCount > 0 && "flex-1", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>}
-                      {section.id === "pipes" && runningPipeCount > 0 && (
-                        sidebarCollapsed ? (
-                          <PipeActivityIndicator
-                            kind="running"
-                            iconOnly
-                            className="pointer-events-none absolute right-1 top-1 scale-[0.72]"
-                            ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
-                          />
-                        ) : (
-                          <PipeActivityIndicator
-                            kind="running"
-                            label={runningPipeCount}
-                            className="ml-auto shrink-0"
-                            labelClassName="text-muted-foreground/60"
-                            ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
-                          />
-                        )
+                      {section.id === "pipes" && runningPipeCount > 0 && !sidebarCollapsed && (
+                        <PipeActivityIndicator
+                          kind="running"
+                          label={runningPipeCount}
+                          className="ml-auto shrink-0"
+                          labelClassName="text-muted-foreground/60"
+                          ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
+                        />
                       )}
                     </button>
                   );
@@ -1159,11 +1195,13 @@ function HomeContent() {
                     isTranslucent ? "vibrant-sidebar-border" : "border-border/50"
                   )}
                 >
-                  <ChatSidebar />
+                  <ChatSidebar onViewAll={() => setActiveSection("history")} />
                 </div>
               ) : (
                 <div className="flex-1" />
               )}
+
+              {!sidebarCollapsed && <UpdateBanner variant="sidebar" className="mb-2" />}
 
               {/* Bottom items */}
               <div className={cn("space-y-0.5 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>

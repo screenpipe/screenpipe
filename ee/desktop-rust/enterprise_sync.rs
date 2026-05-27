@@ -41,8 +41,8 @@ use tracing::{debug, error, info, warn};
 #[path = "enterprise_upload.rs"]
 mod enterprise_upload;
 use enterprise_upload::{
-    upload_direct_encrypted_batch, DirectUploadCursors, DirectUploadRecordCounts,
-    EnterpriseUploadMode,
+    upload_direct_encrypted_batch, upload_direct_readable_batch, DirectUploadCursors,
+    DirectUploadRecordCounts, EnterpriseUploadMode,
 };
 
 /// How often we wake up and try to sync.
@@ -93,19 +93,57 @@ impl EnterpriseSyncConfig {
     /// Build config from env vars + the OS device id. Returns `None` when
     /// required env (`SCREENPIPE_ENTERPRISE_LICENSE_KEY`) is missing — caller
     /// should silently skip sync in that case.
+    ///
+    /// `upload_mode` is initialized to `HostedIngest` as a safe default. The
+    /// caller should run [`Self::resolve_upload_mode`] once the async runtime
+    /// is up to upgrade to `DirectReadable` / `DirectEncrypted` based on the
+    /// customer's storage binding in the control plane. This replaces the
+    /// old "set `SCREENPIPE_ENTERPRISE_UPLOAD_MODE` on every device" UX —
+    /// the dashboard binding is now the single source of truth.
     pub fn from_env(
         app_data_dir: PathBuf,
         device_id: String,
         device_label: String,
     ) -> Option<Self> {
+        Self::from_env_with_fallback(app_data_dir, device_id, device_label, None)
+    }
+
+    /// Same as `from_env` but lets the caller pass a license key resolved
+    /// from somewhere else (e.g. `~/.screenpipe/enterprise.json` populated
+    /// by the desktop's in-app prompt). Env var still wins when set — that
+    /// keeps MDM rollouts working — but a missing env no longer disables
+    /// enterprise sync when the user has signed in normally through the
+    /// app. Without this fallback the entire telemetry pipeline silently
+    /// no-ops because the license key lives in the file, not the shell.
+    pub fn from_env_with_fallback(
+        app_data_dir: PathBuf,
+        device_id: String,
+        device_label: String,
+        license_key_fallback: Option<String>,
+    ) -> Option<Self> {
         let license_key = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY")
             .ok()
-            .filter(|s| !s.trim().is_empty())?;
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| license_key_fallback.filter(|s| !s.trim().is_empty()))?;
         let ingest_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_INGEST_URL.to_string());
-        let upload_mode = EnterpriseUploadMode::from_env(&ingest_url)?;
+        // Honor an explicit env override at boot for MDM / dev / test flows.
+        // Fail-closed semantics: if the operator explicitly set a mode and
+        // it can't be honored (invalid keys etc.), refuse to start sync — a
+        // silent fallback to plaintext could leak data. When no override is
+        // set we start in HostedIngest and let `resolve_upload_mode` ask
+        // the control plane what this license is actually configured for.
+        let explicit_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "auto");
+        let upload_mode = if explicit_mode.is_some() {
+            EnterpriseUploadMode::from_env(&ingest_url)?
+        } else {
+            EnterpriseUploadMode::HostedIngest
+        };
         let cursor_path = app_data_dir.join(CURSOR_FILENAME);
         Some(Self {
             license_key,
@@ -115,6 +153,19 @@ impl EnterpriseSyncConfig {
             cursor_path,
             upload_mode,
         })
+    }
+
+    /// Ask the control plane which upload mode this license should run in,
+    /// and update `self.upload_mode` accordingly. Safe to call before every
+    /// sync run — if the lookup fails, the existing mode is preserved.
+    ///
+    /// This is what makes the "install enterprise build → enter license key
+    /// → uploads start" flow possible without any env-var setup on the
+    /// customer's machine.
+    pub async fn resolve_upload_mode(&mut self) {
+        let resolved =
+            EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await;
+        self.upload_mode = resolved;
     }
 }
 
@@ -133,6 +184,11 @@ pub struct Cursor {
     /// from before UI events were added.
     #[serde(default)]
     pub last_ui_ts: Option<String>,
+    /// ISO-8601 UTC. Latest `memories.created_at` we've ingested.
+    /// Optional in serde to remain backwards-compat with cursor files from
+    /// before memory sync was added.
+    #[serde(default)]
+    pub last_memory_ts: Option<String>,
 }
 
 impl Cursor {
@@ -221,6 +277,19 @@ pub trait LocalApiClient: Send + Sync {
     async fn fetch_latest_snapshot(&self) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
         Ok(None)
     }
+
+    /// Fetch memories (user/AI-curated facts, preferences, decisions) created
+    /// since `since_ts`, ordered by `created_at` ascending, capped at `limit`.
+    /// Memories are the *distilled* layer above the raw frame/audio firehose —
+    /// they're what makes a team's institutional knowledge portable. Default
+    /// empty impl lets clients that predate this signal keep working.
+    async fn fetch_memories_since(
+        &self,
+        _since_ts: Option<&str>,
+        _limit: u32,
+    ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
+        Ok(Vec::new())
+    }
 }
 
 // ─── Wire types — what we POST upstream ─────────────────────────────────────
@@ -291,8 +360,33 @@ pub struct SnapshotRow {
     pub height: u32,
 }
 
+/// One memory row — a user- or AI-curated fact, preference, decision, or
+/// insight. The `memories` table is screenpipe's *distilled* layer above raw
+/// frame/audio — small (10s–1000s of rows), high-signal, and the unit of
+/// institutional knowledge that should follow a person across machines and
+/// (for enterprise) into the org's dashboard. Frame provenance is preserved
+/// via `frame_id` so downstream can link back to the source moment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryRow {
+    /// Local DB id — stable across restarts of this device. Server dedups by
+    /// `(device_id, memory_id)`.
+    pub memory_id: i64,
+    /// RFC3339 UTC. Set when the memory was first created locally.
+    pub created_at: String,
+    /// RFC3339 UTC. Updated when the memory body/tags/importance change.
+    pub updated_at: String,
+    pub content: String,
+    /// "user" (manually saved) or the agent/source that wrote it.
+    pub source: String,
+    pub tags: Vec<String>,
+    /// 0.0 (trivial) – 1.0 (critical). Drives dashboard ranking.
+    pub importance: f64,
+    /// Optional link back to the frame this memory was distilled from.
+    pub frame_id: Option<i64>,
+}
+
 /// One JSONL line. Tagged enum keeps mixed streams trivially parseable on the
-/// server side — `kind: "frame" | "audio" | "ui" | "snapshot"`.
+/// server side — `kind: "frame" | "audio" | "ui" | "snapshot" | "memory"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TelemetryRecord {
@@ -320,6 +414,12 @@ pub enum TelemetryRecord {
         #[serde(flatten)]
         snapshot: SnapshotRow,
     },
+    Memory {
+        device_id: String,
+        device_label: String,
+        #[serde(flatten)]
+        memory: MemoryRow,
+    },
 }
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
@@ -334,14 +434,16 @@ pub enum EnterpriseSyncError {
     IngestAuthRejected,
     #[error("ingest server error: status {0}")]
     IngestServerError(u16),
+    #[error("control-plane network error: {0}")]
+    Network(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
 
 // ─── Pure logic: build the JSONL payload ────────────────────────────────────
 
-/// Serialize a batch of frames + audio + UI rows + snapshots into JSONL
-/// bytes, tagged with the device's identity. Public for unit tests.
+/// Serialize a batch of frames + audio + UI rows + snapshots + memories into
+/// JSONL bytes, tagged with the device's identity. Public for unit tests.
 pub fn build_jsonl(
     device_id: &str,
     device_label: &str,
@@ -349,9 +451,11 @@ pub fn build_jsonl(
     audio: &[AudioRow],
     ui: &[UiEventRow],
     snapshots: &[SnapshotRow],
+    memories: &[MemoryRow],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(
-        (frames.len() + audio.len() + ui.len()) * 256 + snapshots.len() * 50_000,
+        (frames.len() + audio.len() + ui.len() + memories.len()) * 256
+            + snapshots.len() * 50_000,
     );
     for f in frames {
         let rec = TelemetryRecord::Frame {
@@ -430,6 +534,25 @@ pub fn build_jsonl(
             }
         }
     }
+    for m in memories {
+        let rec = TelemetryRecord::Memory {
+            device_id: device_id.to_string(),
+            device_label: device_label.to_string(),
+            memory: m.clone(),
+        };
+        match serde_json::to_vec(&rec) {
+            Ok(line) => {
+                out.extend_from_slice(&line);
+                out.push(b'\n');
+            }
+            Err(e) => {
+                warn!(
+                    "enterprise sync: failed to serialize memory {}: {}",
+                    m.memory_id, e
+                );
+            }
+        }
+    }
     out
 }
 
@@ -498,46 +621,90 @@ pub async fn run_one_sync(
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_ui_ts = Some(cutoff.to_rfc3339());
     }
+    if cursor.last_memory_ts.is_none() {
+        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
+        cursor.last_memory_ts = Some(cutoff.to_rfc3339());
+    }
 
-    let frames = local
-        .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
-        .await?;
-    let audio = local
-        .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
-        .await?;
+    // Per-stream sync policy is fetched fresh on every tick — the admin can
+    // flip toggles in the dashboard and the device picks them up on the next
+    // 5-min policy poll. A disabled stream means we don't even hit the local
+    // API for its rows; the cursor for that kind stays put, so re-enabling
+    // resumes from where the toggle-off happened (capped by SAFE_BACKFILL
+    // anyway).
+    let streams = crate::enterprise_policy::current_sync_streams();
+
+    let frames = if streams.frames {
+        local
+            .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let audio = if streams.audio {
+        local
+            .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
+            .await?
+    } else {
+        Vec::new()
+    };
     // UI events are best-effort — a backend that doesn't expose them yet
     // (or blocks the search query) shouldn't kill the whole sync batch.
     // The frame + audio paths are the load-bearing ones.
-    let ui = match local
-        .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            warn!("enterprise sync: ui fetch failed (skipping): {}", e);
-            Vec::new()
+    let ui = if streams.ui_events {
+        match local
+            .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("enterprise sync: ui fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     // One snapshot per tick. Best-effort — failure to encode/fetch
     // shouldn't block the rest of the batch.
-    let snapshots: Vec<SnapshotRow> = match local.fetch_latest_snapshot().await {
-        Ok(Some(s)) => vec![s],
-        Ok(None) => Vec::new(),
-        Err(e) => {
-            warn!("enterprise sync: snapshot fetch failed (skipping): {}", e);
-            Vec::new()
+    let snapshots: Vec<SnapshotRow> = if streams.snapshots {
+        match local.fetch_latest_snapshot().await {
+            Ok(Some(s)) => vec![s],
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                warn!("enterprise sync: snapshot fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
+    };
+    // Memories are best-effort too — a client that predates the trait
+    // method, or a server without the /memories route, must not kill
+    // the frame+audio path. The default trait impl returns empty.
+    let memories = if streams.memories {
+        match local
+            .fetch_memories_since(cursor.last_memory_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("enterprise sync: memory fetch failed (skipping): {}", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
     };
 
-    if frames.is_empty() && audio.is_empty() && ui.is_empty() && snapshots.is_empty() {
+    if frames.is_empty()
+        && audio.is_empty()
+        && ui.is_empty()
+        && snapshots.is_empty()
+        && memories.is_empty()
+    {
         debug!("enterprise sync: nothing new since last tick");
-        return Ok(SyncTickReport {
-            frames: 0,
-            audio: 0,
-            ui: 0,
-            snapshots: 0,
-            bytes: 0,
-        });
+        return Ok(SyncTickReport::default());
     }
 
     let body = build_jsonl(
@@ -547,6 +714,7 @@ pub async fn run_one_sync(
         &audio,
         &ui,
         &snapshots,
+        &memories,
     );
     let bytes = body.len();
 
@@ -560,6 +728,9 @@ pub async fn run_one_sync(
     if let Some(latest) = ui.last() {
         next_cursor.last_ui_ts = Some(latest.timestamp.clone());
     }
+    if let Some(latest) = memories.last() {
+        next_cursor.last_memory_ts = Some(latest.created_at.clone());
+    }
 
     match &cfg.upload_mode {
         EnterpriseUploadMode::HostedIngest => {
@@ -571,8 +742,27 @@ pub async fn run_one_sync(
                 audio: audio.len(),
                 ui: ui.len(),
                 snapshots: snapshots.len(),
+                memories: memories.len(),
             };
             upload_direct_encrypted_batch(
+                http,
+                cfg,
+                direct,
+                body,
+                counts,
+                DirectUploadCursors::from_cursor(&next_cursor),
+            )
+            .await?;
+        }
+        EnterpriseUploadMode::DirectReadable(direct) => {
+            let counts = DirectUploadRecordCounts {
+                frames: frames.len(),
+                audio: audio.len(),
+                ui: ui.len(),
+                snapshots: snapshots.len(),
+                memories: memories.len(),
+            };
+            upload_direct_readable_batch(
                 http,
                 cfg,
                 direct,
@@ -593,6 +783,7 @@ pub async fn run_one_sync(
         audio: audio.len(),
         ui: ui.len(),
         snapshots: snapshots.len(),
+        memories: memories.len(),
         bytes,
     })
 }
@@ -603,6 +794,7 @@ pub struct SyncTickReport {
     pub audio: usize,
     pub ui: usize,
     pub snapshots: usize,
+    pub memories: usize,
     pub bytes: usize,
 }
 
@@ -631,10 +823,20 @@ pub async fn run(
     loop {
         match run_one_sync(&cfg, &mut cursor, local.as_ref(), &http).await {
             Ok(report) => {
-                if report.frames > 0 || report.audio > 0 || report.ui > 0 || report.snapshots > 0 {
+                if report.frames > 0
+                    || report.audio > 0
+                    || report.ui > 0
+                    || report.snapshots > 0
+                    || report.memories > 0
+                {
                     info!(
-                        "enterprise sync: pushed {} frames, {} audio, {} ui, {} snapshots ({} bytes)",
-                        report.frames, report.audio, report.ui, report.snapshots, report.bytes
+                        "enterprise sync: pushed {} frames, {} audio, {} ui, {} snapshots, {} memories ({} bytes)",
+                        report.frames,
+                        report.audio,
+                        report.ui,
+                        report.snapshots,
+                        report.memories,
+                        report.bytes
                     );
                 }
                 backoff = BACKOFF_INITIAL;
@@ -748,6 +950,19 @@ mod tests {
         }
     }
 
+    fn memory(id: i64, ts: &str, content: &str) -> MemoryRow {
+        MemoryRow {
+            memory_id: id,
+            created_at: ts.to_string(),
+            updated_at: ts.to_string(),
+            content: content.to_string(),
+            source: "user".to_string(),
+            tags: vec!["work".to_string()],
+            importance: 0.7,
+            frame_id: None,
+        }
+    }
+
     #[test]
     fn jsonl_one_line_per_record() {
         let body = build_jsonl(
@@ -760,10 +975,11 @@ mod tests {
             &[audio(1, "2026-05-07T10:00:15Z", "hi")],
             &[ui_event(1, "2026-05-07T10:00:20Z", "Arc", "Send")],
             &[snapshot(2, "2026-05-07T10:00:30Z")],
+            &[memory(7, "2026-05-07T10:00:40Z", "Acme deal closes June 1")],
         );
         let s = String::from_utf8(body).unwrap();
         let lines: Vec<&str> = s.split('\n').filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 6);
         for l in &lines {
             let v: serde_json::Value = serde_json::from_str(l).unwrap();
             assert!(v.get("kind").is_some(), "missing kind: {l}");
@@ -782,11 +998,12 @@ mod tests {
         assert!(kinds.iter().any(|k| k == "audio"));
         assert!(kinds.iter().any(|k| k == "ui"));
         assert!(kinds.iter().any(|k| k == "snapshot"));
+        assert!(kinds.iter().any(|k| k == "memory"));
     }
 
     #[test]
     fn jsonl_empty_input_yields_empty_body() {
-        let body = build_jsonl("dev-1", "host", &[], &[], &[], &[]);
+        let body = build_jsonl("dev-1", "host", &[], &[], &[], &[], &[]);
         assert!(body.is_empty());
     }
 
@@ -799,6 +1016,7 @@ mod tests {
                 frame(1, "2026-05-07T10:00:00Z", "Arc", "a"),
                 frame(2, "2026-05-07T10:00:05Z", "Arc", "b"),
             ],
+            &[],
             &[],
             &[],
             &[],
@@ -818,6 +1036,7 @@ mod tests {
             &[],
             &[],
             &[snapshot(42, "2026-05-07T10:00:30Z")],
+            &[],
         );
         let s = String::from_utf8(body).unwrap();
         let v: serde_json::Value = serde_json::from_str(s.lines().next().unwrap()).unwrap();
@@ -843,12 +1062,41 @@ mod tests {
                 "Submit Quote",
             )],
             &[],
+            &[],
         );
         let s = String::from_utf8(body).unwrap();
         let v: serde_json::Value = serde_json::from_str(s.lines().next().unwrap()).unwrap();
         assert_eq!(v["kind"], "ui");
         assert_eq!(v["element_name"], "Submit Quote");
         assert_eq!(v["app_name"], "Salesforce");
+    }
+
+    #[test]
+    fn jsonl_serializes_memories_with_all_fields() {
+        let body = build_jsonl(
+            "dev-1",
+            "louis-mbp",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[memory(
+                42,
+                "2026-05-07T10:01:00Z",
+                "Acme deal closes June 1",
+            )],
+        );
+        let s = String::from_utf8(body).unwrap();
+        let v: serde_json::Value = serde_json::from_str(s.lines().next().unwrap()).unwrap();
+        assert_eq!(v["kind"], "memory");
+        assert_eq!(v["memory_id"], 42);
+        assert_eq!(v["content"], "Acme deal closes June 1");
+        assert_eq!(v["source"], "user");
+        assert_eq!(v["importance"], 0.7);
+        assert_eq!(v["tags"], serde_json::json!(["work"]));
+        // Frame provenance is preserved as null when absent — server can still
+        // index the memory standalone.
+        assert!(v.get("frame_id").is_some());
     }
 
     // ─── Cursor ─────────────────────────────────────────────────────────
@@ -878,6 +1126,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:30:00Z".to_string()),
+            last_memory_ts: Some("2026-05-07T09:15:00Z".to_string()),
         };
         c.save(&p).unwrap();
         let loaded = Cursor::load(&p);
@@ -894,6 +1143,7 @@ mod tests {
             last_frame_ts: Some("t".to_string()),
             last_audio_ts: None,
             last_ui_ts: None,
+            last_memory_ts: None,
         }
         .save(&p)
         .unwrap();
@@ -1001,9 +1251,39 @@ mod tests {
                 assert_eq!(direct.complete_url, "https://staging/upload-complete");
             }
             EnterpriseUploadMode::HostedIngest => panic!("expected direct upload mode"),
+            EnterpriseUploadMode::DirectReadable(_) => {
+                panic!("expected encrypted direct upload mode")
+            }
         }
 
-        // Case 6: direct upload without a valid root key fails closed.
+        // Case 6: readable direct upload does not require customer-held root keys.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_readable",
+        );
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64");
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64");
+        let dir = TempDir::new().unwrap();
+        let cfg =
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .unwrap();
+        match cfg.upload_mode {
+            EnterpriseUploadMode::DirectReadable(direct) => {
+                assert!(direct.recipients.is_empty());
+                assert_eq!(direct.ticket_url, "https://staging/upload-ticket");
+                assert_eq!(direct.complete_url, "https://staging/upload-complete");
+            }
+            EnterpriseUploadMode::HostedIngest => panic!("expected readable direct upload mode"),
+            EnterpriseUploadMode::DirectEncrypted(_) => {
+                panic!("expected readable direct upload mode")
+            }
+        }
+
+        // Case 7: encrypted direct upload without a valid root key fails closed.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_encrypted",
+        );
         std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64", "bad");
         let dir = TempDir::new().unwrap();
         assert!(EnterpriseSyncConfig::from_env(
@@ -1013,7 +1293,7 @@ mod tests {
         )
         .is_none());
 
-        // Case 7: direct upload without a recovery key also fails closed.
+        // Case 8: encrypted direct upload without a recovery key also fails closed.
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
             base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
@@ -1070,8 +1350,10 @@ mod tests {
     struct MockLocal {
         frames_to_yield: Mutex<Vec<Vec<FrameRow>>>,
         audio_to_yield: Mutex<Vec<Vec<AudioRow>>>,
+        memories_to_yield: Mutex<Vec<Vec<MemoryRow>>>,
         last_frames_since: Mutex<Option<String>>,
         last_audio_since: Mutex<Option<String>>,
+        last_memories_since: Mutex<Option<String>>,
     }
 
     impl MockLocal {
@@ -1079,9 +1361,16 @@ mod tests {
             Self {
                 frames_to_yield: Mutex::new(frames),
                 audio_to_yield: Mutex::new(audio),
+                memories_to_yield: Mutex::new(Vec::new()),
                 last_frames_since: Mutex::new(None),
                 last_audio_since: Mutex::new(None),
+                last_memories_since: Mutex::new(None),
             }
+        }
+
+        fn with_memories(mut self, memories: Vec<Vec<MemoryRow>>) -> Self {
+            self.memories_to_yield = Mutex::new(memories);
+            self
         }
     }
 
@@ -1109,6 +1398,20 @@ mod tests {
             *self.last_audio_since.lock().unwrap() = since_ts.map(|s| s.to_string());
             Ok(self
                 .audio_to_yield
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or_default())
+        }
+
+        async fn fetch_memories_since(
+            &self,
+            since_ts: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
+            *self.last_memories_since.lock().unwrap() = since_ts.map(|s| s.to_string());
+            Ok(self
+                .memories_to_yield
                 .lock()
                 .unwrap()
                 .pop()
@@ -1154,6 +1457,20 @@ mod tests {
         cfg
     }
 
+    fn readable_direct_test_cfg(
+        dir: &TempDir,
+        ticket_url: String,
+        complete_url: String,
+    ) -> EnterpriseSyncConfig {
+        let mut cfg = test_cfg(dir, "http://host/ingest".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
+            ticket_url,
+            complete_url,
+            recipients: Vec::new(),
+        });
+        cfg
+    }
+
     #[tokio::test]
     async fn empty_batch_no_post_no_cursor_change() {
         let dir = TempDir::new().unwrap();
@@ -1162,6 +1479,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T10:00:00Z".to_string()),
+            last_memory_ts: Some("2026-05-07T10:00:00Z".to_string()),
         };
         let local = MockLocal::new(vec![vec![]], vec![vec![]]);
         let http = reqwest::Client::new();
@@ -1214,6 +1532,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![
@@ -1239,6 +1558,53 @@ mod tests {
         // Cursor is also persisted.
         let loaded = Cursor::load(&cfg.cursor_path);
         assert_eq!(loaded.last_frame_ts, cursor.last_frame_ts);
+    }
+
+    #[tokio::test]
+    async fn memories_advance_their_own_cursor() {
+        // Memory-only batch — no frame/audio activity. The tick should still
+        // POST and advance `last_memory_ts` to the latest memory's created_at.
+        // This is the load-bearing path for enterprise: an idle user who just
+        // saves "remember the Acme deal closes June 1" should produce upstream
+        // signal even if their screen and mic are silent.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::header("X-License-Key", "sek_test"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = MockLocal::new(vec![vec![]], vec![vec![]]).with_memories(vec![vec![
+            memory(1, "2026-05-07T10:00:00Z", "first"),
+            memory(2, "2026-05-07T10:30:00Z", "second"),
+        ]]);
+        let http = reqwest::Client::new();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
+        assert_eq!(report.frames, 0);
+        assert_eq!(report.audio, 0);
+        assert_eq!(report.memories, 2);
+        assert_eq!(
+            cursor.last_memory_ts.as_deref(),
+            Some("2026-05-07T10:30:00Z")
+        );
+        // Non-memory cursors are untouched when there's no activity on those
+        // streams.
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T09:00:00Z")
+        );
+        let loaded = Cursor::load(&cfg.cursor_path);
+        assert_eq!(loaded.last_memory_ts, cursor.last_memory_ts);
     }
 
     #[tokio::test]
@@ -1285,6 +1651,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
@@ -1302,6 +1669,80 @@ mod tests {
         );
         let loaded = Cursor::load(&cfg.cursor_path);
         assert_eq!(loaded.last_frame_ts, cursor.last_frame_ts);
+    }
+
+    #[tokio::test]
+    async fn readable_direct_upload_puts_jsonl_body() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ticket"))
+            .and(wiremock::matchers::body_string_contains(
+                "\"mode\":\"direct_upload_readable\"",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "ok": true,
+                    "method": "PUT",
+                    "upload_url": format!("{}/blob", server.uri()),
+                    "headers": {
+                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_READABLE_CONTENT_TYPE,
+                        "x-ms-blob-type": "BlockBlob"
+                    }
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path("/blob"))
+            .and(wiremock::matchers::body_string_contains(
+                "customer-readable",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/complete"))
+            .and(wiremock::matchers::body_string_contains(
+                "\"mode\":\"direct_upload_readable\"",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = readable_direct_test_cfg(
+            &dir,
+            format!("{}/ticket", server.uri()),
+            format!("{}/complete", server.uri()),
+        );
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
+        };
+        let local = MockLocal::new(
+            vec![vec![frame(
+                1,
+                "2026-05-07T10:00:00Z",
+                "Arc",
+                "customer-readable text",
+            )]],
+            vec![vec![]],
+        );
+        let http = reqwest::Client::new();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
+
+        assert_eq!(report.frames, 1);
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T10:00:00Z")
+        );
     }
 
     #[tokio::test]
@@ -1343,6 +1784,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
@@ -1375,6 +1817,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -1406,6 +1849,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -1443,6 +1887,7 @@ mod tests {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -1453,5 +1898,191 @@ mod tests {
             .await
             .unwrap();
         // Mock asserts call shape on drop.
+    }
+
+    // ─── per-stream sync gate (PR #3581) ───────────────────────────────
+    //
+    // Lock in the contract that a disabled stream never hits the local API
+    // for its rows and never appears in the upstream payload. This is the
+    // load-bearing privacy guarantee for enterprise: admins flipping a
+    // toggle in the dashboard expect the device to stop syncing that kind
+    // immediately, not on the next restart.
+
+    /// Mock that tracks call counts per LocalApiClient method. Returns one
+    /// row per enabled method so we can prove via the upstream payload that
+    /// disabled methods produced nothing.
+    struct CallCountingLocal {
+        frames_calls: Mutex<u32>,
+        audio_calls: Mutex<u32>,
+        ui_calls: Mutex<u32>,
+        snapshot_calls: Mutex<u32>,
+        memories_calls: Mutex<u32>,
+    }
+
+    impl CallCountingLocal {
+        fn new() -> Self {
+            Self {
+                frames_calls: Mutex::new(0),
+                audio_calls: Mutex::new(0),
+                ui_calls: Mutex::new(0),
+                snapshot_calls: Mutex::new(0),
+                memories_calls: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for CallCountingLocal {
+        async fn fetch_frames_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            *self.frames_calls.lock().unwrap() += 1;
+            Ok(vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "f")])
+        }
+
+        async fn fetch_audio_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            *self.audio_calls.lock().unwrap() += 1;
+            Ok(vec![audio(1, "2026-05-07T10:00:00Z", "a")])
+        }
+
+        async fn fetch_ui_events_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<UiEventRow>, EnterpriseSyncError> {
+            *self.ui_calls.lock().unwrap() += 1;
+            Ok(vec![ui_event(1, "2026-05-07T10:00:00Z", "Arc", "Send")])
+        }
+
+        async fn fetch_latest_snapshot(&self) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
+            *self.snapshot_calls.lock().unwrap() += 1;
+            Ok(Some(snapshot(1, "2026-05-07T10:00:00Z")))
+        }
+
+        async fn fetch_memories_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
+            *self.memories_calls.lock().unwrap() += 1;
+            Ok(vec![memory(1, "2026-05-07T10:00:00Z", "m")])
+        }
+    }
+
+    /// Pull the `kind` field out of every JSONL line in a captured POST body.
+    /// Used to assert which streams made it onto the wire.
+    fn jsonl_kinds(body: &[u8]) -> Vec<String> {
+        std::str::from_utf8(body)
+            .unwrap()
+            .split('\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn sync_gate_skips_disabled_streams_and_lets_enabled_through() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+
+        // Disable frames, ui, snapshots. Keep audio + memories on.
+        crate::enterprise_policy::set_sync_streams(false, true, false, true, false);
+
+        // Capture the POST body so we can assert what actually crossed the
+        // wire — the most direct evidence that the gate worked, not just
+        // a "didn't call fetch_X" inference.
+        let captured: std::sync::Arc<Mutex<Option<Vec<u8>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let captured_for_responder = captured.clone();
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(move |req: &wiremock::Request| {
+                *captured_for_responder.lock().unwrap() = Some(req.body.clone());
+                wiremock::ResponseTemplate::new(200)
+            })
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = CallCountingLocal::new();
+        let http = reqwest::Client::new();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
+
+        // Disabled streams: zero local-API calls. This is the wasted-fetch
+        // avoidance promise from the PR description.
+        assert_eq!(
+            *local.frames_calls.lock().unwrap(),
+            0,
+            "frames disabled — fetch_frames_since must not be called"
+        );
+        assert_eq!(
+            *local.ui_calls.lock().unwrap(),
+            0,
+            "ui disabled — fetch_ui_events_since must not be called"
+        );
+        assert_eq!(
+            *local.snapshot_calls.lock().unwrap(),
+            0,
+            "snapshots disabled — fetch_latest_snapshot must not be called"
+        );
+
+        // Enabled streams: called exactly once per tick.
+        assert_eq!(*local.audio_calls.lock().unwrap(), 1);
+        assert_eq!(*local.memories_calls.lock().unwrap(), 1);
+
+        // Upstream payload: only audio + memory kinds present. This is the
+        // privacy contract the admin-facing toggle exists to enforce.
+        let body = captured.lock().unwrap().clone().expect("POST captured");
+        let kinds = jsonl_kinds(&body);
+        assert!(kinds.iter().any(|k| k == "audio"));
+        assert!(kinds.iter().any(|k| k == "memory"));
+        assert!(
+            !kinds.iter().any(|k| k == "frame"),
+            "frame in payload despite frames=false: kinds={kinds:?}"
+        );
+        assert!(
+            !kinds.iter().any(|k| k == "ui"),
+            "ui in payload despite ui_events=false: kinds={kinds:?}"
+        );
+        assert!(
+            !kinds.iter().any(|k| k == "snapshot"),
+            "snapshot in payload despite snapshots=false: kinds={kinds:?}"
+        );
+
+        // Cursors for disabled streams stay put → re-enabling the stream
+        // picks up from the toggle-off point (capped by SAFE_BACKFILL).
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T09:00:00Z"),
+            "disabled-stream cursor must not advance"
+        );
+
+        assert_eq!(report.audio, 1);
+        assert_eq!(report.memories, 1);
+        assert_eq!(report.frames, 0);
+
+        // Reset to defaults so the binary-wide static doesn't leak into
+        // other tests that may run later in the same process.
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true);
     }
 }

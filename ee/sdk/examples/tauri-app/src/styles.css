@@ -1,0 +1,24 @@
+main {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 32px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+nav {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0;
+}
+
+button {
+  height: 34px;
+}
+
+#preview {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}

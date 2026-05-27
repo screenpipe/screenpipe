@@ -29,7 +29,7 @@ tracing = { workspace = true }
 # host accepts; if a user genuinely needs RSA SSH key support, re-enable
 # this feature and pin `rsa` to a version compatible with the resolved
 # `pkcs8`. v2.4.170 left this broken on a pristine cargo check.
-russh = { version = "0.57", default-features = false, features = ["ring", "flate2"] }
+russh = { version = "0.60", default-features = false, features = ["ring", "flate2"] }
 russh-sftp = "2.1"
 dirs = "6"
 chrono = "0.4"
@@ -41,6 +41,10 @@ lettre = { version = "0.11", default-features = false, features = ["smtp-transpo
 mdns-sd = "0.13"
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 libsqlite3-sys = { version = "0.26", features = ["bundled"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 eventkit-rs = "0.1"

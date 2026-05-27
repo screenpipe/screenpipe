@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Screenpipe Tauri Example</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Screenpipe Tauri</h1>
+        <p id="status">Ready</p>
+      </header>
+      <nav>
+        <button id="permissions">Permissions</button>
+        <button id="start">Start</button>
+        <button id="snapshot">Snapshot</button>
+        <button id="stop">Stop</button>
+      </nav>
+      <img id="preview" alt="Screen preview" />
+      <section>
+        <h2>Live events</h2>
+        <p>Each row is one frame off <code>screenpipe://event</code>.</p>
+        <ol id="events"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

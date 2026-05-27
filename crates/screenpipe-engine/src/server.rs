@@ -47,7 +47,8 @@ use crate::{
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
-            list_memories_handler, list_memory_tags_handler, update_memory_handler,
+            list_memories_handler, list_memory_tags_handler, sync_external_memories_handler,
+            update_memory_handler,
         },
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
@@ -64,6 +65,7 @@ use crate::{
     sync_api::{self, SyncState},
     video_cache::FrameCache,
 };
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use lru::LruCache;
 use moka::future::Cache as MokaCache;
@@ -189,12 +191,12 @@ pub struct AppState {
     pub api_auth: bool,
     /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
     pub api_auth_key: Option<String>,
-    /// Cloud JWT (Clerk) used to authenticate proxied requests to api.screenpi.pe.
-    /// Held in a RwLock so the desktop shell can refresh it after login/logout
+    /// Cloud JWT (Clerk) used to authenticate proxied requests to api.screenpipe.com.
+    /// Held in ArcSwap so the desktop shell can refresh it after login/logout
     /// without rebuilding the server. The pi-agent's bash deliberately can't see
     /// this token — agent calls localhost/v1/chat/completions and the server
     /// signs the upstream request here. See routes/cloud_proxy.rs.
-    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
+    pub cloud_token: Arc<ArcSwap<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
@@ -231,9 +233,19 @@ pub struct SCServer {
     /// API key for remote auth validation
     pub api_auth_key: Option<String>,
     /// Cloud JWT for proxied /v1/chat/completions calls. See AppState::cloud_token.
-    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
+    pub cloud_token: Arc<ArcSwap<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
+    /// Background OAuth refresh scheduler. Owned here so its JoinHandle
+    /// isn't dropped (which would cancel the task) and so future
+    /// observability endpoints can call `.snapshot()` to inspect metrics.
+    pub oauth_refresher:
+        Option<Arc<screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler>>,
+    /// Background scheduler that mirrors `memories` out to Claude Code's
+    /// CLAUDE.md and Codex's AGENTS.md every few minutes. Owned for the
+    /// same reasons as `oauth_refresher` — keeps the JoinHandle alive
+    /// and exposes `.snapshot()` for health reporting later.
+    pub external_memory_sync: Option<Arc<crate::external_memory_sync::ExternalMemorySyncScheduler>>,
 }
 
 impl SCServer {
@@ -269,25 +281,25 @@ impl SCServer {
             owned_browser: None,
             api_auth: false,
             api_auth_key: None,
-            cloud_token: Arc::new(tokio::sync::RwLock::new(None)),
+            cloud_token: Arc::new(ArcSwap::new(Arc::new(None))),
             secret_store: None,
+            oauth_refresher: None,
+            external_memory_sync: None,
         }
     }
 
     /// Set the cloud JWT used to authenticate proxied chat-completion calls
-    /// to api.screenpi.pe. Safe to call before or after `start()` — the route
+    /// to api.screenpipe.com. Safe to call before or after `start()` — the route
     /// reads the inner Arc on each request. Callers can also clone the Arc
     /// directly (see `cloud_token_handle`) to update it from elsewhere.
     pub fn with_cloud_token(self, token: Option<String>) -> Self {
-        if let Ok(mut guard) = self.cloud_token.try_write() {
-            *guard = token;
-        }
+        self.cloud_token.store(Arc::new(token));
         self
     }
 
     /// Clone the cloud-token handle so the desktop shell can refresh it
     /// after the server has started (e.g. when settings.user.token changes).
-    pub fn cloud_token_handle(&self) -> Arc<tokio::sync::RwLock<Option<String>>> {
+    pub fn cloud_token_handle(&self) -> Arc<ArcSwap<Option<String>>> {
         self.cloud_token.clone()
     }
 
@@ -617,6 +629,7 @@ impl SCServer {
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)
             .get("/memories/tags", list_memory_tags_handler)
+            .post("/memories/sync-external", sync_external_memories_handler)
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
@@ -699,7 +712,7 @@ impl SCServer {
                 axum::routing::post(crate::routes::transcribe::transcribe_handler)
                     .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)), // 250MB
             )
-            // Local proxy → api.screenpi.pe/v1/chat/completions. Lets the
+            // Local proxy → api.screenpipe.com/v1/chat/completions. Lets the
             // pi-agent's bash do cloud media analysis without ever seeing the
             // cloud JWT (which the wrapper unsets). Body limit bumped because
             // requests embed base64'd audio/images.
@@ -851,6 +864,16 @@ impl SCServer {
                 self.api_auth_key.clone(),
             ),
         );
+
+        // User-supplied MCP servers (issue #3282).
+        // Mounted at the top level so /mcp-servers/:id doesn't shadow
+        // /connections/:id and vice versa.
+        let mcp_store: crate::mcp_servers_api::SharedMcpServerStore =
+            Arc::new(screenpipe_connect::mcp_servers::McpServerStore::new(
+                self.screenpipe_dir.clone(),
+                self.secret_store.clone(),
+            ));
+        let router = router.nest("/mcp-servers", crate::mcp_servers_api::router(mcp_store));
 
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {

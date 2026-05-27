@@ -47,23 +47,26 @@ mod chatgpt_oauth;
 mod commands;
 mod disk_usage;
 mod embedded_server;
+mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
 mod hardware;
+mod google_calendar;
 mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod meeting_live_notes;
+mod meeting_stall_notifications;
 mod oauth;
 mod owned_browser;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
 // injects via WKHTTPCookieStore; other platforms compile to a stub
 // `cookies_for_host` that returns empty until Windows (DPAPI + AES-256-
 // GCM + WebView2) and Linux (libsecret + webkit2gtk) readers land.
+mod engine_events;
 mod monitor_events;
 mod owned_browser_cookies;
-mod permission_events;
 mod permissions;
 mod pi;
 mod pi_command_queue;
@@ -289,11 +292,17 @@ async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, St
             .await
         {
             Ok(response) => {
-                if response.status().is_success() {
+                let status = response.status();
+                if status.is_success() {
                     debug!("Successfully uploaded file on attempt {}", attempt);
                     return Ok(true);
                 }
-                last_error = format!("Upload failed with status: {}", response.status());
+                // Surface the response body — S3/Supabase wraps the reason for
+                // 400/403 (signed URL expired, content-type mismatch, etc.) in
+                // an XML payload that we'd otherwise discard.
+                let body = response.text().await.unwrap_or_default();
+                let snippet: String = body.chars().take(500).collect();
+                last_error = format!("Upload failed with status: {} body: {}", status, snippet);
                 error!("{} (attempt {}/{})", last_error, attempt, max_retries);
             }
             Err(e) => {
@@ -734,10 +743,17 @@ async fn main() {
                 recording::get_boot_phase,
                 // Commands from commands.rs
                 commands::is_enterprise_build_cmd,
+                commands::get_app_identifier,
+                enterprise_install_metadata::get_enterprise_install_metadata,
                 commands::set_cloud_media_analysis_skill,
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
+                commands::save_enterprise_team_config,
+                commands::get_enterprise_team_api_token,
+                commands::get_cloud_token,
+                commands::set_cloud_token,
                 enterprise_policy::set_enterprise_policy,
+                enterprise_policy::set_sync_streams,
                 commands::get_disk_usage,
                 commands::list_cache_files,
                 commands::delete_cache_files,
@@ -811,10 +827,13 @@ async fn main() {
                 pi::pi_check,
                 pi::pi_install,
                 pi::pi_prompt,
+                pi::pi_queue_prompt,
                 pi::pi_steer,
+                pi::pi_steer_queued,
                 pi::pi_pending,
                 pi::pi_cancel_queued,
                 pi::pi_abort,
+                pi::pi_abort_active,
                 pi::pi_new_session,
                 pi::pi_set_model,
                 pi::pi_update_config,
@@ -825,6 +844,7 @@ async fn main() {
                 chatgpt_oauth::chatgpt_oauth_get_token,
                 chatgpt_oauth::chatgpt_oauth_logout,
                 chatgpt_oauth::chatgpt_oauth_models,
+                chatgpt_oauth::chatgpt_oauth_check_token,
                 // Generic OAuth commands (works for any OAuth integration)
                 oauth::oauth_connect,
                 oauth::oauth_cancel,
@@ -857,6 +877,8 @@ async fn main() {
                 hardware::get_hardware_capability,
                 // Store encryption
                 store::reencrypt_store,
+                // Autostart
+                commands::set_autostart,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -869,6 +891,7 @@ async fn main() {
             .typ::<suggestions::CachedSuggestions>()
             .typ::<suggestions::Suggestion>()
             .typ::<hardware::HardwareCapability>()
+            .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
             .typ::<oauth::OAuthStatus>();
 
@@ -902,6 +925,7 @@ async fn main() {
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
+        cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(None))),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -961,7 +985,9 @@ async fn main() {
         let args_clone = args.clone();
         let _ = app.run_on_main_thread(move || {
             // Focus the existing window
-            show_main_window(app_for_closure.clone());
+            if !crate::enterprise_policy::is_app_ui_hidden() {
+                show_main_window(app_for_closure.clone());
+            }
 
             // Forward deep-link URL from args
             if let Some(url) = args_clone.iter().find(|a| a.starts_with("screenpipe://")) {
@@ -999,13 +1025,22 @@ async fn main() {
         .manage(sync_scheduler)
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
+            commands::get_app_identifier,
+            enterprise_install_metadata::get_enterprise_install_metadata,
+            updates::get_pending_update,
+            updates::trigger_update_check,
             commands::get_local_api_config,
             commands::regenerate_api_auth_key,
             commands::set_api_auth_key,
             commands::set_cloud_media_analysis_skill,
             commands::get_enterprise_license_key,
             enterprise_policy::set_enterprise_policy,
+            enterprise_policy::set_sync_streams,
             commands::save_enterprise_license_key,
+            commands::save_enterprise_team_config,
+            commands::get_enterprise_team_api_token,
+            commands::get_cloud_token,
+            commands::set_cloud_token,
             spawn_screenpipe,
             stop_screenpipe,
             recording::start_capture,
@@ -1019,6 +1054,8 @@ async fn main() {
             permissions::check_microphone_permission,
             permissions::check_screen_recording_permission,
             permissions::check_accessibility_permission_cmd,
+            permissions::check_input_monitoring_permission_cmd,
+            permissions::request_input_monitoring_permission,
             owned_browser::owned_browser_set_bounds,
             owned_browser::owned_browser_navigate,
             owned_browser::owned_browser_hide,
@@ -1116,10 +1153,13 @@ async fn main() {
             pi::pi_check,
             pi::pi_install,
             pi::pi_prompt,
+            pi::pi_queue_prompt,
             pi::pi_steer,
+            pi::pi_steer_queued,
             pi::pi_pending,
             pi::pi_cancel_queued,
             pi::pi_abort,
+            pi::pi_abort_active,
             pi::pi_new_session,
             pi::pi_set_model,
             pi::pi_update_config,
@@ -1130,6 +1170,7 @@ async fn main() {
             chatgpt_oauth::chatgpt_oauth_get_token,
             chatgpt_oauth::chatgpt_oauth_logout,
             chatgpt_oauth::chatgpt_oauth_models,
+            chatgpt_oauth::chatgpt_oauth_check_token,
             // Generic OAuth commands (works for any OAuth integration)
             oauth::oauth_connect,
             oauth::oauth_cancel,
@@ -1183,6 +1224,7 @@ async fn main() {
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
             store::reencrypt_store,
+            commands::set_autostart,
         ])
         .setup(move |app| {
             //deep link register_all
@@ -1197,6 +1239,7 @@ async fn main() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder, PredefinedMenuItem, MenuItemBuilder};
+                let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
 
                 let mut app_submenu_builder = SubmenuBuilder::new(app, "screenpipe")
                     .item(&PredefinedMenuItem::about(app, Some("About screenpipe"), None)?)
@@ -1207,11 +1250,14 @@ async fn main() {
                             .build(app)?)
                         .separator();
                 }
+                if !app_ui_hidden {
+                    app_submenu_builder = app_submenu_builder
+                        .item(&MenuItemBuilder::with_id("settings", "Settings...")
+                            .accelerator("CmdOrCtrl+,")
+                            .build(app)?)
+                        .separator();
+                }
                 let app_submenu = app_submenu_builder
-                    .item(&MenuItemBuilder::with_id("settings", "Settings...")
-                        .accelerator("CmdOrCtrl+,")
-                        .build(app)?)
-                    .separator()
                     .item(&PredefinedMenuItem::quit(app, Some("Quit screenpipe"))?)
                     .build()?;
 
@@ -1532,8 +1578,13 @@ async fn main() {
                 });
             }
 
-            // Show onboarding window if not completed
-            if !onboarding_store.is_completed {
+            let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
+
+            // Show onboarding/home unless this device is deployed as a managed
+            // background agent. Permission recovery is handled separately below.
+            if app_ui_hidden {
+                info!("enterprise: hidden UI mode active, skipping startup app windows");
+            } else if !onboarding_store.is_completed {
                 let _ = ShowRewindWindow::Onboarding.show(&app.handle());
             } else {
                 let _ = ShowRewindWindow::Home { page: None }.show(&app.handle());
@@ -1548,7 +1599,7 @@ async fn main() {
             // macOS-only: on Windows/Linux the non-macOS chat builder doesn't
             // set .visible(false), causing a visible chat window on startup.
             #[cfg(target_os = "macos")]
-            if onboarding_store.is_completed {
+            if onboarding_store.is_completed && !app_ui_hidden {
                 let app_handle_chat = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Wait for main window to finish setup
@@ -1573,7 +1624,7 @@ async fn main() {
 
             // Show shortcut reminder overlay on app startup if enabled AND onboarding is completed
             // Don't show reminder during first-time onboarding to reduce overwhelm
-            if store.show_shortcut_overlay && onboarding_store.is_completed {
+            if store.show_shortcut_overlay && onboarding_store.is_completed && !app_ui_hidden {
                 let shortcut = store.show_screenpipe_shortcut.clone();
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -1597,7 +1648,7 @@ async fn main() {
             // Uses retry loop because CGPreflightScreenCaptureAccess can return false
             // transiently on startup before TCC fully initializes.
             #[cfg(target_os = "macos")]
-            if onboarding_store.is_completed {
+            if onboarding_store.is_completed || app_ui_hidden {
                 let mut screen_ok = false;
                 let mut mic_ok = false;
                 for attempt in 0..3 {
@@ -1646,6 +1697,7 @@ async fn main() {
                 let server_arc = recording_state.server.clone();
                 let capture_arc = recording_state.capture.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
+                let cloud_token_arc = recording_state.cloud_token.clone();
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
@@ -1735,6 +1787,17 @@ async fn main() {
                             // boot the server + HTTP API + DB without TCC.
                             if !disable_vision && !permissions_check.screen_recording.permitted() {
                                 warn!("Screen recording permission not granted: {:?}. Server will not start.", permissions_check.screen_recording);
+                                // Flip the recording state to a terminal Error
+                                // value so the tray stops showing "Starting…"
+                                // forever. Without this the user sees a
+                                // perpetual spinner with no signal that
+                                // anything is wrong; clearing only `is_starting`
+                                // leaves RECORDING_INFO at its default Starting
+                                // value and the health poll has no
+                                // ever_connected signal to recover from.
+                                crate::health::set_recording_status(
+                                    crate::health::RecordingStatus::Error,
+                                );
                                 is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                                 return;
                             }
@@ -1769,6 +1832,7 @@ async fn main() {
                                 &config,
                                 on_pipe_output,
                                 Some(owned_browser),
+                                cloud_token_arc.clone(),
                             )
                             .await
                             {
@@ -1906,7 +1970,7 @@ async fn main() {
                             let port = core.port;
                             let key = core.local_api_key.clone();
                             drop(guard);
-                            crate::permission_events::start(app_handle_clone.clone(), port, key);
+                            crate::engine_events::start(app_handle_clone.clone(), port, key);
                             return;
                         }
                     }
@@ -1916,6 +1980,7 @@ async fn main() {
 
             crate::monitor_events::start(app_handle.clone());
             crate::meeting_live_notes::start(app_handle.clone());
+            crate::meeting_stall_notifications::start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);
@@ -1928,12 +1993,16 @@ async fn main() {
             // instance), apply_shortcuts early-returns and skips the rest. Fix this to:
             // 1. Collect per-shortcut failures instead of aborting on the first one
             // 2. Emit a user-visible notification listing the conflicting shortcuts
-            let app_handle_clone = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = initialize_global_shortcuts(&app_handle_clone).await {
-                    warn!("Failed to initialize global shortcuts: {}", e);
-                }
-            });
+            if app_ui_hidden {
+                info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+            } else {
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = initialize_global_shortcuts(&app_handle_clone).await {
+                        warn!("Failed to initialize global shortcuts: {}", e);
+                    }
+                });
+            }
 
             // Auto-start suggestions scheduler (always on)
             let suggestions_state = app_handle.state::<suggestions::SuggestionsState>();
@@ -1992,6 +2061,14 @@ async fn main() {
                 ics_calendar::start_ics_calendar_poller(ics_app_handle).await;
             });
 
+            // Start Google Calendar publisher (polls /connections/google-calendar/events
+            // every 60s and pushes into the calendar_events bus). Required for the
+            // 2-3 min prewarm toast to work for users on gmail/gcal.
+            let gcal_app_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                google_calendar::start_google_calendar_publisher(gcal_app_handle).await;
+            });
+
             // Enterprise telemetry sync (no-op stub on consumer builds).
             // Runs forever in background; only takes effect on enterprise-
             // telemetry builds with SCREENPIPE_ENTERPRISE_LICENSE_KEY env set.
@@ -2036,8 +2113,10 @@ async fn main() {
     // Setup dock right-click menu (fallback for when tray is behind the notch)
     #[cfg(target_os = "macos")]
     {
-        let app_handle_dock = app.app_handle().clone();
-        dock_menu::setup_dock_menu(app_handle_dock);
+        if !crate::enterprise_policy::is_app_ui_hidden() {
+            let app_handle_dock = app.app_handle().clone();
+            dock_menu::setup_dock_menu(app_handle_dock);
+        }
     }
 
     app.run(|app_handle, event| {
@@ -2153,6 +2232,9 @@ async fn main() {
                 tauri::RunEvent::Reopen { .. } => {
                     // Defer off the event stack so run handler stays panic-free.
                     // Open the settings/app window (not the timeline overlay).
+                    if crate::enterprise_policy::is_app_ui_hidden() {
+                        return;
+                    }
                     let app = app_handle.app_handle().clone();
                     let _ = app_handle.app_handle().run_on_main_thread(move || {
                         let _ = ShowRewindWindow::Home { page: None }.show(&app);

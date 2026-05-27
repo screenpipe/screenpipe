@@ -4,17 +4,21 @@
 
 //! Pi coding-agent executor.
 //!
-//! Implements [`AgentExecutor`] for the pi CLI (`@mariozechner/pi-coding-agent`).
+//! Implements [`AgentExecutor`] for the pi CLI (`@earendil-works/pi-coding-agent`).
 //! Pi is installed via bun and executed as a subprocess in "print" mode (`pi -p`).
 
 use super::{AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
+use arc_swap::ArcSwap;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.60.0";
-pub const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
+const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
+const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
+const PI_NAMESPACE_DIR: &str = "@earendil-works";
+pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
 /// Fetch the model catalog from the Cloudflare Worker gateway and convert
 /// it into the format Pi's `models.json` expects.
@@ -72,25 +76,11 @@ async fn fetch_models_from_gateway(
                 .unwrap_or("standard");
             let reasoning = intelligence == "highest" || intelligence == "high";
 
-            // Determine input modalities from best_for/tags
-            let best_for = m.get("best_for").and_then(|v| v.as_array());
-            let has_vision = best_for
-                .map(|arr| {
-                    arr.iter()
-                        .any(|v| v.as_str().is_some_and(|s| s.contains("vision")))
-                })
-                .unwrap_or(false);
-            let input = if has_vision {
-                json!(["text", "image"])
-            } else {
-                json!(["text"])
-            };
-
             json!({
                 "id": id,
                 "name": name,
                 "reasoning": reasoning,
-                "input": input,
+                "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": 32000,
@@ -113,22 +103,66 @@ fn fallback_cloud_models() -> serde_json::Value {
 /// Pi agent executor.
 pub struct PiExecutor {
     /// Screenpipe cloud token (for LLM calls via screenpipe proxy).
-    pub user_token: Option<String>,
-    /// Screenpipe API base URL (default: `https://api.screenpi.pe/v1`).
+    ///
+    /// Wrapped in `ArcSwap` so the desktop app can refresh it at
+    /// runtime via the `set_cloud_token` Tauri command — without this the
+    /// token captured at engine boot would be permanent for the lifetime of
+    /// the process. Users who sign in AFTER the engine started would stay on
+    /// the gateway's anonymous tier (allowed_models = haiku/gemini only)
+    /// until they fully quit and restart, because logout/login from the
+    /// webview doesn't restart the screenpipe sidecar.
+    pub user_token: Arc<ArcSwap<Option<String>>>,
+    /// Screenpipe API base URL (default: `https://api.screenpipe.com/v1`).
     pub api_url: String,
     /// Bearer token for the *local* screenpipe-server API (localhost:3030).
-    /// Exposed to the Pi subprocess as `SCREENPIPE_API_AUTH_KEY` so bash tool
-    /// calls against the local server can authenticate. None = auth disabled.
+    /// Exposed to the Pi subprocess as `SCREENPIPE_LOCAL_API_KEY` so bash/TS
+    /// pipe code can authenticate against the local server. `SCREENPIPE_API_AUTH_KEY`
+    /// is also exported as a deprecated alias (one release) for old pipe.md
+    /// files on disk. None = auth disabled.
     pub api_auth_key: Option<String>,
 }
 
 impl PiExecutor {
     pub fn new(user_token: Option<String>) -> Self {
         Self {
+            user_token: Arc::new(ArcSwap::new(Arc::new(user_token))),
+            api_url: SCREENPIPE_API_URL.to_string(),
+            api_auth_key: None,
+        }
+    }
+
+    /// Construct a PiExecutor that shares its cloud-token storage with an
+    /// external `Arc<ArcSwap>` — typically the same Arc held by the server's
+    /// `AppState.cloud_token`. A single update via `set_user_token` (or a
+    /// store through the shared Arc) is then visible to both the cloud
+    /// proxy and pi-agent on the next pipe run.
+    pub fn with_shared_user_token(user_token: Arc<ArcSwap<Option<String>>>) -> Self {
+        Self {
             user_token,
             api_url: SCREENPIPE_API_URL.to_string(),
             api_auth_key: None,
         }
+    }
+
+    /// Read the current cloud token. Returns an owned `Option<String>`.
+    pub fn current_user_token(&self) -> Option<String> {
+        let token = self.user_token.load();
+        (**token).clone().filter(|s| !s.is_empty())
+    }
+
+    /// Push a new cloud token. Called by the desktop app on login/logout so
+    /// the next pipe run picks up the fresh token instead of using whatever
+    /// was present at engine boot.
+    pub fn set_user_token(&self, token: Option<String>) {
+        self.user_token
+            .store(Arc::new(token.filter(|s| !s.is_empty())));
+    }
+
+    /// Expose the underlying `Arc` so it can be shared with other components
+    /// (the cloud_proxy.rs reader, Tauri-managed state) — write through any
+    /// of them is observed by all.
+    pub fn user_token_arc(&self) -> Arc<ArcSwap<Option<String>>> {
+        self.user_token.clone()
     }
 
     /// Attach the local server's api_auth_key so Pi's bash tool can include
@@ -143,7 +177,7 @@ impl PiExecutor {
     /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
     /// confidential-enclave block. Default (no marker) = enabled, so
     /// fresh installs ship the capability documented and Pi knows to
-    /// call `api.screenpi.pe` with `model: "gemma4-e4b"` for audio /
+    /// call `api.screenpipe.com` with `model: "gemma4-e4b"` for audio /
     /// video / image analysis.
     ///
     /// Gating happens at install time (here) rather than by mutating
@@ -179,8 +213,112 @@ impl PiExecutor {
         s
     }
 
+    /// Install or wipe the `screenpipe-team` enterprise-admin skill in
+    /// `project_dir/.pi/skills/screenpipe-team/`.
+    ///
+    /// This skill teaches pi how to query org-wide telemetry (devices,
+    /// search, records) via `https://screenpi.pe/api/enterprise/v1/*`. It
+    /// MUST only be present when the user is an enterprise admin with an
+    /// active license, because exposing the prompts to non-admins is
+    /// misleading (every call would 403) and dropping it onto a personal
+    /// build leaks our enterprise affordances.
+    ///
+    /// Source of truth: `~/.screenpipe/enterprise.json`. The Tauri host
+    /// keeps that file populated with `{is_admin, license_active,
+    /// team_api_token, ...}` based on the user's current license + role.
+    /// We re-check on every pi-agent boot, so role downgrades + license
+    /// expirations wipe the skill automatically.
+    pub fn ensure_screenpipe_team_skill(project_dir: &Path) -> Result<()> {
+        let skill_dir = project_dir
+            .join(".pi")
+            .join("skills")
+            .join("screenpipe-team");
+        let skill_path = skill_dir.join("SKILL.md");
+
+        let should_install = Self::is_enterprise_admin();
+
+        if should_install {
+            std::fs::create_dir_all(&skill_dir)?;
+            std::fs::write(
+                &skill_path,
+                include_str!("../../assets/skills/screenpipe-team/SKILL.md"),
+            )?;
+            debug!("screenpipe-team skill installed at {:?}", skill_path);
+        } else if skill_dir.exists() {
+            // Wipe the whole dir — defense against partial state if a user
+            // hand-edited or we ever ship sub-files in the future.
+            std::fs::remove_dir_all(&skill_dir)?;
+            info!(
+                "screenpipe-team skill removed (no longer an enterprise admin or license inactive)"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// True when `~/.screenpipe/enterprise.json` declares this user as an
+    /// active admin AND the user is signed into screenpipe cloud (the
+    /// Clerk JWT at `~/.screenpipe/auth.json` is what authenticates the
+    /// skill's HTTP calls to `screenpi.pe/api/enterprise/v1`).
+    ///
+    /// Conservative: any I/O or parse error means "no" so we fail closed —
+    /// we'd rather under-install the skill than show team affordances to
+    /// someone who shouldn't see them. Even if the skill DID get installed
+    /// to a non-admin, the server-side `authorizeApiRequest` re-checks
+    /// admin status on every call and returns 403, so this client-side
+    /// check is defense-in-depth, not the security boundary.
+    fn is_enterprise_admin() -> bool {
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return false,
+        };
+        let ent_path = home.join(".screenpipe").join("enterprise.json");
+        let raw = match std::fs::read_to_string(&ent_path) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let is_admin = parsed
+            .get("is_admin")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // license_active defaults to true if the field is absent so older
+        // enterprise.json files don't lose skill access on upgrade. The
+        // website-side claim flow writes `license_active: false` when a
+        // license lapses.
+        let license_active = parsed
+            .get("license_active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let license_key_present = parsed
+            .get("license_key")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
+        // The skill authenticates v1/* calls with a dedicated admin API
+        // token (sk_ent_…) the admin mints once at
+        // screenpi.pe/enterprise?tab=tokens and pastes into Settings →
+        // Enterprise → Admin API token. Stored on disk under
+        // `team_api_token`. This is intentionally separate from the
+        // license_key: any employee has the license_key (deployed by
+        // IT) but only admins should be able to query teammates'
+        // telemetry, so a per-admin revocable token gates the skill.
+        let team_token_present = parsed
+            .get("team_api_token")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
+        is_admin && license_active && license_key_present && team_token_present
+    }
+
     /// Ensure screenpipe skills exist in `project_dir/.pi/skills/`.
     pub fn ensure_screenpipe_skill(project_dir: &Path) -> Result<()> {
+        // Always-on baseline skills (every pi-agent session needs these).
         let api_skill = Self::render_screenpipe_api_skill();
         let skills: &[(&str, &str)] = &[
             ("screenpipe-api", api_skill.as_str()),
@@ -220,6 +358,10 @@ impl PiExecutor {
             std::fs::write(&skill_path, content)?;
             debug!("{} skill installed at {:?}", name, skill_path);
         }
+
+        // Conditional: enterprise admins get the team skill, others get it
+        // wiped if a stale copy exists (e.g. after a role downgrade).
+        Self::ensure_screenpipe_team_skill(project_dir)?;
 
         Ok(())
     }
@@ -289,6 +431,12 @@ impl PiExecutor {
             }
         }
 
+        // Enterprise-admin team skill is orthogonal to pipe permissions —
+        // it gates on the user's license role, not on what the pipe is
+        // allowed to do. Run it after the permission-filtered baseline so
+        // it correctly mirrors the user's current admin/license state.
+        Self::ensure_screenpipe_team_skill(project_dir)?;
+
         Ok(())
     }
 
@@ -328,6 +476,21 @@ impl PiExecutor {
         let ext_path = ext_dir.join("context-pruning.ts");
         std::fs::write(&ext_path, ext_content)?;
         debug!("context-pruning extension installed at {:?}", ext_path);
+        Ok(())
+    }
+
+    /// Install the MCP bridge extension. Registers two proxy tools
+    /// (`mcp_list_tools`, `mcp_call`) that the model uses to talk to
+    /// user-registered MCP servers via the local `/mcp-servers/*` API.
+    /// Always installed — does nothing harmful when zero servers are
+    /// registered (the tools return a helpful "none registered" message).
+    pub fn ensure_mcp_bridge_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/mcp-bridge.ts");
+        let ext_path = ext_dir.join("mcp-bridge.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        debug!("mcp-bridge extension installed at {:?}", ext_path);
         Ok(())
     }
 
@@ -675,7 +838,8 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
+        let cloud_token = self.current_user_token();
+        if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
@@ -700,7 +864,7 @@ impl PiExecutor {
                         cmd.env("GOOGLE_API_KEY", key);
                     }
                     // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
+                    "screenpipe" if cloud_token.is_none() => {
                         cmd.env("SCREENPIPE_API_KEY", key);
                     }
                     _ => {}
@@ -708,8 +872,14 @@ impl PiExecutor {
             }
         }
 
+        // Canonical name: SCREENPIPE_LOCAL_API_KEY. The AUTH_KEY alias is
+        // kept ONE release as a deprecated fallback for user-installed
+        // pipe.md files that hardcoded the old name (e.g. an older
+        // meeting-summary install on disk that install_builtin_pipes won't
+        // overwrite). TODO(remove next release): drop SCREENPIPE_API_AUTH_KEY.
         if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key);
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
@@ -795,7 +965,8 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
+        let cloud_token = self.current_user_token();
+        if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
@@ -818,7 +989,7 @@ impl PiExecutor {
                         cmd.env("GOOGLE_API_KEY", key);
                     }
                     // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
+                    "screenpipe" if cloud_token.is_none() => {
                         cmd.env("SCREENPIPE_API_KEY", key);
                     }
                     _ => {}
@@ -826,8 +997,10 @@ impl PiExecutor {
             }
         }
 
+        // See spawn_pi above — TODO(remove next release): drop the deprecated alias.
         if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key);
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
@@ -964,8 +1137,9 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
-            self.user_token.as_deref(),
+            cloud_token.as_deref(),
             &self.api_url,
             provider,
             Some(model),
@@ -983,6 +1157,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
+        Self::ensure_mcp_bridge_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -1019,8 +1194,13 @@ impl AgentExecutor for PiExecutor {
                 "pi model not found, re-merging managed providers (stderr: {})",
                 output.stderr.trim()
             );
+            // Re-read the cloud token — it may have been refreshed via
+            // `set_user_token` since the run started (e.g. user signed in
+            // mid-pipe). Picking up the fresh value avoids re-running with
+            // the same stale token that triggered the not-found.
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
-                self.user_token.as_deref(),
+                cloud_token.as_deref(),
                 &self.api_url,
                 provider,
                 Some(&resolved_model),
@@ -1061,8 +1241,9 @@ impl AgentExecutor for PiExecutor {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let resolved_model = Self::resolve_model(model, &resolved_provider);
 
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
-            self.user_token.as_deref(),
+            cloud_token.as_deref(),
             &self.api_url,
             provider,
             Some(&resolved_model),
@@ -1074,6 +1255,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
+        Self::ensure_mcp_bridge_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -1108,8 +1290,10 @@ impl AgentExecutor for PiExecutor {
                 "pi model not found, re-merging managed providers (stderr: {})",
                 output.stderr.trim()
             );
+            // Re-read cloud token (see comment in `run` above).
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
-                self.user_token.as_deref(),
+                cloud_token.as_deref(),
                 &self.api_url,
                 provider,
                 Some(&resolved_model),
@@ -1170,7 +1354,7 @@ impl AgentExecutor for PiExecutor {
 
         let mut cmd = std::process::Command::new(&bun);
         cmd.current_dir(&install_dir)
-            .args(["add", PI_PACKAGE, "@anthropic-ai/sdk"]);
+            .args(["add", PI_PACKAGE, PI_AI_PACKAGE, "@anthropic-ai/sdk"]);
 
         #[cfg(windows)]
         {
@@ -1194,8 +1378,8 @@ impl AgentExecutor for PiExecutor {
         "pi"
     }
 
-    fn user_token(&self) -> Option<&str> {
-        self.user_token.as_deref()
+    fn user_token(&self) -> Option<String> {
+        self.current_user_token()
     }
 }
 
@@ -1252,7 +1436,7 @@ fn is_local_pi_version_current() -> bool {
     };
     let pkg_json = dir
         .join("node_modules")
-        .join("@mariozechner")
+        .join(PI_NAMESPACE_DIR)
         .join("pi-coding-agent")
         .join("package.json");
     let contents = match std::fs::read_to_string(&pkg_json) {
@@ -1267,7 +1451,7 @@ fn is_local_pi_version_current() -> bool {
         Some(v) => v,
         None => return false,
     };
-    // PI_PACKAGE is "@mariozechner/pi-coding-agent@0.60.0" — extract version after last '@'
+    // PI_PACKAGE is "<scope>/pi-coding-agent@<ver>" — extract version after last '@'
     let expected = PI_PACKAGE.rsplit('@').next().unwrap_or("");
     if installed != expected {
         info!(
@@ -1279,28 +1463,47 @@ fn is_local_pi_version_current() -> bool {
     true
 }
 
-/// Seed the pi-agent package.json with overrides to fix dependency resolution.
+/// Seed the pi-agent package.json with overrides + strip legacy deps.
 /// `hosted-git-info` requires `lru-cache@^10`, but bun on Windows can hoist
-/// an ESM-only lru-cache@7.x that breaks CJS `require()`.
+/// an ESM-only lru-cache@7.x that breaks CJS `require()`. Also drops any
+/// stale `@mariozechner/*` keys carried over from before the upstream
+/// namespace rename (issue #3527).
 fn seed_pi_package_json(install_dir: &Path) {
     let pkg_path = install_dir.join("package.json");
+    let expected_overrides = json!({
+        "hosted-git-info": {
+            "lru-cache": "^10.0.0"
+        }
+    });
     if pkg_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
-            if !contents.contains("overrides") {
-                if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
-                    if let Some(obj) = pkg.as_object_mut() {
-                        obj.insert(
-                            "overrides".to_string(),
-                            json!({
-                                "hosted-git-info": {
-                                    "lru-cache": "^10.0.0"
-                                }
-                            }),
-                        );
+            if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
+                let mut changed = false;
+                if let Some(obj) = pkg.as_object_mut() {
+                    if obj.get("overrides") != Some(&expected_overrides) {
+                        obj.insert("overrides".to_string(), expected_overrides.clone());
+                        changed = true;
                     }
+                    if let Some(deps_obj) =
+                        obj.get_mut("dependencies").and_then(|d| d.as_object_mut())
+                    {
+                        let legacy: Vec<String> = deps_obj
+                            .keys()
+                            .filter(|k| k.starts_with("@mariozechner/"))
+                            .cloned()
+                            .collect();
+                        for k in &legacy {
+                            deps_obj.remove(k);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
                     if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
                         let _ = std::fs::write(&pkg_path, new_contents);
-                        info!("Added lru-cache overrides to existing pi-agent package.json");
+                        let _ = std::fs::remove_file(install_dir.join("bun.lock"));
+                        let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
+                        info!("Patched pi-agent package.json (overrides + legacy dep cleanup)");
                     }
                 }
             }
@@ -1328,7 +1531,7 @@ fn find_local_pi_entrypoint() -> Option<String> {
     let dir = pi_local_install_dir()?;
     let cli_js = dir
         .join("node_modules")
-        .join("@mariozechner")
+        .join(PI_NAMESPACE_DIR)
         .join("pi-coding-agent")
         .join("dist")
         .join("cli.js");
@@ -1976,5 +2179,61 @@ mod tests {
         let models = ollama.get("models").unwrap().as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].get("id").unwrap().as_str().unwrap(), "qwen3:8b");
+    }
+
+    /// Regression: the engine used to capture the cloud user token once at
+    /// boot via `PiExecutor::new(user_token)` and never refresh it. Users
+    /// who signed in AFTER the sidecar started stayed on tier=anonymous
+    /// until they fully quit + relaunched. The fix is `set_user_token` +
+    /// `with_shared_user_token` — verify both work end-to-end.
+    #[tokio::test]
+    async fn set_user_token_updates_subsequent_reads() {
+        let exec = PiExecutor::new(None);
+        assert_eq!(exec.current_user_token(), None);
+
+        exec.set_user_token(Some("token-v1".to_string()));
+        assert_eq!(exec.current_user_token(), Some("token-v1".to_string()));
+
+        exec.set_user_token(Some("token-v2".to_string()));
+        assert_eq!(exec.current_user_token(), Some("token-v2".to_string()));
+
+        // Empty strings normalize to None so downstream `is_some()` checks
+        // can't be tricked into sending an empty Bearer token.
+        exec.set_user_token(Some("".to_string()));
+        assert_eq!(exec.current_user_token(), None);
+
+        exec.set_user_token(None);
+        assert_eq!(exec.current_user_token(), None);
+    }
+
+    /// Confirms the design promise: a single shared `ArcSwap` written
+    /// from one place is observed by every PiExecutor that was constructed
+    /// with `with_shared_user_token` against that same Arc. This is what
+    /// lets the Tauri `set_cloud_token` command update the running
+    /// pi-agent's apiKey AND the cloud_proxy.rs forwarder in one write.
+    #[tokio::test]
+    async fn shared_arc_propagates_token_writes_across_executors() {
+        let shared = Arc::new(ArcSwap::new(Arc::new(None::<String>)));
+        let exec_a = PiExecutor::with_shared_user_token(shared.clone());
+        let exec_b = PiExecutor::with_shared_user_token(shared.clone());
+
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
+
+        // Write via executor A — both see it.
+        exec_a.set_user_token(Some("fresh-jwt".to_string()));
+        assert_eq!(exec_a.current_user_token(), Some("fresh-jwt".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("fresh-jwt".to_string()));
+
+        // Write directly through the Arc (simulates the Tauri command
+        // path which holds only the Arc, not the executor) — both see it.
+        shared.store(Arc::new(Some("from-tauri".to_string())));
+        assert_eq!(exec_a.current_user_token(), Some("from-tauri".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("from-tauri".to_string()));
+
+        // Sign-out path.
+        exec_b.set_user_token(None);
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
     }
 }

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Screenpipe Browser Bridge",
   "description": "Connects your browser to Screenpipe for AI-powered web automation and data sync.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "background": {
     "service_worker": "worker.js",
     "type": "module"
@@ -14,7 +14,8 @@
     "tabs",
     "alarms",
     "storage",
-    "notifications"
+    "notifications",
+    "cookies"
   ],
   "host_permissions": [
     "<all_urls>"

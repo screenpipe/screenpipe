@@ -19,7 +19,6 @@ import {
   Mic2,
   Play,
   RefreshCw,
-  Settings2,
   Sparkles,
   Square,
   Trash2,
@@ -73,14 +72,7 @@ import { Receipts } from "./receipts";
 import { ReplayStrip } from "./replay-strip";
 import { NoteEditor } from "./note-editor";
 import { TranscriptPanel } from "./transcript-panel";
-import { SummaryPipePicker } from "./summary-pipe-picker";
 import { useSettings, type Settings } from "@/lib/hooks/use-settings";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -154,7 +146,6 @@ export function NoteView({
     initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
   );
   const [transcriptRefreshKey, setTranscriptRefreshKey] = useState(0);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioStatusDevices, setAudioStatusDevices] = useState<
     AudioStatusDevice[]
@@ -288,6 +279,41 @@ export function NoteView({
       cancelled = true;
     };
   }, [meeting.id, isLive, meeting.meeting_start, meeting.meeting_end]);
+
+  // Retry the activity-summary fetch with backoff when it came back empty.
+  // Without this, a meeting opened while the daemon was offline (or before
+  // any frames landed in the meeting's time range) leaves the replay strip
+  // hidden forever even after recording resumes. Only runs while not live —
+  // the main effect above already polls every 30s during live recording.
+  // Only setMeetingCtx on success so a failed retry doesn't re-trigger the
+  // effect and reset the attempt counter into an infinite loop.
+  useEffect(() => {
+    if (isLive) return;
+    if (!meetingCtx) return;
+    if (meetingCtx.activity) return;
+    let cancelled = false;
+    let attempt = 0;
+    const maxAttempts = 5;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      attempt += 1;
+      const ctx = await fetchMeetingContext(meeting);
+      if (cancelled) return;
+      if (ctx.activity) {
+        setMeetingCtx(ctx);
+        return;
+      }
+      if (attempt < maxAttempts) {
+        const delay = Math.min(2000 * 2 ** attempt, 30_000);
+        timer = setTimeout(tick, delay);
+      }
+    };
+    timer = setTimeout(tick, 2000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [isLive, meetingCtx, meeting]);
 
   // Accept upstream updates only for fields the user hasn't touched locally
   useEffect(() => {
@@ -578,7 +604,10 @@ export function NoteView({
     const link = calendarEventMeetingLink(event);
     if (!link || dismissedJoinUrl === link.url) return null;
     if (hasJoinedMeetingLink(link, meeting, meetingCtx)) return null;
-    return link;
+    const meetingTitle = meeting.title?.trim() ?? "";
+    const eventTitle = event?.title?.trim() ?? "";
+    const mapped = !!meetingTitle && !!eventTitle && meetingTitle === eventTitle;
+    return { link, mapped };
   }, [
     calendarEvents,
     dismissedJoinUrl,
@@ -679,30 +708,6 @@ export function NoteView({
                     <RefreshCw className="h-3.5 w-3.5" />
                   )}
                 </Button>
-                <TooltipProvider delayDuration={300}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setPickerOpen(true)}
-                        className="h-8 w-8 rounded-none p-0"
-                        aria-label="choose summary pipe"
-                        title="choose summary pipe"
-                      >
-                        <Settings2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      <p className="text-xs">
-                        pipe:{" "}
-                        <code className="text-[10px]">
-                          {settings.meetingSummaryPipeSlug || "meeting-summary"}
-                        </code>
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
               </>
             )}
           </div>
@@ -769,11 +774,6 @@ export function NoteView({
       </main>
 
       <footer className="sticky bottom-0 z-30 border-t border-border bg-background">
-        {isLive && (
-          <div className="border-b border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
-            Always get consent when transcribing others.
-          </div>
-        )}
         <div className="mx-auto max-w-3xl px-5 py-3 sm:px-0">
           {!isLive && inactivityPrompt && (
             <InactivityResumeBanner
@@ -784,9 +784,10 @@ export function NoteView({
           )}
           {isLive && joinSuggestion && (
             <JoinMeetingSuggestion
-              link={joinSuggestion}
-              onJoin={() => void handleJoinMeeting(joinSuggestion)}
-              onDismiss={() => setDismissedJoinUrl(joinSuggestion.url)}
+              link={joinSuggestion.link}
+              mapped={joinSuggestion.mapped}
+              onJoin={() => void handleJoinMeeting(joinSuggestion.link)}
+              onDismiss={() => setDismissedJoinUrl(joinSuggestion.link.url)}
             />
           )}
           <TranscriptPanel
@@ -917,9 +918,12 @@ export function NoteView({
             </div>
           </div>
         </div>
+        {isLive && (
+          <div className="px-4 pb-1 text-center text-[10px] leading-none text-muted-foreground/60">
+            Always get consent when transcribing others.
+          </div>
+        )}
       </footer>
-
-      <SummaryPipePicker open={pickerOpen} onOpenChange={setPickerOpen} />
     </div>
   );
 }
@@ -1094,13 +1098,16 @@ function AudioHealthButton({
 
 function JoinMeetingSuggestion({
   link,
+  mapped,
   onJoin,
   onDismiss,
 }: {
   link: CalendarMeetingLink;
+  mapped: boolean;
   onJoin: () => void;
   onDismiss: () => void;
 }) {
+  const label = mapped ? link.label : "nearby calendar event — join the call?";
   return (
     <div className="mb-3 flex justify-center">
       <div className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted px-1 py-1 shadow-sm">
@@ -1111,7 +1118,7 @@ function JoinMeetingSuggestion({
           title={link.url}
         >
           <Video className="h-4 w-4 shrink-0" />
-          <span className="truncate">{link.label}</span>
+          <span className="truncate">{label}</span>
         </button>
         <button
           type="button"
@@ -1521,8 +1528,6 @@ function providerLabel(
       return transcriptionEngineLabel(selectedEngine);
     case "deepgram-live":
       return "deepgram live";
-    case "openai-realtime":
-      return "openai realtime";
     case "screenpipe-cloud":
     default:
       return "screenpipe cloud";

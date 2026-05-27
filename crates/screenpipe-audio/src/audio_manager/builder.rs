@@ -11,7 +11,7 @@ use screenpipe_db::DatabaseManager;
 
 use crate::{
     core::{
-        device::{default_input_device, default_output_device},
+        device::{default_input_device, default_output_device, parse_audio_device, DeviceType},
         engine::AudioTranscriptionEngine,
     },
     meeting_detector::MeetingDetector,
@@ -67,6 +67,8 @@ pub struct AudioManagerOptions {
     pub experimental_coreaudio_system_audio: bool,
     /// Experimental: request Windows WASAPI microphone AEC when the endpoint supports it.
     pub windows_input_aec_enabled: bool,
+    /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
+    pub macos_input_vpio_enabled: bool,
     /// Controls when local Whisper transcription runs.
     /// `Realtime` = immediate (default), `Batch` = accumulate longer chunks for quality.
     pub transcription_mode: TranscriptionMode,
@@ -113,6 +115,7 @@ impl Default for AudioManagerOptions {
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
             windows_input_aec_enabled: false,
+            macos_input_vpio_enabled: false,
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,
             meeting_streaming: MeetingStreamingConfig::default(),
@@ -218,6 +221,11 @@ impl AudioManagerBuilder {
         self
     }
 
+    pub fn macos_input_vpio_enabled(mut self, enabled: bool) -> Self {
+        self.options.macos_input_vpio_enabled = enabled;
+        self
+    }
+
     pub fn use_system_default_audio(mut self, use_system_default_audio: bool) -> Self {
         self.options.use_system_default_audio = use_system_default_audio;
         self
@@ -273,6 +281,29 @@ impl AudioManagerBuilder {
                 );
             }
             options.enabled_devices = HashSet::from_iter(devices);
+        }
+
+        if !options.is_disabled && options.use_system_default_audio {
+            let has_output = options.enabled_devices.iter().any(|name| {
+                parse_audio_device(name)
+                    .map(|d| d.device_type == DeviceType::Output)
+                    .unwrap_or(false)
+            });
+            if !has_output {
+                if let Ok(output) = default_output_device().await {
+                    options.enabled_devices.insert(output.to_string());
+                }
+            }
+            let has_input = options.enabled_devices.iter().any(|name| {
+                parse_audio_device(name)
+                    .map(|d| d.device_type == DeviceType::Input)
+                    .unwrap_or(false)
+            });
+            if !has_input {
+                if let Ok(input) = default_input_device() {
+                    options.enabled_devices.insert(input.to_string());
+                }
+            }
         }
 
         Ok(options.clone())

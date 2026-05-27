@@ -64,17 +64,6 @@ import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
 import { ChatPrefillData } from "@/lib/chat-utils";
-import {
-  IntegrationIcon,
-  IntegrationInfo,
-} from "@/components/settings/connections-section";
-import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  TooltipProvider,
-} from "@/components/ui/tooltip";
 // --- Types ---
 
 interface StorePipe {
@@ -237,107 +226,6 @@ function normalizePipe(raw: any): any {
   };
 }
 
-// --- Main Unified Component ---
-
-function ConnectionsStrip() {
-  const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
-  const hardcodedTiles = useHardcodedTiles();
-
-  useEffect(() => {
-    const cacheKey = "connections/list";
-    const cached = apiCache.get<IntegrationInfo[]>(cacheKey);
-    if (cached) {
-      setIntegrations(cached.filter((i) => i.id !== "owned-default"));
-      return;
-    }
-    localFetch("/connections")
-      .then((r) => r.json())
-      .then((data) => {
-        const list: IntegrationInfo[] = data.data || [];
-        apiCache.set(cacheKey, list, 30_000);
-        setIntegrations(list.filter((i) => i.id !== "owned-default"));
-      })
-      .catch(() => {});
-  }, []);
-
-  // Merge: for tiles in both backend and hardcoded, use backend's connected state
-  // but hardcoded's name/icon (which are OS-specific, e.g. windows-calendar vs apple-calendar).
-  // For tiles only in hardcoded (cursor, claude, etc.), append them directly.
-  const hardcodedMap = new Map(hardcodedTiles.map((h) => [h.id, h]));
-  const mergedBackend: IntegrationInfo[] = integrations.map((i) => {
-    const h = hardcodedMap.get(i.id);
-    if (!h) return i;
-    // Use OS-correct name/icon from hardcoded; AND the connected states so an
-    // explicit user disconnect (e.g. calendarUserDisconnected in store) overrides
-    // the backend's "OS calendar is accessible" true.
-    return { ...i, name: h.name, icon: h.icon, connected: i.connected && h.connected };
-  });
-  const backendIds = new Set(integrations.map((i) => i.id));
-  const extraTiles: IntegrationInfo[] = hardcodedTiles
-    .filter((h) => !backendIds.has(h.id))
-    .map((h) => ({ ...h, fields: [], is_oauth: false, category: "", description: "" }));
-  const allIntegrations = [...mergedBackend, ...extraTiles];
-
-  if (allIntegrations.length === 0) return null;
-
-  const connected = allIntegrations.filter((i) => i.connected);
-  const disconnected = allIntegrations.filter((i) => !i.connected);
-  const sorted = [...connected, ...disconnected];
-
-  const openConnections = () => {
-    window.dispatchEvent(
-      new CustomEvent("open-settings", {
-        detail: { section: "connections" },
-      })
-    );
-  };
-
-  return (
-    <TooltipProvider delayDuration={200}>
-      <div className="flex items-center gap-2 mb-6">
-        <div className="flex-1 overflow-x-auto scrollbar-hide">
-          <div className="flex items-center gap-1.5 py-1">
-            {sorted.map((integration) => (
-              <Tooltip key={integration.id}>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => {
-                      sessionStorage.setItem("openConnection", integration.id);
-                      openConnections();
-                    }}
-                    className={cn(
-                      "relative flex items-center justify-center w-8 h-8 shrink-0 border rounded transition-colors",
-                      integration.connected
-                        ? "border-foreground/20 hover:border-foreground/40"
-                        : "border-dashed border-muted-foreground/20 opacity-40 hover:opacity-70"
-                    )}
-                  >
-                    <IntegrationIcon icon={integration.icon} />
-                    {integration.connected && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-foreground" />
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs">
-                  {integration.name}
-                  {integration.connected ? " · connected" : " · not set up"}
-                </TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-        <button
-          onClick={openConnections}
-          className="shrink-0 flex items-center gap-1.5 px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-          title="manage connections"
-        >
-          <Plug className="w-3 h-3" />
-        </button>
-      </div>
-    </TooltipProvider>
-  );
-}
-
 export function PipeStoreView() {
   // Track installed pipe count to auto-switch to Discover for new users
   const [installedCount, setInstalledCount] = useState<number | null>(null);
@@ -390,9 +278,6 @@ export function PipeStoreView() {
 
   return (
     <div className="space-y-4">
-      {/* Connections strip */}
-      <ConnectionsStrip />
-
       {/* Tab bar */}
       <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
         {tabs.map(({ key, label }) => (

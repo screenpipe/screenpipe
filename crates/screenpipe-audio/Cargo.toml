@@ -17,12 +17,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 oasgen = { workspace = true }
 
-# Cross-platform audio capture.
-# Use the divanshu-go Windows AEC fork so Windows microphone AEC can be
-# wired through screenpipe's capture path. Cargo.lock pins the resolved
-# commit; update the cpal guard in .github/workflows/ci.yml whenever this
-# dependency is intentionally advanced.
-cpal = { git = "https://github.com/divanshu-go/cpal.git", branch = "windows-aec" }
+# Cross-platform audio capture. Tracks screenpipe/cpal main, which carries
+# the Windows WASAPI AEC and macOS VoiceProcessingIO patches.
+cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
 
 # Wav encoding
 hound = "3.5"
@@ -89,7 +86,6 @@ audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", branch = "ma
 mlx-rs = { version = "0.25", optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
-base64 = "0.22"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 url = "2"
 
@@ -112,10 +108,9 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-ort = { version = "=2.0.0-rc.10", features = [
-  "download-binaries",
-  "copy-dylibs",
-] }
+# Avoid build-time network downloads (ort-sys download-binaries) for Windows x86_64.
+# When ONNX Runtime is available at runtime, `ort` can load it dynamically.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"
 

@@ -20,11 +20,12 @@
 //! wrapper is in scope for every tool invocation the agent issues. No
 //! model effort, no prompt changes, no new system-prompt lines.
 //!
-//! The wrapper falls back to `$SCREENPIPE_API_AUTH_KEY` as a second name
-//! because the app spawn path exports `SCREENPIPE_LOCAL_API_KEY` but the
-//! core pipe-executor spawn path historically exports `SCREENPIPE_API_AUTH_KEY`
-//! for the same value. Accepting both here means we don't have to migrate
-//! the env-var name in a single PR.
+//! Reads `$SCREENPIPE_LOCAL_API_KEY` only — every spawn path (Tauri chat,
+//! core pipe-executor) is now contractually required to export it.
+//! `SCREENPIPE_API_AUTH_KEY` was a historical second name from when the two
+//! spawn paths diverged; spawn paths still export it as a deprecated alias
+//! for one release so user-installed pipe.md files that hardcode the old
+//! name keep working, but new shim code reads the canonical name only.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -59,8 +60,8 @@ pub const WRAPPER_SCRIPT: &str = r#"# screenpipe — auto-injected by pi-agent b
 unset SCREENPIPE_API_KEY
 
 _sp_auth_key() {
-  # accept either name so we don't depend on which spawn path set it
-  printf '%s' "${SCREENPIPE_LOCAL_API_KEY:-${SCREENPIPE_API_AUTH_KEY:-}}"
+  # spawn paths guarantee SCREENPIPE_LOCAL_API_KEY is set (see pi.rs).
+  printf '%s' "${SCREENPIPE_LOCAL_API_KEY:-}"
 }
 
 curl() {
@@ -188,9 +189,15 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_script_contains_both_env_var_names() {
+    fn wrapper_script_reads_canonical_env_var_name() {
         assert!(WRAPPER_SCRIPT.contains("SCREENPIPE_LOCAL_API_KEY"));
-        assert!(WRAPPER_SCRIPT.contains("SCREENPIPE_API_AUTH_KEY"));
+        // The deprecated alias must NOT be referenced here — every spawn
+        // path now guarantees the canonical name is set, and reading both
+        // hides bugs where a new spawn path forgets the canonical export.
+        assert!(
+            !WRAPPER_SCRIPT.contains("SCREENPIPE_API_AUTH_KEY"),
+            "shim must read only the canonical env var name"
+        );
     }
 
     #[test]

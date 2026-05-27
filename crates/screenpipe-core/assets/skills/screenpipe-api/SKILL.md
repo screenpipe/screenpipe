@@ -23,7 +23,23 @@ API responses can be large. Always write curl output to a file first (`curl ... 
 
 ---
 
-## 1. Search — `GET /search`
+## 1. Activity Summary — `GET /activity-summary`
+
+Default broad-context call. Bundles apps, windows, key_texts, audio, edited_files, recording health, top memories, deduped screen+audio snippets, and a `data_status` + `query_status` + `guidance` triple.
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/activity-summary?start_time=30m%20ago&end_time=now"
+```
+
+Required: `start_time`, `end_time`. Optional: `app_name`, `q` (filters memories+snippets, drives `query_status`), `include_recording|memories|snippets|guidance=false` (each defaults true — disable to slim), `max_snippets` (8/12), `max_snippet_chars` (500/1200), `max_memories` (5/20).
+
+`data_status` ∈ `ok|empty_but_recording|no_capture_in_range|not_recording`. Check before claiming "no activity". `query_status` ∈ `not_requested|matched|no_query_matches`. `guidance.next_best_query` is a ready-to-show hint when empty. Escalate to `/search` only for verbatim quotes / frame_ids.
+
+---
+
+## 2. Search — `GET /search`
+
+Use when `/activity-summary` says `ok` but you need verbatim quotes, media paths, frame IDs, or a specific content match.
 
 ```bash
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
@@ -45,32 +61,13 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | `focused` | boolean | No | Only focused windows |
 | `max_content_length` | integer | No | Truncate each result's text (middle-truncation) |
 
-### Progressive Disclosure
-
-Don't jump to heavy `/search` calls. Escalate:
-
-| Step | Endpoint | When |
-|------|----------|------|
-| 0 | `GET /memories?q=...` | **Always query first/in parallel** — highest signal, lowest cost |
-| 1 | `GET /activity-summary?start_time=...&end_time=...` | Broad questions ("what was I doing?", "which apps?") |
-| 2 | `GET /search?...` | Need specific content |
-| 3 | `GET /elements?...` or `GET /frames/{id}/context` | UI structure, buttons, links |
-| 4 | `GET /frames/{frame_id}` (PNG) | Visual context needed |
-
-Decision tree:
-- "What was I doing?" → Step 1 only
-- "Summarize my meeting" → Step 2 with `content_type=audio`, NO q param. Add `content_type=all` for screen context.
-- "How long on X?" → Step 1 (`/activity-summary` has `active_minutes`)
-- "Which apps today?" → Step 1 (do NOT use frame counts or SQL)
-- "What button did I click?" → Step 3 (`/elements` with role=AXButton)
-- "Show me what I saw" → Step 2 (find frame_id) → Step 4
-
 ### Critical Rules
 
 1. **ALWAYS include `start_time`** — queries without time bounds WILL timeout
 2. **Use `app_name`** when user mentions a specific app (this is string contains)
 3. **"recent"** = 30 min. **"today"** = since midnight. **"yesterday"** = yesterday's range
-4. If timeout, narrow the time range
+4. If `/search` is empty, fall back to `/activity-summary` and check `data_status` before saying "no data"
+5. If timeout, narrow the time range
 
 ### Response Format
 
@@ -84,22 +81,6 @@ Decision tree:
   "pagination": {"limit": 10, "offset": 0, "total": 42}
 }
 ```
-
----
-
-## 2. Activity Summary — `GET /activity-summary`
-
-```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/activity-summary?start_time=1h%20ago&end_time=now"
-```
-
-Returns a rich overview with:
-- **apps**: usage with `active_minutes`, first/last seen
-- **windows**: every distinct window/tab with title, `browser_url`, and time spent — this is the most valuable field, it tells you exactly what the user was working on
-- **key_texts**: one representative text snippet per window context (user input fields prioritized over static page text)
-- **audio_summary.top_transcriptions**: actual transcription text with speaker and timestamp (not just counts)
-
-This is usually enough to answer "what was I doing?" without further searches. Only drill into `/search` if you need verbatim quotes or specific content.
 
 ---
 
@@ -328,10 +309,11 @@ real browser). Password fields are stripped from snapshot output.
 
 ```bash
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings?start_time=1d%20ago&end_time=now&limit=10&offset=0"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings?q=alice%40acme.com"
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings/42"
 ```
 
-Returns detected meetings (from calendar, app detection, window titles, UI elements, multi-speaker audio).
+Returns detected meetings (from calendar, app detection, window titles, UI elements, multi-speaker audio). `q` is a case-insensitive substring filter against title, attendees, and notes.
 
 | Field | Type | Description |
 |-------|------|-------------|

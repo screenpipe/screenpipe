@@ -228,12 +228,18 @@ jobs:
           $sigFile = "$($exe.FullName).sig"
           if (Test-Path $sigFile) {
             Remove-Item $sigFile
-            $keyFile = Join-Path $env:RUNNER_TEMP "tauri-key.txt"
-            Set-Content -Path $keyFile -Value $env:TAURI_SIGNING_PRIVATE_KEY -NoNewline
             Push-Location apps/screenpipe-app-tauri
-            # Tauri v2 CLI: --private-key auto-detects path-vs-contents.
-            # The legacy --private-key-path flag was removed in 2.x.
-            bunx tauri signer sign $exe.FullName --private-key $keyFile --password $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            # Tauri v2 CLI reads TAURI_SIGNING_PRIVATE_KEY +
+            # TAURI_SIGNING_PRIVATE_KEY_PASSWORD from env when --private-key
+            # is not passed. We intentionally DO NOT pass --private-key here:
+            # its "path vs contents" auto-detect treats Windows absolute
+            # paths (e.g. D:\...) as base64 because `:` at offset 1 fails
+            # decoding with "Invalid symbol 58, offset 1". Relying on env
+            # vars bypasses that code path entirely. See release v2.4.30
+            # failure (run 24790392363) — same fix already in release-app.yml
+            # but was missed here, surfaced on enterprise run 26301444082.
+            bunx tauri signer sign $exe.FullName
+            if ($LASTEXITCODE -ne 0) { throw "tauri signer sign failed (exit $LASTEXITCODE) - auto-updater would be broken" }
             Pop-Location
             Write-Host "Tauri signature regenerated"
           }
@@ -328,9 +334,18 @@ jobs:
         working-directory: apps/screenpipe-app-tauri
         run: bun install
 
+      - name: Install macOS binary dependencies
+        shell: bash
+        run: |
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/sbin" >> $GITHUB_PATH
+          brew install ffmpeg wget
+
       - name: Run pre_build.js
         env:
           SKIP_SCREENPIPE_SETUP: true
+          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
@@ -405,6 +420,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CI: false
+          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
           MACOSX_DEPLOYMENT_TARGET: "14.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
           CFLAGS: "-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
@@ -511,6 +527,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+
           TARGET="aarch64-apple-darwin"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
@@ -533,30 +551,38 @@ jobs:
 
           # Find installer signing identity (Developer ID Installer)
           INSTALLER_IDENTITY=$(security find-identity -v -p basic "$HOME/Library/Keychains/build.keychain-db" 2>/dev/null | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
-
-          # Create component pkg from .app — installs to /Applications
-          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
-          if [ -n "$INSTALLER_IDENTITY" ]; then
-            echo "Signing .pkg with: $INSTALLER_IDENTITY"
-            pkgbuild \
-              --component "$APP_PATH" \
-              --install-location /Applications \
-              --identifier "screenpi.pe.enterprise" \
-              --version "$VERSION" \
-              --sign "$INSTALLER_IDENTITY" \
-              "$PKG_OUTPUT"
-          else
-            echo "WARNING: No 'Developer ID Installer' cert found, building unsigned .pkg"
-            echo "Apple notarization will fail without it. Add the installer cert to APPLE_CERTIFICATE."
-            pkgbuild \
-              --component "$APP_PATH" \
-              --install-location /Applications \
-              --identifier "screenpi.pe.enterprise" \
-              --version "$VERSION" \
-              "$PKG_OUTPUT"
+          if [ -z "$INSTALLER_IDENTITY" ]; then
+            echo "ERROR: No 'Developer ID Installer' certificate found in the build keychain."
+            echo "macOS .pkg artifacts must be signed with Developer ID Installer before notarization."
+            echo "Add the Developer ID Installer certificate to APPLE_CERTIFICATE; refusing to upload an untrusted .pkg."
+            security find-identity -v -p basic "$HOME/Library/Keychains/build.keychain-db" 2>&1 || true
+            exit 1
           fi
 
+          # Create an unsigned component package first so the package receipt
+          # keeps a stable identifier, then sign the final product archive with
+          # Developer ID Installer.
+          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
+          COMPONENT_PKG="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64-component.pkg"
+
+          echo "Building component .pkg..."
+          pkgbuild \
+            --component "$APP_PATH" \
+            --install-location /Applications \
+            --identifier "screenpi.pe.enterprise" \
+            --version "$VERSION" \
+            "$COMPONENT_PKG"
+
+          echo "Signing product .pkg with: $INSTALLER_IDENTITY"
+          productbuild \
+            --package "$COMPONENT_PKG" \
+            --sign "$INSTALLER_IDENTITY" \
+            --timestamp \
+            "$PKG_OUTPUT"
+          rm -f "$COMPONENT_PKG"
+
           echo "Distribution pkg created: $(basename "$PKG_OUTPUT")"
+          pkgutil --check-signature "$PKG_OUTPUT"
 
           # Notarize the .pkg
           echo "Notarizing .pkg..."
@@ -564,12 +590,12 @@ jobs:
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 15m 2>&1) || true
+            --wait --timeout 15m 2>&1)
           echo "$SUBMIT_OUT"
 
           # Extract submission ID and check result
-          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "id:" | head -1 | awk '{print $2}')
-          if echo "$SUBMIT_OUT" | grep -q "status: Invalid"; then
+          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "id:" | head -1 | awk '{print $2}' || true)
+          if ! echo "$SUBMIT_OUT" | grep -q "status: Accepted"; then
             echo "Notarization FAILED — fetching log for details..."
             if [ -n "$SUBMISSION_ID" ]; then
               xcrun notarytool log "$SUBMISSION_ID" \
@@ -577,13 +603,14 @@ jobs:
                 --password "$APPLE_PASSWORD" \
                 --team-id "$APPLE_TEAM_ID" 2>&1 || true
             fi
-            echo "WARNING: .pkg notarization failed but continuing — DMG is still available"
-            exit 0
+            echo "ERROR: Refusing to upload an unnotarized .pkg."
+            exit 1
           fi
 
           echo "Stapling .pkg..."
           xcrun stapler staple "$PKG_OUTPUT"
           xcrun stapler validate "$PKG_OUTPUT"
+          spctl --assess --type install --verbose "$PKG_OUTPUT"
           echo ".pkg notarized and stapled: $(basename "$PKG_OUTPUT")"
 
       - name: Upload to R2
@@ -605,6 +632,9 @@ jobs:
           done
           for pkg in "${BUNDLE_DIR}"/pkg/*.pkg; do
             [ -f "$pkg" ] && aws s3 cp "$pkg" "${R2_PREFIX}/$(basename "$pkg")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$pkg")"
+          done
+          for updater in "${BUNDLE_DIR}"/macos/*.app.tar.gz "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig; do
+            [ -f "$updater" ] && aws s3 cp "$updater" "${R2_PREFIX}/$(basename "$updater")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$updater")"
           done
           echo "R2 enterprise upload complete for macOS"
 

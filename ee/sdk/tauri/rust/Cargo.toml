@@ -1,0 +1,35 @@
+[package]
+name = "screenpipe-tauri"
+version = "0.4.1"
+edition = "2021"
+description = "Native Tauri v2 plugin for the screenpipe SDK — in-process recorder, no Node bridge"
+license = "LicenseRef-Screenpipe-Enterprise"
+publish = false
+# Tauri's permission system derives the namespace from `links`. We
+# want runtime invocations like `plugin:screenpipe|<cmd>` to match the
+# permission allow-list, so set `links = "screenpipe"` to align the
+# build-time namespace with `PluginBuilder::new("screenpipe")` in
+# `lib.rs`. Not the same as `package.name` (`screenpipe-tauri`) — the
+# crate name keeps the `-tauri` suffix to disambiguate from sibling
+# packages, but the plugin identity is `screenpipe`.
+links = "screenpipe"
+
+[dependencies]
+# The pure-Rust recorder orchestration. Calling it in-process is what
+# lets this plugin avoid spawning a Node helper at runtime.
+screenpipe-recorder = { path = "../../recorder-core" }
+
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", default-features = false }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+
+[build-dependencies]
+# Autogenerates the Tauri v2 permissions schema from the command list
+# in `build.rs`. Without this, every plugin command 404s at runtime
+# with "plugin not found" even though `generate_handler!` wires them.
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dev-dependencies]
+tempfile = "3"

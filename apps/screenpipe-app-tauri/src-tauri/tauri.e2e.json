@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "dangerous-insecure-transport-protocol": true,
+      "endpoints": ["http://127.0.0.1:8765/"]
+    }
+  }
+}

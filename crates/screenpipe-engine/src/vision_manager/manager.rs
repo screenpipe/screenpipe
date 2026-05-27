@@ -16,8 +16,9 @@ use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-use crate::event_driven_capture::{CaptureTrigger, TriggerSender};
+use crate::event_driven_capture::{CaptureTriggerMsg, TriggerSender};
 use crate::focus_aware_controller::FocusAwareController;
+use crate::frame_linker_actor::{linker_channel, spawn_frame_linker, LinkerSender};
 use crate::hot_frame_cache::HotFrameCache;
 use crate::power::PowerProfile;
 
@@ -44,6 +45,19 @@ pub struct VisionManagerConfig {
     /// snapshot max width via `screenpipe_core::video::*`. Values: "low",
     /// "balanced" (default), "high", "max".
     pub video_quality: String,
+
+    /// Mitsukeru fork: overrides for `EventDrivenCaptureConfig`.
+    /// Each field is applied only when `Some(_)`. None = follow active PowerProfile.
+    pub idle_capture_interval_ms: Option<u64>,
+    pub visual_check_interval_ms: Option<u64>,
+    pub visual_change_threshold: Option<f64>,
+    pub min_capture_interval_ms: Option<u64>,
+    /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
+    /// None = engine default (false). PowerProfile does not touch this.
+    pub capture_on_keystroke: Option<bool>,
+    /// Override `EventDrivenCaptureConfig::capture_on_clipboard`.
+    /// None = engine default (false). PowerProfile does not touch this.
+    pub capture_on_clipboard: Option<bool>,
 }
 
 /// Status of the VisionManager
@@ -65,6 +79,14 @@ pub struct VisionManager {
     /// Broadcast sender for capture triggers — shared with UI recorder.
     /// Each monitor subscribes via `trigger_tx.subscribe()`.
     trigger_tx: TriggerSender,
+    /// Sender for the frame-linker actor — shared with UI recorder and
+    /// each event-driven capture loop. The recorder forwards
+    /// `EventPersisted` after batch flush; the capture loop forwards
+    /// `FrameCaptured` after each successful capture; the actor pairs
+    /// them and applies `UPDATE ui_events SET frame_id` writes.
+    linker_tx: LinkerSender,
+    /// Stop flag for the linker actor task.
+    linker_stop: Arc<AtomicBool>,
     /// Hot frame cache — capture pushes frames here for zero-DB timeline reads.
     hot_frame_cache: Option<Arc<HotFrameCache>>,
     /// Power profile receiver — each monitor gets a clone.
@@ -85,7 +107,20 @@ impl VisionManager {
         vision_handle: Handle,
     ) -> Self {
         // Single broadcast channel shared across all monitors + UI recorder.
-        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTrigger>(64);
+        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(
+            crate::event_driven_capture::TRIGGER_CHANNEL_BUFFER,
+        );
+
+        // Frame-linker actor: pairs UI events with the frames they
+        // caused us to capture. Single shared instance across all
+        // monitors and the UI recorder. Lives as long as the
+        // VisionManager.
+        let (linker_tx, linker_rx) = linker_channel();
+        let linker_stop = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = vision_handle.enter();
+            spawn_frame_linker(db.clone(), linker_rx, linker_stop.clone());
+        }
 
         // Focus-aware capture is always on. `new_tracker()` always succeeds —
         // returns a null tracker on platforms without a native impl. Controller
@@ -105,6 +140,8 @@ impl VisionManager {
             status: Arc::new(RwLock::new(VisionManagerStatus::Stopped)),
             recording_tasks: Arc::new(DashMap::new()),
             trigger_tx,
+            linker_tx,
+            linker_stop,
             hot_frame_cache: None,
             power_profile_rx: None,
             focus_controller,
@@ -127,6 +164,14 @@ impl VisionManager {
     /// Pass this to `start_ui_recording()` so UI events trigger captures.
     pub fn trigger_sender(&self) -> TriggerSender {
         self.trigger_tx.clone()
+    }
+
+    /// Get a clone of the frame-linker sender. Pass this to
+    /// `start_ui_recording()` and the event-driven capture loops so
+    /// they can report `EventPersisted` and `FrameCaptured` for
+    /// pairing.
+    pub fn linker_sender(&self) -> LinkerSender {
+        self.linker_tx.clone()
     }
 
     /// Get current status
@@ -318,11 +363,22 @@ impl VisionManager {
             .as_ref()
             .map(|rx| rx.borrow().jpeg_quality.min(baseline_q))
             .unwrap_or(baseline_q);
+        let max_snapshot_width = video_quality_to_max_snapshot_width(&self.config.video_quality);
         let snapshot_writer = Arc::new(SnapshotWriter::new(
             format!("{}/data", output_path),
             initial_jpeg_quality,
-            video_quality_to_max_snapshot_width(&self.config.video_quality),
+            max_snapshot_width,
         ));
+
+        // Cap the macOS SCK capture stream to the same width as the snapshot
+        // writer. The GPU downscales before replayd delivers the framebuffer,
+        // saving WindowServer composite + readback cost without affecting
+        // anything that wasn't going to be downsized in user space anyway.
+        // Text extraction is primarily a11y-tree-driven (unchanged) and OCR
+        // runs only as a fallback; both see the same image they'd see after
+        // the snapshot-writer downscale.
+        #[cfg(target_os = "macos")]
+        screenpipe_screen::monitor::set_sck_capture_max_width(max_snapshot_width);
 
         // Create activity feed for this monitor
         let activity_feed = ActivityFeed::new();
@@ -344,10 +400,30 @@ impl VisionManager {
         // Event-driven capture config — seed jpeg_quality from the user's
         // chosen videoQuality so power-profile updates can use it as the
         // baseline ceiling (`min(profile, baseline)`) at runtime.
-        let capture_config = EventDrivenCaptureConfig {
+        let mut capture_config = EventDrivenCaptureConfig {
             jpeg_quality: baseline_q,
             ..EventDrivenCaptureConfig::default()
         };
+        // Mitsukeru fork: apply per-parameter CLI / settings overrides if any.
+        // These force the value regardless of the active PowerProfile.
+        if let Some(v) = self.config.idle_capture_interval_ms {
+            capture_config.idle_capture_interval_ms = v;
+        }
+        if let Some(v) = self.config.visual_check_interval_ms {
+            capture_config.visual_check_interval_ms = v;
+        }
+        if let Some(v) = self.config.visual_change_threshold {
+            capture_config.visual_change_threshold = v;
+        }
+        if let Some(v) = self.config.min_capture_interval_ms {
+            capture_config.min_capture_interval_ms = v;
+        }
+        if let Some(v) = self.config.capture_on_keystroke {
+            capture_config.capture_on_keystroke = v;
+        }
+        if let Some(v) = self.config.capture_on_clipboard {
+            capture_config.capture_on_clipboard = v;
+        }
 
         // Subscribe to the shared broadcast channel so UI events reach this monitor
         let trigger_rx = self.trigger_tx.subscribe();
@@ -363,6 +439,7 @@ impl VisionManager {
         let languages = self.config.languages.clone();
         let power_profile_rx = self.power_profile_rx.clone();
         let focus_controller = self.focus_controller.clone();
+        let linker_tx = Some(self.linker_tx.clone());
 
         info!(
             "Starting event-driven capture for monitor {} (device: {})",
@@ -390,6 +467,7 @@ impl VisionManager {
                 languages,
                 power_profile_rx,
                 focus_controller,
+                linker_tx,
             )
             .await
             {
@@ -474,6 +552,11 @@ impl VisionManager {
     /// Shutdown the VisionManager
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down VisionManager");
+        // Signal the frame-linker actor to stop. Drops of the cloned
+        // senders held by recorder/capture loops will also close the
+        // channel; either path exits the actor cleanly.
+        self.linker_stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.stop().await
     }
 }
@@ -503,6 +586,12 @@ mod tests {
             pause_on_drm_content: false,
             languages: vec![Language::English],
             video_quality: "balanced".to_string(),
+            idle_capture_interval_ms: None,
+            visual_check_interval_ms: None,
+            visual_change_threshold: None,
+            min_capture_interval_ms: None,
+            capture_on_keystroke: None,
+            capture_on_clipboard: None,
         };
         VisionManager::new(config, db, Handle::current())
     }

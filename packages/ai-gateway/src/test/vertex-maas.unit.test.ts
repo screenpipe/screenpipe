@@ -174,6 +174,93 @@ describe('VertexMaasProvider.formatMessages', () => {
 
 		expect(result[0].content).toEqual([{ type: 'text', text: 'hello' }]);
 	});
+
+	// Vertex MaaS 400 "No tool calls but found tool output" — see Sentry
+	// SCREENPIPE-AI-PROXY-13 (escalating, 22 users / 7d). Pi chats can prune
+	// or edit history mid-conversation, leaving a tool-role reply whose
+	// originating assistant tool_calls turn is gone. Vertex rejects the whole
+	// batch unless we drop the orphan.
+	it('drops orphan tool messages whose tool_call_id never appeared', () => {
+		const result = provider.formatMessages([
+			{ role: 'user', content: 'hi' },
+			{ role: 'tool', content: 'ghost result', tool_call_id: 'call_ghost' } as any,
+			{ role: 'user', content: 'are you there?' },
+		]);
+		expect(result).toHaveLength(2);
+		expect(result.map((m: any) => m.role)).toEqual(['user', 'user']);
+	});
+
+	it('keeps tool messages that reference a prior assistant tool_call', () => {
+		const result = provider.formatMessages([
+			{ role: 'user', content: 'list files' },
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{ id: 'call_42', type: 'function', function: { name: 'ls', arguments: '{}' } }],
+			} as any,
+			{ role: 'tool', content: 'a.txt', tool_call_id: 'call_42' } as any,
+			{ role: 'assistant', content: 'found a.txt' },
+		]);
+		expect(result).toHaveLength(4);
+		expect(result[2]).toMatchObject({ role: 'tool', tool_call_id: 'call_42' });
+	});
+
+	it('drops orphan tool_result content parts on user messages', () => {
+		const result = provider.formatMessages([
+			{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_ghost', content: 'gone' }] as any },
+			{ role: 'user', content: 'continue' },
+		]);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({ role: 'user' });
+	});
+
+	it('drops tool messages with missing tool_call_id (would otherwise reach Vertex bare)', () => {
+		// Output mapper strips tool_call_id when falsy via conditional spread,
+		// so a kept tool message with no id reaches Vertex as { role: 'tool' }
+		// alone and trips 400 "No tool calls but found tool output".
+		const result = provider.formatMessages([
+			{ role: 'user', content: 'list files' },
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{ id: 'call_42', type: 'function', function: { name: 'ls', arguments: '{}' } }],
+			} as any,
+			{ role: 'tool', content: 'orphan output, no id' } as any,
+		]);
+		expect(result).toHaveLength(2);
+		expect(result.map((m: any) => m.role)).toEqual(['user', 'assistant']);
+	});
+
+	it('drops tool messages with empty-string tool_call_id', () => {
+		const result = provider.formatMessages([
+			{ role: 'user', content: 'hi' },
+			{ role: 'tool', content: 'empty id', tool_call_id: '' } as any,
+		]);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({ role: 'user' });
+	});
+
+	// Without this preservation, the string-content branch of
+	// formatMessageContent silently drops the OpenAI-style tool_calls field,
+	// and Vertex 400s on the next tool-role message because the assistant
+	// payload it sees has no tool_calls to bind to.
+	it('preserves OpenAI-style tool_calls on assistant with string content', () => {
+		const result = provider.formatMessages([
+			{ role: 'user', content: 'what files?' },
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{ id: 'call_42', type: 'function', function: { name: 'ls', arguments: '{}' } }],
+			} as any,
+			{ role: 'tool', content: 'a.txt b.txt', tool_call_id: 'call_42' } as any,
+		]);
+		expect(result).toHaveLength(3);
+		expect(result[1]).toMatchObject({
+			role: 'assistant',
+			tool_calls: [{ id: 'call_42' }],
+		});
+		expect(result[2]).toMatchObject({ role: 'tool', tool_call_id: 'call_42' });
+	});
 });
 
 describe('promoteReasoningStream', () => {

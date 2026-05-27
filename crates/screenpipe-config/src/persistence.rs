@@ -51,12 +51,14 @@ fn dirs_next() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{tempdir, NamedTempFile};
 
     #[test]
     fn load_missing_file_returns_default() {
-        let path = Path::new("/tmp/screenpipe-test-nonexistent-config.toml");
-        let settings = load_toml(path).unwrap();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing-config.toml");
+
+        let settings = load_toml(&path).unwrap();
         assert_eq!(settings, RecordingSettings::default());
     }
 

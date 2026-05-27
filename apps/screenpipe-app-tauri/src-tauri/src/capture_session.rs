@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use screenpipe_audio::audio_manager::builder::AudioManagerOptions;
+use screenpipe_audio::core::device::resolve_audio_devices_for_capture;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::transcription::deepgram::{
@@ -68,6 +69,8 @@ impl CaptureSession {
         // --- Capture trigger sender (set by VisionManager, consumed by UI recorder) ---
         let mut capture_trigger_tx: Option<screenpipe_engine::event_driven_capture::TriggerSender> =
             None;
+        // --- Frame-linker sender (set by VisionManager, consumed by UI recorder + capture loops) ---
+        let mut linker_tx: Option<screenpipe_engine::frame_linker_actor::LinkerSender> = None;
 
         // --- Vision ---
         if !config.disable_vision {
@@ -83,6 +86,7 @@ impl CaptureSession {
             );
 
             capture_trigger_tx = Some(vision_manager.trigger_sender());
+            linker_tx = Some(vision_manager.linker_sender());
 
             let shutdown_rx = shutdown_tx.subscribe();
             let audio_manager_for_drm = if !config.disable_audio {
@@ -150,6 +154,7 @@ impl CaptureSession {
                 db_clone,
                 ui_config,
                 capture_trigger_tx,
+                linker_tx,
                 config.ignored_windows.clone(),
             )
             .await
@@ -318,8 +323,18 @@ async fn reconfigure_audio_manager(
             None
         };
 
+    let audio_devices = if config.disable_audio {
+        Vec::new()
+    } else {
+        resolve_audio_devices_for_capture(
+            &config.audio_devices,
+            config.use_system_default_audio,
+        )
+        .await
+    };
+
     let mut audio_manager_builder = config
-        .to_audio_manager_builder(server.data_path.clone(), config.audio_devices.clone())
+        .to_audio_manager_builder(server.data_path.clone(), audio_devices)
         .transcription_mode(config.transcription_mode.clone())
         .openai_compatible_config(openai_compatible_config);
 

@@ -355,6 +355,37 @@ pub(crate) async fn delete_memory_handler(
     Ok(JsonResponse(json!({"ok": true})))
 }
 
+/// Trigger an immediate sync of `memories` out to every enabled
+/// external destination (Claude Code's CLAUDE.md, Codex's AGENTS.md).
+///
+/// The background scheduler in `external_memory_sync` runs this every
+/// 5 minutes; this handler exists so the app's "sync now" button and
+/// `curl`-based debugging don't have to wait for the next tick.
+///
+/// Returns `JsonResponse<Value>` so the per-destination outcome (which
+/// includes `anyhow::Result` via a custom `serialize_with`) doesn't have
+/// to be OaSchema. The OpenAPI spec just reports a generic JSON shape.
+#[oasgen]
+pub(crate) async fn sync_external_memories_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
+    let results = crate::external_memory_sync::run_once(
+        &state.db,
+        state.secret_store.as_deref(),
+        &state.screenpipe_dir,
+    )
+    .await;
+
+    let value = serde_json::to_value(&results).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": format!("serialize results: {}", e)})),
+        )
+    })?;
+
+    Ok(JsonResponse(json!({"results": value})))
+}
+
 #[oasgen]
 pub(crate) async fn list_memory_tags_handler(
     State(state): State<Arc<AppState>>,

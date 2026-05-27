@@ -121,8 +121,9 @@ interface OpenAIModel {
 }
 
 export const DEFAULT_PROMPT = `Rules:
-- Media: use standard markdown ![description](/path/to/file.mp4) for videos and ![description](/path/to/image.jpg) for images
-- Use the exact absolute file_path from search results, do not modify it
+- Media: use standard markdown with angle-bracket local paths, like ![description](</path/to/file.mp4>) for videos and ![description](</path/to/image.jpg>) for images
+- Use the exact absolute file_path from search results inside the angle brackets, do not modify it
+- Always wrap local file paths in angle brackets because screenpipe paths often contain spaces or parentheses
 - Always answer my question/intent, do not make up things
 `;
 
@@ -205,12 +206,13 @@ export function AIProviderConfig({
     const fetchPiModels = async () => {
       try {
         const token = settings?.user?.token || "";
-        const resp = await fetch("https://api.screenpi.pe/v1/models", {
+        const resp = await fetch("https://api.screenpipe.com/v1/models", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (resp.ok) {
           const data = await resp.json();
-          const models = (data.data || []).map((m: any) => ({
+          const models = (data.data || [])
+            .map((m: any) => ({
             id: m.id,
             name: m.name || m.id,
             free: m.free,
@@ -218,7 +220,8 @@ export function AIProviderConfig({
             recommended_for: m.recommended_for,
             warning: m.warning,
             health: m.health,
-          }));
+            }))
+            .filter((m: { id: string }, idx: number, arr: { id: string }[]) => arr.findIndex((x) => x.id === m.id) === idx);
           setPiModels(models);
         }
       } catch {
@@ -404,8 +407,9 @@ export function AIProviderConfig({
             });
             if (resp.ok) {
               const data = await resp.json();
-              if (data.data?.length > 0) {
-                setOpenAIModels(data.data);
+              const uniqueModels = (data.data as { id: string }[]).filter((m, idx, arr) => arr.findIndex((x) => x.id === m.id) === idx);
+              if (uniqueModels.length > 0) {
+                setOpenAIModels(uniqueModels);
                 setIsLoadingModels(false);
                 return;
               }
@@ -1128,17 +1132,18 @@ export const AIPresetsSelector = ({
         const nextIndex = (currentIndex + 1) % aiPresets.length;
         const nextPreset = aiPresets[nextIndex];
 
-        // Set the next preset as default
-        const updatedPresets = aiPresets.map((p) => ({
-          ...p,
-          defaultPreset: p.id === nextPreset.id,
-        }));
-
-        updateSettings({
-          aiPresets: updatedPresets,
-        });
-
-        onPresetSaved?.(nextPreset);
+        if (isControlled) {
+          // Controlled (e.g. chat composer): cycle the host's local selection
+          // without rewriting the user's default preset in settings.
+          onControlledSelect?.(nextPreset.id);
+        } else {
+          const updatedPresets = aiPresets.map((p) => ({
+            ...p,
+            defaultPreset: p.id === nextPreset.id,
+          }));
+          updateSettings({ aiPresets: updatedPresets });
+          onPresetSaved?.(nextPreset);
+        }
 
         toast.success("Preset changed", {
           description: `Switched to ${nextPreset.id} (${nextPreset.model})`,
@@ -1148,7 +1153,7 @@ export const AIPresetsSelector = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [aiPresets, selectedPreset, updateSettings, shortcutKey, onPresetSaved]);
+  }, [aiPresets, selectedPreset, updateSettings, shortcutKey, onPresetSaved, isControlled, onControlledSelect]);
 
   const handleSavePreset = (preset: Partial<AIPreset>) => {
     if (!canManageEmployeePresets) {

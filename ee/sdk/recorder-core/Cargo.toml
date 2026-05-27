@@ -1,0 +1,27 @@
+[package]
+name = "screenpipe-recorder"
+version = "0.3.0"
+edition = "2021"
+description = "Pure-Rust recorder orchestration for the screenpipe SDK — screen + MP4 + event-driven paired capture. Consumed by both the napi addon (ee/sdk) and the Tauri plugin (ee/sdk/tauri/rust) so neither has to spawn a Node bridge."
+license = "LicenseRef-Screenpipe-Enterprise"
+publish = false
+
+[dependencies]
+screenpipe-screen  = { path = "../../../crates/screenpipe-screen" }
+screenpipe-core    = { path = "../../../crates/screenpipe-core", default-features = false }
+screenpipe-a11y    = { path = "../../../crates/screenpipe-a11y", default-features = false }
+screenpipe-capture = { path = "../../../crates/screenpipe-capture" }
+screenpipe-db      = { path = "../../../crates/screenpipe-db" }
+screenpipe-config  = { path = "../../../crates/screenpipe-config" }
+
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+crossbeam-channel = "0.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
+tracing = "0.1"
+cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
+
+[dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }

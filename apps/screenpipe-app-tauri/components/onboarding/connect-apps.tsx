@@ -5,10 +5,11 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Check, Loader, Lock, LockOpen } from "lucide-react";
+import { Check, Loader, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { localFetch } from "@/lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { readTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
 import { homeDir, join, dirname } from "@tauri-apps/api/path";
@@ -17,13 +18,10 @@ import posthog from "posthog-js";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
-function GmailIcon({ className = "w-5 h-5" }: { className?: string }) {
+function ObsidianIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className}>
-      <path
-        d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.907 1.528-1.148C21.69 2.28 24 3.434 24 5.457z"
-        fill="#EA4335"
-      />
+    <svg viewBox="0 0 24 24" className={className} fill="#7C3AED">
+      <path d="M19.355 18.538a68.967 68.959 0 0 0 1.858-2.954.81.81 0 0 0-.062-.9c-.516-.685-1.504-2.075-2.042-3.362-.553-1.321-.636-3.375-.64-4.377a1.707 1.707 0 0 0-.358-1.05l-3.198-4.064a3.744 3.744 0 0 1-.076.543c-.106.503-.307 1.004-.536 1.5-.134.29-.29.6-.446.914l-.31.626c-.516 1.068-.997 2.227-1.132 3.59-.124 1.26.046 2.73.815 4.481.128.011.257.025.386.044a6.363 6.363 0 0 1 3.326 1.505c.916.79 1.744 1.922 2.415 3.5zM8.199 22.569c.073.012.146.02.22.02.78.024 2.095.092 3.16.29.87.16 2.593.64 4.01 1.055 1.083.316 2.198-.548 2.355-1.664.114-.814.33-1.735.725-2.58l-.01.005c-.67-1.87-1.522-3.078-2.416-3.849a5.295 5.295 0 0 0-2.778-1.257c-1.54-.216-2.952.19-3.84.45.532 2.218.368 4.829-1.425 7.531zM5.533 9.938c-.023.1-.056.197-.098.29L2.82 16.059a1.602 1.602 0 0 0 .313 1.772l4.116 4.24c2.103-3.101 1.796-6.02.836-8.3-.728-1.73-1.832-3.081-2.55-3.831zM9.32 14.01c.615-.183 1.606-.465 2.745-.534-.683-1.725-.848-3.233-.716-4.577.154-1.552.7-2.847 1.235-3.95.113-.235.223-.454.328-.664.149-.297.288-.577.419-.86.217-.47.379-.885.46-1.27.08-.38.08-.72-.014-1.043-.095-.325-.297-.675-.68-1.06a1.6 1.6 0 0 0-1.475.36l-4.95 4.452a1.602 1.602 0 0 0-.513.952l-.427 2.83c.672.59 2.328 2.316 3.335 4.711.09.21.175.43.253.653z"/>
     </svg>
   );
 }
@@ -174,6 +172,108 @@ async function installClaudeMcp(): Promise<void> {
   }
 }
 
+// Codex (uses TOML at ~/.codex/config.toml)
+async function getCodexConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".codex", "config.toml");
+}
+
+const CODEX_SCREENPIPE_TABLE = /(?:^|\n)\[mcp_servers\.screenpipe\][\s\S]*?(?=\n\[(?!mcp_servers\.screenpipe(?:\.|\]))[^\]]+\]|\s*$)/;
+
+async function isCodexMcpInstalled(): Promise<boolean> {
+  try {
+    const content = await readTextFile(await getCodexConfigPath());
+    const table = content.match(CODEX_SCREENPIPE_TABLE)?.[0] ?? "";
+    return !!table && !/^\s*enabled\s*=\s*false\s*$/m.test(table);
+  } catch { return false; }
+}
+
+async function installCodexMcp(): Promise<void> {
+  const configPath = await getCodexConfigPath();
+  const { command, args } = await buildMcpConfig();
+  let existing = "";
+  try { existing = await readTextFile(configPath); } catch { /* fresh */ }
+
+  const withoutScreenpipe = existing
+    .replace(CODEX_SCREENPIPE_TABLE, "")
+    .replace(/^\n+/, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+
+  const block = [
+    "[mcp_servers.screenpipe]",
+    `command = ${JSON.stringify(command)}`,
+    `args = [${args.map(a => JSON.stringify(a)).join(", ")}]`,
+    "enabled = true",
+  ].join("\n");
+
+  const next = `${withoutScreenpipe}${withoutScreenpipe ? "\n\n" : ""}${block}\n`;
+  await mkdir(await dirname(configPath), { recursive: true });
+  await writeFile(configPath, new TextEncoder().encode(next));
+}
+
+// Obsidian — auto-discover vaults from obsidian.json, save first one to local API
+async function getObsidianConfigPath(): Promise<string | null> {
+  try {
+    const home = await homeDir();
+    const os = platform();
+    if (os === "macos") return join(home, "Library", "Application Support", "obsidian", "obsidian.json");
+    if (os === "windows") return join(home, "AppData", "Roaming", "Obsidian", "obsidian.json");
+    if (os === "linux") return join(home, ".config", "obsidian", "obsidian.json");
+    return null;
+  } catch { return null; }
+}
+
+async function discoverObsidianVaults(): Promise<Array<{ path: string }>> {
+  try {
+    const configPath = await getObsidianConfigPath();
+    if (!configPath) return [];
+    const raw = await readTextFile(configPath);
+    const config = JSON.parse(raw);
+    return Object.values((config.vaults || {}) as Record<string, { path?: string }>)
+      .map(v => ({ path: v.path ?? "" }))
+      .filter(v => !!v.path);
+  } catch { return []; }
+}
+
+async function isObsidianConnected(): Promise<boolean> {
+  try {
+    const res = await localFetch("/connections/obsidian");
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !!data?.credentials?.vault_path;
+  } catch { return false; }
+}
+
+/**
+ * Onboarding connect flow for Obsidian: pick the first auto-discovered vault.
+ * Users with multiple vaults can swap later in Settings → Connections. Throws
+ * if no vault is detected so the card surfaces an error CTA.
+ */
+async function connectObsidianFirstVault(): Promise<string> {
+  const vaults = await discoverObsidianVaults();
+  if (vaults.length === 0) throw new Error("no obsidian vaults detected — open obsidian once, then retry");
+  const vaultPath = vaults[0].path;
+
+  const testRes = await localFetch("/connections/obsidian/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credentials: { vault_path: vaultPath } }),
+  });
+  const testData = await testRes.json();
+  if (!testRes.ok || testData.error) throw new Error(testData.error || "vault test failed");
+
+  const saveRes = await localFetch("/connections/obsidian", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credentials: { vault_path: vaultPath } }),
+  });
+  const saveData = await saveRes.json();
+  if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "vault save failed");
+
+  return vaultPath.split(/[\\/]/).filter(Boolean).pop() ?? vaultPath;
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Integration {
@@ -183,32 +283,20 @@ interface Integration {
   valueProp: string;
   ahaCopy: string;
   isPro: boolean;
-  type: "oauth" | "mcp" | "chatgpt" | "claude";
+  type: "oauth" | "mcp" | "chatgpt" | "claude" | "codex" | "obsidian";
 }
 
 type CardState = "idle" | "connecting" | "connected" | "error";
 
 // ─── Integration list ─────────────────────────────────────────────────────────
+//
+// Notion is the only paid integration shown in onboarding. Gmail / Google
+// Calendar were removed: the Google Workspace OAuth verification process
+// blocks shipping them broadly, and consumer-pro upsell is no longer the
+// revenue engine (enterprise contracts are). Codex + Obsidian replace
+// those two slots — both are free, no OAuth, work fully offline.
 
-const PRO_INTEGRATIONS: Integration[] = [
-  {
-    id: "gmail",
-    cardKey: "gmail",
-    name: "Gmail",
-    valueProp: "draft replies from your screen context",
-    ahaCopy: "email context active",
-    isPro: true,
-    type: "oauth",
-  },
-  {
-    id: "google-calendar",
-    cardKey: "google-calendar",
-    name: "Google Calendar",
-    valueProp: "auto-prep meetings, recall context",
-    ahaCopy: "meeting context active",
-    isPro: true,
-    type: "oauth",
-  },
+const INTEGRATIONS: Integration[] = [
   {
     id: "notion",
     cardKey: "notion",
@@ -218,9 +306,33 @@ const PRO_INTEGRATIONS: Integration[] = [
     isPro: true,
     type: "oauth",
   },
-];
-
-const FREE_INTEGRATIONS: Integration[] = [
+  {
+    id: "codex",
+    cardKey: "codex",
+    name: "Codex",
+    valueProp: "give OpenAI Codex full memory of your work",
+    ahaCopy: "MCP installed — restart Codex",
+    isPro: false,
+    type: "codex",
+  },
+  {
+    id: "obsidian",
+    cardKey: "obsidian",
+    name: "Obsidian",
+    valueProp: "search your vault alongside screen",
+    ahaCopy: "vault connected",
+    isPro: false,
+    type: "obsidian",
+  },
+  {
+    id: "claude",
+    cardKey: "claude",
+    name: "Claude",
+    valueProp: "give Claude Desktop full memory of your screen",
+    ahaCopy: "MCP installed — restart Claude",
+    isPro: false,
+    type: "claude",
+  },
   {
     id: "cursor",
     cardKey: "cursor",
@@ -239,42 +351,18 @@ const FREE_INTEGRATIONS: Integration[] = [
     isPro: false,
     type: "chatgpt",
   },
-  {
-    id: "claude",
-    cardKey: "claude",
-    name: "Claude",
-    valueProp: "give Claude Desktop full memory of your screen",
-    ahaCopy: "MCP installed — restart Claude",
-    isPro: false,
-    type: "claude",
-  },
-];
-
-// Pro user "also free" section — Claude, Cursor, ChatGPT
-const PRO_FREE_SECTION: Integration[] = [
-  FREE_INTEGRATIONS[2], // Claude
-  FREE_INTEGRATIONS[0], // Cursor
-  FREE_INTEGRATIONS[1], // ChatGPT
-];
-
-// Free-user view: 2×2 grid — Cursor, Gmail (locked teaser), ChatGPT, Claude
-const FREE_USER_ORDER: Integration[] = [
-  FREE_INTEGRATIONS[0], // Cursor
-  PRO_INTEGRATIONS[0],  // Gmail (locked teaser)
-  FREE_INTEGRATIONS[1], // ChatGPT
-  FREE_INTEGRATIONS[2], // Claude
 ];
 
 const ICONS: Record<string, React.ReactNode> = {
-  gmail: <GmailIcon />,
-  "google-calendar": (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />
-  ),
   notion: (
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />
   ),
+  codex: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded dark:invert" />
+  ),
+  obsidian: <ObsidianIcon className="w-5 h-5" />,
   cursor: <CursorIcon className="w-5 h-5 rounded" />,
   chatgpt: <ChatGptIcon className="w-5 h-5" />,
   claude: (
@@ -285,17 +373,12 @@ const ICONS: Record<string, React.ReactNode> = {
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
-type ProPhase = "locked" | "unlocking" | "unlocked";
-
 function IntegrationCard({
   integration,
   isPro,
   state,
   displayName,
-  // proPhase / unlockDelay from parent trigger the local animation sequence.
-  // Each card runs its own phase independently so the stagger is exact.
-  proPhase,
-  unlockDelay,
+  errorMessage,
   onConnect,
   onUpgradeToPro,
 }: {
@@ -303,8 +386,7 @@ function IntegrationCard({
   isPro: boolean;
   state: CardState;
   displayName: string | null;
-  proPhase: ProPhase;
-  unlockDelay: number;
+  errorMessage: string | null;
   onConnect: () => void;
   onUpgradeToPro: () => void;
 }) {
@@ -312,30 +394,6 @@ function IntegrationCard({
   const isConnected = state === "connected";
   const isConnecting = state === "connecting";
   const isError = state === "error";
-  const shouldAnimate = isPro && integration.isPro && !isConnected;
-
-  // Each card owns its own local phase so animations are fully independent.
-  const [localPhase, setLocalPhase] = useState<ProPhase>(
-    shouldAnimate ? "locked" : "unlocked"
-  );
-
-  // Reset to locked whenever parent snaps back to "locked" (e.g. free→pro transition)
-  useEffect(() => {
-    if (proPhase === "locked" && isPro && integration.isPro) {
-      setLocalPhase("locked");
-    }
-  }, [proPhase, isPro, integration.isPro]);
-
-  useEffect(() => {
-    if (!shouldAnimate) return;
-    if (proPhase !== "unlocking") return;
-    const delayMs = unlockDelay * 1000;
-    // Step 1: start the burst-open animation for this card
-    const t1 = setTimeout(() => setLocalPhase("unlocking"), delayMs);
-    // Step 2: overlay fully gone, show "connect →"
-    const t2 = setTimeout(() => setLocalPhase("unlocked"), delayMs + 600);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [proPhase, unlockDelay, shouldAnimate]);
 
   return (
     <div
@@ -345,8 +403,6 @@ function IntegrationCard({
           : "border-border/50"
       }`}
     >
-      {/* ── Static lock overlay for free users on pro cards ────────────────
-          Always visible, never animates. Lock + upgrade CTA centred.    */}
       {isLocked && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/50 backdrop-blur-[3px]">
           <motion.div
@@ -364,64 +420,11 @@ function IntegrationCard({
         </div>
       )}
 
-      {/* ── Full-card lock overlay for pro users (animated unlock) ─────────
-          Each card drives its OWN localPhase, so stagger is exact and
-          there is no shared-state timing conflict between the three cards. */}
-      {shouldAnimate && (
-        <motion.div
-          className="absolute inset-0 z-10 flex items-center justify-center bg-background/60"
-          animate={{ opacity: localPhase === "unlocked" ? 0 : 1 }}
-          transition={
-            localPhase === "unlocked"
-              ? { duration: 0.35, ease: "easeOut" }
-              : { duration: 0 }
-          }
-          style={{ pointerEvents: localPhase === "unlocked" ? "none" : "auto" }}
-        >
-          <AnimatePresence mode="wait">
-            {localPhase === "locked" && (
-              <motion.div
-                key="lock-closed"
-                initial={{ opacity: 0.45, scale: 1 }}
-                animate={{ opacity: [0.45, 0.75, 0.45], scale: [1, 1.07, 1] }}
-                exit={{ opacity: 0, scale: 1.4, rotate: 30, y: -5,
-                  transition: { duration: 0.16, ease: "easeIn" } }}
-                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-              >
-                <Lock className="w-7 h-7 text-foreground/50" strokeWidth={1.5} />
-              </motion.div>
-            )}
-            {localPhase === "unlocking" && (
-              <motion.div
-                key="lock-open"
-                initial={{ opacity: 0, scale: 0.75, rotate: -12 }}
-                animate={{
-                  opacity: [0, 1, 1, 0],
-                  scale: [0.75, 1.2, 1.05, 0],
-                  rotate: [-12, 6, 2, 18],
-                }}
-                transition={{ duration: 0.52, times: [0, 0.28, 0.62, 1], ease: "easeOut" }}
-              >
-                <LockOpen className="w-7 h-7 text-foreground/65" strokeWidth={1.5} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
-      )}
-
-      {/* Card content — dimmed while locked (free overlay) or during pro lock phase */}
       <motion.div
-        className="flex flex-col gap-1.5"
-        animate={{
-          opacity: isLocked
-            ? 0.62
-            : shouldAnimate && localPhase === "locked"
-            ? 0.38
-            : 1,
-        }}
+        className="flex flex-col gap-1.5 h-full"
+        animate={{ opacity: isLocked ? 0.62 : 1 }}
         transition={{ duration: 0.4 }}
       >
-        {/* Header */}
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-5 h-5 flex items-center justify-center shrink-0">
             {ICONS[integration.cardKey]}
@@ -429,7 +432,6 @@ function IntegrationCard({
           <span className="font-mono text-xs font-semibold truncate">
             {integration.name}
           </span>
-          {/* pro badge only when NOT locked — lock overlay already carries the CTA */}
           {integration.isPro && !isPro && !isLocked && !isConnected && (
             <span className="ml-auto shrink-0 font-mono text-[9px] px-1 py-0.5 border border-amber-500/40 text-amber-500/70 leading-none">
               pro
@@ -437,13 +439,11 @@ function IntegrationCard({
           )}
         </div>
 
-        {/* Value prop */}
         <p className="font-mono text-[10px] text-muted-foreground/60 leading-tight">
           {integration.valueProp}
         </p>
 
-        {/* Action */}
-        <div className="mt-0.5 min-h-[20px] flex items-center">
+        <div className="mt-auto min-h-[20px] flex items-center">
           {isConnected && !isLocked ? (
             <motion.div
               className="flex flex-col gap-0.5 w-full"
@@ -469,30 +469,15 @@ function IntegrationCard({
               <Loader className="w-3 h-3 animate-spin shrink-0" />
               connecting...
             </span>
-          ) : shouldAnimate ? (
-            /* "connect →" appears after this card's own overlay fades out */
-            <AnimatePresence>
-              {localPhase === "unlocked" && (
-                <motion.button
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.28, ease: "easeOut" }}
-                  onClick={onConnect}
-                  className="font-mono text-[10px] text-muted-foreground/60 hover:text-foreground transition-colors"
-                >
-                  connect →
-                </motion.button>
-              )}
-            </AnimatePresence>
           ) : isLocked ? (
-            // overlay handles the CTA — action area intentionally empty
             null
           ) : isError ? (
             <button
               onClick={onConnect}
-              className="font-mono text-[10px] text-red-400/70 hover:text-red-400 transition-colors"
+              title={errorMessage ?? undefined}
+              className="font-mono text-[10px] text-red-400/70 hover:text-red-400 transition-colors text-left truncate max-w-full"
             >
-              failed — retry →
+              {errorMessage ? `failed — ${errorMessage}` : "failed — retry →"}
             </button>
           ) : (
             <button
@@ -520,7 +505,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
   const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
-  const [proPhase, setProPhase] = useState<ProPhase>(isPro ? "locked" : "unlocked");
+  const [errorMessages, setErrorMessages] = useState<Record<string, string>>({});
   const [seconds, setSeconds] = useState(0);
   const mountTimeRef = useRef(Date.now());
 
@@ -530,11 +515,9 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       const stateUpdates: Record<string, CardState> = {};
       const nameUpdates: Record<string, string> = {};
 
-      const allIntegrations = [...PRO_INTEGRATIONS, ...FREE_INTEGRATIONS];
-
-      // Standard OAuth integrations
+      // Standard OAuth integrations (Notion)
       await Promise.allSettled(
-        allIntegrations.filter((i) => i.type === "oauth").map(async (i) => {
+        INTEGRATIONS.filter((i) => i.type === "oauth").map(async (i) => {
           try {
             const res = await commands.oauthStatus(i.id, null);
             if (res.status === "ok" && res.data.connected) {
@@ -566,6 +549,16 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         if (await isClaudeMcpInstalled()) stateUpdates["claude"] = "connected";
       } catch { /* ignore */ }
 
+      // Codex MCP
+      try {
+        if (await isCodexMcpInstalled()) stateUpdates["codex"] = "connected";
+      } catch { /* ignore */ }
+
+      // Obsidian (via local API)
+      try {
+        if (await isObsidianConnected()) stateUpdates["obsidian"] = "connected";
+      } catch { /* ignore */ }
+
       if (Object.keys(stateUpdates).length > 0)
         setCardStates((prev) => ({ ...prev, ...stateUpdates }));
       if (Object.keys(nameUpdates).length > 0)
@@ -589,21 +582,6 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     }, 8000);
     return () => clearInterval(interval);
   }, [isPro, settings.user?.token, loadUser]);
-
-  // Pro unlock animation sequence
-  // Cards enter at ~200-320ms. Locked state visible for ~400ms before unlock starts.
-  // Each card's unlock: 550ms animation, staggered 150ms apart.
-  // Last card (index 2) starts at 700 + 300 = 1000ms, finishes at 1550ms.
-  // Also handles the free→pro transition mid-session (e.g. after Stripe checkout).
-  useEffect(() => {
-    if (!isPro) return;
-    // Snap to locked first — ensures overlay is visible before the burst animation
-    // (covers both initial load and returning from Stripe as a new pro user)
-    setProPhase("locked");
-    const t1 = setTimeout(() => setProPhase("unlocking"), 700);
-    const t2 = setTimeout(() => setProPhase("unlocked"), 1650);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [isPro]);
 
   // Seconds ticker
   useEffect(() => {
@@ -650,12 +628,12 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       if (data.url) {
         await openUrl(data.url);
       } else {
-        await openUrl("https://screenpi.pe/billing");
+        await openUrl("https://screenpipe.com/billing");
         return;
       }
     } catch (error) {
       console.error("failed to start onboarding checkout:", error);
-      await openUrl("https://screenpi.pe/billing");
+      await openUrl("https://screenpipe.com/billing");
       return;
     }
 
@@ -670,6 +648,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       if (integration.isPro && !isPro) return;
 
       posthog.capture("onboarding_integration_connect_clicked", { integration: integration.id });
+      setErrorMessages((prev) => { const next = { ...prev }; delete next[integration.cardKey]; return next; });
       setCardState(integration.cardKey, "connecting");
 
       try {
@@ -695,6 +674,21 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         if (integration.type === "claude") {
           await installClaudeMcp();
           setCardState(integration.cardKey, "connected");
+          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          return;
+        }
+
+        if (integration.type === "codex") {
+          await installCodexMcp();
+          setCardState(integration.cardKey, "connected");
+          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          return;
+        }
+
+        if (integration.type === "obsidian") {
+          const vaultName = await connectObsidianFirstVault();
+          setCardState(integration.cardKey, "connected");
+          setDisplayNames((prev) => ({ ...prev, [integration.cardKey]: vaultName }));
           posthog.capture("onboarding_integration_connected", { integration: integration.id });
           return;
         }
@@ -727,8 +721,10 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         if (err instanceof Error && err.message === "oauth_timeout") {
           setCardState(integration.cardKey, "idle");
         } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          setErrorMessages((prev) => ({ ...prev, [integration.cardKey]: msg }));
           setCardState(integration.cardKey, "error");
-          setTimeout(() => setCardState(integration.cardKey, "idle"), 3000);
+          setTimeout(() => setCardState(integration.cardKey, "idle"), 4000);
         }
       }
     },
@@ -792,109 +788,43 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         </p>
       </motion.div>
 
-      {isPro ? (
-        /* Pro layout: pro section + divider + free section */
-        <div className="w-full flex flex-col gap-3">
-          {/* Pro cards */}
-          <div className="grid grid-cols-3 gap-2 w-full auto-rows-fr">
-            {PRO_INTEGRATIONS.map((integration, i) => (
-              <motion.div
-                key={integration.cardKey}
-                className="h-full"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 + i * 0.06, duration: 0.3 }}
-              >
-                <IntegrationCard
-                  integration={integration}
-                  isPro={isPro}
-                  state={cardStates[integration.cardKey] ?? "idle"}
-                  displayName={displayNames[integration.cardKey] ?? null}
-                  proPhase={proPhase}
-                  unlockDelay={i * 0.15}
-                  onConnect={() => handleConnect(integration)}
-                  onUpgradeToPro={handleUpgradeToPro}
-                />
-              </motion.div>
-            ))}
-          </div>
-
-          {/* Divider */}
+      <div className="grid grid-cols-3 gap-2 w-full auto-rows-fr">
+        {INTEGRATIONS.map((integration, i) => (
           <motion.div
-            className="flex items-center gap-2 w-full"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.38 }}
+            key={integration.cardKey}
+            className="h-full"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 + i * 0.05, duration: 0.3 }}
           >
-            <div className="flex-1 h-px bg-border/40" />
-            <span className="font-mono text-[9px] text-muted-foreground/30 uppercase tracking-widest">also free</span>
-            <div className="flex-1 h-px bg-border/40" />
+            <IntegrationCard
+              integration={integration}
+              isPro={isPro}
+              state={cardStates[integration.cardKey] ?? "idle"}
+              displayName={displayNames[integration.cardKey] ?? null}
+              errorMessage={errorMessages[integration.cardKey] ?? null}
+              onConnect={() => handleConnect(integration)}
+              onUpgradeToPro={handleUpgradeToPro}
+            />
           </motion.div>
+        ))}
+      </div>
 
-          {/* Free cards */}
-          <div className="grid grid-cols-3 gap-2 w-full auto-rows-fr">
-            {PRO_FREE_SECTION.map((integration, i) => (
-              <motion.div
-                key={integration.cardKey}
-                className="h-full"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.42 + i * 0.06, duration: 0.3 }}
-              >
-                <IntegrationCard
-                  integration={integration}
-                  isPro={isPro}
-                  state={cardStates[integration.cardKey] ?? "idle"}
-                  displayName={displayNames[integration.cardKey] ?? null}
-                  proPhase={proPhase}
-                  unlockDelay={0}
-                  onConnect={() => handleConnect(integration)}
-                  onUpgradeToPro={handleUpgradeToPro}
-                />
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        /* Free layout: 2×2 — Cursor, Gmail (locked teaser), ChatGPT, Claude */
-        <>
-          <div className="grid grid-cols-2 gap-2 w-full auto-rows-fr">
-            {FREE_USER_ORDER.map((integration, i) => (
-              <motion.div
-                key={integration.cardKey}
-                className="h-full"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 + i * 0.06, duration: 0.3 }}
-              >
-                <IntegrationCard
-                  integration={integration}
-                  isPro={isPro}
-                  state={cardStates[integration.cardKey] ?? "idle"}
-                  displayName={displayNames[integration.cardKey] ?? null}
-                  proPhase={proPhase}
-                  unlockDelay={0}
-                  onConnect={() => handleConnect(integration)}
-                  onUpgradeToPro={handleUpgradeToPro}
-                />
-              </motion.div>
-            ))}
-          </div>
-          <motion.p
-            className="font-mono text-[9px] text-muted-foreground/30 mt-3 text-center"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5 }}
+      {!isPro && (
+        <motion.p
+          className="font-mono text-[9px] text-muted-foreground/30 mt-3 text-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+        >
+          notion unlocks with{" "}
+          <button
+            onClick={handleUpgradeToPro}
+            className="underline underline-offset-2 hover:text-muted-foreground/50 transition-colors"
           >
-            gmail, gcal &amp; notion unlock with{" "}
-            <button
-              onClick={handleUpgradeToPro}
-              className="underline underline-offset-2 hover:text-muted-foreground/50 transition-colors"
-            >
-              screenpipe pro
-            </button>
-          </motion.p>
-        </>
+            screenpipe pro
+          </button>
+        </motion.p>
       )}
 
       {/* Actions */}

@@ -20,6 +20,7 @@ import {
   Lock,
   Copy,
   ClipboardX,
+  FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -29,9 +30,12 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { WindowPicker } from "./window-picker";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { useTeam } from "@/lib/hooks/use-team";
+import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { commands } from "@/lib/utils/tauri";
@@ -58,28 +62,70 @@ const createWindowOptions = (
   windowItems: { name: string; count: number; app_name?: string }[],
   existingPatterns: string[]
 ) => {
-  const windowOptions = [...windowItems]
-    .sort((a, b) => b.count - a.count)
-    .map((item) => ({
-      value: item.name,
-      label: item.name,
+  // For each observed window, surface BOTH the bare title (matches anywhere)
+  // and a scoped `App::Title` variant (matches that one window of that one
+  // app). Users can pick whichever matches their intent.
+  const seen = new Set<string>();
+  const windowOptions: ReturnType<typeof toOption>[] = [];
+  const sorted = [...windowItems].sort((a, b) => b.count - a.count);
+
+  function toOption(args: {
+    value: string;
+    label: string;
+    iconHint?: string;
+    description: string;
+  }) {
+    return {
+      value: args.value,
+      label: args.label,
       icon: AppWindowMac,
-      iconUrl: getAppIconUrl(item.app_name || item.name),
-      description: [
-        item.app_name && item.app_name !== item.name ? item.app_name : null,
-        `${formatCount(item.count)} captures`,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    }));
+      iconUrl: getAppIconUrl(args.iconHint || args.value),
+      description: args.description,
+    };
+  }
+
+  for (const item of sorted) {
+    if (!seen.has(item.name)) {
+      seen.add(item.name);
+      windowOptions.push(
+        toOption({
+          value: item.name,
+          label: item.name,
+          iconHint: item.app_name || item.name,
+          description: [
+            item.app_name && item.app_name !== item.name
+              ? item.app_name
+              : null,
+            `${formatCount(item.count)} captures`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        })
+      );
+    }
+    if (item.app_name && item.app_name !== item.name) {
+      const scoped = `${item.app_name}::${item.name}`;
+      if (!seen.has(scoped)) {
+        seen.add(scoped);
+        windowOptions.push(
+          toOption({
+            value: scoped,
+            label: scoped,
+            iconHint: item.app_name,
+            description: `scoped: only this window of ${item.app_name}`,
+          })
+        );
+      }
+    }
+  }
 
   const customOptions = existingPatterns
-    .filter((pattern) => !windowItems.some((item) => item.name === pattern))
+    .filter((pattern) => !seen.has(pattern))
     .map((pattern) => ({
       value: pattern,
       label: pattern,
       icon: AppWindowMac,
-      iconUrl: getAppIconUrl(pattern),
+      iconUrl: getAppIconUrl(pattern.includes("::") ? pattern.split("::")[0] : pattern),
     }));
 
   return [...windowOptions, ...customOptions];
@@ -209,6 +255,7 @@ export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
   const team = useTeam();
   const isTeamAdmin = !!team.team && team.role === "admin";
+  const isEnterprise = useIsEnterpriseBuild();
   const { toast } = useToast();
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -216,6 +263,7 @@ export function PrivacySection() {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const [pushingFilter, setPushingFilter] = useState<string | null>(null);
+  const [picker, setPicker] = useState<"ignored" | "included" | null>(null);
 
   const [liveApiKey, setLiveApiKey] = useState<string | null>(null);
   const [revealApiKey, setRevealApiKey] = useState(false);
@@ -477,6 +525,20 @@ export function PrivacySection() {
         variant: "destructive",
       });
     }
+  };
+
+  // Add one pattern from the WindowPicker. Reuses the MultiSelect change
+  // handler so the mutual-exclusion logic (a pattern in ignore is removed
+  // from include and vice versa) stays in one place.
+  const addIgnoredPattern = (pattern: string) => {
+    const lower = pattern.toLowerCase();
+    if (settings.ignoredWindows.some((w) => w.toLowerCase() === lower)) return;
+    handleIgnoredWindowsChange([...settings.ignoredWindows, pattern]);
+  };
+  const addIncludedPattern = (pattern: string) => {
+    const lower = pattern.toLowerCase();
+    if (settings.includedWindows.some((w) => w.toLowerCase() === lower)) return;
+    handleIncludedWindowsChange([...settings.includedWindows, pattern]);
   };
 
   const handleIgnoredWindowsChange = (values: string[]) => {
@@ -753,6 +815,8 @@ export function PrivacySection() {
         </Card>
         </LockedSetting>
 
+        {isEnterprise && <AdminTeamTokenCard />}
+
         {/* LAN access — off by default. Toggling on force-enables api_auth
             (the backend mirrors this guard in RecordingConfig::from_settings
             so the API is never exposed to the network unauthenticated). */}
@@ -792,7 +856,7 @@ export function PrivacySection() {
         </LockedSetting>
 
         <EncryptDataCard
-          encryptStore={settings.encryptStore ?? false}
+          encryptStore={settings.encryptStore ?? true}
           onEncryptStoreChange={(checked) => {
             handleSettingsChange({ encryptStore: checked });
           }}
@@ -1112,7 +1176,7 @@ export function PrivacySection() {
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Ignored Apps
-                      <HelpTooltip text="Apps matching these patterns will not be captured. Matches against window titles — e.g. add 'Password Manager' to skip sensitive apps." />
+                      <HelpTooltip text="Skip captures for these patterns. Plain text (e.g. '1Password') matches the app or any window title that contains it. Use 'App::Title' to scope to one window of an app (e.g. 'Slack::#hr' blocks only #hr in Slack)." />
                     </h3>
                     {isTeamAdmin && (
                       <Button
@@ -1150,6 +1214,14 @@ export function PrivacySection() {
                     placeholder="Select apps to ignore..."
                     allowCustomValues
                   />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] mt-1.5 gap-1.5"
+                    onClick={() => setPicker("ignored")}
+                  >
+                    <FolderTree className="h-3 w-3" /> browse apps & windows
+                  </Button>
                   {filterView === "all" &&
                     (settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
@@ -1203,7 +1275,7 @@ export function PrivacySection() {
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Included Apps
-                      <HelpTooltip text="When set, ONLY apps matching these patterns will be captured. Everything else is ignored. Leave empty to capture all apps (except ignored ones)." />
+                      <HelpTooltip text="When set, only matching windows are captured. Plain text is a global include (e.g. 'Slack' = only Slack). 'App::Title' creates a per-app whitelist (e.g. 'Slack::#engineering' keeps only that channel in Slack; other apps stay unaffected)." />
                     </h3>
                     {isTeamAdmin && (
                       <Button
@@ -1241,6 +1313,14 @@ export function PrivacySection() {
                     placeholder="Only capture these apps (optional)..."
                     allowCustomValues
                   />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] mt-1.5 gap-1.5"
+                    onClick={() => setPicker("included")}
+                  >
+                    <FolderTree className="h-3 w-3" /> browse apps & windows
+                  </Button>
                   {filterView === "all" &&
                     (settings.teamFilters?.includedWindows?.length ?? 0) >
                       0 && (
@@ -1621,6 +1701,238 @@ export function PrivacySection() {
           </Button>
         </div>
       )}
+      <WindowPicker
+        open={picker !== null}
+        onOpenChange={(o) => {
+          if (!o) setPicker(null);
+        }}
+        selected={
+          picker === "included" ? settings.includedWindows : settings.ignoredWindows
+        }
+        onAdd={(p) => {
+          if (picker === "included") addIncludedPattern(p);
+          else addIgnoredPattern(p);
+        }}
+        action={picker === "included" ? "include" : "ignore"}
+      />
     </div>
+  );
+}
+
+/**
+ * Admin team API token — enterprise builds only.
+ *
+ * Org-wide team-query auth has two intentionally separate pieces:
+ * `license_key` is org-level (every employee's machine, deployed by IT);
+ * `team_api_token` is per-admin and grants the `read:devices` /
+ * `read:search` / `read:records` scopes that the `screenpipe-team` pi
+ * skill calls v1 endpoints with. An admin mints one at
+ * https://screenpi.pe/enterprise?tab=tokens, pastes it here, and the
+ * desktop persists it to ~/.screenpipe/enterprise.json. Every new pi
+ * chat reads that file at boot and (un)installs the skill accordingly —
+ * no app restart needed, just open a new chat. Revoke from the same
+ * dashboard page to kill team access immediately.
+ *
+ * UX mirrors the local API key card above (Input + Eye reveal + Copy).
+ */
+function AdminTeamTokenCard() {
+  const { toast } = useToast();
+  const [liveToken, setLiveToken] = useState<string | null>(null);
+  const [revealToken, setRevealToken] = useState(false);
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const cur = await commands.getEnterpriseTeamApiToken();
+      setLiveToken(cur ?? null);
+    } catch {
+      setLiveToken(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const handleSave = useCallback(async () => {
+    const trimmed = (pendingToken ?? "").trim();
+    if (!trimmed) {
+      toast({ title: "paste a token first" });
+      return;
+    }
+    if (!trimmed.startsWith("sk_ent_")) {
+      toast({
+        title: "that doesn't look like an admin token",
+        description: "expected format: sk_ent_…",
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await commands.saveEnterpriseTeamConfig(null, null, trimmed);
+      if (res.status === "error") throw new Error(res.error);
+      setLiveToken(trimmed);
+      setPendingToken(null);
+      toast({
+        title: "admin token saved",
+        description: "open a new pi chat to use it — no app restart needed",
+      });
+    } catch (e) {
+      toast({
+        title: "failed to save",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, [pendingToken, toast]);
+
+  const handleClear = useCallback(async () => {
+    setSaving(true);
+    try {
+      const res = await commands.saveEnterpriseTeamConfig(null, null, "");
+      if (res.status === "error") throw new Error(res.error);
+      setLiveToken(null);
+      setPendingToken(null);
+      setRevealToken(false);
+      toast({ title: "admin token cleared" });
+    } catch (e) {
+      toast({
+        title: "failed to clear",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, [toast]);
+
+  const displayValue =
+    pendingToken !== null
+      ? pendingToken
+      : liveToken
+      ? revealToken
+        ? liveToken
+        : "•".repeat(Math.min(liveToken.length, 32))
+      : "";
+  const hasPending = pendingToken !== null && pendingToken !== (liveToken ?? "");
+
+  return (
+    <Card className="border-border bg-card">
+      <CardContent className="px-3 py-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div>
+              <h3 className="text-sm font-medium text-foreground">
+                Admin Team API Token
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Lets the pi agent query org-wide team data (devices, search,
+                records). Mint at{" "}
+                <button
+                  className="underline text-foreground hover:text-foreground/80"
+                  onClick={() =>
+                    openUrl("https://screenpi.pe/enterprise?tab=tokens")
+                  }
+                >
+                  screenpi.pe/enterprise → api tokens
+                </button>
+                .
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
+          <Input
+            type="text"
+            // First-time users have no `liveToken` yet — they must always be able
+            // to type a fresh token in. Only lock the input when we're displaying
+            // an EXISTING token in masked form; clicking the eye unlocks edit mode.
+            readOnly={Boolean(liveToken) && !revealToken && pendingToken === null}
+            placeholder="sk_ent_…"
+            data-testid="privacy-admin-token-input"
+            value={displayValue}
+            onChange={(e) => {
+              setPendingToken(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && hasPending) {
+                void handleSave();
+              }
+            }}
+            onClick={(e) => (e.target as HTMLInputElement).select()}
+            className="h-8 text-xs font-mono cursor-text select-all"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 shrink-0"
+            title={revealToken ? "Hide token" : "Reveal token"}
+            onClick={() => {
+              setRevealToken((v) => !v);
+              if (pendingToken === null && liveToken) setPendingToken(liveToken);
+            }}
+            // Eye only makes sense when there's a saved token to unmask. Fresh
+            // users typing a new token don't need it.
+            disabled={!liveToken}
+            data-testid="privacy-admin-token-reveal"
+          >
+            {revealToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 shrink-0"
+            title="Copy token"
+            disabled={!liveToken}
+            data-testid="privacy-admin-token-copy"
+            onClick={async () => {
+              if (!liveToken) return;
+              try {
+                await navigator.clipboard.writeText(liveToken);
+              } catch {
+                const el = document.createElement("textarea");
+                el.value = liveToken;
+                el.style.position = "fixed";
+                el.style.opacity = "0";
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand("copy");
+                document.body.removeChild(el);
+              }
+              toast({ title: "admin token copied to clipboard" });
+            }}
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </Button>
+          {hasPending && (
+            <Button
+              size="sm"
+              className="h-8 text-xs"
+              disabled={saving}
+              onClick={handleSave}
+              data-testid="privacy-admin-token-save"
+            >
+              save
+            </Button>
+          )}
+          {!hasPending && liveToken && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs"
+              disabled={saving}
+              onClick={handleClear}
+              data-testid="privacy-admin-token-clear"
+            >
+              clear
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

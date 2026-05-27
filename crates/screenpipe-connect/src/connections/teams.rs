@@ -26,7 +26,9 @@ static OAUTH: OAuthConfig = OAuthConfig {
              Team.ReadBasic.All \
              TeamMember.Read.All",
         ),
-        ("prompt", "consent"),
+        // select_account so a second connect shows Microsoft's account picker
+        // instead of silently consenting under the already-signed-in account.
+        ("prompt", "consent select_account"),
     ],
     redirect_uri_override: None,
 };

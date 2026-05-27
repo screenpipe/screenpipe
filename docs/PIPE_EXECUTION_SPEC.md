@@ -183,7 +183,7 @@ Every one of these can fail independently, mid-execution.
 **Required:** Already handled — `spawn()` error propagates to `PipeRunLog { success: false }`. But error message should be clear: "pi binary not found at {path}".
 
 #### D5. Pi binary version mismatch
-**Current:** No version check. Pi is installed via `bun add -g @mariozechner/pi-coding-agent` with no pinned version. Auto-update could break compatibility.
+**Current:** No version check. Pi is installed via `bun add -g @earendil-works/pi-coding-agent` with no pinned version. Auto-update could break compatibility.
 **Required:** Pin pi version in `ensure_installed()`. Or at minimum, check `pi --version` output and warn if unexpected.
 
 #### D6. Multiple screenpipe instances running pipes

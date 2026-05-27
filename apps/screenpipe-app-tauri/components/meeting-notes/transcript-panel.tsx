@@ -16,6 +16,7 @@ import {
   Check,
   Copy,
   Loader2,
+  Search,
   User,
   X,
 } from "lucide-react";
@@ -257,6 +258,8 @@ export function TranscriptPanel({
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [copied, setCopied] = useState(false);
   const [liveBlocks, setLiveBlocks] = useState<LiveTranscriptBlock[]>([]);
   const [liveStatus, setLiveStatus] = useState<LiveStreamingStatus | null>(
@@ -530,6 +533,19 @@ export function TranscriptPanel({
   }, [isOpen, meeting.id, query]);
 
   useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchOpen(false);
+      setQuery("");
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
     if (!isOpen || !isLive || query.trim()) return;
     if (!isFollowingLive) {
       setHasUnseenLive(hasTranscriptContent);
@@ -608,9 +624,49 @@ export function TranscriptPanel({
           if (e.key === "Escape") onClose();
         }}
       >
-        <header className="flex items-center justify-end px-4 py-3 border-b border-border shrink-0">
-          <div className="flex items-center gap-1">
+        <header className="flex items-center gap-2 px-4 py-1.5 border-b border-border shrink-0">
+          {showSearch && (searchOpen || Boolean(query.trim())) ? (
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setQuery("");
+                  setSearchOpen(false);
+                }
+              }}
+              placeholder="search transcript..."
+              className="min-w-0 flex-1 bg-transparent text-xs px-2 h-7 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+            />
+          ) : (
+            <div className="flex-1" />
+          )}
+          <div className="flex items-center gap-1 shrink-0">
             {headerActions}
+            {showSearch && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearchOpen((prev) => {
+                    const next = !prev;
+                    if (!next) setQuery("");
+                    return next;
+                  });
+                }}
+                className={cn(
+                  "h-7 w-7 p-0",
+                  searchOpen && "bg-accent text-accent-foreground",
+                )}
+                title={searchOpen ? "hide search" : "search transcript"}
+                aria-pressed={searchOpen}
+              >
+                <Search className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -641,18 +697,6 @@ export function TranscriptPanel({
           <div className="flex items-start gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span className="leading-5">{recoveryMessage}</span>
-          </div>
-        )}
-
-        {showSearch && (
-          <div className="px-4 py-2 border-b border-border shrink-0">
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="search transcript..."
-              className="w-full bg-transparent text-xs px-2 py-1 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-            />
           </div>
         )}
 

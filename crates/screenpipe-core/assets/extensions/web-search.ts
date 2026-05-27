@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Plain JSON-Schema literal — registerTool only stores it for the LLM,
 // no runtime validation, so we don't need @sinclair/typebox here. The
@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
 
       const apiKey = process.env.SCREENPIPE_API_KEY || "";
       const response = await fetch(
-        "https://api.screenpi.pe/v1/web-search",
+        "https://api.screenpipe.com/v1/web-search",
         {
           method: "POST",
           headers: {

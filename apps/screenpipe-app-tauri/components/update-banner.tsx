@@ -11,18 +11,10 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { platform, arch } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
-import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 
 interface UpdateInfo {
   version: string;
   body: string;
-}
-
-interface DownloadProgress {
-  version: string;
-  downloaded: number;
-  total: number | null;
-  percent: number;
 }
 
 interface AuthRequiredInfo {
@@ -34,47 +26,47 @@ interface UpdateBannerState {
   isVisible: boolean;
   updateInfo: UpdateInfo | null;
   isInstalling: boolean;
-  isDownloading: boolean;
-  downloadProgress: DownloadProgress | null;
   pendingUpdate: Update | null;
   authRequired: AuthRequiredInfo | null;
+  // Version the user dismissed in this session. Periodic re-checks and
+  // providers-remount hydration would otherwise re-show the same banner
+  // immediately after the user clicked X.
+  dismissedVersion: string | null;
   setIsVisible: (visible: boolean) => void;
   setUpdateInfo: (info: UpdateInfo | null) => void;
   setIsInstalling: (installing: boolean) => void;
-  setIsDownloading: (downloading: boolean) => void;
-  setDownloadProgress: (progress: DownloadProgress | null) => void;
   setPendingUpdate: (update: Update | null) => void;
   setAuthRequired: (info: AuthRequiredInfo | null) => void;
+  dismiss: (version: string) => void;
+  resetDismissed: () => void;
 }
 
 export const useUpdateBanner = create<UpdateBannerState>((set) => ({
   isVisible: false,
   updateInfo: null,
   isInstalling: false,
-  isDownloading: false,
-  downloadProgress: null,
   pendingUpdate: null,
   authRequired: null,
+  dismissedVersion: null,
   setIsVisible: (visible) => set({ isVisible: visible }),
   setUpdateInfo: (info) => set({ updateInfo: info }),
   setIsInstalling: (installing) => set({ isInstalling: installing }),
-  setIsDownloading: (downloading) => set({ isDownloading: downloading }),
-  setDownloadProgress: (progress) => set({ downloadProgress: progress }),
   setPendingUpdate: (update) => set({ pendingUpdate: update }),
   setAuthRequired: (info) => set({ authRequired: info }),
+  dismiss: (version) => set({ isVisible: false, authRequired: null, dismissedVersion: version }),
+  resetDismissed: () => set({ dismissedVersion: null }),
 }));
 
 interface UpdateBannerProps {
   className?: string;
   compact?: boolean;
+  /** "sidebar" renders a vertical card sized for the app sidebar. */
+  variant?: "default" | "sidebar";
 }
 
-export function UpdateBanner({ className, compact = false }: UpdateBannerProps) {
-  const isEnterprise = useIsEnterpriseBuild();
-  const { isVisible, updateInfo, isInstalling, isDownloading, downloadProgress, setIsVisible, setIsInstalling, pendingUpdate, authRequired, setAuthRequired } = useUpdateBanner();
+export function UpdateBanner({ className, compact = false, variant = "default" }: UpdateBannerProps) {
+  const { isVisible, updateInfo, isInstalling, setIsInstalling, pendingUpdate, authRequired, dismiss } = useUpdateBanner();
   const { toast } = useToast();
-
-  if (isEnterprise) return null;
 
   const handleUpdate = async () => {
     setIsInstalling(true);
@@ -180,7 +172,7 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
             variant="ghost"
             size="sm"
             className="h-7 w-7 p-0"
-            onClick={() => setAuthRequired(null)}
+            onClick={() => dismiss(authRequired.version)}
           >
             <X className="h-4 w-4" />
           </Button>
@@ -189,35 +181,29 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
     );
   }
 
-  // Show downloading state even before updateInfo is set
-  if (isDownloading && !updateInfo) {
-    const pct = downloadProgress?.percent ?? 0;
-    if (compact) {
-      return (
-        <div className={cn("flex items-center gap-2 text-xs text-muted-foreground", className)}>
-          <Sparkles className="h-3 w-3 text-primary animate-pulse" />
-          <span>downloading update... {pct}%</span>
-        </div>
-      );
-    }
+  if (!isVisible || !updateInfo) return null;
+
+  if (variant === "sidebar") {
     return (
-      <div className={cn("flex items-center gap-3 px-3 py-2 bg-muted/50 border-b text-sm", className)}>
-        <Sparkles className="h-4 w-4 text-primary animate-pulse" />
-        <div className="flex items-center gap-2 flex-1">
-          <span>downloading update{downloadProgress?.version ? ` v${downloadProgress.version}` : ""}...</span>
-          <div className="flex-1 max-w-[200px] h-1.5 bg-muted rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary rounded-full transition-all duration-300"
-              style={{ width: `${pct}%` }}
-            />
+      <button
+        type="button"
+        onClick={handleUpdate}
+        disabled={isInstalling}
+        className={cn(
+          "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-border bg-card/50 hover:bg-card transition-colors text-left disabled:opacity-60",
+          className,
+        )}
+      >
+        <Sparkles className="h-4 w-4 text-primary shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-foreground truncate">
+            {isInstalling ? "Restarting…" : "Restart to update"}
           </div>
-          <span className="text-xs text-muted-foreground">{pct}%</span>
+          <div className="text-[10px] text-muted-foreground truncate">v{updateInfo.version}</div>
         </div>
-      </div>
+      </button>
     );
   }
-
-  if (!isVisible || !updateInfo) return null;
 
   if (compact) {
     return (
@@ -226,24 +212,16 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
         className
       )}>
         <Sparkles className="h-3 w-3 text-primary" />
-        {isDownloading ? (
-          <>
-            <span>downloading v{updateInfo.version}... {downloadProgress?.percent ?? 0}%</span>
-          </>
-        ) : (
-          <>
-            <span>v{updateInfo.version} ready</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 px-2 text-xs"
-              onClick={handleUpdate}
-              disabled={isInstalling}
-            >
-              {isInstalling ? "restarting..." : "restart to update"}
-            </Button>
-          </>
-        )}
+        <span>v{updateInfo.version} ready</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-5 px-2 text-xs"
+          onClick={handleUpdate}
+          disabled={isInstalling}
+        >
+          {isInstalling ? "restarting..." : "restart to update"}
+        </Button>
       </div>
     );
   }
@@ -255,91 +233,103 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
     )}>
       <div className="flex items-center gap-2 flex-1">
         <Sparkles className="h-4 w-4 text-primary" />
-        {isDownloading ? (
-          <div className="flex items-center gap-2 flex-1">
-            <span>downloading <span className="font-medium">v{updateInfo.version}</span></span>
-            <div className="flex-1 max-w-[200px] h-1.5 bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-primary rounded-full transition-all duration-300"
-                style={{ width: `${downloadProgress?.percent ?? 0}%` }}
-              />
-            </div>
-            <span className="text-xs text-muted-foreground">{downloadProgress?.percent ?? 0}%</span>
-          </div>
-        ) : (
-          <span>
-            screenpipe <span className="font-medium">v{updateInfo.version}</span> is ready
-          </span>
-        )}
+        <span>
+          screenpipe <span className="font-medium">v{updateInfo.version}</span> is ready
+        </span>
       </div>
-      {!isDownloading && (
-        <div className="flex items-center gap-2">
-          <Button
-            variant="default"
-            size="sm"
-            className="h-7 px-3 text-xs"
-            onClick={handleUpdate}
-            disabled={isInstalling}
-          >
-            {isInstalling ? "restarting..." : "restart to update"}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => setIsVisible(false)}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      )}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="default"
+          size="sm"
+          className="h-7 px-3 text-xs"
+          onClick={handleUpdate}
+          disabled={isInstalling}
+        >
+          {isInstalling ? "restarting..." : "restart to update"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0"
+          onClick={() => dismiss(updateInfo.version)}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
     </div>
   );
 }
 
-// Hook to listen for update events from Rust
+interface PendingUpdateSnapshot {
+  version: string;
+  body: string;
+  downloaded: boolean;
+  auth_required: boolean;
+}
+
+// Hook to listen for update events from Rust.
+// Mounted globally in app/providers.tsx so it survives route changes and
+// catches the `update-available` event regardless of which page is open
+// when the download finishes. On mount, it also pulls the current pending
+// state from Rust so it can recover if the event fired before this hook
+// registered (boot-time webview race).
 export function useUpdateListener() {
-  const { setIsVisible, setUpdateInfo, setIsDownloading, setDownloadProgress, setAuthRequired } = useUpdateBanner();
+  const { setIsVisible, setUpdateInfo, setAuthRequired, resetDismissed } = useUpdateBanner();
 
   useEffect(() => {
     let unlistenAvailable: (() => void) | undefined;
     let unlistenClick: (() => void) | undefined;
-    let unlistenDownloading: (() => void) | undefined;
-    let unlistenProgress: (() => void) | undefined;
     let unlistenAuth: (() => void) | undefined;
 
+    // Rust re-emits update-available on every periodic check, and providers
+    // hydration runs on every remount — both would otherwise resurrect a
+    // banner the user just dismissed. Read dismissedVersion fresh inside the
+    // callback so a newer version still shows even if an older one is dismissed.
+    const showIfNotDismissed = (info: UpdateInfo) => {
+      setUpdateInfo(info);
+      if (useUpdateBanner.getState().dismissedVersion !== info.version) {
+        setIsVisible(true);
+      }
+    };
+    const showAuthIfNotDismissed = (info: AuthRequiredInfo) => {
+      if (useUpdateBanner.getState().dismissedVersion !== info.version) {
+        setAuthRequired(info);
+      }
+    };
+
     const setupListeners = async () => {
-      // Listen for download starting (shows banner immediately)
-      unlistenDownloading = await listen<{ version: string; body: string }>("update-downloading", (event) => {
-        setIsDownloading(true);
-        setDownloadProgress({ version: event.payload.version, downloaded: 0, total: null, percent: 0 });
-        setIsVisible(true);
-      });
-
-      // Listen for download progress
-      unlistenProgress = await listen<DownloadProgress>("update-download-progress", (event) => {
-        setDownloadProgress(event.payload);
-      });
-
-      // Listen for update ready (download complete)
+      // Download happens silently in the background. Banner only appears
+      // when the download is complete and the app is ready to restart.
       unlistenAvailable = await listen<UpdateInfo>("update-available", (event) => {
-        setIsDownloading(false);
-        setDownloadProgress(null);
-        setUpdateInfo(event.payload);
-        setIsVisible(true);
+        showIfNotDismissed(event.payload);
       });
 
-      // Listen for tray menu click
+      // Tray click is an explicit user request — clear any prior dismissal
+      // so the banner reappears even if they X'd it earlier this session.
       unlistenClick = await listen("update-now-clicked", () => {
+        resetDismissed();
         setIsVisible(true);
       });
 
       // Listen for auth-required (user needs to sign in to download update)
       unlistenAuth = await listen<AuthRequiredInfo>("update-auth-required", (event) => {
-        setAuthRequired(event.payload);
-        setIsDownloading(false);
-        setDownloadProgress(null);
+        showAuthIfNotDismissed(event.payload);
       });
+
+      // Hydrate from Rust in case the event fired before we mounted.
+      try {
+        const pending = await invoke<PendingUpdateSnapshot | null>("get_pending_update");
+        if (pending) {
+          if (pending.auth_required) {
+            showAuthIfNotDismissed({ version: pending.version, message: "sign in to get the latest update" });
+          } else if (pending.downloaded) {
+            showIfNotDismissed({ version: pending.version, body: pending.body });
+          }
+        }
+      } catch (e) {
+        // Command not registered yet (older Rust side) or app not ready.
+        // Fall back to event-driven path silently.
+      }
     };
 
     setupListeners();
@@ -347,9 +337,7 @@ export function useUpdateListener() {
     return () => {
       unlistenAvailable?.();
       unlistenClick?.();
-      unlistenDownloading?.();
-      unlistenProgress?.();
       unlistenAuth?.();
     };
-  }, [setIsVisible, setUpdateInfo, setIsDownloading, setDownloadProgress, setAuthRequired]);
+  }, [setIsVisible, setUpdateInfo, setAuthRequired, resetDismissed]);
 }

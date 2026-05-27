@@ -15,7 +15,7 @@ use crate::platform::windows_uia::{self, ClickElementRequest, UiaContext};
 use crossbeam_channel::bounded;
 use parking_lot::Mutex;
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -529,6 +529,8 @@ fn test_full_pipeline_with_app() {
     let config2 = config.clone();
     let click_queue2 = click_queue.clone();
     let focused_element2 = focused_element.clone();
+    let start_time = Instant::now();
+    let last_input_at_ms = Arc::new(AtomicU64::new(0));
     let thread = std::thread::spawn(move || {
         windows_uia::run_uia_thread(
             tree_tx,
@@ -537,6 +539,8 @@ fn test_full_pipeline_with_app() {
             focused_element2,
             stop2,
             config2,
+            start_time,
+            last_input_at_ms,
         );
     });
 

@@ -1,9 +1,11 @@
 ## New Features
 
-- Smart transcription now detects meetings via bidirectional audio — catches calls on any platform (Arc, Firefox, unknown apps) even when window titles don't match known meeting URLs
+- Bring your own MCP servers — register custom MCP servers from your config and route them through the AI agent alongside the built-in ones
+- Microphone capture can now use macOS VoiceProcessingIO (opt-in) for cleaner echo/noise cancellation on Apple silicon
 
 ## Bug Fixes
 
-- Fix audio transcriptions not being assigned to all overlapping frames in timeline
+- Electron apps (VS Code, Discord, Slack) now get the full accessibility walk budget — depth counter resets at AXWebArea boundaries instead of cutting off the tree halfway through
+- USB audio devices with mismatched sample rates no longer drop into silence on macOS
 
-#### **Full Changelog:** [b79b960c..d2912ada](https://github.com/screenpipe/screenpipe/compare/b79b960c..d2912ada)
+#### **Full Changelog:** [bdf01bdb..2b06b643](https://github.com/screenpipe/screenpipe/compare/bdf01bdb..2b06b643)

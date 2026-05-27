@@ -62,6 +62,7 @@ import {
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   useChatStore,
+  sessionRecordFromMeta,
   type SessionStatus,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
@@ -313,22 +314,7 @@ async function hydrate() {
       limit: CHAT_HISTORY_INITIAL_LIMIT,
       includeHidden: false,
     });
-    const records: SessionRecord[] = metas
-      .map((m) => ({
-        id: m.id,
-        title: m.title || "untitled",
-        preview: "",
-        status: "idle" as const,
-        messageCount: m.messageCount,
-        createdAt: m.createdAt,
-        updatedAt: m.updatedAt,
-        pinned: m.pinned,
-        // History reload doesn't count as new activity — start clean.
-        unread: false,
-        lastUserMessageAt: m.lastUserMessageAt,
-        kind: m.kind,
-        pipeContext: m.pipeContext,
-      }));
+    const records: SessionRecord[] = metas.map(sessionRecordFromMeta);
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {
     // Storage may not be ready yet on first launch — non-fatal.
@@ -460,9 +446,17 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
 
   const t = payload.type;
 
-  // Assistant message starts — create a new in-flight message shell
-  // and remember its id as the streaming target.
+  // Assistant message starts. When a session moves to the background in the
+  // middle of a tool-using reply, Pi may emit another assistant
+  // `message_start` after an internal `turn_end`. Foreground chat keeps that
+  // work inside the SAME visible assistant bubble, so background routing must
+  // reuse the existing streaming target instead of creating a second message.
+  //
+  // Only create a fresh assistant shell when we truly have no in-flight
+  // assistant message for this session.
   if (t === "message_start" && payload.message?.role === "assistant") {
+    const cur = store.sessions[sid];
+    if (cur?.streamingMessageId) return;
     const newId = `pi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const newMsg: MutableMessage = {
       id: newId,
@@ -571,20 +565,12 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   }
 
   // turn_end fires between LLM turns within a single agent run (typically
-  // across a tool-call boundary). The agent is still streaming — only the
-  // current message's accumulator should be cleared so the next
-  // message_start gets a fresh slate. Calling endTurn here would briefly
-  // flip isStreaming/isLoading false and falsely settle the session
-  // mid-run.
+  // across a tool-call boundary). Foreground chat does NOT split the visible
+  // assistant reply here; it keeps appending follow-up tool work and prose to
+  // the same assistant bubble until the full run reaches agent_end. The
+  // background router must mirror that shape or switching away mid-response
+  // will fragment one reply into several tiny assistant messages.
   if (t === "turn_end") {
-    const cur = store.sessions[sid];
-    if (cur?.streamingMessageId) {
-      store.actions.setStreaming(sid, {
-        streamingMessageId: null,
-        streamingText: "",
-        contentBlocks: [],
-      });
-    }
     return;
   }
 
@@ -663,7 +649,11 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       }
 
       const existing = await loadConversationFile(sid);
-      const firstUserMsg = messages.find((m: any) => m.role === "user") as any;
+      // Skip injected <conversation_history> sync prompts — Pi echoes them back
+      // as user events and their first 50 chars would corrupt the title.
+      const firstUserMsg = messages.find(
+        (m: any) => m.role === "user" && !m.content?.startsWith("<conversation_history>")
+      ) as any;
       const derivedTitle: string =
         firstUserMsg?.content?.slice(0, 50) || "New Chat";
       // Prefer a previously-persisted title (user may have renamed it),
@@ -711,11 +701,15 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             id: m.id,
             role: m.role,
             content,
+            ...(m.intent ? { intent: m.intent } : {}),
+            ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
             timestamp: m.timestamp,
             ...(blocks?.length ? { contentBlocks: blocks } : {}),
             ...(m.images?.length ? { images: m.images } : {}),
             ...(m.model ? { model: m.model } : {}),
             ...(m.provider ? { provider: m.provider } : {}),
+            ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
+            ...(m.steeredResponse ? { steeredResponse: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),

@@ -110,3 +110,132 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
 
   return { items, isLoading };
 }
+
+/** A single (app, window) cell returned by the tree query. */
+interface RawAppWindowRow {
+  app_name: string;
+  window_name: string | null;
+  count: number;
+  app_total: number;
+  window_count: number;
+}
+
+export interface AppWindowNode {
+  app: string;
+  /** Sum of frames across all windows for this app over the lookback period. */
+  totalCount: number;
+  /** Distinct window titles observed for this app (may exceed `windows.length`
+   * since we cap the per-app window list — see `windows.length` for what's
+   * actually browsable client-side). */
+  windowCount: number;
+  /** Top-N windows, descending by frame count. Rows with no window title
+   * (apps that don't expose AX or have a11y blocked) appear as a single
+   * entry with `title === null`. */
+  windows: Array<{ title: string | null; count: number }>;
+}
+
+const TREE_CACHE: { data?: AppWindowNode[]; ts?: number } = {};
+
+/**
+ * Fetch apps + their top windows from local screenpipe, grouped for the
+ * Browse picker. Returns one node per app with up to 20 windows.
+ *
+ * Why a separate hook: the existing `useSqlAutocomplete("window")` flattens
+ * by app_name only, which is fine for chip-autocomplete but loses the
+ * window dimension needed for `App::Title` scoped patterns.
+ */
+export function useAppWindowTree() {
+  const [data, setData] = useState<AppWindowNode[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const fetch = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      if (
+        TREE_CACHE.data &&
+        TREE_CACHE.ts &&
+        Date.now() - TREE_CACHE.ts < CACHE_DURATION
+      ) {
+        setData(TREE_CACHE.data);
+        return;
+      }
+      // Per-app top-20 windows. The outer WHERE rn <= 20 caps Arc-like
+      // sprawl (640+ windows) at a browsable size while preserving the
+      // long-tail count via `window_count`. LIMIT 1000 is a hard ceiling
+      // that the engine enforces anyway.
+      const query = `
+        WITH per_window AS (
+          SELECT
+            app_name,
+            NULLIF(window_name, '') as window_name,
+            COUNT(*) as count,
+            ROW_NUMBER() OVER (PARTITION BY app_name ORDER BY COUNT(*) DESC) as rn
+          FROM frames
+          WHERE timestamp > datetime('now','-7 days')
+            AND app_name IS NOT NULL AND app_name != ''
+          GROUP BY app_name, COALESCE(window_name, '')
+        ),
+        per_app AS (
+          SELECT
+            app_name,
+            SUM(count) as app_total,
+            COUNT(*) as window_count
+          FROM per_window
+          GROUP BY app_name
+        )
+        SELECT
+          w.app_name,
+          w.window_name,
+          w.count,
+          a.app_total,
+          a.window_count
+        FROM per_window w
+        JOIN per_app a ON w.app_name = a.app_name
+        WHERE w.rn <= 20
+        ORDER BY a.app_total DESC, w.count DESC
+        LIMIT 1000
+      `;
+      const response = await localFetch("/raw_sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const rows: RawAppWindowRow[] = await response.json();
+      // Bucket flat rows into per-app nodes. Order of first appearance
+      // preserves the SQL-side sort (apps by total frames descending).
+      const byApp = new Map<string, AppWindowNode>();
+      for (const r of rows) {
+        let node = byApp.get(r.app_name);
+        if (!node) {
+          node = {
+            app: r.app_name,
+            totalCount: r.app_total,
+            windowCount: r.window_count,
+            windows: [],
+          };
+          byApp.set(r.app_name, node);
+        }
+        node.windows.push({ title: r.window_name, count: r.count });
+      }
+      const result = Array.from(byApp.values());
+      TREE_CACHE.data = result;
+      TREE_CACHE.ts = Date.now();
+      setData(result);
+    } catch (error) {
+      const msg =
+        (error as Error)?.stack ?? (error as Error)?.message ?? String(error);
+      console.error("failed to fetch app-window tree:", msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch();
+  }, [fetch]);
+
+  return { data, isLoading, refresh: fetch };
+}

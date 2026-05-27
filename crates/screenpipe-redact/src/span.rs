@@ -34,6 +34,14 @@ pub enum SpanLabel {
     Date,
     /// API keys, bearer tokens, passwords, private-key block markers.
     Secret,
+    /// GDPR Art. 9 / HIPAA non-Safe-Harbor PHI — sensitive *context*
+    /// phrases (diagnoses, religious beliefs, sexual orientation,
+    /// political opinion, trade-union membership, genetic/biometric
+    /// data). Distinct from a person's *identifier*: e.g.
+    /// `Schizophrenia` next to `Marcus Chen` produces a `Person` span
+    /// AND a separate `Sensitive` span. Emitted by the v45 phase 3
+    /// model; older adapters always return zero of these.
+    Sensitive,
 }
 
 impl SpanLabel {
@@ -53,6 +61,7 @@ impl SpanLabel {
             Self::Id => "[ID]",
             Self::Date => "[DATE]",
             Self::Secret => "[SECRET]",
+            Self::Sensitive => "[SENSITIVE]",
         }
     }
 }

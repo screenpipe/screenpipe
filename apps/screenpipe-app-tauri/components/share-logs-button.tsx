@@ -4,11 +4,10 @@
 
 import { Button } from "./ui/button";
 import { useToast } from "./ui/use-toast";
-import { Upload, Loader, Copy, X, Camera, Video } from "lucide-react";
+import { Upload, Loader, X, Camera, Video } from "lucide-react";
 import { readTextFile } from "@tauri-apps/plugin-fs";
-import { commands, LogFile } from "@/lib/utils/tauri";
+import { commands } from "@/lib/utils/tauri";
 import { useState, useEffect } from "react";
-import { useCopyToClipboard } from "@/lib/hooks/use-copy-to-clipboard";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -33,57 +32,14 @@ interface VideoChunk {
   id: number;
 }
 
-const ShareLinkDisplay = ({
-  shareLink,
-  onCopy,
-  onClose,
-}: {
-  shareLink: string;
-  onCopy: () => void;
-  onClose: () => void;
-}) => {
-  return (
-    <div className="flex items-center gap-2 bg-secondary/30 px-3 py-2 rounded-lg border border-secondary animate-in fade-in slide-in-from-top-4">
-      <div className="flex items-center gap-2 flex-1">
-        <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
-        <span className="text-sm font-mono">{shareLink}</span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 hover:bg-secondary/50 transition-colors"
-          onClick={onCopy}
-          title="Copy share link"
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 hover:bg-secondary/50 transition-colors text-muted-foreground"
-          onClick={onClose}
-          title="Dismiss"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    </div>
-  );
-};
-
 export const ShareLogsButton = ({
-  showShareLink = true,
   onComplete,
 }: {
-  showShareLink?: boolean;
   onComplete?: () => void;
 }) => {
   const { toast } = useToast();
-  const { copyToClipboard } = useCopyToClipboard({ timeout: 3000 });
   const { settings } = useSettings();
   const [isSending, setIsSending] = useState(false);
-  const [shareLink, setShareLink] = useState("");
   const [machineId, setMachineId] = useState("");
   const [feedbackText, setFeedbackText] = useState("");
   const [isLoadingVideo, setIsLoadingVideo] = useState(false);
@@ -127,13 +83,12 @@ export const ShareLogsButton = ({
   const captureLastFiveMinutes = async () => {
     setIsLoadingVideo(true);
     try {
-      // Fetch last video chunks
       const response = await localFetch("/raw_sql", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query: `
-            SELECT * FROM video_chunks 
+            SELECT * FROM video_chunks
             ORDER BY id DESC
             LIMIT 6
           `,
@@ -143,7 +98,6 @@ export const ShareLogsButton = ({
       if (!response.ok) throw new Error("failed to fetch video chunks");
       const chunks = (await response.json()) as VideoChunk[];
 
-      // Merge frames
       const mergeResponse = await localFetch(
         "/experimental/frames/merge",
         {
@@ -177,7 +131,6 @@ export const ShareLogsButton = ({
       const file = e.target.files?.[0];
       if (!file) return;
 
-      // Resize and compress to JPEG so Discord can render it (max ~1920px wide)
       const img = new Image();
       const dataUrl = await new Promise<string>((resolve) => {
         const reader = new FileReader();
@@ -213,13 +166,11 @@ export const ShareLogsButton = ({
       const identifier = settings.user?.id || machineId;
       const type = settings.user?.id ? "user" : "machine";
 
-      // Get log contents - limit to last 100KB per file to avoid OOM
-      const MAX_LOG_SIZE = 100 * 1024; // 100KB per file
+      const MAX_LOG_SIZE = 100 * 1024;
       const logContents = await Promise.all(
-        logFiles.slice(0, 5).map(async (file) => { // Only process 5 most recent logs
+        logFiles.slice(0, 5).map(async (file) => {
           try {
             const content = await readTextFile(file.path);
-            // Only keep last MAX_LOG_SIZE characters
             const truncatedContent = content.length > MAX_LOG_SIZE
               ? `... [truncated, showing last ${MAX_LOG_SIZE / 1024}KB] ...\n` + content.slice(-MAX_LOG_SIZE)
               : content;
@@ -234,7 +185,7 @@ export const ShareLogsButton = ({
       );
 
       let consoleLog = "";
-      try { consoleLog = (localStorage?.getItem("console_logs") || "").slice(-50000); } catch {} // Last 50KB of console logs
+      try { consoleLog = (localStorage?.getItem("console_logs") || "").slice(-50000); } catch {}
 
       const signedRes = await fetch(`${BASE_URL}/api/logs`, {
         method: "POST",
@@ -260,7 +211,6 @@ export const ShareLogsButton = ({
       if (includeChatHistory) {
         try {
           const conversations = await loadAllConversations();
-          // include last 5 conversations, cap at 200KB total
           const MAX_CHAT_SIZE = 200 * 1024;
           const recentConvs = conversations.slice(0, 5);
           let chatData = "";
@@ -292,13 +242,10 @@ export const ShareLogsButton = ({
         headers: { "Content-Type": "text/plain" },
       });
 
-      // Upload screenshot if exists
       if (screenshot && signedUrlScreenshot) {
-        // Convert base64 to blob
         const response = await fetch(screenshot);
         const blob = await response.blob();
 
-        // Upload directly using fetch
         await fetch(signedUrlScreenshot, {
           method: "PUT",
           body: blob,
@@ -306,13 +253,7 @@ export const ShareLogsButton = ({
         });
       }
 
-      // Upload video if exists
       if (mergedVideoPath && signedUrlVideo) {
-        console.log({
-          filePath: mergedVideoPath,
-          signedUrl: signedUrlVideo,
-        });
-
         const videoResult = await commands.uploadFileToS3(
           mergedVideoPath,
           signedUrlVideo
@@ -324,7 +265,7 @@ export const ShareLogsButton = ({
       const os_version = osVersion();
       const app_version = await getVersion();
 
-      const confirmRes = await fetch(`${BASE_URL}/api/logs/confirm`, {
+      await fetch(`${BASE_URL}/api/logs/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -341,10 +282,14 @@ export const ShareLogsButton = ({
         }),
       });
 
-      const {
-        data: { id },
-      } = await confirmRes.json();
-      setShareLink(`${BASE_URL}/logs/${id}`);
+      toast({
+        title: "feedback sent",
+        description: "thanks — we'll follow up by email or discord.",
+      });
+      setFeedbackText("");
+      setScreenshot(null);
+      setMergedVideoPath(null);
+      if (onComplete) onComplete();
     } catch (err) {
       console.error("log sharing failed:", err);
       toast({
@@ -353,147 +298,121 @@ export const ShareLogsButton = ({
         variant: "destructive",
       });
     } finally {
-      if (!showShareLink) {
-        toast({
-          title: "feedback sent",
-          description: "thanks for your feedback!",
-        });
-      }
-      if (onComplete) onComplete();
       setIsSending(false);
     }
   };
   return (
     <TooltipProvider>
       <div className="flex flex-col gap-2.5 w-full">
-        {!shareLink ? (
-          <>
-            <Textarea
-              placeholder="describe your feedback or issue..."
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-              className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
+        <Textarea
+          placeholder="describe your feedback or issue..."
+          value={feedbackText}
+          onChange={(e) => setFeedbackText(e.target.value)}
+          className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="cursor-pointer flex-none">
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleScreenshotUpload}
+              disabled={!!screenshot}
             />
-
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="cursor-pointer flex-none">
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleScreenshotUpload}
-                  disabled={!!screenshot}
-                />
-                <Button
-                  variant={screenshot ? "secondary" : "outline"}
-                  size="sm"
-                  className={`gap-1.5 h-7 text-xs transition-all ${
-                    screenshot
-                      ? "bg-foreground/10 text-foreground"
-                      : ""
-                  }`}
-                  disabled={!!screenshot}
-                  asChild
-                >
-                  <span>
-                    <Camera className="h-3 w-3" />
-                    <span>screenshot</span>
-                  </span>
-                </Button>
-              </label>
-
-              <Tooltip delayDuration={200}>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={mergedVideoPath ? "secondary" : "outline"}
-                    size="sm"
-                    onClick={captureLastFiveMinutes}
-                    className={`gap-1.5 h-7 text-xs transition-all ${
-                      mergedVideoPath
-                        ? "bg-foreground/10 text-foreground"
-                        : ""
-                    }`}
-                    disabled={isLoadingVideo || health?.status === "error"}
-                  >
-                    {isLoadingVideo ? (
-                      <Loader className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Video className="h-3 w-3" />
-                    )}
-                    <span>recording</span>
-                    <span className="ml-0.5 text-[10px] text-muted-foreground">
-                      5m
-                    </span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent
-                  side="bottom"
-                  className="text-xs"
-                >
-                  attach last 5 minutes of screen recording
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            {screenshot && (
-              <div className="relative w-32 aspect-video rounded-lg overflow-hidden bg-secondary/10 border border-border">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={screenshot}
-                  alt="Screenshot preview"
-                  className="object-cover w-full h-full"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-1 right-1 h-5 w-5 rounded-full bg-background/80 hover:bg-background/95 border border-border"
-                  onClick={() => setScreenshot(null)}
-                >
-                  <X className="h-2.5 w-2.5" />
-                </Button>
-              </div>
-            )}
-
-            <p className="text-[10px] text-muted-foreground leading-tight">
-              pi chat history is included to help us debug. personal info is automatically removed.
-            </p>
-
             <Button
-              variant="default"
+              variant={screenshot ? "secondary" : "outline"}
               size="sm"
-              onClick={sendLogs}
-              disabled={isSending}
-              className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
+              className={`gap-1.5 h-7 text-xs transition-all ${
+                screenshot
+                  ? "bg-foreground/10 text-foreground"
+                  : ""
+              }`}
+              disabled={!!screenshot}
+              asChild
             >
-              {isSending ? (
-                <>
-                  <Loader className="h-3 w-3 animate-spin" />
-                  <span>sending...</span>
-                </>
-              ) : (
-                <>
-                  <Upload className="h-3 w-3" />
-                  <span>send logs & feedback</span>
-                </>
-              )}
+              <span>
+                <Camera className="h-3 w-3" />
+                <span>screenshot</span>
+              </span>
             </Button>
-          </>
-        ) : (
-          <>
-            {showShareLink && (
-              <ShareLinkDisplay
-                shareLink={shareLink}
-                onCopy={() => copyToClipboard(shareLink)}
-                onClose={() => {
-                  setShareLink("");
-                  setFeedbackText("");
-                  setScreenshot(null);
-                  setMergedVideoPath(null);
-                }}
-              />
-            )}
-          </>
+          </label>
+
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant={mergedVideoPath ? "secondary" : "outline"}
+                size="sm"
+                onClick={captureLastFiveMinutes}
+                className={`gap-1.5 h-7 text-xs transition-all ${
+                  mergedVideoPath
+                    ? "bg-foreground/10 text-foreground"
+                    : ""
+                }`}
+                disabled={isLoadingVideo || health?.status === "error"}
+              >
+                {isLoadingVideo ? (
+                  <Loader className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Video className="h-3 w-3" />
+                )}
+                <span>recording</span>
+                <span className="ml-0.5 text-[10px] text-muted-foreground">
+                  5m
+                </span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              className="text-xs"
+            >
+              attach last 5 minutes of screen recording
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
+        {screenshot && (
+          <div className="relative w-32 aspect-video rounded-lg overflow-hidden bg-secondary/10 border border-border">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={screenshot}
+              alt="Screenshot preview"
+              className="object-cover w-full h-full"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-1 right-1 h-5 w-5 rounded-full bg-background/80 hover:bg-background/95 border border-border"
+              onClick={() => setScreenshot(null)}
+            >
+              <X className="h-2.5 w-2.5" />
+            </Button>
+          </div>
         )}
+
+        <p className="text-[10px] text-muted-foreground leading-tight">
+          pi chat history is included to help us debug. personal info is automatically removed.
+        </p>
+
+        <Button
+          variant="default"
+          size="sm"
+          onClick={sendLogs}
+          disabled={isSending}
+          className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
+        >
+          {isSending ? (
+            <>
+              <Loader className="h-3 w-3 animate-spin" />
+              <span>sending...</span>
+            </>
+          ) : (
+            <>
+              <Upload className="h-3 w-3" />
+              <span>send logs & feedback</span>
+            </>
+          )}
+        </Button>
       </div>
     </TooltipProvider>
   );

@@ -58,6 +58,33 @@ use sck_rs::Monitor as SckMonitor;
 // xcap is used on non-macOS platforms, and as fallback on older macOS
 use xcap::Monitor as XcapMonitor;
 
+/// Optional cap on captured width for the macOS SCK stream. The GPU
+/// downscales to fit before `replayd` delivers the framebuffer, so
+/// WindowServer composites a smaller surface. `0` = no cap (capture at
+/// native, the previous default).
+///
+/// Set by the vision manager from the user's `video_quality` setting via
+/// `video_quality_to_max_snapshot_width` so the captured resolution
+/// matches the resolution the snapshot writer would downscale to anyway.
+/// Coupling these means screenpipe captures exactly the pixels it stores —
+/// no wasted GPU readback at native res just to throw it away in user
+/// space before JPEG encoding.
+#[cfg(target_os = "macos")]
+static SCK_CAPTURE_MAX_WIDTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Set the SCK capture-width cap. `0` = no cap. Reads the user's
+/// `video_quality` setting via the snapshot-width mapping; called by the
+/// vision manager when capture starts and when settings change.
+#[cfg(target_os = "macos")]
+pub fn set_sck_capture_max_width(max_width: u32) {
+    SCK_CAPTURE_MAX_WIDTH.store(max_width, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(target_os = "macos")]
+fn sck_capture_max_width() -> u32 {
+    SCK_CAPTURE_MAX_WIDTH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Clone)]
 pub struct SafeMonitor {
     monitor_id: u32,
@@ -257,8 +284,17 @@ impl SafeMonitor {
                         return Err("Invalid monitor dimensions".to_string());
                     }
 
-                    monitor
-                        .capture_image()
+                    // Honor the user's video_quality cap at the SCK layer so
+                    // WindowServer composites + replayd delivers a framebuffer
+                    // at the same resolution the snapshot writer would write
+                    // to disk anyway. `0` = no cap (capture native).
+                    let cap = sck_capture_max_width();
+                    let result = if cap == 0 {
+                        monitor.capture_image()
+                    } else {
+                        monitor.capture_image_scaled(cap)
+                    };
+                    result
                         .map_err(|e| format!("{}", e))
                         .map(DynamicImage::ImageRgba8)
                 } else {
@@ -327,8 +363,13 @@ impl SafeMonitor {
                         return Err("Invalid monitor dimensions".to_string());
                     }
 
-                    monitor
-                        .capture_image_excluding(&ids)
+                    let cap = sck_capture_max_width();
+                    let result = if cap == 0 {
+                        monitor.capture_image_excluding(&ids)
+                    } else {
+                        monitor.capture_image_scaled_excluding(cap, &ids)
+                    };
+                    result
                         .map_err(|e| format!("{}", e))
                         .map(DynamicImage::ImageRgba8)
                 } else {

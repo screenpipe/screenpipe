@@ -285,10 +285,11 @@ If not connected, tell user to set up in Settings > Connections.
 
 ```bash
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings?start_time=1d%20ago&end_time=now&limit=10&offset=0"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings?q=alice%40acme.com"
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings/42"
 ```
 
-Returns detected meetings (from calendar, app detection, window titles, UI elements, multi-speaker audio).
+Returns detected meetings (from calendar, app detection, window titles, UI elements, multi-speaker audio). `q` is a case-insensitive substring filter against title, attendees, and notes.
 
 | Field | Type | Description |
 |-------|------|-------------|

@@ -6,12 +6,14 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, LogOut, ExternalLink, FileText, Lock } from "lucide-react";
+import { Loader2, RefreshCw, LogOut, ExternalLink, FileText, Lock, Plus } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
+import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
 
 interface DriveFile {
   id: string;
@@ -20,56 +22,88 @@ interface DriveFile {
   webViewLink: string;
 }
 
+interface DocsAccount {
+  instance: string | null;
+  displayName: string | null;
+}
+
 export function GoogleDocsCard() {
   const { settings } = useSettings();
   const isPro = !!settings.user?.cloud_subscribed;
-  const [connected, setConnected] = useState(false);
-  const [email, setEmail] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<DocsAccount[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [recentDocs, setRecentDocs] = useState<DriveFile[]>([]);
   const [isLoadingDocs, setIsLoadingDocs] = useState(false);
 
-  const fetchStatus = useCallback(async () => {
+  const fetchAccounts = useCallback(async () => {
     try {
+      const list = await commands.oauthListInstances("google-docs");
+      if (list.status === "ok" && list.data.length > 0) {
+        setAccounts(
+          list.data.map((i) => ({
+            instance: i.instance ?? null,
+            displayName: i.display_name ?? null,
+          }))
+        );
+        return;
+      }
       const status = await commands.oauthStatus("google-docs", null);
-      if (status.status === "ok") {
-        setConnected(status.data.connected);
-        setEmail(status.data.display_name ?? null);
+      if (status.status === "ok" && status.data.connected) {
+        setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
+      } else {
+        setAccounts([]);
       }
     } catch (e) {
       console.error("failed to fetch google docs status:", e);
+      setAccounts([]);
     }
   }, []);
 
   useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
+    fetchAccounts();
+  }, [fetchAccounts]);
+
+  const connected = accounts.length > 0;
 
   const fetchRecentDocs = useCallback(async () => {
     setIsLoadingDocs(true);
     try {
-      const params = new URLSearchParams({
-        q: "mimeType='application/vnd.google-apps.document' and trashed=false",
-        orderBy: "modifiedTime desc",
-        pageSize: "5",
-        fields: "files(id,name,modifiedTime,webViewLink)",
-      });
-      const res = await localFetch(
-        `/connections/google-docs/proxy/drive/v3/files?${params}`,
-        { method: "GET" }
+      const targets = accounts.length > 0 ? accounts : [{ instance: null, displayName: null }];
+      const groups = await Promise.all(
+        targets.map(async (account) => {
+          const params = new URLSearchParams({
+            q: "mimeType='application/vnd.google-apps.document' and trashed=false",
+            orderBy: "modifiedTime desc",
+            pageSize: "5",
+            fields: "files(id,name,modifiedTime,webViewLink)",
+          });
+          if (account.instance) params.set("instance", account.instance);
+          const res = await localFetch(
+            `/connections/google-docs/proxy/drive/v3/files?${params}`,
+            { method: "GET" }
+          );
+          if (!res.ok) return [];
+          const data = await res.json();
+          return (data.files || []) as DriveFile[];
+        })
       );
-      if (res.ok) {
-        const data = await res.json();
-        setRecentDocs(data.files || []);
-      } else {
-        setRecentDocs([]);
-      }
+      const seen = new Set<string>();
+      const merged = groups
+        .flat()
+        .filter((d) => {
+          if (seen.has(d.id)) return false;
+          seen.add(d.id);
+          return true;
+        })
+        .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())
+        .slice(0, 5);
+      setRecentDocs(merged);
     } catch {
       setRecentDocs([]);
     }
     setIsLoadingDocs(false);
-  }, []);
+  }, [accounts]);
 
   useEffect(() => {
     if (connected) fetchRecentDocs();
@@ -81,7 +115,8 @@ export function GoogleDocsCard() {
       const res = await commands.oauthConnect("google-docs", null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_docs_connected");
-        await fetchStatus();
+        await fetchAccounts();
+        notifyConnectionsUpdated();
       }
     } catch (e) {
       console.error("google docs oauth failed:", e);
@@ -89,18 +124,18 @@ export function GoogleDocsCard() {
     setIsConnecting(false);
   };
 
-  const handleDisconnect = async () => {
-    setIsDisconnecting(true);
+  const handleDisconnect = async (instance: string | null) => {
+    const key = instance ?? "__default__";
+    setDisconnecting(key);
     try {
-      await commands.oauthDisconnect("google-docs", null);
-      setConnected(false);
-      setEmail(null);
-      setRecentDocs([]);
-      posthog.capture("google_docs_disconnected");
+      await commands.oauthDisconnect("google-docs", instance ?? null);
+      posthog.capture("google_docs_disconnected", { instance });
+      await fetchAccounts();
+      notifyConnectionsUpdated();
     } catch (e) {
       console.error("failed to disconnect google docs:", e);
     }
-    setIsDisconnecting(false);
+    setDisconnecting(null);
   };
 
   const formatRelativeTime = (iso: string) => {
@@ -125,7 +160,7 @@ export function GoogleDocsCard() {
               <h3 className="text-sm font-semibold text-foreground">Google Docs</h3>
               {connected && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
-                  connected
+                  {accounts.length} account{accounts.length > 1 ? "s" : ""}
                 </span>
               )}
             </div>
@@ -135,48 +170,71 @@ export function GoogleDocsCard() {
               Only docs you open with screenpipe or that screenpipe creates are visible — not your whole Drive.
             </p>
 
-            {!connected && !isPro ? (
+            {accounts.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {accounts.map((account) => {
+                  const key = account.instance ?? "__default__";
+                  const isDisconnecting = disconnecting === key;
+                  return (
+                    <div key={key} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground truncate">
+                        {account.displayName || account.instance || "default account"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDisconnect(account.instance)}
+                        disabled={isDisconnecting}
+                        className="text-xs text-muted-foreground hover:text-destructive h-6 px-2 shrink-0"
+                      >
+                        {isDisconnecting ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <LogOut className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!isPro && !connected ? (
               <div className="flex flex-col gap-1.5">
                 <Button disabled size="sm" className="gap-1.5 text-xs opacity-60">
                   <Lock className="h-3 w-3" />pro required
                 </Button>
                 <button
-                  onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                  onClick={() => openUrl("https://screenpipe.com/onboarding")}
                   className="text-[10px] text-muted-foreground hover:text-foreground underline"
                 >
                   upgrade to pro to connect
                 </button>
               </div>
-            ) : !connected ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleConnect}
-                disabled={isConnecting}
-                className="text-xs"
-              >
-                {isConnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <img src="/images/google-docs.svg" alt="" className="h-3 w-3 mr-1.5" />
-                )}
-                {isConnecting ? "Waiting for Google..." : "Connect Google Docs"}
-              </Button>
             ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleDisconnect}
-                disabled={isDisconnecting}
-                className="text-xs text-muted-foreground hover:text-destructive h-7 px-2"
-              >
-                {isDisconnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <LogOut className="h-3 w-3 mr-1.5" />
-                )}
-                Disconnect
-              </Button>
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleConnect}
+                  disabled={isConnecting}
+                  className="text-xs"
+                >
+                  {isConnecting ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : connected ? (
+                    <Plus className="h-3 w-3 mr-1.5" />
+                  ) : (
+                    <img src="/images/google-docs.svg" alt="" className="h-3 w-3 mr-1.5" />
+                  )}
+                  {isConnecting
+                    ? "Waiting for Google..."
+                    : connected
+                    ? "Add another account"
+                    : "Connect Google Docs"}
+                </Button>
+                {!connected && <GoogleOAuthUnverifiedAppHint />}
+              </div>
             )}
           </div>
         </div>
@@ -231,10 +289,12 @@ export function GoogleDocsCard() {
         <div className="px-4 py-2 bg-muted/50 border-t border-border">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>
-              {connected && email
-                ? `connected as ${email}`
-                : connected
-                ? "google docs connected"
+              {connected
+                ? accounts.length > 1
+                  ? `${accounts.length} accounts synced`
+                  : accounts[0]?.displayName
+                  ? `connected as ${accounts[0].displayName}`
+                  : "google docs connected"
                 : "Lets AI read and search your Google Docs"}
             </span>
             <span className="ml-auto">{connected ? "● connected" : "○ not connected"}</span>

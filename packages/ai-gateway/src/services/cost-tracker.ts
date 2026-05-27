@@ -54,6 +54,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-2.5-pro': { input: 1.25, output: 10.00 },
   'gemini-3-flash': { input: 0.10, output: 0.40 },
   'gemini-3-pro': { input: 1.25, output: 10.00 },
+  // 3.5-flash routes through Vertex global endpoint (see gemini.ts
+  // requiresGlobalEndpoint), so we pay the cheaper global tier — $1.50/$9
+  // vs $1.65/$9.90 for regional.
+  'gemini-3.5-flash': { input: 1.50, output: 9.00 },
   'gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
   'gemini-1.5-flash': { input: 0.075, output: 0.30 },
   'gemini-1.5-pro': { input: 1.25, output: 5.00 },

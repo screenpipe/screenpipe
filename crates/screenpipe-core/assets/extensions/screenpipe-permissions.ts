@@ -6,7 +6,7 @@
 // Rules use Type(specifier) syntax: Api(), App(), Window(), Content().
 // Evaluation order: deny → allow → default allowlist → reject
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 interface PermissionRule {
   type: "api" | "app" | "window" | "content";

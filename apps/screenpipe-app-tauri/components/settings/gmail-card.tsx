@@ -9,8 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Lock, LogOut, Mail, Plus } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import posthog from "posthog-js";
+import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
 
 interface GmailAccount {
   instance: string | null;
@@ -59,6 +61,7 @@ export function GmailCard() {
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("gmail_connected");
         await fetchAccounts();
+        notifyConnectionsUpdated();
       }
     } catch (e) {
       console.error("gmail oauth failed:", e);
@@ -73,6 +76,7 @@ export function GmailCard() {
       await commands.oauthDisconnect("gmail", instance ?? null);
       posthog.capture("gmail_disconnected", { instance });
       await fetchAccounts();
+      notifyConnectionsUpdated();
     } catch (e) {
       console.error("failed to disconnect gmail:", e);
     }
@@ -153,33 +157,36 @@ export function GmailCard() {
                   <Lock className="h-3 w-3" />pro required
                 </Button>
                 <button
-                  onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                  onClick={() => openUrl("https://screenpipe.com/onboarding")}
                   className="text-[10px] text-muted-foreground hover:text-foreground underline"
                 >
                   upgrade to pro to connect
                 </button>
               </div>
             ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleConnect}
-                disabled={isConnecting}
-                className="text-xs"
-              >
-                {isConnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : connected ? (
-                  <Plus className="h-3 w-3 mr-1.5" />
-                ) : (
-                  <Mail className="h-3 w-3 mr-1.5" />
-                )}
-                {isConnecting
-                  ? "Waiting for Google..."
-                  : connected
-                  ? "Add another account"
-                  : "Connect Gmail"}
-              </Button>
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleConnect}
+                  disabled={isConnecting}
+                  className="text-xs"
+                >
+                  {isConnecting ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : connected ? (
+                    <Plus className="h-3 w-3 mr-1.5" />
+                  ) : (
+                    <Mail className="h-3 w-3 mr-1.5" />
+                  )}
+                  {isConnecting
+                    ? "Waiting for Google..."
+                    : connected
+                    ? "Add another account"
+                    : "Connect Gmail"}
+                </Button>
+                {!connected && <GoogleOAuthUnverifiedAppHint />}
+              </div>
             )}
           </div>
         </div>

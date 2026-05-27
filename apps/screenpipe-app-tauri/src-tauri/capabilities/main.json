@@ -10,6 +10,7 @@
       "http://localhost:*",
       "https://api.openai.com/*",
       "https://*.openai.com/*",
+      "https://api.screenpipe.com/*",
       "https://api.screenpi.pe/*",
       "https://*.anthropic.com/*",
       "https://*.ollama.ai/*",
@@ -122,6 +123,10 @@
         },
         {
           "path": "$HOME/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/**",
           "requireLiteralLeadingDot": false
         },
         {

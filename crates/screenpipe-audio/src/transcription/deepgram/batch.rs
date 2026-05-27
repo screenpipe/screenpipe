@@ -275,14 +275,14 @@ async fn handle_deepgram_response(
                 error!(
                     "device: {}, deepgram request blocked — received HTML instead of JSON (status {}). \
                      this usually means a firewall, corporate proxy, or captive portal is intercepting \
-                     requests to api.screenpi.pe. body preview: {}",
+                     requests to api.screenpipe.com. body preview: {}",
                     device,
                     status,
                     &body_text[..body_text.len().min(500)]
                 );
                 return Err(anyhow::anyhow!(
                     "Audio transcription blocked by network (firewall/proxy). \
-                     Please check that api.screenpi.pe is accessible from your network."
+                     Please check that api.screenpipe.com is accessible from your network."
                 ));
             }
 
@@ -374,11 +374,11 @@ async fn handle_deepgram_response(
             let err_str = format!("{:?}", e);
             if err_str.contains("timed out") || err_str.contains("timeout") {
                 error!(
-                    "device: {}, deepgram request timed out — possible firewall blocking api.screenpi.pe: {:?}",
+                    "device: {}, deepgram request timed out — possible firewall blocking api.screenpipe.com: {:?}",
                     device, e
                 );
                 return Err(anyhow::anyhow!(
-                    "Audio transcription request timed out. Check if api.screenpi.pe is accessible from your network."
+                    "Audio transcription request timed out. Check if api.screenpipe.com is accessible from your network."
                 ));
             }
             if err_str.contains("dns") || err_str.contains("resolve") {
@@ -396,7 +396,7 @@ async fn handle_deepgram_response(
                     device, e
                 );
                 return Err(anyhow::anyhow!(
-                    "Connection refused to audio transcription server. A firewall may be blocking api.screenpi.pe."
+                    "Connection refused to audio transcription server. A firewall may be blocking api.screenpipe.com."
                 ));
             }
 

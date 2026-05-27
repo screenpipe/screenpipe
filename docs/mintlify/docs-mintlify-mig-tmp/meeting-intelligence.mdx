@@ -104,8 +104,27 @@ name speakers from the UI first when you can. use the API when building cleanup 
 
 ## meeting APIs
 
+### list and search meetings
+
 ```bash
+# list recent meetings
 curl "http://localhost:3030/meetings?limit=20"
+
+# search by title, attendees, or notes (case-insensitive)
+curl "http://localhost:3030/meetings?q=customer+sync&limit=20"
+
+# filter by date range
+curl "http://localhost:3030/meetings?start_time=2026-05-01T00:00:00Z&end_time=2026-05-31T23:59:59Z"
+
+# combine search with date range
+curl "http://localhost:3030/meetings?q=sprint&start_time=2026-05-01T00:00:00Z&limit=10"
+```
+
+the `q` parameter searches across meeting title, attendees, and notes with case-insensitive substring matching.
+
+### manage meetings
+
+```bash
 curl "http://localhost:3030/meetings/status"
 
 curl -X POST http://localhost:3030/meetings/start
@@ -116,7 +135,7 @@ curl -X POST http://localhost:3030/meetings/merge \
   -d '{"meeting_ids": [12, 13]}'
 ```
 
-use the meetings API when an automation needs meeting lists, current meeting status, merge cleanup, or downstream note updates.
+use the meetings API when an automation needs meeting lists, search, current meeting status, merge cleanup, or downstream note updates.
 
 ## Zoom, Meet, and Teams tradeoffs
 

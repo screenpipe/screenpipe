@@ -4,6 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  aggregateSourceCitations,
+  computeChatCitationPlan,
   formatSourceCitationsMarkdown,
   sourceCitationsFromMessage,
 } from "../source-citations";
@@ -333,6 +335,168 @@ describe("source citations", () => {
     });
 
     expect(citations).toEqual([]);
+  });
+
+  it("does not leak file paths from heredoc script bodies", () => {
+    // Common pipe pattern: write a script via heredoc then run it. Without
+    // stripping the heredoc body, every quoted "/Users/..." string literal
+    // and `process.platform`-style token inside the embedded source gets
+    // tokenized as a path and pollutes the footer.
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: {
+              command:
+                "cat > /tmp/sync.ts << 'SCRIPT_EOF'\n" +
+                'const IMESSAGE_DB = "/Users/me/Library/Messages/chat.db";\n' +
+                'const HINT = ".clawdbot/credentials/telegram-pairing.json";\n' +
+                'if (process.platform !== "darwin") return null;\n' +
+                "SCRIPT_EOF\n" +
+                "bun run /tmp/sync.ts",
+            },
+            result: "Done\n",
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    const titles = citations.map((c) => c.title);
+    expect(titles).toContain("Local file: sync.ts");
+    expect(titles).not.toContain("Local file: chat.db");
+    expect(titles).not.toContain("Local file: telegram-pairing.json");
+    expect(titles).not.toContain("Local file: null");
+    expect(titles).not.toContain("Local file: undefined");
+  });
+
+  it("aggregates citations across pipe-run messages and dedupes repeats", () => {
+    // Real pipe-run pattern from chat-memory-sync_2341.json: the agent reads
+    // the same state file across multiple debug steps. Per-message footers
+    // would render N "Read: state.json" rows; the aggregator emits one.
+    const readState = {
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "read",
+            args: { path: "/Users/me/.screenpipe/pipes/sync/state.json" },
+            result: "{}",
+            isRunning: false,
+          },
+        },
+      ],
+    };
+    const writeScript = {
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "write",
+            args: { path: "/tmp/sync.ts" },
+            result: "ok",
+            isRunning: false,
+          },
+        },
+      ],
+    };
+
+    const aggregated = aggregateSourceCitations([
+      readState,
+      writeScript,
+      readState, // repeated step in the agentic loop
+    ]);
+
+    expect(aggregated.map((c) => c.title)).toEqual([
+      "Read: state.json",
+      "Wrote: sync.ts",
+    ]);
+  });
+
+  describe("computeChatCitationPlan", () => {
+    const readMsg = (id: string, path: string) => ({
+      id,
+      role: "assistant" as const,
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "read",
+            args: { path },
+            result: "ok",
+            isRunning: false,
+          },
+        },
+      ],
+    });
+    const userMsg = (id: string) => ({ id, role: "user" as const, contentBlocks: [] });
+
+    it("leaves single-tool turns alone", () => {
+      const plan = computeChatCitationPlan([
+        userMsg("u1"),
+        readMsg("a1", "/tmp/x.ts"),
+      ]);
+      expect(plan.deferredMessageIds.size).toBe(0);
+      expect(plan.aggregatedAfter.size).toBe(0);
+    });
+
+    it("aggregates an agentic loop turn (≥2 citation-bearing assistants)", () => {
+      const plan = computeChatCitationPlan([
+        userMsg("u1"),
+        readMsg("a1", "/tmp/state.json"),
+        readMsg("a2", "/tmp/state.json"),
+        readMsg("a3", "/tmp/script.ts"),
+      ]);
+      expect([...plan.deferredMessageIds]).toEqual(["a1", "a2", "a3"]);
+      expect(plan.aggregatedAfter.has("a3")).toBe(true);
+      expect(plan.aggregatedAfter.get("a3")?.map((c) => c.title)).toEqual([
+        "Read: state.json",
+        "Read: script.ts",
+      ]);
+    });
+
+    it("scopes aggregation per turn so separate user questions stay separate", () => {
+      const plan = computeChatCitationPlan([
+        userMsg("u1"),
+        readMsg("a1", "/tmp/a.ts"),
+        readMsg("a2", "/tmp/a.ts"),
+        userMsg("u2"),
+        readMsg("b1", "/tmp/b.ts"),
+        readMsg("b2", "/tmp/b.ts"),
+      ]);
+      expect(plan.aggregatedAfter.has("a2")).toBe(true);
+      expect(plan.aggregatedAfter.has("b2")).toBe(true);
+      expect(plan.aggregatedAfter.get("a2")?.map((c) => c.title)).toEqual(["Read: a.ts"]);
+      expect(plan.aggregatedAfter.get("b2")?.map((c) => c.title)).toEqual(["Read: b.ts"]);
+    });
+
+    it("forceAggregate folds even single-step turns (pipe sessions)", () => {
+      const plan = computeChatCitationPlan(
+        [userMsg("u1"), readMsg("a1", "/tmp/once.ts")],
+        { forceAggregate: true },
+      );
+      expect(plan.deferredMessageIds.has("a1")).toBe(true);
+      expect(plan.aggregatedAfter.get("a1")?.map((c) => c.title)).toEqual([
+        "Read: once.ts",
+      ]);
+    });
+
+    it("ignores assistant messages without citations when deciding to aggregate", () => {
+      const plain = {
+        id: "a1",
+        role: "assistant" as const,
+        contentBlocks: [{ type: "text", text: "hi" }],
+      };
+      const plan = computeChatCitationPlan([
+        userMsg("u1"),
+        plain,
+        readMsg("a2", "/tmp/x.ts"),
+      ]);
+      // Only one citation-bearing assistant — below the default threshold.
+      expect(plan.aggregatedAfter.size).toBe(0);
+    });
   });
 
   it("formats citations for chat markdown exports", () => {

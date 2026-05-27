@@ -28,7 +28,7 @@ export function HermesCard() {
       skill={{
         localPath: "~/.hermes/skills/screenpipe/SKILL.md",
         cliInstall:
-          "hermes skills install github:mediar-ai/screenpipe/.claude/skills/screenpipe-cli",
+          "hermes skills install github:screenpipe/screenpipe/.claude/skills/screenpipe-cli",
       }}
       sync={{
         defaultRemotePath: "~/screenpipe-data",

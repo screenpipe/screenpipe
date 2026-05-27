@@ -15,7 +15,7 @@
 // - Sub-agents inherit pipe token for screenpipe API auth
 // - All children killed on parent exit
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Prevent nesting — sub-agents must not spawn further sub-agents
 if (process.env.SCREENPIPE_SUBAGENT === "1") {
@@ -77,7 +77,7 @@ async function spawnSubAgent(prompt: string): Promise<string> {
 
   return new Promise((resolve, reject) => {
     const child = spawn("bun", [
-      require.resolve("@mariozechner/pi-coding-agent/dist/main.js"),
+      require.resolve("@earendil-works/pi-coding-agent/dist/main.js"),
       "--mode", "print",
       "--no-session",
       "--provider", process.env.PI_PROVIDER || "screenpipe",

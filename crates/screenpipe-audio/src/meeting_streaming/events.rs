@@ -108,6 +108,8 @@ pub struct MeetingLifecycleEvent {
     #[serde(default)]
     pub calendar_title: Option<String>,
     #[serde(default)]
+    pub detection_source: Option<String>,
+    #[serde(default)]
     pub timestamp: Option<DateTime<Utc>>,
 }
 

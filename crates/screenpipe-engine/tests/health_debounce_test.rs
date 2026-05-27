@@ -281,7 +281,7 @@ fn test_flicker_scenario_simulation() {
     let grace = Duration::from_secs(30);
     let threshold = CONSECUTIVE_FAILURES_THRESHOLD;
     let mut current = RecordingStatus::Recording;
-    let mut consecutive_failures: u32 = 0;
+    let mut consecutive_failures: u32;
 
     // tick 1: healthy
     current = decide_status(
