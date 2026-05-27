@@ -45,11 +45,15 @@ export function isInjectedTitleSourcePrompt(content?: string | null): boolean {
 }
 
 /**
- * Legacy alias for backward compatibility.
- * @deprecated Use isInjectedTitleSourcePrompt for consistent filtering.
+ * Detect `<conversation_history>` sync prompts that Pi echoes back as
+ * user events. Used by display code to hide these from the sidebar/title.
+ *
+ * This is intentionally narrow — only matches conversation_history tags.
+ * For broader title-derivation filtering (bare <role>/<system> tags),
+ * use `isInjectedTitleSourcePrompt` instead.
  */
 export function isConversationHistorySyncPrompt(value?: string | null): boolean {
-  return isInjectedTitleSourcePrompt(value);
+  return typeof value === "string" && value.trimStart().startsWith("<conversation_history>");
 }
 
 // ============================================================================

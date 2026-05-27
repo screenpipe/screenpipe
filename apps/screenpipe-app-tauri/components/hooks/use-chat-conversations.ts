@@ -16,6 +16,8 @@ import {
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
+import { stripPromptPlumbing, systemFallbackTitle, isFallbackLikeTitle as isFallbackLikeTitleUtil } from "@/lib/utils/chat-title";
+import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
@@ -91,16 +93,6 @@ interface UseChatConversationsOpts {
 interface SaveConversationOptions {
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
-}
-
-// Filters app-injected metadata from title derivation.
-// Duplicated from chat-utils.ts for hot-path performance.
-function isInjectedTitleSourcePrompt(content?: string | null): boolean {
-  if (typeof content !== "string") return false;
-  const trimmed = content.trimStart();
-  if (trimmed.startsWith("<conversation_history>")) return true;
-  const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
-  return bareMetadataOnly.test(trimmed);
 }
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
@@ -398,70 +390,69 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const firstUserMsg = msgs.find(
       (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
     );
-    const contentFallbackTitle = (firstUserMsg?.content.slice(0, 50) || "New Chat").trim();
-    const fallbackTitle = selectedPreset ? contentFallbackTitle : "New Chat";
+    // Strip prompt-plumbing tags so <role>/<system> wrappers never leak
+    // into the fallback title shown in the sidebar or into AI title input.
+    const cleanContent = firstUserMsg ? stripPromptPlumbing(firstUserMsg.content) : null;
+    const fallbackTitle = systemFallbackTitle(firstUserMsg?.content);
     const existingTitle = existing?.title?.trim() || null;
     const isFallbackLikeTitle =
       existingTitle === null ||
-      existingTitle === fallbackTitle ||
-      existingTitle === contentFallbackTitle ||
-      existingTitle === "New Chat" ||
-      existingTitle === "new chat" ||
-      existingTitle === "untitled" ||
-      (firstUserMsg && existingTitle === firstUserMsg.content.slice(0, 50).trim());
+      isFallbackLikeTitleUtil(existingTitle, fallbackTitle, firstUserMsg?.content);
 
     const hasValidPreset =
       selectedPreset &&
       selectedPreset.provider &&
       selectedPreset.model?.trim();
 
-    // Preserve user renames; use fallback for new conversations
-    const title = (!isFallbackLikeTitle && existingTitle) ? existingTitle : existingTitle || fallbackTitle;
+    // Title priority: user > ai > fallback
+    // Preserve existing title if it has higher priority than fallback
+    const existingSource = existing?.titleSource;
+    const shouldPreserveExisting = existingSource === "user" || existingSource === "ai";
+    const title = shouldPreserveExisting && existingTitle ? existingTitle : fallbackTitle;
+    const titleSource: "user" | "ai" | "fallback" = shouldPreserveExisting && existingSource ? existingSource : "fallback";
 
     // Start AI title generation in background (once per conversation)
+    // Only generate if current title is fallback priority
+    const rawContent = firstUserMsg?.content?.trim() || null;
     if (
-      isFallbackLikeTitle &&
-      firstUserMsg &&
+      titleSource === "fallback" &&
+      rawContent &&
       hasValidPreset &&
       !aiTitleAttemptedRef.current.has(convId)
     ) {
       aiTitleAttemptedRef.current.add(convId);
-      // Capture initial title to detect user renames during generation
-      const initialTitle = title;
 
       // Generate title in background (non-blocking)
+      // Pass the full raw user message — the AI can parse wrapper tags
+      // and extract intent better than the simple regex stripper.
       void (async () => {
         try {
           const aiTitle = await titleCreatedByAI(
-            firstUserMsg.content,
+            rawContent,
             selectedPreset,
             settings?.user?.token ?? null,
           );
 
           if (aiTitle) {
-            // Reload conversation to check if user renamed it while we were generating
+            // Reload conversation to check title priority
             const existingConv = await loadConversationFile(convId);
             if (!existingConv) {
-              return; // Conversation deleted - expected for this best-effort feature
+              return; // Conversation deleted
             }
 
-            const currentTitle = existingConv.title?.trim() || "";
-
-            // Only replace title if unchanged since generation started
-            const titleUnchanged = currentTitle === initialTitle;
-
-            if (titleUnchanged) {
+            // Only update if current title is still fallback priority
+            if (existingConv.titleSource !== "user") {
               existingConv.title = aiTitle;
+              existingConv.titleSource = "ai";
               await saveConversationFile(existingConv);
 
-              if (componentUnmountedRef.current) return;
-
-              upsertFileConversationMeta(existingConv);
-
-              // Update in-memory store and emit cross-window event
+              // Always update the zustand store and emit the cross-window
+              // event — the sidebar and header read from the store, so
+              // skipping this when the component unmounts leaves them
+              // showing the stale fallback title.
               try {
                 const { useChatStore } = await import("@/lib/stores/chat-store");
-                useChatStore.getState().actions.patch(convId, { title: aiTitle });
+                useChatStore.getState().actions.patch(convId, { title: aiTitle, titleSource: "ai" });
               } catch (e) {
                 console.warn("[chat-title] failed to update chat store", { convId, error: e });
               }
@@ -470,9 +461,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
                 await emit("chat-conversation-saved", {
                   id: convId,
                   title: existingConv.title,
+                  titleSource: "ai" as const,
                 });
               } catch {
                 // Ignore - webview may have reloaded
+              }
+
+              // React state update — only safe while mounted
+              if (!componentUnmountedRef.current) {
+                upsertFileConversationMeta(existingConv);
               }
             }
           }
@@ -488,6 +485,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const conversation: ChatConversation = {
       id: convId,
       title,
+      titleSource,
       // Persist the full transcript. The previous slice(-100) was silently
       // dropping the oldest messages on every save, so any chat that grew
       // past 100 messages walked forward and lost its early history. If
@@ -587,6 +585,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       await emit("chat-conversation-saved", {
         id: conversation.id,
         title: conversation.title,
+        titleSource: conversation.titleSource,
       });
     } catch {
       // ignore broadcast failures; local save already succeeded
@@ -732,7 +731,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const conv = await loadConversationFile(convId);
     if (!conv) return;
-    await saveConversationFile({ ...conv, title: trimmed, updatedAt: Date.now() });
+    await saveConversationFile({ ...conv, title: trimmed, titleSource: "user", updatedAt: Date.now() });
     await refreshFileConversations();
     // Mirror to the in-memory store so the chat sidebar reflects the new
     // title without waiting for app restart. Some call sites already patch
@@ -741,7 +740,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     try {
       const { useChatStore } = await import("@/lib/stores/chat-store");
       if (useChatStore.getState().sessions[convId]) {
-        useChatStore.getState().actions.patch(convId, { title: trimmed });
+        useChatStore.getState().actions.patch(convId, { title: trimmed, titleSource: "user" });
       }
     } catch (e) {
       console.warn("[chat] failed to sync rename to store:", e);

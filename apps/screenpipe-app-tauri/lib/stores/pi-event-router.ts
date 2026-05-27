@@ -60,6 +60,8 @@ import {
   saveConversationFile,
 } from "@/lib/chat-storage";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
+import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
+import { systemFallbackTitle } from "@/lib/utils/chat-title";
 import {
   useChatStore,
   sessionRecordFromMeta,
@@ -206,7 +208,7 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   if (!existing) {
     store.actions.upsert({
       id: sid,
-      title: "new chat",
+      title: "untitled",
       preview: snippet ?? "",
       status: nextStatus ?? "streaming",
       lastError: err ?? undefined,
@@ -650,20 +652,10 @@ async function persistBackgroundSession(sid: string): Promise<void> {
 
       const existing = await loadConversationFile(sid);
 
-      // Duplicated from chat-utils.ts for hot-path performance
-      function isInjectedTitleSourcePrompt(content?: string | null): boolean {
-        if (typeof content !== "string") return false;
-        const trimmed = content.trimStart();
-        if (trimmed.startsWith("<conversation_history>")) return true;
-        const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
-        return bareMetadataOnly.test(trimmed);
-      }
-
       const firstUserMsg = messages.find(
         (m: any) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
       ) as any;
-      const derivedTitle: string =
-        (firstUserMsg?.content?.slice(0, 50) || "New Chat").trim();
+      const derivedTitle: string = systemFallbackTitle(firstUserMsg?.content);
 
       // Background saves use fallback titles; AI titles generated in foreground
       const title = existing?.title || derivedTitle;
@@ -675,6 +667,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       const conv: ChatConversation = {
         id: sid,
         title,
+        ...(existing?.titleSource ? { titleSource: existing.titleSource } : {}),
         ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
         // Full transcript — see comment in use-chat-conversations.ts
         // saveConversation. The slice(-100) here was silently truncating

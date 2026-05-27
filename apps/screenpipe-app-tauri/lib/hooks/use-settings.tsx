@@ -160,6 +160,9 @@ export interface ChatConversation {
 		 *  "re-open" button is shown in the chat header). */
 		collapsed?: boolean;
 	};
+	/** Title source priority: user > ai > fallback. Used to prevent
+	 *  lower-priority titles from overwriting higher-priority ones. */
+	titleSource?: "user" | "ai" | "fallback";
 }
 
 export interface ChatHistoryStore {

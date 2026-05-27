@@ -46,6 +46,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
+import { stripPromptPlumbing } from "@/lib/utils/chat-title";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -2765,14 +2766,17 @@ function ChatTitleMenu({
   const firstUserMsg = messages.find(
     (m) => m.role === "user" && !isConversationHistorySyncPrompt(m.content)
   );
-  const derivedTitle = firstUserMsg?.content?.slice(0, 50);
+  const derivedTitle = firstUserMsg?.content
+    ? stripPromptPlumbing(firstUserMsg.content).slice(0, 50).trim()
+    : undefined;
+  const hasMessages = messages.length > 0;
   const title =
     storeTitle &&
     storeTitle !== "new chat" &&
     storeTitle !== "untitled" &&
     !isConversationHistorySyncPrompt(storeTitle)
       ? storeTitle
-      : derivedTitle || "";
+      : derivedTitle || (hasMessages ? "untitled" : "");
 
   // No conversation id OR no real content → don't render. The "+ New"
   // button on the right is enough; no point showing actions for a
@@ -6447,7 +6451,7 @@ export function StandaloneChat({
       if (!storeState.sessions[sidNow]) {
         storeState.actions.upsert({
           id: sidNow,
-          title: "new chat",
+          title: "untitled",
           preview: "",
           status: "streaming",
           messageCount: 0,

@@ -130,7 +130,7 @@ function HomeContent() {
     });
     store.actions.upsert({
       id,
-      title: "new chat",
+      title: "untitled",
       preview: "",
       status: "idle",
       messageCount: 0,
@@ -205,7 +205,7 @@ function HomeContent() {
         if (!existing) {
           store.actions.upsert({
             id,
-            title: title?.trim() || "new chat",
+            title: title?.trim() || "untitled",
             preview: preview ?? "",
             status: status ?? "idle",
             lastError,
@@ -261,11 +261,11 @@ function HomeContent() {
     let cancelled = false;
     let unlistenFn: (() => void) | undefined;
     (async () => {
-      const unlisten = await listen<{ id: string; title?: string }>(
+      const unlisten = await listen<{ id: string; title?: string; titleSource?: "fallback" | "ai" | "user" }>(
         "chat-conversation-saved",
         (event) => {
           if (cancelled) return;
-          const { id, title } = event.payload ?? {};
+          const { id, title, titleSource } = event.payload ?? {};
           const nextTitle = title?.trim();
           if (!id || !nextTitle) return;
 
@@ -275,6 +275,7 @@ function HomeContent() {
             store.actions.upsert({
               id,
               title: nextTitle,
+              ...(titleSource ? { titleSource } : {}),
               preview: "",
               status: "idle",
               messageCount: 0,
@@ -286,8 +287,17 @@ function HomeContent() {
             });
             return;
           }
-          if (existing.title !== nextTitle) {
-            store.actions.patch(id, { title: nextTitle });
+          // Respect titleSource priority: user > ai > fallback.
+          // Never downgrade an existing higher-priority source.
+          const existingSource = existing.titleSource;
+          const incomingSource = titleSource;
+          const wouldDowngrade =
+            existingSource === "user" && incomingSource !== "user";
+          if (!wouldDowngrade && (existing.title !== nextTitle || (incomingSource && existingSource !== incomingSource))) {
+            store.actions.patch(id, {
+              title: nextTitle,
+              ...(incomingSource ? { titleSource: incomingSource } : {}),
+            });
           }
         },
       );

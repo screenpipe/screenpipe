@@ -418,7 +418,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       const fresh = crypto.randomUUID();
       actions.upsert({
         id: fresh,
-        title: "new chat",
+        title: "untitled",
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -474,7 +474,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       const fresh = crypto.randomUUID();
       actions.upsert({
         id: fresh,
-        title: "new chat",
+        title: "untitled",
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -509,9 +509,9 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const handleRenameConfirmed = async (id: string, nextTitleRaw: string) => {
     const nextTitle = nextTitleRaw.trim() || "untitled";
-    actions.patch(id, { title: nextTitle });
+    actions.patch(id, { title: nextTitle, titleSource: "user" });
     try {
-      await updateConversationFlags(id, { title: nextTitle });
+      await updateConversationFlags(id, { title: nextTitle, titleSource: "user" });
     } catch {
       // best-effort persistence — UI already updated
     }
