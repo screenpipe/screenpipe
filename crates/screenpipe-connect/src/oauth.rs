@@ -1039,7 +1039,10 @@ mod tests {
             .unwrap();
 
         let got = load_oauth_json(Some(&store), id, Some("c@example.com")).await;
-        assert!(got.is_none(), "must not fall back when multiple accounts exist");
+        assert!(
+            got.is_none(),
+            "must not fall back when multiple accounts exist"
+        );
     }
 
     #[tokio::test]

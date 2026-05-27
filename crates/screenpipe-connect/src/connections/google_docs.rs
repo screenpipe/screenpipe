@@ -127,7 +127,9 @@ mod tests {
             .iter()
             .find(|(prefix, _)| api_path_clean.starts_with(prefix))
             .map(|(prefix, new_base)| {
-                let rest = api_path_clean.strip_prefix(prefix).unwrap_or(api_path_clean);
+                let rest = api_path_clean
+                    .strip_prefix(prefix)
+                    .unwrap_or(api_path_clean);
                 format!("{}/{}", new_base.trim_end_matches('/'), rest)
             })
             .unwrap_or_else(|| format!("{}/{}", base, api_path_clean))

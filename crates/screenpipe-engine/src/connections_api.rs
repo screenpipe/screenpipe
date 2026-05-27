@@ -1628,10 +1628,7 @@ async fn connection_proxy(
             let rest = api_path_clean
                 .strip_prefix(prefix)
                 .unwrap_or(api_path_clean);
-            (
-                new_base.trim_end_matches('/').to_string(),
-                rest.to_string(),
-            )
+            (new_base.trim_end_matches('/').to_string(), rest.to_string())
         })
         .unwrap_or_else(|| (base_url.clone(), api_path_clean.to_string()));
     let target_url = match forwarded_query.as_deref() {
