@@ -107,7 +107,9 @@ impl VisionManager {
         vision_handle: Handle,
     ) -> Self {
         // Single broadcast channel shared across all monitors + UI recorder.
-        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(64);
+        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(
+            crate::event_driven_capture::TRIGGER_CHANNEL_BUFFER,
+        );
 
         // Frame-linker actor: pairs UI events with the frames they
         // caused us to capture. Single shared instance across all

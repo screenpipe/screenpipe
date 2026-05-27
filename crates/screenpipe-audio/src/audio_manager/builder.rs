@@ -11,7 +11,7 @@ use screenpipe_db::DatabaseManager;
 
 use crate::{
     core::{
-        device::{default_input_device, default_output_device},
+        device::{default_input_device, default_output_device, parse_audio_device, DeviceType},
         engine::AudioTranscriptionEngine,
     },
     meeting_detector::MeetingDetector,
@@ -281,6 +281,29 @@ impl AudioManagerBuilder {
                 );
             }
             options.enabled_devices = HashSet::from_iter(devices);
+        }
+
+        if !options.is_disabled && options.use_system_default_audio {
+            let has_output = options.enabled_devices.iter().any(|name| {
+                parse_audio_device(name)
+                    .map(|d| d.device_type == DeviceType::Output)
+                    .unwrap_or(false)
+            });
+            if !has_output {
+                if let Ok(output) = default_output_device().await {
+                    options.enabled_devices.insert(output.to_string());
+                }
+            }
+            let has_input = options.enabled_devices.iter().any(|name| {
+                parse_audio_device(name)
+                    .map(|d| d.device_type == DeviceType::Input)
+                    .unwrap_or(false)
+            });
+            if !has_input {
+                if let Ok(input) = default_input_device() {
+                    options.enabled_devices.insert(input.to_string());
+                }
+            }
         }
 
         Ok(options.clone())

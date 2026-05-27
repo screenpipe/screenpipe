@@ -65,6 +65,7 @@ use crate::{
     sync_api::{self, SyncState},
     video_cache::FrameCache,
 };
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use lru::LruCache;
 use moka::future::Cache as MokaCache;
@@ -191,11 +192,11 @@ pub struct AppState {
     /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
     pub api_auth_key: Option<String>,
     /// Cloud JWT (Clerk) used to authenticate proxied requests to api.screenpipe.com.
-    /// Held in a RwLock so the desktop shell can refresh it after login/logout
+    /// Held in ArcSwap so the desktop shell can refresh it after login/logout
     /// without rebuilding the server. The pi-agent's bash deliberately can't see
     /// this token — agent calls localhost/v1/chat/completions and the server
     /// signs the upstream request here. See routes/cloud_proxy.rs.
-    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
+    pub cloud_token: Arc<ArcSwap<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
@@ -232,7 +233,7 @@ pub struct SCServer {
     /// API key for remote auth validation
     pub api_auth_key: Option<String>,
     /// Cloud JWT for proxied /v1/chat/completions calls. See AppState::cloud_token.
-    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
+    pub cloud_token: Arc<ArcSwap<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
     /// Background OAuth refresh scheduler. Owned here so its JoinHandle
@@ -280,7 +281,7 @@ impl SCServer {
             owned_browser: None,
             api_auth: false,
             api_auth_key: None,
-            cloud_token: Arc::new(tokio::sync::RwLock::new(None)),
+            cloud_token: Arc::new(ArcSwap::new(Arc::new(None))),
             secret_store: None,
             oauth_refresher: None,
             external_memory_sync: None,
@@ -292,15 +293,13 @@ impl SCServer {
     /// reads the inner Arc on each request. Callers can also clone the Arc
     /// directly (see `cloud_token_handle`) to update it from elsewhere.
     pub fn with_cloud_token(self, token: Option<String>) -> Self {
-        if let Ok(mut guard) = self.cloud_token.try_write() {
-            *guard = token;
-        }
+        self.cloud_token.store(Arc::new(token));
         self
     }
 
     /// Clone the cloud-token handle so the desktop shell can refresh it
     /// after the server has started (e.g. when settings.user.token changes).
-    pub fn cloud_token_handle(&self) -> Arc<tokio::sync::RwLock<Option<String>>> {
+    pub fn cloud_token_handle(&self) -> Arc<ArcSwap<Option<String>>> {
         self.cloud_token.clone()
     }
 

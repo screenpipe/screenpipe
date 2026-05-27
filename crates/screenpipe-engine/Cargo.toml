@@ -149,7 +149,11 @@ tower = { version = "0.4", features = ["util"] }
 criterion = { workspace = true }
 
 [features]
-default = ["qwen3-asr", "parakeet"]
+# redact-onnx-cpu is in defaults because screenpipe-engine.rs unconditionally
+# imports `screenpipe_redact::adapters::onnx` for the async PII worker. Without
+# it, `cargo {check,clippy,build} -p screenpipe-engine` (no --features) fails
+# to compile. Mac/Win release builds layer redact-onnx-{coreml,directml} on top.
+default = ["qwen3-asr", "parakeet", "redact-onnx-cpu"]
 metal = ["screenpipe-audio/metal"]
 heap-prof = ["dhat"]
 cuda = ["screenpipe-audio/cuda"]

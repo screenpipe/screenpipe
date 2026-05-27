@@ -759,6 +759,51 @@ pub async fn default_output_device() -> Result<AudioDevice> {
     }
 }
 
+/// Whether capture should ignore pinned device names and follow system defaults.
+pub fn should_resolve_to_system_default_audio(
+    configured: &[String],
+    use_system_default_audio: bool,
+) -> bool {
+    configured.is_empty()
+        || use_system_default_audio
+        || (configured.len() == 1 && configured[0].trim().eq_ignore_ascii_case("default"))
+}
+
+/// Resolve the audio device list used when starting or reconfiguring capture.
+///
+/// Matches the CLI engine behavior: when following system defaults (empty list,
+/// bare `"default"` sentinel, or `use_system_default_audio`), always enroll the
+/// current default input and output. Otherwise parse explicit device names.
+pub async fn resolve_audio_devices_for_capture(
+    configured: &[String],
+    use_system_default_audio: bool,
+) -> Vec<String> {
+    if should_resolve_to_system_default_audio(configured, use_system_default_audio) {
+        let mut devices = Vec::new();
+        if let Ok(input) = default_input_device() {
+            devices.push(input.to_string());
+        }
+        if let Ok(output) = default_output_device().await {
+            devices.push(output.to_string());
+        }
+        return devices;
+    }
+
+    let mut audio_devices = Vec::new();
+    for d in configured {
+        if d.trim().eq_ignore_ascii_case("default") {
+            continue;
+        }
+        match parse_audio_device(d) {
+            Ok(device) => audio_devices.push(device.to_string()),
+            Err(e) => {
+                tracing::warn!("skipping unparseable audio device '{}': {}", d, e);
+            }
+        }
+    }
+    audio_devices
+}
+
 /// Returns the Windows "Default Communications Device" (output) if it differs
 /// from the multimedia/console default. MS Teams, Zoom, etc. route call audio
 /// to the eCommunications endpoint, which is often a USB headset while the
@@ -840,5 +885,39 @@ mod windows_com_audio {
         }
 
         Ok(Some(name))
+    }
+}
+
+#[cfg(test)]
+mod resolve_audio_tests {
+    use super::should_resolve_to_system_default_audio;
+
+    #[test]
+    fn empty_config_uses_system_defaults() {
+        assert!(should_resolve_to_system_default_audio(&[], false));
+    }
+
+    #[test]
+    fn default_sentinel_uses_system_defaults() {
+        assert!(should_resolve_to_system_default_audio(
+            &["default".to_string()],
+            false
+        ));
+    }
+
+    #[test]
+    fn follow_system_default_flag_overrides_pinned_names() {
+        assert!(should_resolve_to_system_default_audio(
+            &["MacBook Pro Microphone (input)".to_string()],
+            true
+        ));
+    }
+
+    #[test]
+    fn pinned_devices_only_when_not_following_system_default() {
+        assert!(!should_resolve_to_system_default_audio(
+            &["MacBook Pro Microphone (input)".to_string()],
+            false
+        ));
     }
 }

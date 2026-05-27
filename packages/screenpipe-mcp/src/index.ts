@@ -314,13 +314,15 @@ const TOOLS: Tool[] = [
     name: "list-meetings",
     description:
       "List detected meetings (Zoom, Teams, Meet, etc.) with duration, app, and attendees. " +
-      "Only available when screenpipe runs in smart transcription mode.",
+      "Only available when screenpipe runs in smart transcription mode. " +
+      "Pass `q` to filter by substring match against title, attendees, and notes (e.g. an email or name).",
     annotations: { title: "List Meetings", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
         start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '1d ago')" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        q: { type: "string", description: "Case-insensitive substring filter on title, attendees, and note" },
         limit: { type: "integer", description: "Max results (default 20)", default: 20 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
       },

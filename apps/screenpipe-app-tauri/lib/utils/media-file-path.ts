@@ -43,13 +43,13 @@ export function isMediaFilePath(path: string): boolean {
 
 export function normalizeLocalMediaMarkdown(text: string): string {
   return text.replace(
-    new RegExp(`!\\[([^\\]]*)\\]\\(((?:/[^\n\r]+?|[A-Z]:[\\\\/][^\n\r]+?)\\.(${MEDIA_EXTENSION_PATTERN}))\\)`, "gi"),
-    (_match, alt: string, path: string) => {
+    new RegExp(`(!?)\\[([^\\]]*)\\]\\(((?:/[^\n\r]+?|[A-Z]:[\\\\/][^\n\r]+?)\\.(${MEDIA_EXTENSION_PATTERN}))\\)`, "gi"),
+    (_match, sigil: string, alt: string, path: string) => {
       const trimmedPath = path.trim();
       if (trimmedPath.startsWith("<") && trimmedPath.endsWith(">")) {
-        return `![${alt}](${trimmedPath})`;
+        return `${sigil}[${alt}](${trimmedPath})`;
       }
-      return `![${alt}](<${trimmedPath.replace(/>/g, "%3E")}>)`;
+      return `${sigil}[${alt}](<${trimmedPath.replace(/>/g, "%3E")}>)`;
     },
   );
 }

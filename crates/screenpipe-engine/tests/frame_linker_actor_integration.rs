@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use screenpipe_db::{DatabaseManager, InsertUiEvent, UiEventType};
-use screenpipe_engine::frame_linker::{EventPersisted, FrameCaptured};
+use screenpipe_engine::frame_linker::{DropReason, EventPersisted, FrameCaptured};
 use screenpipe_engine::frame_linker_actor::{
     linker_channel, linker_metrics_snapshot, next_correlation_id, spawn_frame_linker, LinkerMessage,
 };
@@ -246,6 +246,128 @@ async fn unmatched_event_stays_null_when_no_frame_arrives() {
     assert!(
         read_frame_id(&db, row_id).await.is_none(),
         "no frame ever arrived — row stays NULL"
+    );
+
+    stop.store(true, Ordering::Relaxed);
+}
+
+/// Multi-monitor race guard: `TriggerDropped` is broadcast to N capture
+/// loops. Per-monitor drop sites (Cold state, capture-error, debounce
+/// without `last_frame_id`) can fire for a corr_id another monitor is
+/// still in the middle of capturing. If `TriggerDropped` mutated linker
+/// state, this ordering would silently un-pair a perfectly good capture:
+///
+///   T0  recorder broadcasts trigger corr=K
+///   T1  monitor A starts do_capture (~500ms)
+///   T2  recorder batch flush → EventPersisted{K, row}
+///   T3  monitor B (Cold) drains corr=K, sends TriggerDropped
+///   T4  monitor A finishes → FrameCaptured{K, frame}
+///
+/// The actor MUST treat TriggerDropped as a metrics signal only — TTL
+/// eviction is the only authoritative "give up" path.
+#[tokio::test]
+async fn trigger_dropped_does_not_unpair_a_racing_capture() {
+    let db = fresh_db().await;
+    let (linker_tx, linker_rx) = linker_channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _actor = spawn_frame_linker(db.clone(), linker_rx, stop.clone());
+
+    let row_id = db.insert_ui_events_batch(&[click_event()]).await.unwrap()[0];
+    let frame_id = db
+        .insert_accessibility_text("TestApp", "Main", "ctx", None)
+        .await
+        .unwrap();
+    let corr_id = next_correlation_id();
+
+    // T2: event persists first (a Cold monitor's drain reaches the
+    // linker after the recorder's batch flush in some interleavings).
+    linker_tx
+        .send(LinkerMessage::EventPersisted(EventPersisted {
+            correlation_id: corr_id,
+            row_id,
+        }))
+        .await
+        .unwrap();
+
+    // T3: a Cold (or capture-erroring) monitor reports the same corr_id
+    // as dropped. This MUST NOT remove the pending event — another
+    // monitor (T4 below) may still pair it.
+    linker_tx
+        .send(LinkerMessage::TriggerDropped {
+            correlation_ids: vec![corr_id],
+            reason: DropReason::Other,
+        })
+        .await
+        .unwrap();
+
+    // T4: the Active monitor finishes its screenshot and reports it.
+    linker_tx
+        .send(LinkerMessage::FrameCaptured(FrameCaptured {
+            frame_id,
+            correlation_ids: vec![corr_id],
+        }))
+        .await
+        .unwrap();
+
+    let observed = wait_for_link(&db, row_id, Duration::from_secs(2)).await;
+    assert_eq!(
+        observed,
+        Some(frame_id),
+        "pending event must survive a racy TriggerDropped — the Active monitor's frame still pairs it"
+    );
+
+    stop.store(true, Ordering::Relaxed);
+}
+
+/// Same race in the reverse order on the frame side: a frame arrived
+/// first with `unmatched = [K]`, sitting in pending_frames. A
+/// TriggerDropped for K must not clear that unmatched slot — the
+/// recorder's batch flush is still in flight and will arrive next.
+#[tokio::test]
+async fn trigger_dropped_does_not_clear_pending_frame_waiters() {
+    let db = fresh_db().await;
+    let (linker_tx, linker_rx) = linker_channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _actor = spawn_frame_linker(db.clone(), linker_rx, stop.clone());
+
+    let row_id = db.insert_ui_events_batch(&[click_event()]).await.unwrap()[0];
+    let frame_id = db
+        .insert_accessibility_text("TestApp", "Main", "ctx", None)
+        .await
+        .unwrap();
+    let corr_id = next_correlation_id();
+
+    // Frame first.
+    linker_tx
+        .send(LinkerMessage::FrameCaptured(FrameCaptured {
+            frame_id,
+            correlation_ids: vec![corr_id],
+        }))
+        .await
+        .unwrap();
+    // Per-monitor drop site (Cold drain, capture error, etc.) reports
+    // the same corr_id. Must NOT clear the unmatched slot.
+    linker_tx
+        .send(LinkerMessage::TriggerDropped {
+            correlation_ids: vec![corr_id],
+            reason: DropReason::CaptureError,
+        })
+        .await
+        .unwrap();
+    // Event row arrives last — should still pair.
+    linker_tx
+        .send(LinkerMessage::EventPersisted(EventPersisted {
+            correlation_id: corr_id,
+            row_id,
+        }))
+        .await
+        .unwrap();
+
+    let observed = wait_for_link(&db, row_id, Duration::from_secs(2)).await;
+    assert_eq!(
+        observed,
+        Some(frame_id),
+        "pending frame's unmatched slot must survive a racy TriggerDropped"
     );
 
     stop.store(true, Ordering::Relaxed);

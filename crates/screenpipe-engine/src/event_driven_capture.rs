@@ -104,6 +104,52 @@ impl CaptureTriggerMsg {
     }
 }
 
+/// Notify the linker that one or more triggers will never produce a
+/// frame. Best-effort: if the linker channel is full or absent, the
+/// pending entries will TTL-evict after 60s. Returns immediately —
+/// `try_send` never blocks the capture loop.
+fn report_triggers_dropped(
+    linker_tx: Option<&crate::frame_linker_actor::LinkerSender>,
+    correlation_ids: Vec<crate::frame_linker::CorrelationId>,
+    reason: crate::frame_linker::DropReason,
+) {
+    let Some(linker) = linker_tx else { return };
+    if correlation_ids.is_empty() && !matches!(reason, crate::frame_linker::DropReason::Lagged) {
+        // Nothing to report unless we're tracking the lag counter.
+        return;
+    }
+    let _ = linker.try_send(crate::frame_linker_actor::LinkerMessage::TriggerDropped {
+        correlation_ids,
+        reason,
+    });
+}
+
+/// Drain whatever's currently in the broadcast receiver into a
+/// `Vec<CorrelationId>`. Used by pause / cold-monitor branches that
+/// must let the linker know these triggers will never produce a frame.
+fn drain_pending_corr_ids(
+    trigger_rx: &mut TriggerReceiver,
+) -> Vec<crate::frame_linker::CorrelationId> {
+    let mut out = Vec::new();
+    loop {
+        match trigger_rx.try_recv() {
+            Ok(msg) => {
+                if let Some(corr) = msg.correlation_id {
+                    out.push(corr);
+                }
+            }
+            Err(broadcast::error::TryRecvError::Empty)
+            | Err(broadcast::error::TryRecvError::Closed) => break,
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                // Lagged inside drain — keep trying; the receiver auto-
+                // recovers to the latest available message.
+                continue;
+            }
+        }
+    }
+    out
+}
+
 /// Reduce a batch of drained triggers to (kind, correlation_ids).
 ///
 /// - `kind` is the most recent non-skipped trigger (most recent context
@@ -277,9 +323,17 @@ impl EventDrivenCapture {
 pub type TriggerSender = broadcast::Sender<CaptureTriggerMsg>;
 pub type TriggerReceiver = broadcast::Receiver<CaptureTriggerMsg>;
 
+/// Broadcast buffer for capture triggers. Sized to absorb a typing
+/// burst (Arc/Claude routinely emit 100+ Text/Click events in <200ms)
+/// while one monitor is mid-screenshot (250-800ms blocking). At 32B per
+/// `CaptureTriggerMsg` this is ~128KB total. Smaller buffers cause
+/// `broadcast::error::RecvError::Lagged`, which drops correlation_ids
+/// permanently — the `ui_events` rows then stay `frame_id = NULL`.
+pub const TRIGGER_CHANNEL_BUFFER: usize = 4096;
+
 /// Create a trigger channel pair.
 pub fn trigger_channel() -> (TriggerSender, TriggerReceiver) {
-    let (tx, rx) = broadcast::channel(64);
+    let (tx, rx) = broadcast::channel(TRIGGER_CHANNEL_BUFFER);
     (tx, rx)
 }
 
@@ -562,6 +616,21 @@ pub async fn event_driven_capture_loop(
                     }
                 }
                 CaptureState::Cold => {
+                    // Drain any triggers that arrived while we were Cold —
+                    // they'll never produce a frame on this monitor, so tell
+                    // the linker now instead of letting them TTL-evict. With
+                    // multi-monitor setups the linker only needs ONE monitor
+                    // to claim a corr_id; if this monitor was Cold but another
+                    // captured, the corr_id is already paired and our
+                    // TriggerDropped becomes a harmless no-op for it.
+                    let drained = drain_pending_corr_ids(&mut trigger_rx);
+                    if !drained.is_empty() {
+                        report_triggers_dropped(
+                            linker_tx.as_ref(),
+                            drained,
+                            crate::frame_linker::DropReason::Other,
+                        );
+                    }
                     // Block until focus returns. 5s backstop guards against
                     // stuck waiters if a focus event is ever missed.
                     let notify = focus_controller.notify_for(monitor_id);
@@ -605,6 +674,21 @@ pub async fn event_driven_capture_loop(
                 monitor.release_capture_stream();
             }
             was_in_pause_state = true;
+            // Drain triggers that piled up while paused so the linker
+            // doesn't hold their corr_ids for the full 60s TTL. The
+            // recorder keeps emitting events through every pause state
+            // (a11y observer is independent of capture), so without this
+            // drain a multi-minute pause overflows the broadcast buffer
+            // and the dropped ids show up as misleading "stale entries"
+            // WARNs later.
+            let drained = drain_pending_corr_ids(&mut trigger_rx);
+            if !drained.is_empty() {
+                report_triggers_dropped(
+                    linker_tx.as_ref(),
+                    drained,
+                    crate::frame_linker::DropReason::Paused,
+                );
+            }
             tokio::time::sleep(poll_interval).await;
             continue;
         } else if was_in_pause_state {
@@ -725,8 +809,15 @@ pub async fn event_driven_capture_loop(
                     );
                     // Missed broadcast msgs — their correlation_ids are
                     // gone forever and those ui_events rows will stay
-                    // frame_id=NULL. Fall back to Manual below if
-                    // nothing else in this drain wins.
+                    // frame_id=NULL. Bump the lagged counter so the
+                    // periodic linker WARN shows this slice of loss.
+                    report_triggers_dropped(
+                        linker_tx.as_ref(),
+                        Vec::new(),
+                        crate::frame_linker::DropReason::Lagged,
+                    );
+                    let _ = n;
+                    // Fall back to Manual below if nothing else wins.
                     lagged_force_manual = true;
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
@@ -754,6 +845,12 @@ pub async fn event_driven_capture_loop(
                                 "trigger channel lagged by {} more messages on monitor {}",
                                 n, monitor_id
                             );
+                            report_triggers_dropped(
+                                linker_tx.as_ref(),
+                                Vec::new(),
+                                crate::frame_linker::DropReason::Lagged,
+                            );
+                            let _ = n;
                             lagged_force_manual = true;
                         }
                         Err(broadcast::error::TryRecvError::Closed) => {
@@ -861,6 +958,15 @@ pub async fn event_driven_capture_loop(
                             "pre-capture DRM check blocked capture on monitor {}",
                             monitor_id
                         );
+                        // Release the corr_ids the linker is waiting on so
+                        // the ui_events rows don't sit pending for 60s.
+                        if !correlation_ids.is_empty() {
+                            report_triggers_dropped(
+                                linker_tx.as_ref(),
+                                std::mem::take(&mut correlation_ids),
+                                crate::frame_linker::DropReason::Drm,
+                            );
+                        }
                         tokio::time::sleep(poll_interval).await;
                         continue;
                     }
@@ -1051,6 +1157,16 @@ pub async fn event_driven_capture_loop(
                             );
                         }
 
+                        // Release corr_ids the linker is waiting on —
+                        // this capture failed, no frame_id is coming.
+                        if !correlation_ids.is_empty() {
+                            report_triggers_dropped(
+                                linker_tx.as_ref(),
+                                std::mem::take(&mut correlation_ids),
+                                crate::frame_linker::DropReason::CaptureError,
+                            );
+                        }
+
                         // Exponential backoff for persistent failures — avoids
                         // hammering a broken capture path (missing Wayland
                         // protocol, permission denied, etc.) while still
@@ -1068,6 +1184,13 @@ pub async fn event_driven_capture_loop(
                             trigger.as_str(),
                             monitor_id
                         );
+                        if !correlation_ids.is_empty() {
+                            report_triggers_dropped(
+                                linker_tx.as_ref(),
+                                std::mem::take(&mut correlation_ids),
+                                crate::frame_linker::DropReason::CaptureError,
+                            );
+                        }
                     }
                 }
             } else {
@@ -1076,6 +1199,28 @@ pub async fn event_driven_capture_loop(
                     trigger.as_str(),
                     monitor_id
                 );
+                // Debounce within min_capture_interval_ms. The events
+                // belong to the previous frame visually (screen is the
+                // same), so link them to `last_frame_id` if we have one;
+                // otherwise tell the linker to release them.
+                if !correlation_ids.is_empty() {
+                    if let (Some(ref linker), Some(fid)) = (&linker_tx, last_frame_id) {
+                        let _ = linker.try_send(
+                            crate::frame_linker_actor::LinkerMessage::FrameCaptured(
+                                crate::frame_linker::FrameCaptured {
+                                    frame_id: fid,
+                                    correlation_ids: std::mem::take(&mut correlation_ids),
+                                },
+                            ),
+                        );
+                    } else {
+                        report_triggers_dropped(
+                            linker_tx.as_ref(),
+                            std::mem::take(&mut correlation_ids),
+                            crate::frame_linker::DropReason::Other,
+                        );
+                    }
+                }
             }
         }
 

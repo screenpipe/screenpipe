@@ -12,7 +12,7 @@ import React, {
   useMemo,
 } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader, Check, ChevronDown } from "lucide-react";
+import { Loader, Check } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { scheduleFirstRunNotification } from "@/lib/notifications";
 import { commands } from "@/lib/utils/tauri";
@@ -27,9 +27,9 @@ type Pipe = {
   gmailBoost: boolean;
 };
 
-// Defaults are the 4 most universal pipes. digital-clone leads because it's
-// the breakout install (~4.8k organic store installs in 30d vs ~40 for
-// todo-list — the prior "universal" pipe in the 3-path flow).
+// Two-pipe bundle. digital-clone is the breakout install (~4.8k organic
+// store installs in 30d); personal-crm is the second. Other pipes are
+// reachable from the pipe store after onboarding.
 const PIPES: Pipe[] = [
   {
     slug: "digital-clone",
@@ -39,53 +39,11 @@ const PIPES: Pipe[] = [
     gmailBoost: true,
   },
   {
-    slug: "obsidian-daily-summary",
-    title: "daily-summary",
-    subtitle: "nightly recap of your day",
-    defaultOn: true,
-    gmailBoost: true,
-  },
-  {
-    slug: "meeting-intel",
-    title: "meeting-notes",
-    subtitle: "auto-transcribe every call",
-    defaultOn: true,
-    gmailBoost: false,
-  },
-  {
-    slug: "todo-list-assistant",
-    title: "todo-assistant",
-    subtitle: "never miss a follow-up",
-    defaultOn: true,
-    gmailBoost: true,
-  },
-  {
     slug: "personal-crm",
     title: "personal-crm",
     subtitle: "remember everyone you meet",
-    defaultOn: false,
+    defaultOn: true,
     gmailBoost: true,
-  },
-  {
-    slug: "toggl-time-tracker",
-    title: "time-tracker",
-    subtitle: "where your time really goes",
-    defaultOn: false,
-    gmailBoost: false,
-  },
-  {
-    slug: "focus-assistant",
-    title: "focus-assistant",
-    subtitle: "nudge when you drift",
-    defaultOn: false,
-    gmailBoost: false,
-  },
-  {
-    slug: "ai-prompt-journal",
-    title: "prompt-journal",
-    subtitle: "save every AI prompt you send",
-    defaultOn: false,
-    gmailBoost: false,
   },
 ];
 
@@ -246,7 +204,6 @@ export default function PickPipe() {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(DEFAULT_SLUGS)
   );
-  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [showSkip, setShowSkip] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -277,15 +234,6 @@ export default function PickPipe() {
       .catch(() => {});
   }, []);
 
-  // Expand the onboarding window when customize opens so the 4 optional
-  // pipes don't push the install button below the fold. The parent route
-  // sets pipe step to 500x620 (fits 4 default pipes); customize adds 4
-  // more rows (~58px each = ~232px).
-  useEffect(() => {
-    const height = customizeOpen ? 860 : 620;
-    commands.setWindowSize("Onboarding", 500, height).catch(() => {});
-  }, [customizeOpen]);
-
   const toggle = useCallback((slug: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -301,7 +249,6 @@ export default function PickPipe() {
   }, [selected]);
 
   const defaultPipes = useMemo(() => PIPES.filter((p) => p.defaultOn), []);
-  const optionalPipes = useMemo(() => PIPES.filter((p) => !p.defaultOn), []);
 
   const handleInstall = useCallback(async () => {
     if (selected.size === 0) return;
@@ -443,41 +390,6 @@ export default function PickPipe() {
             />
           ))}
         </div>
-
-        <button
-          onClick={() => setCustomizeOpen((o) => !o)}
-          className="font-mono text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center gap-1 self-start"
-        >
-          <ChevronDown
-            className={`w-3 h-3 transition-transform ${
-              customizeOpen ? "" : "-rotate-90"
-            }`}
-          />
-          customize ({optionalPipes.length} more available)
-        </button>
-
-        <AnimatePresence initial={false}>
-          {customizeOpen && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.25 }}
-              className="flex flex-col gap-2 w-full overflow-hidden"
-            >
-              {optionalPipes.map((p, i) => (
-                <PipeRow
-                  key={p.slug}
-                  pipe={p}
-                  selected={selected.has(p.slug)}
-                  gmailConnected={gmailConnected}
-                  onToggle={toggle}
-                  delay={i * 0.04}
-                />
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         <button
           onClick={handleInstall}

@@ -169,6 +169,43 @@ you can also browse and install pipes at [screenpi.pe/pipes](https://screenpi.pe
 
 ---
 
+## troubleshooting
+
+### pipe installed from store but not showing in UI
+
+**problem**: you click GET on a pipe, the install succeeds, but the pipe doesn't appear in **settings → pipes**.
+
+**solution**: 
+
+1. restart screenpipe (close and reopen the app). the pipe list sometimes takes a few seconds to refresh.
+2. check that the pipe folder exists:
+   - **macOS/Linux**: `ls ~/.screenpipe/pipes/` and verify the pipe name appears
+   - **Windows**: `dir %USERPROFILE%\.screenpipe\pipes\` (or `echo $env:USERPROFILE\.screenpipe\pipes` in PowerShell)
+3. if the folder is missing, re-run the install from the pipe store.
+4. verify screenpipe API is healthy: `curl http://localhost:3030/health`
+
+### pipes disappearing from UI
+
+**problem**: pipes you installed are suddenly gone, or they appear and then vanish.
+
+**solution**: screenpipe uses a **tombstone system** to track deleted pipes and prevent them from being restored. a pipe may be marked as deleted if:
+- you deleted it via **settings → pipes → delete**
+- you uninstalled the app (rebuilding the pipe list removes orphaned pipes)
+- the pipe folder was manually deleted from `~/.screenpipe/pipes/`
+
+**to recover**:
+1. go to **settings → pipes** and look for the pipe in the installed list
+2. if it's not there, check if it appears in the **Discover** tab and click **GET** to reinstall
+3. if the pipe is still not showing, the tombstone file (`.tombstones.json`) may need to be cleared. **backup first**, then delete `~/.screenpipe/pipes/.tombstones.json` and restart screenpipe
+
+**to prevent**: avoid deleting pipes manually from the filesystem. use the **delete** button in the app instead — it properly manages tombstone records.
+
+### pipe install succeeds but doesn't execute
+
+**problem**: the pipe is installed and enabled, but scheduled runs produce no output or logs.
+
+**solution**: the issue is usually the pipe execution, not the installation. see [debug screenpipe pipes](/pipe-debugging) for execution troubleshooting (logs, API health, provider auth).
+
 ## built-in template pipes
 
 these ship with screenpipe and are available immediately (no install needed):

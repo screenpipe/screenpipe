@@ -92,7 +92,7 @@ pub(super) fn handle(_app: &AppHandle, _name: &str, data: &Value) {
         ("AudioPaused", _) => (
             "battery low — audio paused",
             format!(
-                "battery at {battery}% — whisper transcription stopped, screenshots paused. \
+                "battery at {battery}% — audio transcription stopped, screenshots paused. \
                 accessibility metadata still captured."
             ),
         ),

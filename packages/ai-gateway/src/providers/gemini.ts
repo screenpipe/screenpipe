@@ -908,6 +908,7 @@ export class GeminiProvider implements AIProvider {
 			{ id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google' },
 			{ id: 'gemini-2.0-pro-exp-02-05', name: 'Gemini 2.0 Pro', provider: 'google' },
 			{ id: 'gemini-3-flash', name: 'Gemini 3 Flash', provider: 'google' },
+			{ id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', provider: 'google' },
 			{ id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', provider: 'google' },
 		];
 	}

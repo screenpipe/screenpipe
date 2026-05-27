@@ -128,10 +128,84 @@ pub fn preflight_check(need_screen: bool, need_audio: bool) -> bool {
 
 // ── macOS implementations ──
 
+/// macOS Screen Recording TCC probes.
+///
+/// Two independent checks exist because `CGPreflightScreenCaptureAccess`
+/// has a well-known false-negative bug: it returns `false` even when
+/// permission is actually granted. We've documented this in three other
+/// places in the codebase (see `permission_monitor`, the Tauri app's
+/// `health.rs`, and `main.rs`'s retry loops). The case that motivates
+/// this split: a CLI binary launched via `npx` from a fresh cache path
+/// — TCC's cache hasn't associated it with the responsible terminal yet,
+/// so preflight reports denied while `/usr/sbin/screencapture` (and any
+/// real capture call) succeeds.
+///
+/// - [`preflight`] reads TCC's cached answer. Fast and a `true` result
+///   is always trustworthy. A `false` result is not: it may be stale.
+/// - [`capture_probe`] performs a real 1x1 `CGWindowListCreateImage`
+///   capture. The kernel either returns an image (permission granted)
+///   or NULL (denied) — the cache plays no role. This is the same
+///   primitive `/usr/sbin/screencapture` relies on, which is why
+///   that test consistently agrees with reality.
+#[cfg(target_os = "macos")]
+mod macos_screen_recording {
+    /// Cached TCC answer via `CGPreflightScreenCaptureAccess`. May lie
+    /// in the negative direction; never in the positive direction.
+    pub fn preflight() -> bool {
+        use core_graphics::access::ScreenCaptureAccess;
+        ScreenCaptureAccess.preflight()
+    }
+
+    /// Definitive probe: attempts a minimal real capture. Returns `true`
+    /// iff the kernel hands back a CGImage. Cost is a single 1x1 image
+    /// allocation + release (~milliseconds, no UI flicker, no prompt).
+    pub fn capture_probe() -> bool {
+        use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+
+        type CGImageRef = *mut std::ffi::c_void;
+        const ON_SCREEN_ONLY: u32 = 1;
+        const IMAGE_DEFAULT: u32 = 0;
+        const NULL_WINDOW_ID: u32 = 0;
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGWindowListCreateImage(
+                screen_bounds: CGRect,
+                list_option: u32,
+                window_id: u32,
+                image_option: u32,
+            ) -> CGImageRef;
+            fn CGImageRelease(image: CGImageRef);
+        }
+
+        let rect = CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize {
+                width: 1.0,
+                height: 1.0,
+            },
+        };
+
+        unsafe {
+            let image =
+                CGWindowListCreateImage(rect, ON_SCREEN_ONLY, NULL_WINDOW_ID, IMAGE_DEFAULT);
+            if image.is_null() {
+                false
+            } else {
+                CGImageRelease(image);
+                true
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording() -> PermissionStatus {
-    use core_graphics::access::ScreenCaptureAccess;
-    if ScreenCaptureAccess.preflight() {
+    // Trust a positive preflight (always reliable). For a negative,
+    // confirm with a real capture before declaring denial — the CLI's
+    // polling loop has no other signal, and a false denial leaves users
+    // stuck on the permission screen with permission already granted.
+    if macos_screen_recording::preflight() || macos_screen_recording::capture_probe() {
         PermissionStatus::Granted
     } else {
         PermissionStatus::Denied
@@ -208,4 +282,33 @@ pub fn check_microphone() -> PermissionStatus {
 #[cfg(not(target_os = "macos"))]
 pub fn check_accessibility() -> PermissionStatus {
     PermissionStatus::NotNeeded
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    /// Invariant: a successful capture probe is definitive — the kernel
+    /// just handed us a CGImage of the desktop, so permission must be
+    /// granted. Safe to assert regardless of CI's TCC state because the
+    /// invariant only fires on the positive branch.
+    #[test]
+    fn capture_probe_implies_granted() {
+        if macos_screen_recording::capture_probe() {
+            assert_eq!(check_screen_recording(), PermissionStatus::Granted);
+        }
+        if macos_screen_recording::preflight() {
+            assert_eq!(check_screen_recording(), PermissionStatus::Granted);
+        }
+    }
+
+    /// Sanity: repeated probing must not leak, hang, or destabilize.
+    /// `permission_monitor` polls every 5s for the life of the process,
+    /// so a long-running burst here mirrors hours of real usage.
+    #[test]
+    fn capture_probe_is_stable_under_repetition() {
+        for _ in 0..256 {
+            let _ = macos_screen_recording::capture_probe();
+        }
+    }
 }

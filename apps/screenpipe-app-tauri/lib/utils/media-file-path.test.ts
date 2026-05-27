@@ -66,4 +66,13 @@ describe("normalizeLocalMediaMarkdown", () => {
       "- When you were talking: ![](<\/Users/ansh/.screenpipe/data/System Audio (output)_2026-05-25_11-27-00.mp4>)",
     );
   });
+
+  it("wraps local media links that contain spaces and parentheses", () => {
+    const markdown =
+      "[play clip](/Users/ansh/.screenpipe/data/System Audio (output)_2026-05-25_11-27-00.mp4)";
+
+    expect(normalizeLocalMediaMarkdown(markdown)).toBe(
+      "[play clip](</Users/ansh/.screenpipe/data/System Audio (output)_2026-05-25_11-27-00.mp4>)",
+    );
+  });
 });

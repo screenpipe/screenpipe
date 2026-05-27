@@ -148,7 +148,7 @@ Get a lightweight compressed activity overview for a time range:
 - Audio speaker summary
 
 ### list-meetings
-List detected meetings with duration, app, and attendees.
+List detected meetings with duration, app, and attendees. Pass `q` to filter by substring (title, attendees, notes).
 
 ### search-elements
 Search structured UI elements (accessibility tree nodes and OCR text blocks):

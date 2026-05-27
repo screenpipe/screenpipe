@@ -8570,6 +8570,7 @@ LIMIT ? OFFSET ?
         &self,
         start_time: Option<&str>,
         end_time: Option<&str>,
+        query: Option<&str>,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<MeetingRecord>, SqlxError> {
@@ -8578,34 +8579,34 @@ LIMIT ? OFFSET ?
              detection_source, created_at FROM meetings WHERE 1=1",
         );
         if start_time.is_some() {
-            sql.push_str(" AND meeting_start >= ?1");
+            sql.push_str(" AND meeting_start >= ?");
         }
         if end_time.is_some() {
-            sql.push_str(if start_time.is_some() {
-                " AND meeting_start <= ?2"
-            } else {
-                " AND meeting_start <= ?1"
-            });
+            sql.push_str(" AND meeting_start <= ?");
         }
-        sql.push_str(" ORDER BY meeting_start DESC");
-        sql.push_str(if start_time.is_some() && end_time.is_some() {
-            " LIMIT ?3 OFFSET ?4"
-        } else if start_time.is_some() || end_time.is_some() {
-            " LIMIT ?2 OFFSET ?3"
-        } else {
-            " LIMIT ?1 OFFSET ?2"
-        });
+        if query.is_some() {
+            sql.push_str(
+                " AND (LOWER(IFNULL(title, '')) LIKE ? \
+                 OR LOWER(IFNULL(attendees, '')) LIKE ? \
+                 OR LOWER(IFNULL(note, '')) LIKE ?)",
+            );
+        }
+        sql.push_str(" ORDER BY meeting_start DESC LIMIT ? OFFSET ?");
 
-        let mut query = sqlx::query_as::<_, MeetingRecord>(&sql);
+        let mut q = sqlx::query_as::<_, MeetingRecord>(&sql);
         if let Some(st) = start_time {
-            query = query.bind(st);
+            q = q.bind(st);
         }
         if let Some(et) = end_time {
-            query = query.bind(et);
+            q = q.bind(et);
         }
-        query = query.bind(limit).bind(offset);
+        if let Some(qs) = query {
+            let pattern = format!("%{}%", qs.to_lowercase());
+            q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
+        }
+        q = q.bind(limit).bind(offset);
 
-        let meetings = query.fetch_all(&self.pool).await?;
+        let meetings = q.fetch_all(&self.pool).await?;
         Ok(meetings)
     }
 

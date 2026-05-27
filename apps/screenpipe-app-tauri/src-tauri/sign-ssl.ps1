@@ -105,19 +105,45 @@ while (-not $signed -and $attempt -lt $maxAttempts) {
     }
 
     Push-Location $env:CODESIGNTOOL_PATH
-    & $javaFile.FullName -jar $jarFile.FullName sign `
+    # Capture stdout+stderr so we can detect SSL.com QuotaExceededError
+    # and fail fast — burning 5 retries × exponential backoff (~7.5 min)
+    # on a quota wall is pure waste; the next attempt fails the same way.
+    # Recurring concretely on build 26478881028 (2026-05-26): both Windows
+    # targets hit QuotaExceededError on every attempt. Detect the error
+    # body shape `{"error":"server_error","error_description":"code:
+    # QuotaExceededError ..."}` and exit 1 immediately so the operator
+    # sees the actual ask (top up SSL.com or wait for monthly reset)
+    # instead of a generic "5 attempts failed".
+    $signOutput = & $javaFile.FullName -jar $jarFile.FullName sign `
         "-username=$env:ESIGNER_USERNAME" `
         "-password=$env:ESIGNER_PASSWORD" `
         "-totp_secret=$env:ESIGNER_TOTP_SECRET" `
         "-credential_id=$env:ESIGNER_CREDENTIAL_ID" `
         "-input_file_path=$FilePath" `
-        "-output_dir_path=$signedDir"
+        "-output_dir_path=$signedDir" 2>&1
     $signExit = $LASTEXITCODE
     Pop-Location
+
+    # Mirror output to the build log so we keep the existing visibility.
+    $signOutput | ForEach-Object { Write-Host $_ }
 
     if ($signExit -eq 0 -and (Test-Path $signedFile)) {
         $signed = $true
         break
+    }
+
+    $signOutputText = ($signOutput | Out-String)
+    if ($signOutputText -match "QuotaExceededError") {
+        # ASCII only in this block: sign-ssl.ps1 is read by PowerShell 5.1
+        # on Windows runners with no BOM and an ANSI codepage. UTF-8
+        # multi-byte chars (em-dash, smart-quotes) mangle and break the
+        # parser at the first non-ASCII byte; the reported line number
+        # ends up far below the actual offending character. Stick to
+        # `-` and straight quotes here.
+        Write-Host "ERROR: SSL.com signing quota exceeded - every retry will hit the same wall."
+        Write-Host "ERROR: Top up the account at https://www.ssl.com/dashboard or wait for the monthly quota reset, then re-run this workflow."
+        Write-Host "ERROR: Failed file: $FilePath"
+        exit 1
     }
     Write-Host "WARN: sign attempt $attempt failed (exit=$signExit, signed file present=$(Test-Path $signedFile))"
 }

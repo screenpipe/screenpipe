@@ -1974,8 +1974,9 @@ impl PipeManager {
         // Pre-configure pi
         let mut pipe_token: Option<String> = None;
         if config.agent == "pi" {
+            let cloud_token = executor.user_token();
             if let Err(e) = PiExecutor::ensure_pi_config(
-                executor.user_token(),
+                cloud_token.as_deref(),
                 SCREENPIPE_API_URL,
                 run_provider.as_deref(),
                 Some(&run_model),
@@ -3505,8 +3506,9 @@ impl PipeManager {
                     // Pre-configure pi with the pipe's provider
                     let mut pipe_token: Option<String> = None;
                     if config.agent == "pi" {
+                        let cloud_token = executor.user_token();
                         if let Err(e) = PiExecutor::ensure_pi_config(
-                            executor.user_token(),
+                            cloud_token.as_deref(),
                             SCREENPIPE_API_URL,
                             provider.as_deref(),
                             Some(&model),

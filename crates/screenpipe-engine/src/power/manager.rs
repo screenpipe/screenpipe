@@ -230,7 +230,7 @@ pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManage
                 )
             {
                 info!(
-                    "battery low (<=20%) — pausing audio/Whisper, \
+                    "battery low (<=20%) — pausing audio transcription, \
                     vision capture continues; battery={:?}",
                     power_state.battery_pct
                 );
