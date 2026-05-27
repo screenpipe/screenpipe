@@ -1,5 +1,9 @@
 ## New Features
 
+- Exclude apps from system-audio capture via `~/.screenpipe/audio-exclusions.json` (hot-reloadable JSON file; resolves bundle IDs via NSRunningApp + macOS 14.4+ `NSAudioCaptureUsageDescription` TCC prompt)
+
+## New Features
+
 - Bring your own MCP servers — register custom MCP servers from your config and route them through the AI agent alongside the built-in ones
 - Microphone capture can now use macOS VoiceProcessingIO (opt-in) for cleaner echo/noise cancellation on Apple silicon
 
