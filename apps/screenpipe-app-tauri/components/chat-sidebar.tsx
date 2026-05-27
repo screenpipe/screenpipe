@@ -512,6 +512,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     actions.patch(id, { title: nextTitle, titleSource: "user" });
     try {
       await updateConversationFlags(id, { title: nextTitle, titleSource: "user" });
+      await emit("chat-renamed", { id, title: nextTitle });
     } catch {
       // best-effort persistence — UI already updated
     }

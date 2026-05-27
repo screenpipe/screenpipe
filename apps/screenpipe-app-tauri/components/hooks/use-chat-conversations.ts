@@ -182,6 +182,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       lastUserMessageAt,
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
+      titleSource: conversation.titleSource,
     };
 
     setFileConversations((prev) => {
@@ -197,6 +198,61 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     });
     lastHistoryQueryRef.current = "";
   }, [historySearch]);
+
+  const syncConversationTitleState = useCallback(async (
+    id: string,
+    {
+      title,
+      titleSource,
+    }: {
+      title?: string | null;
+      titleSource?: "fallback" | "ai" | "user";
+    } = {},
+  ) => {
+    let resolvedTitle = title?.trim() || null;
+    let resolvedTitleSource = titleSource;
+    let loadedConversation: ChatConversation | null = null;
+
+    if (!resolvedTitle || !resolvedTitleSource) {
+      try {
+        await markConversationFileChanged(id);
+        loadedConversation = await loadConversationFile(id);
+        if (!loadedConversation) return;
+        resolvedTitle = resolvedTitle || loadedConversation.title?.trim() || null;
+        resolvedTitleSource = resolvedTitleSource || loadedConversation.titleSource;
+      } catch {
+        return;
+      }
+    }
+
+    if (!resolvedTitle) return;
+
+    try {
+      const { useChatStore } = await import("@/lib/stores/chat-store");
+      const session = useChatStore.getState().sessions[id];
+      if (session) {
+        useChatStore.getState().actions.patch(id, {
+          title: resolvedTitle,
+          ...(resolvedTitleSource ? { titleSource: resolvedTitleSource } : {}),
+        });
+      }
+    } catch (e) {
+      console.warn("[chat-title] failed to sync local title state", { id, error: e });
+    }
+
+    if (!loadedConversation) {
+      try {
+        await markConversationFileChanged(id);
+        loadedConversation = await loadConversationFile(id);
+      } catch {
+        loadedConversation = null;
+      }
+    }
+
+    if (loadedConversation) {
+      upsertFileConversationMeta(loadedConversation);
+    }
+  }, [upsertFileConversationMeta]);
 
   useEffect(() => {
     if (!inlineHistoryEnabled || !showHistory) {
@@ -316,41 +372,36 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       );
       unlistenFns.push(unlistenVisibility);
 
-      const unlistenSaved = await listen<{ id: string; title?: string }>(
+      const unlistenSaved = await listen<{ id: string; title?: string; titleSource?: "fallback" | "ai" | "user" }>(
         "chat-conversation-saved",
         async (event) => {
           if (cancelled) return;
-          const { id, title } = event.payload ?? {};
+          const { id, title, titleSource } = event.payload ?? {};
           if (!id) return;
 
-          // Special case: If this event is for the CURRENT conversation,
-          // update the in-memory store (for cross-window title sync) but
-          // skip reloading from disk (we're already viewing it).
+          // The current conversation's transcript may be newer in local state
+          // than on disk, but title metadata should still converge to the
+          // persisted value across windows.
           if (id === conversationId || id === piSessionIdRef.current) {
-            if (title) {
-              try {
-                const { useChatStore } = await import("@/lib/stores/chat-store");
-                useChatStore.getState().actions.patch(id, { title });
-              } catch (e) {
-                console.warn("[chat-title] cross-window sync failed", { conversationId: id, error: e });
-              }
-            }
-            return;  // Don't reload from disk
+            await syncConversationTitleState(id, { title, titleSource });
+            return;
           }
 
-          // For other conversations, reload from disk as before
-          try {
-            await markConversationFileChanged(id);
-            const conv = await loadConversationFile(id);
-            if (!cancelled && conv) {
-              upsertFileConversationMeta(conv);
-            }
-          } catch {
-            // ignore: a later explicit history refresh can repair the list
-          }
+          await syncConversationTitleState(id, { title, titleSource });
         },
       );
       unlistenFns.push(unlistenSaved);
+
+      const unlistenRenamed = await listen<{ id: string; title: string }>(
+        "chat-renamed",
+        async (event) => {
+          if (cancelled) return;
+          const { id, title } = event.payload ?? {};
+          if (!id || !title) return;
+          await syncConversationTitleState(id, { title, titleSource: "user" });
+        },
+      );
+      unlistenFns.push(unlistenRenamed);
     })().catch(() => {
       // ignore: chat still works without cross-window sync listeners
     });
@@ -365,6 +416,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     scheduleHistoryRefresh,
     setConversationId,
     setMessages,
+    syncConversationTitleState,
     upsertFileConversationMeta,
   ]);
 
@@ -868,6 +920,37 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     //     disk would silently drop tokens that arrived since the last
     //     persisted agent_end.
     const existing = store.sessions[conv.id];
+    const { loadConversationFile } = await import("@/lib/chat-storage");
+    const persisted = await loadConversationFile(conv.id);
+    if (persisted) {
+      if (!store.sessions[conv.id]) {
+        store.actions.upsert({
+          id: conv.id,
+          title: persisted.title || "untitled",
+          ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
+          preview: "",
+          status: "idle",
+          messageCount: persisted.messages?.length ?? 0,
+          createdAt: persisted.createdAt ?? Date.now(),
+          updatedAt: persisted.updatedAt ?? Date.now(),
+          pinned: persisted.pinned === true,
+          unread: false,
+          ...(persisted.hidden === true ? { hidden: true } : {}),
+          ...(persisted.kind ? { kind: persisted.kind } : {}),
+          ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+        });
+      } else {
+        store.actions.patch(conv.id, {
+          title: persisted.title || existing?.title || "untitled",
+          ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
+          pinned: persisted.pinned === true,
+          hidden: persisted.hidden === true,
+          updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
+          ...(persisted.kind ? { kind: persisted.kind } : {}),
+          ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+        });
+      }
+    }
     let messagesForPanel: any[];
     if (existing?.messages && existing.messages.length > 0) {
       messagesForPanel = existing.messages as any[];
@@ -899,10 +982,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       store.actions.markHydrated(conv.id);
     } else {
       // Cold session — load from disk and seed the store.
-      const { loadConversationFile } = await import("@/lib/chat-storage");
-      const loaded = await loadConversationFile(conv.id);
       const full =
-        loaded ||
+        persisted ||
         (Array.isArray((conv as ChatConversation).messages)
           ? (conv as ChatConversation)
           : null);
@@ -934,6 +1015,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         store.actions.upsert({
           id: conv.id,
           title: full.title || "untitled",
+          ...(full.titleSource ? { titleSource: full.titleSource } : {}),
           preview: "",
           status: "idle",
           messageCount: messagesForPanel.length,
@@ -950,6 +1032,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         });
       } else if (conv.kind || conv.pipeContext) {
         store.actions.patch(conv.id, {
+          title: full.title || store.sessions[conv.id]?.title || "untitled",
+          ...(full.titleSource ? { titleSource: full.titleSource } : {}),
+          pinned: full.pinned === true,
+          hidden: full.hidden === true,
+          updatedAt: Math.max(store.sessions[conv.id]?.updatedAt ?? 0, full.updatedAt ?? 0),
           ...(conv.kind ? { kind: conv.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : {}),
         });
