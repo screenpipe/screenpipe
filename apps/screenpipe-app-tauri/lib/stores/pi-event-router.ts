@@ -446,9 +446,17 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
 
   const t = payload.type;
 
-  // Assistant message starts — create a new in-flight message shell
-  // and remember its id as the streaming target.
+  // Assistant message starts. When a session moves to the background in the
+  // middle of a tool-using reply, Pi may emit another assistant
+  // `message_start` after an internal `turn_end`. Foreground chat keeps that
+  // work inside the SAME visible assistant bubble, so background routing must
+  // reuse the existing streaming target instead of creating a second message.
+  //
+  // Only create a fresh assistant shell when we truly have no in-flight
+  // assistant message for this session.
   if (t === "message_start" && payload.message?.role === "assistant") {
+    const cur = store.sessions[sid];
+    if (cur?.streamingMessageId) return;
     const newId = `pi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const newMsg: MutableMessage = {
       id: newId,
@@ -557,20 +565,12 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   }
 
   // turn_end fires between LLM turns within a single agent run (typically
-  // across a tool-call boundary). The agent is still streaming — only the
-  // current message's accumulator should be cleared so the next
-  // message_start gets a fresh slate. Calling endTurn here would briefly
-  // flip isStreaming/isLoading false and falsely settle the session
-  // mid-run.
+  // across a tool-call boundary). Foreground chat does NOT split the visible
+  // assistant reply here; it keeps appending follow-up tool work and prose to
+  // the same assistant bubble until the full run reaches agent_end. The
+  // background router must mirror that shape or switching away mid-response
+  // will fragment one reply into several tiny assistant messages.
   if (t === "turn_end") {
-    const cur = store.sessions[sid];
-    if (cur?.streamingMessageId) {
-      store.actions.setStreaming(sid, {
-        streamingMessageId: null,
-        streamingText: "",
-        contentBlocks: [],
-      });
-    }
     return;
   }
 
