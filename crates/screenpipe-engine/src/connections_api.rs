@@ -1608,22 +1608,35 @@ async fn connection_proxy(
         }
     };
 
-    // Capture the extra-root-CA PEM (if any) BEFORE releasing the lock, so
-    // we can build the right reqwest client without keeping the manager
-    // borrow alive across the network call.
+    // Capture the extra-root-CA PEM (if any) and path-prefix routing rules
+    // BEFORE releasing the lock, so we can build the right reqwest client and
+    // target URL without keeping the manager borrow alive across the network call.
     let extra_root_pem = mgr.find_extra_root_pem(&id);
+    let path_routes = mgr.find_path_routes(&id);
 
     drop(mgr); // release lock before making external request
 
-    // Build the target URL. Query params from the caller (e.g.
-    // `?valueInputOption=USER_ENTERED` for Google Sheets appends) must be
-    // forwarded verbatim — without this, callers silently hit defaults and
-    // bad requests like 400s on `values:append`.
+    // Build the target URL. Path-prefix routes (e.g. Google Docs "docs/" →
+    // docs.googleapis.com) override base_url for specific path prefixes.
+    // Query params from the caller must be forwarded verbatim — without this,
+    // callers silently hit defaults and get 400s on endpoints like `values:append`.
+    let api_path_clean = api_path.trim_start_matches('/');
+    let (effective_base, effective_path) = path_routes
+        .iter()
+        .find(|(prefix, _)| api_path_clean.starts_with(prefix))
+        .map(|(prefix, new_base)| {
+            let rest = api_path_clean
+                .strip_prefix(prefix)
+                .unwrap_or(api_path_clean);
+            (
+                new_base.trim_end_matches('/').to_string(),
+                rest.to_string(),
+            )
+        })
+        .unwrap_or_else(|| (base_url.clone(), api_path_clean.to_string()));
     let target_url = match forwarded_query.as_deref() {
-        Some(q) if !q.is_empty() => {
-            format!("{}/{}?{}", base_url, api_path.trim_start_matches('/'), q)
-        }
-        _ => format!("{}/{}", base_url, api_path.trim_start_matches('/')),
+        Some(q) if !q.is_empty() => format!("{}/{}?{}", effective_base, effective_path, q),
+        _ => format!("{}/{}", effective_base, effective_path),
     };
 
     // Audit log
