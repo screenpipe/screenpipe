@@ -441,7 +441,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             }
 
             // Only update if current title is still fallback priority
-            if (existingConv.titleSource !== "user") {
+            if (existingConv.titleSource === "fallback" || !existingConv.titleSource) {
               existingConv.title = aiTitle;
               existingConv.titleSource = "ai";
               await saveConversationFile(existingConv);
