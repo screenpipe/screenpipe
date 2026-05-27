@@ -898,8 +898,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     }
 
     const newId = crypto.randomUUID();
-    const firstUserMsg = branchedMessages.find((m) => m.role === "user");
-    const title = (firstUserMsg?.content.slice(0, 47) || "Branched Chat") + "…";
+    const currentTitle = store.sessions[outgoingSid]?.title?.trim();
+    const title = currentTitle || "Branched Chat";
     const createdAt = Date.now();
     const lastUserMessageAt = [...branchedMessages]
       .reverse()
