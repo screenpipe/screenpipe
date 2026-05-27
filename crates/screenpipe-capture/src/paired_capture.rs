@@ -160,6 +160,24 @@ pub async fn paired_capture(
             || n.contains("hyper")
             || n.contains("warp")
     });
+    // Named-app gate: these apps always need both AX + OCR regardless of
+    // AX char count. Screen-share content is GPU-rendered and invisible to
+    // the AX tree; OCR is the only way to capture it.
+    // Also cover browser-hosted meetings via window_name.
+    let app_needs_both = ctx.app_name.is_some_and(|name| {
+        let n = name.to_lowercase();
+        n.contains("zoom")
+            || n.contains("facetime")
+            || n.contains("microsoft teams")
+            || n == "teams"
+            || n.contains("discord")
+            || n.contains("webex")
+            || n.contains("figma")
+            || n.contains("excalidraw")
+    }) || ctx.window_name.is_some_and(|w| {
+        let w = w.to_lowercase();
+        w.contains("google meet") || w.contains("whereby") || w.contains("zoom web")
+    });
     let has_accessibility_text = !app_prefers_ocr
         && tree_snapshot
             .map(|s| !s.text_content.is_empty())
@@ -175,7 +193,7 @@ pub async fn paired_capture(
             .unwrap_or(false);
 
     // Run OCR when: no a11y text, app prefers OCR, OR a11y text is thin (hybrid)
-    let (ocr_text, ocr_text_json) = if !has_accessibility_text || a11y_is_thin {
+    let (ocr_text, ocr_text_json) = if !has_accessibility_text || a11y_is_thin || app_needs_both {
         // Windows native OCR is async, so call it directly (not inside spawn_blocking)
         #[cfg(target_os = "windows")]
         let raw = {
@@ -270,7 +288,7 @@ pub async fn paired_capture(
     let (final_text, text_source) = if let Some(ref text) = accessibility_text {
         if text.is_empty() {
             (None, None)
-        } else if tree_json.is_some() && a11y_is_thin && !ocr_text.is_empty() {
+        } else if tree_json.is_some() && (a11y_is_thin || app_needs_both) && !ocr_text.is_empty() {
             // Hybrid: a11y had chrome text, OCR captured the real content.
             // Keep a11y text as accessibility_text (structured); OCR data is
             // stored separately in the ocr_text table via ocr_data below.
@@ -595,13 +613,25 @@ fn a11y_content_is_thin(
     false
 }
 
+/// Minimum number of non-empty nodes before repetition check runs.
+const REPETITION_MIN_NODES: usize = 10;
+/// A single label must repeat at least this many times to be suspicious.
+/// Set to 3 so 3-person meeting calls (button × 3 tiles) are caught.
+const REPETITION_MIN_SINGLE: usize = 3;
+/// At least this many distinct labels must be at high repetition.
+const REPETITION_MIN_DISTINCT: usize = 4;
+/// Top-3 labels must cover at least this fraction of non-empty nodes.
+/// 0.70 per issue #3274 spec — high enough to avoid false positives on
+/// dense Notion tables or kanban boards with repeated action buttons.
+const REPETITION_RATIO_THRESHOLD: f64 = 0.70;
+
 /// Returns `true` when the AX node list is dominated by a small set of
 /// repeated labels — the Zoom/Teams pattern where every video tile
 /// carries its own copy of toolbar buttons ("Mute my audio" × 29).
 ///
 /// Algorithm: if the top-3 most frequent non-empty node texts account
-/// for ≥ 40 % of all non-empty nodes, AND at least one text repeats
-/// ≥ 5 times, the tree is repetitive chrome rather than real content.
+/// for ≥ 70 % of all non-empty nodes, AND at least one text repeats
+/// ≥ 3 times, the tree is repetitive chrome rather than real content.
 fn a11y_text_is_repetitive(snap: &screenpipe_a11y::tree::TreeSnapshot) -> bool {
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut total_non_empty: usize = 0;
@@ -615,29 +645,29 @@ fn a11y_text_is_repetitive(snap: &screenpipe_a11y::tree::TreeSnapshot) -> bool {
         *counts.entry(t).or_insert(0) += 1;
     }
 
-    if total_non_empty < 10 {
-        return false; // too few nodes to judge
-    }
-
-    let max_single = counts.values().copied().max().unwrap_or(0);
-    if max_single < 10 {
-        return false; // no label repeats enough to be suspicious
-    }
-
-    // require at least 4 distinct labels at high repetition
-    // spares 3-button social feeds (Reply/Like/Share × 30)
-    let high_rep_count = counts.values().filter(|&&c| c >= max_single / 2).count();
-    if high_rep_count < 4 {
+    if total_non_empty < REPETITION_MIN_NODES {
         return false;
     }
 
-    // Sum top-3 occurrence counts
+    let max_single = counts.values().copied().max().unwrap_or(0);
+    if max_single < REPETITION_MIN_SINGLE {
+        return false;
+    }
+
+    // require at least REPETITION_MIN_DISTINCT labels at high repetition
+    // spares 3-button social feeds (Reply/Like/Share × 30)
+    let high_rep_count = counts.values().filter(|&&c| c >= max_single / 2).count();
+    if high_rep_count < REPETITION_MIN_DISTINCT {
+        return false;
+    }
+
+    // top-3 node-occurrence ratio
     let mut sorted: Vec<usize> = counts.into_values().collect();
     sorted.sort_unstable_by(|a, b| b.cmp(a));
     let top3: usize = sorted.iter().take(3).sum();
 
     let ratio = top3 as f64 / total_non_empty as f64;
-    if ratio >= 0.40 {
+    if ratio >= REPETITION_RATIO_THRESHOLD {
         debug!(
             "a11y_text_is_repetitive: top-3 labels = {}/{} nodes ({:.0}%)",
             top3,
@@ -1209,8 +1239,9 @@ mod tests {
 
     #[test]
     fn test_thin_zoom_repeated_toolbar() {
-        // Simulates Zoom frame: "Mute my audio" × 29 + other chrome × 29
-        // Top-3 labels cover >>40% of nodes → repetitive → thin
+        // Simulates Zoom frame: 7 labels x29.
+        // zoom.us in app_name → MEETING_APP_PATTERNS → thin (named-app path).
+        // Repetition heuristic is the long-tail safety net for unknown apps.
         let repeated: Vec<AccessibilityTreeNode> = [
             "Mute my audio",
             "Audio options",
@@ -1233,13 +1264,10 @@ mod tests {
         .collect();
 
         let snap = make_snap(repeated);
+        // Named-app path: zoom.us → MEETING_APP_PATTERNS → thin
         assert!(
-            a11y_text_is_repetitive(&snap),
-            "Zoom-style repeated toolbar should be detected as repetitive"
-        );
-        assert!(
-            a11y_content_is_thin(&snap, Some("Zoom Meeting"), None, None),
-            "Zoom frame should be thin via repetition check, not allowlist"
+            a11y_content_is_thin(&snap, Some("Zoom Meeting"), None, Some("zoom.us")),
+            "Zoom frame should be thin via named-app path"
         );
     }
 
@@ -1302,6 +1330,79 @@ mod tests {
         assert!(
             a11y_text_is_repetitive(&snap),
             "Teams-style repeated chrome (4 labels x20) should be detected"
+        );
+    }
+
+    #[test]
+    fn test_app_needs_both_zoom_forces_ocr_regardless_of_ax() {
+        // Even with minimal AX text, Zoom app_name triggers app_needs_both
+        // so OCR always runs. This handles small meetings (2-3 people)
+        // where repetition count is too low for the heuristic.
+        // We verify via a11y_content_is_thin since app_needs_both is
+        // checked in paired_capture (integration), but MEETING_APP_PATTERNS
+        // already covers zoom in a11y_content_is_thin for the named path.
+        let snap = make_snap(vec![AccessibilityTreeNode {
+            role: "AXButton".into(),
+            text: "Mute my audio".into(),
+            depth: 0,
+            bounds: None,
+            ..Default::default()
+        }]);
+        // zoom.us in app_name → MEETING_APP_PATTERNS → thin
+        assert!(
+            a11y_content_is_thin(&snap, None, None, Some("zoom.us")),
+            "zoom.us app_name should trigger thin via MEETING_APP_PATTERNS"
+        );
+    }
+
+    #[test]
+    fn test_browser_hosted_meet_window_name() {
+        // Google Meet in Chrome: app_name="Arc", window_name="Team sync - Google Meet"
+        // app_needs_both triggers via window_name check
+        let snap = make_snap(vec![AccessibilityTreeNode {
+            role: "AXStaticText".into(),
+            text: "Mute microphone Camera Leave call".into(),
+            depth: 0,
+            bounds: None,
+            ..Default::default()
+        }]);
+        assert!(
+            a11y_content_is_thin(
+                &snap,
+                Some("Team sync - Google Meet"),
+                Some("https://meet.google.com/abc-defg"),
+                Some("Arc"),
+            ),
+            "browser-hosted Meet should be thin via URL pattern"
+        );
+    }
+
+    #[test]
+    fn test_thin_repetitive_unknown_app() {
+        // Unknown app with 3 labels × 30 nodes — top-3 = 100% > 70%
+        // This is the long-tail case the heuristic covers.
+        let repeated: Vec<AccessibilityTreeNode> = [
+            "Action button",
+            "Settings option",
+            "Close panel",
+            "Expand view",
+        ]
+        .iter()
+        .flat_map(|label| {
+            (0..30).map(move |_| AccessibilityTreeNode {
+                role: "AXButton".into(),
+                text: (*label).into(),
+                depth: 0,
+                bounds: None,
+                ..Default::default()
+            })
+        })
+        .collect();
+
+        let snap = make_snap(repeated);
+        assert!(
+            a11y_text_is_repetitive(&snap),
+            "4 labels x30 — top-3 = 75% > 0.70 threshold"
         );
     }
 }
