@@ -60,9 +60,15 @@ import {
   useChatStore,
   useChatActions,
   useOrderedSessions,
+  sessionRecordFromMeta,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { deleteConversationFile, updateConversationFlags } from "@/lib/chat-storage";
+import {
+  conversationMetaFromJson,
+  deleteConversationFile,
+  loadConversationFile,
+  updateConversationFlags,
+} from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
 import { commands } from "@/lib/utils/tauri";
 import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
@@ -223,6 +229,105 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       unlistenFn?.();
     };
   }, [actions]);
+
+  // Cross-window sidebar sync. The home sidebar and the standalone chat can
+  // live in separate WebViews with separate zustand stores, so a chat saved
+  // in one window must be mirrored into the other's in-memory sidebar list.
+  useEffect(() => {
+    let cancelled = false;
+    const unlistenFns: Array<() => void> = [];
+
+    const syncConversationFromDisk = async (id: string) => {
+      try {
+        const conv = await loadConversationFile(id);
+        if (cancelled || !conv) return;
+        const meta = conversationMetaFromJson(conv);
+        if (!meta) return;
+
+        const store = useChatStore.getState();
+        const existing = store.sessions[id];
+        if (existing) {
+          store.actions.patch(id, {
+            title: meta.title || existing.title,
+            messageCount: meta.messageCount,
+            pinned: meta.pinned,
+            hidden: meta.hidden,
+            lastUserMessageAt: meta.lastUserMessageAt,
+            updatedAt: Math.max(existing.updatedAt, meta.updatedAt),
+            kind: meta.kind,
+            pipeContext: meta.pipeContext,
+            draft: false,
+          });
+          return;
+        }
+
+        store.actions.upsert(sessionRecordFromMeta(meta));
+      } catch {
+        // ignore: a later save / hydrate can repair the row
+      }
+    };
+
+    (async () => {
+      const unlistenSaved = await listen<{ id: string }>(
+        "chat-conversation-saved",
+        (event) => {
+          const id = event.payload?.id;
+          if (!id) return;
+          void syncConversationFromDisk(id);
+        }
+      );
+      unlistenFns.push(unlistenSaved);
+
+      const unlistenDeleted = await listen<{ id: string }>("chat-deleted", (event) => {
+        const id = event.payload?.id;
+        if (!id) return;
+        useChatStore.getState().actions.drop(id);
+      });
+      unlistenFns.push(unlistenDeleted);
+
+      const unlistenVisibility = await listen<{ id: string; hidden: boolean }>(
+        "chat-visibility-changed",
+        (event) => {
+          const { id, hidden } = event.payload ?? {};
+          if (!id) return;
+          const existing = useChatStore.getState().sessions[id];
+          if (existing) {
+            useChatStore.getState().actions.patch(id, {
+              hidden,
+              unread: false,
+              ...(hidden ? { draft: false } : {}),
+            });
+            return;
+          }
+          if (!hidden) {
+            void syncConversationFromDisk(id);
+          }
+        }
+      );
+      unlistenFns.push(unlistenVisibility);
+
+      const unlistenRenamed = await listen<{ id: string; title: string }>(
+        "chat-renamed",
+        (event) => {
+          const { id, title } = event.payload ?? {};
+          if (!id || !title) return;
+          if (useChatStore.getState().sessions[id]) {
+            useChatStore.getState().actions.patch(id, { title });
+          } else {
+            void syncConversationFromDisk(id);
+          }
+        }
+      );
+      unlistenFns.push(unlistenRenamed);
+    })().catch(() => {
+      // ignore: sidebar still works without cross-window sync listeners
+    });
+
+    return () => {
+      cancelled = true;
+      for (const unlisten of unlistenFns) unlisten();
+    };
+  }, []);
 
   const runningPipes = useRunningPipes();
   const {
