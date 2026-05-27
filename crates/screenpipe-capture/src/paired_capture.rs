@@ -621,8 +621,8 @@ const REPETITION_MIN_SINGLE: usize = 3;
 /// At least this many distinct labels must be at high repetition.
 const REPETITION_MIN_DISTINCT: usize = 4;
 /// Top-3 labels must cover at least this fraction of non-empty nodes.
-/// 0.70 per issue #3274 spec — high enough to avoid false positives on
-/// dense Notion tables or kanban boards with repeated action buttons.
+/// 0.70 — high enough to avoid false positives on dense Notion tables
+/// or kanban boards with repeated action buttons.
 const REPETITION_RATIO_THRESHOLD: f64 = 0.70;
 
 /// Returns `true` when the AX node list is dominated by a small set of
