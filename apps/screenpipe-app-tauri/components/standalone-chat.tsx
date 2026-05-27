@@ -8185,6 +8185,12 @@ export function StandaloneChat({
               const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
               const canShowMessageActions = !item.showActionsWhenExpandedBy ||
                 expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
+              const isActiveStreamingAssistantMessage =
+                message.role === "assistant" &&
+                (isLoading || isStreaming) &&
+                message.id === activeSourceFooterMessageId;
+              const shouldShowMessageActionBar =
+                canShowMessageActions && !isActiveStreamingAssistantMessage;
               const nextAssistant = visibleMessages
                 .slice(messageIndex + 1)
                 .find((candidate) => candidate.role === "assistant");
@@ -8342,7 +8348,7 @@ export function StandaloneChat({
                 )}
               </div>
               )}
-              {!hideSupersededSteerBody && canShowMessageActions ? (
+              {!hideSupersededSteerBody && shouldShowMessageActionBar ? (
                 <>
                 {/* Action buttons - appear on hover, outside the message box */}
                 {editingMessageId !== message.id && (
