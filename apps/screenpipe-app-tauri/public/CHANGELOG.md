@@ -1,5 +1,9 @@
 ## New Features
 
+- Settings panel for managing audio process exclusions — Settings → Recording → "Exclude apps from system audio" with chip list + Add-app picker. Writes through to `~/.screenpipe/audio-exclusions.json`; engine hot-reloads on next tick.
+
+## New Features
+
 - Exclude apps from system-audio capture via `~/.screenpipe/audio-exclusions.json` (hot-reloadable JSON file; resolves bundle IDs via NSRunningApp + macOS 14.4+ `NSAudioCaptureUsageDescription` TCC prompt)
 
 ## New Features
