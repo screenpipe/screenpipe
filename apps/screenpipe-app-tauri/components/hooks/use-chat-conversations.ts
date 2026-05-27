@@ -880,9 +880,30 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const branchedMessages = messages.slice(0, msgIndex + 1);
     if (branchedMessages.length === 0) return;
 
+    const { useChatStore } = await import("@/lib/stores/chat-store");
+    const store = useChatStore.getState();
+    const outgoingSid = piSessionIdRef.current;
+    if (outgoingSid && store.sessions[outgoingSid]) {
+      const outgoingKind = store.sessions[outgoingSid].kind;
+      if (outgoingKind !== "pipe-watch") {
+        store.actions.snapshotSession(outgoingSid, {
+          messages: messages as any,
+          streamingText: piStreamingTextRef.current,
+          streamingMessageId: piMessageIdRef.current,
+          contentBlocks: [...piContentBlocksRef.current],
+          isStreaming,
+          isLoading,
+        });
+      }
+    }
+
     const newId = crypto.randomUUID();
     const firstUserMsg = branchedMessages.find((m) => m.role === "user");
     const title = (firstUserMsg?.content.slice(0, 47) || "Branched Chat") + "…";
+    const createdAt = Date.now();
+    const lastUserMessageAt = [...branchedMessages]
+      .reverse()
+      .find((m) => m.role === "user")?.timestamp;
 
     const conversation: ChatConversation = {
       id: newId,
@@ -910,6 +931,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.intent ? { intent: m.intent } : {}),
           ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
           timestamp: m.timestamp,
+          ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
@@ -918,12 +940,47 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.steeredResponse ? { steeredResponse: true } : {}),
         };
       }),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt,
+      updatedAt: createdAt,
+      ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
     };
 
     await saveConversationFile(conversation);
     await refreshFileConversations();
+
+    try {
+      store.actions.upsert({
+        id: newId,
+        title: conversation.title,
+        preview: "",
+        status: "idle",
+        messageCount: conversation.messages.length,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+        pinned: false,
+        hidden: false,
+        unread: false,
+        draft: false,
+        ...(conversation.lastUserMessageAt
+          ? { lastUserMessageAt: conversation.lastUserMessageAt }
+          : {}),
+      });
+      store.actions.setMessages(newId, conversation.messages as any);
+      store.actions.setCurrent(newId);
+      store.actions.setPanelSession(newId);
+    } catch (e) {
+      console.warn("[chat] failed to sync branched conversation to store:", e);
+    }
+
+    try {
+      await emit("chat-conversation-saved", {
+        id: conversation.id,
+        title: conversation.title,
+      });
+    } catch {
+      // ignore broadcast failures; local branch save already succeeded
+    }
+    emit("chat-current-session", { id: newId });
 
     // Switch to the branched conversation
     piSessionIdRef.current = newId;
