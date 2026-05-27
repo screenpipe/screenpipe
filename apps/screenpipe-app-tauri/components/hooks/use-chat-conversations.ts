@@ -920,35 +920,45 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     //     disk would silently drop tokens that arrived since the last
     //     persisted agent_end.
     const existing = store.sessions[conv.id];
-    const { loadConversationFile } = await import("@/lib/chat-storage");
-    const persisted = await loadConversationFile(conv.id);
-    if (persisted) {
-      if (!store.sessions[conv.id]) {
-        store.actions.upsert({
-          id: conv.id,
-          title: persisted.title || "untitled",
-          ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
-          preview: "",
-          status: "idle",
-          messageCount: persisted.messages?.length ?? 0,
-          createdAt: persisted.createdAt ?? Date.now(),
-          updatedAt: persisted.updatedAt ?? Date.now(),
-          pinned: persisted.pinned === true,
-          unread: false,
-          ...(persisted.hidden === true ? { hidden: true } : {}),
-          ...(persisted.kind ? { kind: persisted.kind } : {}),
-          ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
-        });
-      } else {
-        store.actions.patch(conv.id, {
-          title: persisted.title || existing?.title || "untitled",
-          ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
-          pinned: persisted.pinned === true,
-          hidden: persisted.hidden === true,
-          updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
-          ...(persisted.kind ? { kind: persisted.kind } : {}),
-          ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
-        });
+    const needsPersistedSync =
+      !existing ||
+      !existing.hydratedAt ||
+      !existing.messages ||
+      existing.messages.length === 0 ||
+      existing.titleSource == null;
+    let persisted: ChatConversation | null = null;
+
+    if (needsPersistedSync) {
+      const { loadConversationFile } = await import("@/lib/chat-storage");
+      persisted = await loadConversationFile(conv.id);
+      if (persisted) {
+        if (!store.sessions[conv.id]) {
+          store.actions.upsert({
+            id: conv.id,
+            title: persisted.title || "untitled",
+            ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
+            preview: "",
+            status: "idle",
+            messageCount: persisted.messages?.length ?? 0,
+            createdAt: persisted.createdAt ?? Date.now(),
+            updatedAt: persisted.updatedAt ?? Date.now(),
+            pinned: persisted.pinned === true,
+            unread: false,
+            ...(persisted.hidden === true ? { hidden: true } : {}),
+            ...(persisted.kind ? { kind: persisted.kind } : {}),
+            ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+          });
+        } else {
+          store.actions.patch(conv.id, {
+            title: persisted.title || existing?.title || "untitled",
+            ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
+            pinned: persisted.pinned === true,
+            hidden: persisted.hidden === true,
+            updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
+            ...(persisted.kind ? { kind: persisted.kind } : {}),
+            ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+          });
+        }
       }
     }
     let messagesForPanel: any[];
