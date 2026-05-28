@@ -980,7 +980,8 @@ impl SCServer {
                             // Allow specific endpoints without auth:
                             // - /health: device monitor, tray status, startup polling
                             //   (called before frontend loads API key via IPC)
-                            // - /connections/oauth/callback: browser redirect from
+                            // - /connections/oauth/callback and
+                            //   /mcp-servers/:id/oauth/callback: browser redirect from
                             //   OAuth providers (no bearer token in redirect)
                             // - /pipes/store/*: onboarding can fire pipe install before
                             //   the frontend's IPC key-fetch completes on cold start /
@@ -992,6 +993,8 @@ impl SCServer {
                                 || path == "/ws/health"
                                 || path == "/audio/device/status"
                                 || path == "/connections/oauth/callback"
+                                || (path.starts_with("/mcp-servers/")
+                                    && path.ends_with("/oauth/callback"))
                                 || path == "/connections/browser/pair/start"
                                 || path == "/connections/browser/pair/status"
                                 || path.starts_with("/frames/")

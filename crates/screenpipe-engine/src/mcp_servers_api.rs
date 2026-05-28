@@ -8,13 +8,15 @@
 //! over loopback so the engine stays the single source of truth for
 //! credentials and connection state.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use screenpipe_connect::mcp_servers::{McpHeader, McpServerConfig, McpServerStore, McpTransport};
+use screenpipe_connect::mcp_servers::{
+    McpAuthMode, McpHeader, McpServerConfig, McpServerStore, McpTransport,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -77,6 +79,20 @@ pub struct CallBody {
     pub tool: String,
     #[serde(default)]
     pub arguments: Value,
+}
+
+#[derive(Deserialize)]
+pub struct OAuthStartBody {
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub headers: Vec<McpHeader>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +181,11 @@ async fn upsert_server(
                 args: None,
                 env: None,
                 header_names,
+                auth_mode: existing
+                    .as_ref()
+                    .map(|c| c.auth_mode.clone())
+                    .unwrap_or(McpAuthMode::Headers),
+                oauth: existing.as_ref().and_then(|c| c.oauth.clone()),
                 enabled: body.enabled,
                 created_at,
             };
@@ -185,6 +206,8 @@ async fn upsert_server(
                 args: body.args,
                 env: body.env,
                 header_names: vec![],
+                auth_mode: McpAuthMode::Headers,
+                oauth: None,
                 enabled: body.enabled,
                 created_at,
             };
@@ -357,6 +380,114 @@ async fn call_tool(
     }
 }
 
+/// GET /mcp-servers/:id/oauth/status — whether a token is stored.
+async fn oauth_status(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
+    match state.store.oauth_status(&id).await {
+        Ok(status) => Json(json!({ "data": status })).into_response(),
+        Err(e) => bad_request(&e.to_string()),
+    }
+}
+
+/// POST /mcp-servers/:id/oauth/start — create PKCE state and return provider URL.
+async fn oauth_start(
+    State(state): State<McpServersState>,
+    Path(id): Path<String>,
+    Json(body): Json<OAuthStartBody>,
+) -> Response {
+    let redirect_uri = body.redirect_uri.unwrap_or_else(|| {
+        format!(
+            "http://localhost:3030/mcp-servers/{}/oauth/callback",
+            url_path_segment(&id)
+        )
+    });
+    let result = if let Some(url) = body.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        let name = body.name.as_deref().unwrap_or("").trim().to_string();
+        if name.is_empty() {
+            return bad_request("name must not be empty");
+        }
+        let supplied = normalise_supplied(body.headers);
+        if let Err(msg) = validate_headers(&supplied) {
+            return bad_request(&msg);
+        }
+        let header_names: Vec<String> = supplied.iter().map(|h| h.name.clone()).collect();
+        let cfg = McpServerConfig {
+            id: id.clone(),
+            name,
+            url: url.to_string(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            env: None,
+            header_names,
+            auth_mode: McpAuthMode::Headers,
+            oauth: None,
+            enabled: body.enabled,
+            created_at: Utc::now().timestamp(),
+        };
+        state
+            .store
+            .start_oauth_for_config(cfg, supplied, redirect_uri)
+            .await
+    } else {
+        state.store.start_oauth(&id, redirect_uri).await
+    };
+    match result {
+        Ok(start) => Json(json!({ "data": start })).into_response(),
+        Err(e) => bad_request(&e.to_string()),
+    }
+}
+
+/// GET /mcp-servers/:id/oauth/callback — browser redirect target.
+async fn oauth_callback(
+    State(state): State<McpServersState>,
+    Path(id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    if let Some(error) = query.get("error") {
+        return html_response(
+            StatusCode::BAD_REQUEST,
+            &format!("screenpipe MCP OAuth failed: {}", error),
+        );
+    }
+    let Some(state_value) = query.get("state") else {
+        return html_response(
+            StatusCode::BAD_REQUEST,
+            "screenpipe MCP OAuth failed: missing state",
+        );
+    };
+    let Some(code) = query.get("code") else {
+        return html_response(
+            StatusCode::BAD_REQUEST,
+            "screenpipe MCP OAuth failed: missing code",
+        );
+    };
+    match state.store.complete_oauth(state_value, code).await {
+        Ok(server_id) if server_id == id => html_response(
+            StatusCode::OK,
+            "screenpipe MCP OAuth connected. You can close this tab.",
+        ),
+        Ok(_) => html_response(
+            StatusCode::BAD_REQUEST,
+            "screenpipe MCP OAuth failed: callback server mismatch",
+        ),
+        Err(e) => html_response(
+            StatusCode::BAD_REQUEST,
+            &format!("screenpipe MCP OAuth failed: {}", e),
+        ),
+    }
+}
+
+/// POST /mcp-servers/:id/oauth/disconnect — wipe stored token.
+async fn oauth_disconnect(
+    State(state): State<McpServersState>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.store.disconnect_oauth(&id).await {
+        Ok(()) => Json(json!({ "success": true })).into_response(),
+        Err(e) => bad_request(&e.to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
@@ -385,6 +516,39 @@ fn not_found(id: &str) -> Response {
         .into_response()
 }
 
+fn html_response(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        [("content-type", "text/html; charset=utf-8")],
+        format!(
+            "<!doctype html><html><head><title>screenpipe MCP OAuth</title></head><body><p>{}</p></body></html>",
+            html_escape(message)
+        ),
+    )
+        .into_response()
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn url_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                vec![b as char]
+            } else {
+                format!("%{:02X}", b).chars().collect()
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -402,6 +566,10 @@ where
         .route("/:id/test", post(test_server))
         .route("/:id/tools", get(list_tools))
         .route("/:id/call", post(call_tool))
+        .route("/:id/oauth/status", get(oauth_status))
+        .route("/:id/oauth/start", post(oauth_start))
+        .route("/:id/oauth/callback", get(oauth_callback))
+        .route("/:id/oauth/disconnect", post(oauth_disconnect))
         .route(
             "/:id",
             get(get_server).put(upsert_server).delete(delete_server),

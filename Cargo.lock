@@ -8180,6 +8180,7 @@ version = "0.3.348"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "eventkit-rs",
@@ -8199,6 +8200,7 @@ dependencies = [
  "screenpipe-secrets",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "tempfile",
  "thiserror 1.0.69",
