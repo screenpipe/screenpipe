@@ -733,7 +733,7 @@ async fn main() {
                 // Commands from audio_exclusions.rs
                 audio_exclusions::read_audio_exclusions,
                 audio_exclusions::write_audio_exclusions,
-                audio_exclusions::list_running_apps,
+                audio_exclusions::read_app_bundle_metadata,
                 // Commands from main.rs
                 get_env,
                 get_e2e_seed_flags,
@@ -1077,7 +1077,7 @@ async fn main() {
             permissions::request_arc_automation_permission,
             audio_exclusions::read_audio_exclusions,
             audio_exclusions::write_audio_exclusions,
-            audio_exclusions::list_running_apps,
+            audio_exclusions::read_app_bundle_metadata,
             set_tray_unhealth_icon,
             set_tray_health_icon,
             write_browser_log,

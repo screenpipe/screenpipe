@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 
 use ca::aggregate_device_keys as agg_keys;
 use ca::sub_device_keys as sub_keys;
-use cidre::{cat, cf, core_audio as ca, ns, os};
+use cidre::{cat, cf, core_audio as ca, os};
 
 use super::stream::AudioStreamConfig;
 use crate::utils::audio::audio_to_mono;
@@ -79,7 +79,7 @@ fn detect_os_version() -> Option<(u64, u64, u64)> {
 /// The exclusion list is a JSON file with the shape:
 ///
 /// ```json
-/// { "excluded_bundle_ids": ["com.example.app", "com.other.app"] }
+/// { "excluded_apps": [{ "bundle_id": "com.example.app", "name": "Example" }] }
 /// ```
 ///
 /// Path defaults to `$HOME/.screenpipe/audio-exclusions.json` and can be
@@ -150,11 +150,16 @@ mod exclusions {
         let parsed: serde_json::Value =
             serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
         let ids = parsed
-            .get("excluded_bundle_ids")
+            .get("excluded_apps")
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .filter_map(|entry| {
+                        entry
+                            .get("bundle_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -210,28 +215,6 @@ mod exclusions {
         }
     }
 
-    /// Enumerate currently running apps as `(bundle_id, localized_name)` for
-    /// the "Exclude apps from system audio" picker UI. Sorted by display name
-    /// (case-insensitive) and deduped by bundle ID so a single tuple is
-    /// returned per app even if multiple processes of the same bundle are
-    /// running. Apps without a bundle ID (background daemons, etc.) are
-    /// omitted — they can't be targeted by the exclusion list anyway.
-    pub fn running_apps_for_picker() -> Vec<(String, String)> {
-        let apps = ns::Workspace::shared().running_apps();
-        let mut out: Vec<(String, String)> = Vec::with_capacity(apps.len());
-        for app in apps.iter() {
-            let Some(bundle_id) = app.bundle_id() else { continue; };
-            let name = app
-                .localized_name()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| bundle_id.to_string());
-            out.push((bundle_id.to_string(), name));
-        }
-        out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
-        out.dedup_by(|a, b| a.0 == b.0);
-        out
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -269,21 +252,23 @@ mod exclusions {
 
         #[test]
         fn empty_array_returns_empty() {
-            let f = write_tmp(r#"{"excluded_bundle_ids": []}"#);
+            let f = write_tmp(r#"{"excluded_apps": []}"#);
             assert!(read_bundle_ids(f.path()).0.is_empty());
         }
 
         #[test]
-        fn non_string_entries_are_skipped() {
-            let f = write_tmp(r#"{"excluded_bundle_ids": ["com.a", 42, null, "com.b"]}"#);
+        fn entries_missing_bundle_id_are_skipped() {
+            let f = write_tmp(
+                r#"{"excluded_apps": [{}, {"bundle_id": "com.a"}, {"name": "no id"}]}"#,
+            );
             let (ids, _) = read_bundle_ids(f.path());
-            assert_eq!(ids, vec!["com.a".to_string(), "com.b".to_string()]);
+            assert_eq!(ids, vec!["com.a".to_string()]);
         }
 
         #[test]
         fn well_formed_returns_list() {
             let f = write_tmp(
-                r#"{"excluded_bundle_ids": ["com.stremio.stremio", "com.spotify.client"]}"#,
+                r#"{"excluded_apps": [{"bundle_id": "com.stremio.stremio"}, {"bundle_id": "com.spotify.client"}]}"#,
             );
             let (ids, mt) = read_bundle_ids(f.path());
             assert_eq!(
@@ -309,14 +294,6 @@ mod exclusions {
         }
     }
 }
-
-/// Public re-exports for the exclusion-list UI.
-///
-/// The engine consumes the exclusion list internally via the private
-/// `exclusions` module; the Tauri shell only needs to enumerate running
-/// apps for the picker. Exposed as a thin pass-through so the Tauri layer
-/// does not need its own `cidre` / `NSWorkspace` dependency.
-pub use exclusions::running_apps_for_picker;
 
 // ---------------------------------------------------------------------------
 // IO proc callback

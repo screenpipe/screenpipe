@@ -1698,19 +1698,28 @@ export function RecordingSettings() {
       .catch(() => setCoreaudioTapAvailable(false));
   }, []);
 
+  type ExcludedApp = {
+    bundleId: string;
+    name: string | null;
+    icon: string | null;
+  };
+
   // Per-app exclusions for the CoreAudio Process Tap. The list is owned by
   // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
   // read/write it through Tauri commands. Hot-reload happens engine-side
   // on the existing 500ms tap-rebuild loop, so a write here propagates in
   // ~1 tick subject to the 60s REBUILD_COOLDOWN.
-  const [audioExclusions, setAudioExclusions] = useState<string[]>([]);
-  const [runningApps, setRunningApps] = useState<{ bundleId: string; name: string }[]>([]);
-  const [exclusionPickerOpen, setExclusionPickerOpen] = useState(false);
+  const [audioExclusions, setAudioExclusions] = useState<ExcludedApp[]>([]);
+  const [pendingAudioExclusions, setPendingAudioExclusions] = useState<ExcludedApp[] | null>(null);
+  const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
+  const effectiveAudioExclusions = pendingAudioExclusions ?? audioExclusions;
+
+  const { toast } = useToast();
 
   const reloadAudioExclusions = useCallback(async () => {
     try {
-      const ids = await invoke<string[]>("read_audio_exclusions");
-      setAudioExclusions(ids);
+      const apps = await invoke<ExcludedApp[]>("read_audio_exclusions");
+      setAudioExclusions(apps);
     } catch (e) {
       console.error("read_audio_exclusions failed", e);
       toast({
@@ -1719,64 +1728,67 @@ export function RecordingSettings() {
         variant: "destructive",
       });
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     if (!coreaudioTapAvailable) return;
     reloadAudioExclusions();
   }, [coreaudioTapAvailable, reloadAudioExclusions]);
 
-  const openExclusionPicker = useCallback(async () => {
-    setExclusionPickerOpen(true);
-    try {
-      const apps = await invoke<{ bundleId: string; name: string }[]>("list_running_apps");
-      setRunningApps(apps);
-    } catch (e) {
-      console.error("list_running_apps failed", e);
-    }
-  }, []);
-
-  const { toast } = useToast();
-
-  const writeAudioExclusions = useCallback(
-    async (next: string[]) => {
-      const prev = audioExclusions;
-      setAudioExclusions(next);
-      try {
-        await invoke("write_audio_exclusions", { bundleIds: next });
-      } catch (e) {
-        console.error("write_audio_exclusions failed", e);
-        setAudioExclusions(prev);
-        toast({
-          title: "Couldn't save audio exclusion",
-          description: String(e),
-          variant: "destructive",
-        });
-      }
-    },
-    [audioExclusions, toast]
-  );
-
   const addAudioExclusion = useCallback(
-    (bundleId: string) => {
-      if (!bundleId || audioExclusions.includes(bundleId)) return;
-      writeAudioExclusions([...audioExclusions, bundleId]);
-      setExclusionPickerOpen(false);
+    (app: ExcludedApp) => {
+      const current = pendingAudioExclusions ?? audioExclusions;
+      if (!app.bundleId || current.some((a) => a.bundleId === app.bundleId)) return;
+      setPendingAudioExclusions([...current, app]);
+      setHasUnsavedChanges(true);
     },
-    [audioExclusions, writeAudioExclusions]
+    [pendingAudioExclusions, audioExclusions]
   );
 
   const removeAudioExclusion = useCallback(
     (bundleId: string) => {
-      writeAudioExclusions(audioExclusions.filter((b) => b !== bundleId));
+      const current = pendingAudioExclusions ?? audioExclusions;
+      setPendingAudioExclusions(current.filter((a) => a.bundleId !== bundleId));
+      setSelectedBundleId((curr) => (curr === bundleId ? null : curr));
+      setHasUnsavedChanges(true);
     },
-    [audioExclusions, writeAudioExclusions]
+    [pendingAudioExclusions, audioExclusions]
   );
 
-  const nameForBundle = useCallback(
-    (bundleId: string) => runningApps.find((a) => a.bundleId === bundleId)?.name ?? bundleId,
-    [runningApps]
-  );
+  const pickAppToExclude = useCallback(async () => {
+    const picked = await open({
+      filters: [{ name: "Application", extensions: ["app"] }],
+      defaultPath: "/Applications",
+      multiple: false,
+      directory: false,
+    });
+    if (!picked || typeof picked !== "string") return;
+    try {
+      const meta = await invoke<ExcludedApp>("read_app_bundle_metadata", { path: picked });
+      addAudioExclusion(meta);
+    } catch (e) {
+      toast({
+        title: "Couldn't read app bundle",
+        description: String(e),
+        variant: "destructive",
+      });
+    }
+  }, [addAudioExclusion, toast]);
+
+  useEffect(() => {
+    if (!selectedBundleId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeAudioExclusion(selectedBundleId);
+        setSelectedBundleId(null);
+      } else if (e.key === "Escape") {
+        setSelectedBundleId(null);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [selectedBundleId, removeAudioExclusion]);
 
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
@@ -2106,6 +2118,16 @@ export function RecordingSettings() {
           Sentry.init({
             ...defaultOptions,
           });
+        }
+      }
+
+      if (pendingAudioExclusions !== null) {
+        try {
+          await invoke("write_audio_exclusions", { apps: pendingAudioExclusions });
+          setAudioExclusions(pendingAudioExclusions);
+          setPendingAudioExclusions(null);
+        } catch (e) {
+          throw new Error(`Failed to save audio exclusions: ${e}`);
         }
       }
 
@@ -3342,56 +3364,64 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap gap-1.5 pl-6">
-              {audioExclusions.map((bid) => (
+            <div
+              className="flex flex-wrap gap-1.5 pl-6"
+              onClick={() => setSelectedBundleId(null)}
+            >
+              {effectiveAudioExclusions.map((app) => (
                 <Badge
-                  key={bid}
-                  variant="secondary"
-                  className="gap-1 pr-1 cursor-pointer hover:bg-destructive/20"
-                  onClick={() => removeAudioExclusion(bid)}
-                  title={`Click to remove (${bid})`}
+                  key={app.bundleId}
+                  variant={selectedBundleId === app.bundleId ? "default" : "secondary"}
+                  className="gap-1.5 pr-1 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedBundleId === app.bundleId}
+                  title={app.bundleId}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedBundleId(
+                      selectedBundleId === app.bundleId ? null : app.bundleId
+                    );
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedBundleId(
+                        selectedBundleId === app.bundleId ? null : app.bundleId
+                      );
+                    }
+                  }}
                 >
-                  <span className="text-xs">{nameForBundle(bid)}</span>
-                  <XCircle className="h-3 w-3" />
+                  {app.icon && (
+                    <img src={app.icon} alt="" className="h-4 w-4 rounded-sm" />
+                  )}
+                  <span className="text-xs">{app.name ?? app.bundleId}</span>
+                  <button
+                    type="button"
+                    className="inline-flex rounded-sm hover:bg-destructive/30 focus:outline-none focus:ring-1 focus:ring-ring"
+                    aria-label={`Remove ${app.name ?? app.bundleId} from audio exclusions`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeAudioExclusion(app.bundleId);
+                    }}
+                  >
+                    <XCircle className="h-3 w-3" />
+                  </button>
                 </Badge>
               ))}
-              <Popover open={exclusionPickerOpen} onOpenChange={(o) => o ? openExclusionPicker() : setExclusionPickerOpen(false)}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 text-xs"
-                  >
-                    + add app
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[260px] p-0" align="start">
-                  <Command>
-                    <CommandInput placeholder="Search running apps..." className="h-9" />
-                    <CommandList>
-                      <CommandEmpty>No running apps found.</CommandEmpty>
-                      <CommandGroup>
-                        {runningApps
-                          .filter((a) => !audioExclusions.includes(a.bundleId))
-                          .map((a) => (
-                            <CommandItem
-                              key={a.bundleId}
-                              value={`${a.name} ${a.bundleId}`}
-                              onSelect={() => addAudioExclusion(a.bundleId)}
-                            >
-                              <div className="flex flex-col">
-                                <span className="text-sm">{a.name}</span>
-                                <span className="text-[10px] text-muted-foreground">{a.bundleId}</span>
-                              </div>
-                            </CommandItem>
-                          ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  pickAppToExclude();
+                }}
+              >
+                + add app
+              </Button>
             </div>
-            {audioExclusions.length === 0 && (
+            {effectiveAudioExclusions.length === 0 && (
               <p className="text-xs text-muted-foreground pl-6 italic">
                 No apps excluded. All system audio is captured.
               </p>

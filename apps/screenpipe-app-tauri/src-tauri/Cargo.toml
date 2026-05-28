@@ -50,6 +50,7 @@ tauri-plugin-http = "=2.5.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
+plist = "1"
 arc-swap = "1"
 
 tower-http = { version = "0.4.0", features = ["cors", "trace"] }
@@ -291,6 +292,7 @@ jemalloc = ["tikv-jemallocator"]
 # enterprise-build feature is on).
 tempfile = "3"
 wiremock = "0.6"
+serial_test = "3"
 
 
 [package.metadata.cargo-machete]
