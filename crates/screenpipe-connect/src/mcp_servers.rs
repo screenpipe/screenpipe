@@ -665,7 +665,10 @@ impl McpServerStore {
                 e
             );
         } else {
-            tracing::info!("[mcp-oauth] post-auth probe succeeded for '{}'", pending.server_id);
+            tracing::info!(
+                "[mcp-oauth] post-auth probe succeeded for '{}'",
+                pending.server_id
+            );
         }
         self.write_oauth_token(&pending.server_id, token).await?;
         if let Some(mut cfg) = pending.create_config {
@@ -735,10 +738,10 @@ impl McpServerStore {
             cfg.url
         );
         let protected_resource_url = protected_resource_metadata_url(&cfg.url)?;
-        let (_fetched_metadata_url, text) =
-            self.fetch_first_json(&protected_resource_url)
-                .await
-                .map_err(|e| anyhow!("OAuth protected resource discovery failed: {}", e))?;
+        let (_fetched_metadata_url, text) = self
+            .fetch_first_json(&protected_resource_url)
+            .await
+            .map_err(|e| anyhow!("OAuth protected resource discovery failed: {}", e))?;
         let protected: ProtectedResourceMetadata = serde_json::from_str(&text)
             .map_err(|e| anyhow!("invalid OAuth protected resource metadata: {}", e))?;
         tracing::info!(
@@ -1616,7 +1619,11 @@ async fn send_mcp_notification(
         }
     }
     if let Err(e) = req.send().await {
-        tracing::debug!("[mcp] notification '{}' send failed (non-fatal): {}", method, e);
+        tracing::debug!(
+            "[mcp] notification '{}' send failed (non-fatal): {}",
+            method,
+            e
+        );
     }
 }
 
