@@ -103,17 +103,29 @@ function wrapPathForMarkdown(path: string): string {
   return `<${path.replace(/>/g, "%3E")}>`;
 }
 
-export function rewriteLocalMarkdownLinksForChat(text: string): string {
+function rewriteLocalMediaLinksForChat(text: string): string {
   return text.replace(
+    /(!?)\[([^\]]*)\]\(((?:file:\/\/\/?[^\n\r]+?|\/[^\n\r]+?|[A-Z]:[\\/][^\n\r]+?)\.(mp4|mp3|wav|webm|ogg|m4a))\)/gi,
+    (_match, sigil: string, label: string, rawPath: string) => {
+      const localPath =
+        resolveLocalPathFromMarkdownUrl(rawPath) ?? normalizeMediaFilePath(rawPath.trim());
+      const normalizedPath = normalizeMediaFilePath(localPath);
+      return `${sigil}[${label}](${wrapPathForMarkdown(normalizedPath)})`;
+    },
+  );
+}
+
+export function rewriteLocalMarkdownLinksForChat(text: string): string {
+  return rewriteLocalMediaLinksForChat(text).replace(
     /(!?)\[([^\]\n]+)\]\((<[^>\n]+>|[^)\n]+)\)/g,
     (match, sigil: string, label: string, rawUrl: string) => {
-      const localPath = resolveLocalPathFromMarkdownUrl(rawUrl);
-      if (!localPath) {
+      if (sigil === "!") {
         return match;
       }
 
-      if (sigil === "!") {
-        return `${sigil}[${label}](${wrapPathForMarkdown(localPath)})`;
+      const localPath = resolveLocalPathFromMarkdownUrl(rawUrl);
+      if (!localPath) {
+        return match;
       }
 
       const normalizedMediaPath = normalizeMediaFilePath(localPath);
