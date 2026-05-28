@@ -16,7 +16,7 @@ import {
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
-import { stripPromptPlumbing, systemFallbackTitle, isFallbackLikeTitle as isFallbackLikeTitleUtil, shouldAcceptTitleSource } from "@/lib/utils/chat-title";
+import { systemFallbackTitle, shouldAcceptTitleSource } from "@/lib/utils/chat-title";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
@@ -465,14 +465,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const firstUserMsg = msgs.find(
       (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
     );
-    // Strip prompt-plumbing tags so <role>/<system> wrappers never leak
-    // into the fallback title shown in the sidebar or into AI title input.
-    const cleanContent = firstUserMsg ? stripPromptPlumbing(firstUserMsg.content) : null;
     const fallbackTitle = systemFallbackTitle(firstUserMsg?.content);
     const existingTitle = existing?.title?.trim() || null;
-    const isFallbackLikeTitle =
-      existingTitle === null ||
-      isFallbackLikeTitleUtil(existingTitle, fallbackTitle, firstUserMsg?.content);
 
     const hasValidPreset =
       selectedPreset &&
