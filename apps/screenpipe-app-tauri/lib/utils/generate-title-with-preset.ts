@@ -15,11 +15,17 @@ const TITLE_PROJECT_DIR = "pi-title";
 // ─── Prompt & validation (unchanged) ─────────────────────────────────────────
 
 function buildTitlePrompt(userMessage: string): string {
-  return `Write a concise chat title (max 50 chars) that describes what the user wants to do:
+  return `Generate a short chat title (max 50 characters) based on the user's request.
+
+Rules:
+- Prefer a specific task or goal.
+- Do not use vague labels like "Greeting", "Inquiry", "Conversation", "Discussion", or "Small talk".
+- If no concrete task is clear, return a short cleaned version of the user's message instead.
+- Reply with only the title text, nothing else.
 
 ${userMessage}
 
-Reply with just the title, nothing else.`;
+Reply with only the title text.`;
 }
 
 function normalizeTitle(text: string | null | undefined): string | null {
