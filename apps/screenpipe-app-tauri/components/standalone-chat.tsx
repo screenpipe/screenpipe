@@ -2759,6 +2759,9 @@ function ChatTitleMenu({
   const storeTitle = useChatStore((s) =>
     conversationId ? s.sessions[conversationId]?.title : undefined
   );
+  const streamingTitle = useChatStore((s) =>
+    conversationId ? s.sessions[conversationId]?.streamingTitle : undefined
+  );
   const session = useChatStore((s) =>
     conversationId ? s.sessions[conversationId] : undefined
   );
@@ -2771,12 +2774,13 @@ function ChatTitleMenu({
     : undefined;
   const hasMessages = messages.length > 0;
   const title =
-    storeTitle &&
-    storeTitle !== "new chat" &&
-    storeTitle !== "untitled" &&
-    !isConversationHistorySyncPrompt(storeTitle)
-      ? storeTitle
-      : derivedTitle || (hasMessages ? "untitled" : "");
+    streamingTitle ||
+    (storeTitle &&
+      storeTitle !== "new chat" &&
+      storeTitle !== "untitled" &&
+      !isConversationHistorySyncPrompt(storeTitle)
+        ? storeTitle
+        : derivedTitle || (hasMessages ? "untitled" : ""));
 
   // No conversation id OR no real content → don't render. The "+ New"
   // button on the right is enough; no point showing actions for a

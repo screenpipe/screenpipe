@@ -1548,7 +1548,7 @@ export function SidebarChatRow({
                 : "text-muted-foreground"
           )}
         >
-          {(isConversationHistorySyncPrompt(session.title) ? undefined : session.title) || "untitled"}
+          {session.streamingTitle || (isConversationHistorySyncPrompt(session.title) ? undefined : session.title) || "untitled"}
         </span>
         <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
           <span

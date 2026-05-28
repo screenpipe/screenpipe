@@ -91,6 +91,7 @@ async function generateTitleViaPi(
   content: string,
   preset: AIPreset,
   userToken: string | null,
+  onDelta?: (partial: string) => void,
 ): Promise<string | null> {
   // Unique session ID per call — no collisions across windows or concurrent calls
   const sessionId = `${INTERNAL_TITLE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -133,6 +134,10 @@ async function generateTitleViaPi(
     if (isTextDelta) {
       const delta = evt.delta ?? evt.assistantMessageEvent?.delta ?? "";
       accumulated += delta;
+      if (onDelta) {
+        const partial = normalizeTitle(accumulated);
+        if (partial) onDelta(partial);
+      }
       return;
     }
 
@@ -207,19 +212,20 @@ async function generateTitleViaPi(
   }
 }
 
-// ─── Public API (signature unchanged) ────────────────────────────────────────
+// ─── Public API ──────────────────────────────────────────────────────────────
 
 export async function titleCreatedByAI(
   content: string,
   selectedPreset: AIPreset | null | undefined,
   userToken?: string | null,
+  onDelta?: (partial: string) => void,
 ): Promise<string | null> {
   if (!selectedPreset) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
 
   try {
-    return await generateTitleViaPi(trimmed, selectedPreset, userToken ?? null);
+    return await generateTitleViaPi(trimmed, selectedPreset, userToken ?? null, onDelta);
   } catch (error) {
     console.warn("[chat-title] failed", {
       provider: selectedPreset.provider,

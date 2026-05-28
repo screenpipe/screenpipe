@@ -50,6 +50,10 @@ export interface SessionRecord {
   title: string;
   /** Who currently owns the title. User titles always win over AI/fallback. */
   titleSource?: ChatTitleSource;
+  /** Partial AI title being streamed — displayed in sidebar/header while
+   *  generation is in progress. Cleared on completion or failure.
+   *  Never persisted to disk. */
+  streamingTitle?: string;
   /** Last assistant or user message preview, truncated for the sidebar. */
   preview: string;
   /** Current liveness state (drives the sidebar dot / pulse). */

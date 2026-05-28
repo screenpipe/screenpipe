@@ -483,13 +483,29 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             rawContent,
             selectedPreset,
             settings?.user?.token ?? null,
+            async (partial) => {
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                const session = useChatStore.getState().sessions[convId];
+                // Only stream partial title while still at fallback priority.
+                // If the user renamed (titleSource === "user") or AI already
+                // settled, stop updating.
+                if (!session || (session.titleSource && session.titleSource !== "fallback")) return;
+                useChatStore.getState().actions.patch(convId, { streamingTitle: partial });
+              } catch {}
+            },
           );
 
           if (aiTitle) {
             // Reload conversation to check title priority
             const existingConv = await loadConversationFile(convId);
             if (!existingConv) {
-              return; // Conversation deleted
+              // Conversation deleted — clear streaming state
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+              } catch {}
+              return;
             }
 
             // Only update if current title is still fallback priority
@@ -498,13 +514,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
               existingConv.titleSource = "ai";
               await saveConversationFile(existingConv);
 
-              // Always update the zustand store and emit the cross-window
-              // event — the sidebar and header read from the store, so
-              // skipping this when the component unmounts leaves them
-              // showing the stale fallback title.
+              // Clear streamingTitle atomically with the final title apply
+              // so the sidebar transitions directly from partial → final
+              // with no fallback flicker.
               try {
                 const { useChatStore } = await import("@/lib/stores/chat-store");
-                useChatStore.getState().actions.patch(convId, { title: aiTitle, titleSource: "ai" });
+                useChatStore.getState().actions.patch(convId, {
+                  title: aiTitle,
+                  titleSource: "ai",
+                  streamingTitle: undefined,
+                });
               } catch (e) {
                 console.warn("[chat-title] failed to update chat store", { convId, error: e });
               }
@@ -523,9 +542,27 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
               if (!componentUnmountedRef.current) {
                 upsertFileConversationMeta(existingConv);
               }
+            } else {
+              // Title was upgraded (e.g. user renamed) while we were generating —
+              // just clear the streaming state.
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+              } catch {}
             }
+          } else {
+            // AI returned null — clear streaming state, keep fallback
+            try {
+              const { useChatStore } = await import("@/lib/stores/chat-store");
+              useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+            } catch {}
           }
         } catch (error) {
+          // Clear streamingTitle on error
+          try {
+            const { useChatStore } = await import("@/lib/stores/chat-store");
+            useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+          } catch {}
           console.warn("[chat-title] background title generation failed", {
             convId,
             error,
@@ -792,7 +829,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     try {
       const { useChatStore } = await import("@/lib/stores/chat-store");
       if (useChatStore.getState().sessions[convId]) {
-        useChatStore.getState().actions.patch(convId, { title: trimmed, titleSource: "user" });
+        useChatStore.getState().actions.patch(convId, { title: trimmed, titleSource: "user", streamingTitle: undefined });
       }
     } catch (e) {
       console.warn("[chat] failed to sync rename to store:", e);
