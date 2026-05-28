@@ -31,6 +31,7 @@ import {
   MemoizedReactMarkdown,
   chatUrlTransform,
   openScreenpipeViewerLink,
+  rewriteLocalMarkdownLinksForChat,
 } from "@/components/markdown";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
@@ -2036,7 +2037,9 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
   // Assistant messages occasionally contain raw tool-call XML the model emitted
   // as text — rewrite it to a fenced code block so rehypeRaw doesn't collapse
   // the unknown tags and bleed the args into the prose. See sanitize-tool-call-xml.ts.
-  const renderText = isUser ? text : sanitizeToolCallXml(text);
+  const renderText = rewriteLocalMarkdownLinksForChat(
+    isUser ? text : sanitizeToolCallXml(text),
+  );
   return (
     <MemoizedReactMarkdown
       className={cn(
