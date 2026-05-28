@@ -26,6 +26,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 import {
   openScreenpipeViewerLink,
   screenpipeViewerPathFromHref,
+  createScreenpipeUrlTransform,
 } from "@/components/markdown";
 
 describe("screenpipeViewerPathFromHref", () => {
@@ -110,5 +111,41 @@ describe("openScreenpipeViewerLink", () => {
     await expect(
       openScreenpipeViewerLink("screenpipe://view?path=/tmp/x.jpg"),
     ).rejects.toThrow("viewer window crashed");
+  });
+});
+
+describe("createScreenpipeUrlTransform — file:// handling", () => {
+  // Regression for defaultUrlTransform strips file:// URLs entirely,
+  // rendering local file links as plain text. The transform must pass them
+  // through so the a-component click handler can open them via Tauri shell.
+
+  it("passes file:// URLs through unchanged", () => {
+    const transform = createScreenpipeUrlTransform(["view"]);
+    const url = "file:///Users/me/screenpipe/data/frame_123.jpg";
+    expect(transform(url)).toBe(url);
+  });
+
+  it("passes Windows-style file:// URLs through unchanged", () => {
+    const transform = createScreenpipeUrlTransform(["view"]);
+    const url = "file:///C:/Users/me/screenpipe/data/frame.mp4";
+    expect(transform(url)).toBe(url);
+  });
+
+  it("still strips javascript: URLs", () => {
+    const transform = createScreenpipeUrlTransform(["view"]);
+    expect(transform("javascript:alert(1)")).toBe("");
+  });
+
+  it("still allows screenpipe:// URLs for allowed hosts", () => {
+    const transform = createScreenpipeUrlTransform(["view"]);
+    const url = "screenpipe://view?path=/tmp/frame.jpg";
+    expect(transform(url)).toBe(url);
+  });
+
+  it("still blocks screenpipe:// URLs for disallowed hosts", () => {
+    const transform = createScreenpipeUrlTransform(["view"]);
+    // "timeline" not in allowed set — should fall through to defaultUrlTransform
+    // which strips unknown protocols.
+    expect(transform("screenpipe://timeline?timestamp=2026-05-25T00:00:00Z")).toBe("");
   });
 });

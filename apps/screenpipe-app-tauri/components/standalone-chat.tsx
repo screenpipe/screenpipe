@@ -2125,6 +2125,42 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             );
           }
 
+          // Local file links — open via Tauri shell so the OS handles the
+          // file type (finder, explorer, default app). The URL transform in
+          // markdown.tsx lets file:// through; without this click handler
+          // the anchor would be a dead href="#" in the Tauri webview.
+          if (href?.startsWith("file://")) {
+            const handleFileLinkClick = async (
+              e: React.MouseEvent<HTMLAnchorElement>,
+            ) => {
+              e.preventDefault();
+              try {
+                // Strip file:// prefix — openViewerWindow expects a raw fs path
+                const path = decodeURIComponent(
+                  href.replace(/^file:\/\/\//, "/").replace(/^file:\/\//, "")
+                );
+                // On Windows, leading slash must be removed: /C:/Users/... → C:/Users/...
+                const fsPath = path.startsWith("/") && path[2] === ":" ? path.slice(1) : path;
+                const result = await commands.openViewerWindow(fsPath);
+                if (result.status === "error") {
+                  console.error("failed to open local file:", result.error);
+                }
+              } catch (error) {
+                console.error("failed to open local file:", error);
+              }
+            };
+            return (
+              <a
+                href="#"
+                onClick={handleFileLinkClick}
+                className="underline underline-offset-2 text-blue-500 hover:text-blue-400 cursor-pointer inline"
+                {...props}
+              >
+                {children}
+             </a>
+            );
+          }
+
           return (
             <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" {...props}>
               {children}

@@ -18,6 +18,12 @@ export function createScreenpipeUrlTransform(allowedHosts: readonly string[]) {
       if (parsed.protocol === "screenpipe:" && allowed.has(parsed.host)) {
         return url;
       }
+      // Allow local file links through — click handling is done in the
+      // a-component via Tauri's shell.open so the browser never navigates
+      // to a file:// URL directly.
+      if (parsed.protocol === "file:") {
+        return url;
+      }
     } catch {
       // Fall back to react-markdown's default sanitizer for malformed URLs.
     }
