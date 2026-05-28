@@ -32,6 +32,7 @@ import {
   Mic,
   Monitor,
   Volume2,
+  VolumeX,
   Headphones,
   AppWindowMac,
   EyeOff,
@@ -3353,7 +3354,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
             <div className="flex items-start space-x-2.5">
-              <EyeOff className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+              <VolumeX className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
               <div className="flex-1">
                 <h3 className="text-sm font-medium text-foreground">
                   Exclude apps from system audio
@@ -3398,7 +3399,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <span className="text-xs">{app.name ?? app.bundleId}</span>
                   <button
                     type="button"
-                    className="inline-flex rounded-sm hover:bg-destructive/30 focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
                     aria-label={`Remove ${app.name ?? app.bundleId} from audio exclusions`}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -3420,12 +3421,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               >
                 + add app
               </Button>
+              {effectiveAudioExclusions.length === 0 && (
+                <span className="text-xs text-muted-foreground italic self-center">
+                  No apps excluded. All system audio is captured.
+                </span>
+              )}
             </div>
-            {effectiveAudioExclusions.length === 0 && (
-              <p className="text-xs text-muted-foreground pl-6 italic">
-                No apps excluded. All system audio is captured.
-              </p>
-            )}
           </CardContent>
         </Card>
         )}
