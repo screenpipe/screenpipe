@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-recorder"
-version = "0.3.0"
+version = "0.4.1"
 edition = "2021"
 description = "Pure-Rust recorder orchestration for the screenpipe SDK — screen + MP4 + event-driven paired capture. Consumed by both the napi addon (ee/sdk) and the Tauri plugin (ee/sdk/tauri/rust) so neither has to spawn a Node bridge."
 license = "LicenseRef-Screenpipe-Enterprise"

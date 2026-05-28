@@ -69,9 +69,9 @@ impl Integration for GoogleDocs {
 
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
-            // Using googleapis.com root so the proxy covers both the Docs API
-            // (docs.googleapis.com paths rewrite to /docs/v1/...) and the Drive
-            // API (/drive/v3/...) with a single token injection point.
+            // Drive API lives on www.googleapis.com (/drive/v3/...).
+            // Docs API paths (/docs/v1/...) are rerouted to docs.googleapis.com
+            // by path_routes below — they would 404 on www.googleapis.com.
             base_url: "https://www.googleapis.com",
             auth: ProxyAuth::Bearer {
                 credential_key: "api_key",
@@ -79,6 +79,13 @@ impl Integration for GoogleDocs {
             extra_headers: &[],
         };
         Some(&CFG)
+    }
+
+    fn path_routes(&self) -> &'static [(&'static str, &'static str)] {
+        // Google Docs API is at docs.googleapis.com, not www.googleapis.com.
+        // Strip the "docs/" prefix from the proxy path and use the correct host.
+        // Drive paths (drive/v3/...) fall through to the default base_url.
+        &[("docs/", "https://docs.googleapis.com/")]
     }
 
     async fn test(
@@ -104,5 +111,72 @@ impl Integration for GoogleDocs {
 
         let email = resp["email"].as_str().unwrap_or("unknown");
         Ok(format!("connected as {}", email))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connections::Integration;
+
+    fn resolve(path: &str) -> String {
+        let routes = GoogleDocs.path_routes();
+        let base = "https://www.googleapis.com";
+        let api_path_clean = path.trim_start_matches('/');
+        routes
+            .iter()
+            .find(|(prefix, _)| api_path_clean.starts_with(prefix))
+            .map(|(prefix, new_base)| {
+                let rest = api_path_clean
+                    .strip_prefix(prefix)
+                    .unwrap_or(api_path_clean);
+                format!("{}/{}", new_base.trim_end_matches('/'), rest)
+            })
+            .unwrap_or_else(|| format!("{}/{}", base, api_path_clean))
+    }
+
+    #[test]
+    fn docs_create_routes_to_docs_subdomain() {
+        assert_eq!(
+            resolve("docs/v1/documents"),
+            "https://docs.googleapis.com/v1/documents"
+        );
+    }
+
+    #[test]
+    fn docs_get_routes_to_docs_subdomain() {
+        let doc_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms";
+        assert_eq!(
+            resolve(&format!("docs/v1/documents/{}", doc_id)),
+            format!("https://docs.googleapis.com/v1/documents/{}", doc_id)
+        );
+    }
+
+    #[test]
+    fn docs_batch_update_routes_to_docs_subdomain() {
+        let doc_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms";
+        assert_eq!(
+            resolve(&format!("docs/v1/documents/{}:batchUpdate", doc_id)),
+            format!(
+                "https://docs.googleapis.com/v1/documents/{}:batchUpdate",
+                doc_id
+            )
+        );
+    }
+
+    #[test]
+    fn drive_paths_stay_on_www_googleapis() {
+        assert_eq!(
+            resolve("drive/v3/files"),
+            "https://www.googleapis.com/drive/v3/files"
+        );
+    }
+
+    #[test]
+    fn drive_export_stays_on_www_googleapis() {
+        assert_eq!(
+            resolve("drive/v3/files/FILE_ID/export"),
+            "https://www.googleapis.com/drive/v3/files/FILE_ID/export"
+        );
     }
 }

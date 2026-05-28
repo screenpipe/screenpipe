@@ -786,6 +786,14 @@ pub async fn resolve_audio_devices_for_capture(
         if let Ok(output) = default_output_device().await {
             devices.push(output.to_string());
         }
+        if devices.is_empty() {
+            tracing::warn!(
+                "resolve_audio_devices_for_capture: no default input or output found \
+                 (use_system_default_audio={}, configured={:?})",
+                use_system_default_audio,
+                configured
+            );
+        }
         return devices;
     }
 

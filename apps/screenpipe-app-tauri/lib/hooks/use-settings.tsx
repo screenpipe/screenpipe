@@ -98,6 +98,11 @@ export interface ChatMessage {
 	images?: any[];
 	interruptedBySteer?: boolean;
 	steeredResponse?: boolean;
+	/** Wall-clock work duration for coalesced assistant messages (pipe
+	 *  runs). Used by the chat renderer as a fallback when no thinking
+	 *  blocks contributed a duration, so the work-group can still show
+	 *  "Worked for X min" even when the agent emitted no thinking. */
+	workDurationMs?: number;
 }
 
 /** What kind of session a conversation represents.

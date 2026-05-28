@@ -247,13 +247,7 @@ fn build_capture(
     let asbd = tap
         .asbd()
         .map_err(|s| anyhow!("Failed to read tap format: {:?}", s))?;
-    let sample_rate = asbd.sample_rate;
     let channels = asbd.channels_per_frame as u16;
-    info!(
-        "Process Tap: {:.0} Hz, {} ch, {} bit",
-        sample_rate, channels, asbd.bits_per_channel
-    );
-    let config = AudioStreamConfig::new(sample_rate as u32, channels);
 
     let sub_device =
         cf::DictionaryOf::with_keys_values(&[sub_keys::uid()], &[output_uid.as_type_ref()]);
@@ -285,6 +279,22 @@ fn build_capture(
     );
     let agg_device = ca::AggregateDevice::with_desc(&agg_desc)
         .map_err(|s| anyhow!("Failed to create aggregate device: {:?}", s))?;
+
+    // Use the aggregate device's nominal sample rate, not the tap's asbd.
+    // The aggregate is anchored to the output device (e.g. headphones), and its
+    // rate reflects what's actually being delivered. When the output device runs
+    // at 96kHz (common for headphone DACs), asbd may still report 48kHz, causing
+    // the recording pipeline to interpret 1.44M samples as 30s @ 48kHz when
+    // they're actually 15s @ 96kHz — produces files that play at 2x slowmo.
+    let sample_rate = agg_device
+        .nominal_sample_rate()
+        .map(|r| r as f64)
+        .unwrap_or(asbd.sample_rate);
+    info!(
+        "Process Tap: {:.0} Hz (asbd reported {:.0} Hz), {} ch, {} bit",
+        sample_rate, asbd.sample_rate, channels, asbd.bits_per_channel
+    );
+    let config = AudioStreamConfig::new(sample_rate as u32, channels);
 
     let mut ctx = Box::new(TapCallbackCtx {
         tx,

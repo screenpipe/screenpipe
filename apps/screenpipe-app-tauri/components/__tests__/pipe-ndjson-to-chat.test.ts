@@ -191,25 +191,22 @@ describe("parsePipeNdjsonToMessages", () => {
     ].join("\n");
 
     const msgs = parsePipeNdjsonToMessages(stdout);
-    // user, assistant (with tool), assistant (final)
-    expect(msgs.length).toBeGreaterThanOrEqual(3);
+    // user, then a single coalesced assistant covering tool + final text
+    expect(msgs.length).toBe(2);
 
     expect(msgs[0].role).toBe("user");
     expect(msgs[0].content).toBe("Check my activity");
 
-    // First assistant has tool call
-    expect(msgs[1].role).toBe("assistant");
-    expect(msgs[1].contentBlocks).toBeDefined();
-    const toolBlock = msgs[1].contentBlocks!.find(
+    // Coalesced assistant: tool call + final text in one message
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.contentBlocks).toBeDefined();
+    const toolBlock = assistant.contentBlocks!.find(
       (b: any) => b.type === "tool"
     );
     expect(toolBlock).toBeDefined();
     expect(toolBlock.toolCall.toolName).toBe("bash");
-
-    // Second assistant has final text
-    const lastAssistant = msgs[msgs.length - 1];
-    expect(lastAssistant.role).toBe("assistant");
-    expect(lastAssistant.content).toContain("focused on coding");
+    expect(assistant.content).toContain("focused on coding");
   });
 
   // ─── agent_end fallback ───────────────────────────────────────────
@@ -256,31 +253,30 @@ describe("parsePipeNdjsonToMessages", () => {
     ].join("\n");
 
     const msgs = parsePipeNdjsonToMessages(stdout);
-    // user, assistant+tool, assistant+tool, assistant (final)
-    expect(msgs.length).toBe(4);
+    // user, then one coalesced assistant covering all turns
+    expect(msgs.length).toBe(2);
 
     expect(msgs[0].role).toBe("user");
     expect(msgs[0].content).toBe("Check meetings");
 
-    // First assistant: text + tool call
-    expect(msgs[1].role).toBe("assistant");
-    expect(msgs[1].content).toBe("Let me check.");
-    const tool1 = msgs[1].contentBlocks?.find((b: any) => b.type === "tool");
-    expect(tool1).toBeDefined();
-    expect(tool1.toolCall.toolName).toBe("bash");
-    // toolResult should be attached
-    expect(tool1.toolCall.result).toContain("No meetings found");
+    // Coalesced assistant: text + tool + text + tool + text (in order)
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    const blockTypes = assistant.contentBlocks!.map((b: any) => b.type);
+    expect(blockTypes).toEqual(["text", "tool", "text", "tool", "text"]);
 
-    // Second assistant: text + tool call
-    expect(msgs[2].role).toBe("assistant");
-    expect(msgs[2].content).toBe("Let me search audio.");
-    const tool2 = msgs[2].contentBlocks?.find((b: any) => b.type === "tool");
-    expect(tool2).toBeDefined();
-    expect(tool2.toolCall.result).toContain("Some audio fragments");
+    const tools = assistant.contentBlocks!.filter((b: any) => b.type === "tool");
+    expect(tools).toHaveLength(2);
+    expect(tools[0].toolCall.toolName).toBe("bash");
+    expect(tools[0].toolCall.result).toContain("No meetings found");
+    expect(tools[1].toolCall.result).toContain("Some audio fragments");
 
-    // Final assistant: just text
-    expect(msgs[3].role).toBe("assistant");
-    expect(msgs[3].content).toBe("No real meetings detected. Just ambient audio.");
+    // Final answer is the last text block
+    const finalText = assistant.contentBlocks![assistant.contentBlocks!.length - 1];
+    expect(finalText.text).toContain("No real meetings detected");
+
+    // The coalesced assistant's content also surfaces the final text
+    expect(assistant.content).toContain("No real meetings detected");
   });
 
   it("hides Codex-style function return messages from agent_end", () => {
@@ -295,15 +291,24 @@ describe("parsePipeNdjsonToMessages", () => {
 
     const msgs = parsePipeNdjsonToMessages(stdout);
 
-    expect(msgs.map((m) => m.content)).toEqual([
-      "Analyze my screen",
-      "Let me search.",
-      "I found usable screen data.",
-    ]);
+    // The "Return of functions.bash" pseudo-user is a tool-return marker,
+    // not a real user turn — so the assistant chain isn't broken by it
+    // and both assistant turns coalesce into one message.
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0].role).toBe("user");
+    expect(msgs[0].content).toBe("Analyze my screen");
     expect(
       msgs.some((m) => String(m.content).includes("Return of functions.bash")),
     ).toBe(false);
-    const toolBlock = msgs[1].contentBlocks?.find((b: any) => b.type === "tool");
+
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    const textBlocks = assistant.contentBlocks!.filter((b: any) => b.type === "text");
+    expect(textBlocks.map((b: any) => b.text)).toEqual([
+      "Let me search.",
+      "I found usable screen data.",
+    ]);
+    const toolBlock = assistant.contentBlocks?.find((b: any) => b.type === "tool");
     expect(toolBlock?.toolCall.result).toContain('"data"');
   });
 
@@ -334,22 +339,18 @@ describe("parsePipeNdjsonToMessages", () => {
 
     const msgs = parsePipeNdjsonToMessages(stdout);
 
-    // Should use agent_end which has complete text
-    expect(msgs.length).toBeGreaterThanOrEqual(3);
+    // Should use agent_end which has complete text. Both assistant
+    // turns coalesce into one message.
+    expect(msgs).toHaveLength(2);
 
-    // User prompt
     expect(msgs[0].role).toBe("user");
     expect(msgs[0].content).toContain("Execute the pipe");
 
-    // First assistant with tool
-    expect(msgs[1].role).toBe("assistant");
-    expect(msgs[1].content).toBe("Checking activity.");
-    expect(msgs[1].contentBlocks?.some((b: any) => b.type === "tool")).toBe(true);
-
-    // Final assistant with summary
-    const lastAssistant = msgs[msgs.length - 1];
-    expect(lastAssistant.role).toBe("assistant");
-    expect(lastAssistant.content).toContain("coding for the past hour");
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.contentBlocks?.some((b: any) => b.type === "tool")).toBe(true);
+    expect(assistant.content).toContain("Checking activity.");
+    expect(assistant.content).toContain("coding for the past hour");
   });
 
   // ─── error handling ───────────────────────────────────────────────
@@ -432,26 +433,21 @@ describe("parsePipeNdjsonToMessages", () => {
 
     const msgs = parsePipeNdjsonToMessages(stdout);
 
-    // Should have: user, assistant (tool call), assistant (final text)
-    expect(msgs.length).toBeGreaterThanOrEqual(3);
+    // user, then a single coalesced assistant covering tool + final text
+    expect(msgs).toHaveLength(2);
 
-    // First: user with time range
     expect(msgs[0].role).toBe("user");
     expect(msgs[0].content).toContain("Time range:");
 
-    // Second: assistant with tool call to read SKILL.md
-    expect(msgs[1].role).toBe("assistant");
-    expect(msgs[1].contentBlocks).toBeDefined();
-    const toolBlock = msgs[1].contentBlocks!.find(
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.contentBlocks).toBeDefined();
+    const toolBlock = assistant.contentBlocks!.find(
       (b: any) => b.type === "tool"
     );
     expect(toolBlock).toBeDefined();
     expect(toolBlock.toolCall.toolName).toBe("read");
-
-    // Last: assistant with final verdict
-    const lastMsg = msgs[msgs.length - 1];
-    expect(lastMsg.role).toBe("assistant");
-    expect(lastMsg.content).toContain("focused");
+    expect(assistant.content).toContain("focused");
   });
 
   // ─── real-world: obsidian-sync multi-turn ─────────────────────────
@@ -482,27 +478,22 @@ describe("parsePipeNdjsonToMessages", () => {
 
     const msgs = parsePipeNdjsonToMessages(stdout);
 
-    // user, assistant (query + tool), assistant (final)
-    expect(msgs.length).toBeGreaterThanOrEqual(3);
+    // user, then a single coalesced assistant covering both turns
+    expect(msgs).toHaveLength(2);
 
     const user = msgs[0];
     expect(user.role).toBe("user");
     expect(user.content).toContain("Time range:");
 
-    const firstAssistant = msgs[1];
-    expect(firstAssistant.role).toBe("assistant");
-    expect(firstAssistant.contentBlocks).toBeDefined();
-    // Should have text and tool blocks (tool_result is attached to the tool block)
-    const blockTypes = firstAssistant.contentBlocks!.map((b: any) => b.type);
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.contentBlocks).toBeDefined();
+    const blockTypes = assistant.contentBlocks!.map((b: any) => b.type);
     expect(blockTypes).toContain("text");
     expect(blockTypes).toContain("tool");
-    // Tool result should be attached to the tool block
-    const toolBlock = firstAssistant.contentBlocks!.find((b: any) => b.type === "tool");
+    const toolBlock = assistant.contentBlocks!.find((b: any) => b.type === "tool");
     expect(toolBlock.toolCall.result).toContain("WezTerm");
-
-    const lastAssistant = msgs[msgs.length - 1];
-    expect(lastAssistant.role).toBe("assistant");
-    expect(lastAssistant.content).toContain("Obsidian vault");
+    expect(assistant.content).toContain("Obsidian vault");
   });
 
   // ─── skips non-assistant message_start/end ────────────────────────
@@ -545,6 +536,67 @@ describe("parsePipeNdjsonToMessages", () => {
     const ids = msgs.map((m) => m.id);
     const uniqueIds = new Set(ids);
     expect(uniqueIds.size).toBe(ids.length);
+  });
+
+  // ─── coalescing: many single-tool turns → one assistant ─────────────
+
+  it("coalesces N consecutive single-tool assistant turns into one assistant", () => {
+    // Reproduces the pipe-history screenshot: each agent step is a
+    // separate assistant message holding just one tool call. Before
+    // coalescing this rendered as N stacked "ran 1 command" headers;
+    // after, it's one assistant message whose tool calls the renderer
+    // can fold into a single "Worked for X min" rail.
+    const stdout = [
+      '{"type":"agent_end","messages":[' +
+        '{"role":"user","content":[{"type":"text","text":"sync messages"}],"timestamp":1000}' +
+        ',{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"read","arguments":{"path":"state.json"}}],"timestamp":2000}' +
+        ',{"role":"toolResult","content":[{"type":"text","text":"r1"}],"timestamp":2500}' +
+        ',{"role":"assistant","content":[{"type":"toolCall","id":"t2","name":"bash","arguments":{"command":"bun run /tmp/sync.ts"}}],"timestamp":3000}' +
+        ',{"role":"toolResult","content":[{"type":"text","text":"r2"}],"timestamp":3500}' +
+        ',{"role":"assistant","content":[{"type":"toolCall","id":"t3","name":"bash","arguments":{"command":"ls"}}],"timestamp":4000}' +
+        ',{"role":"toolResult","content":[{"type":"text","text":"r3"}],"timestamp":4500}' +
+        ',{"role":"assistant","content":[{"type":"text","text":"Sync complete."}],"timestamp":5000}' +
+      ']}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs).toHaveLength(2);
+
+    const assistant = msgs[1];
+    expect(assistant.role).toBe("assistant");
+    const tools = assistant.contentBlocks!.filter((b: any) => b.type === "tool");
+    expect(tools).toHaveLength(3);
+    expect(tools[0].toolCall.toolName).toBe("read");
+    expect(tools[1].toolCall.toolName).toBe("bash");
+    expect(tools[2].toolCall.toolName).toBe("bash");
+    expect(tools[0].toolCall.result).toBe("r1");
+    expect(tools[1].toolCall.result).toBe("r2");
+    expect(tools[2].toolCall.result).toBe("r3");
+
+    // Wall-clock duration captured from timestamps
+    expect(assistant.workDurationMs).toBe(3000); // first asst 2000 → last toolResult 5000? no — last asst is 5000, but last seen ts is 5000
+  });
+
+  it("captures workDurationMs from streaming message timestamps", () => {
+    const stdout = [
+      '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}',
+      '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}',
+      '{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":1000}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0,"toolName":"bash","partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}},"partial":{}}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[],"timestamp":2000}}',
+      '{"type":"turn_end"}',
+      '{"type":"turn_start"}',
+      '{"type":"message_start","message":{"role":"assistant","content":[],"timestamp":3000}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"done","partial":{}}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[],"timestamp":4000}}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs).toHaveLength(2);
+    const assistant = msgs[1];
+    // first asst ts = 1000, last ts seen = 4000
+    expect(assistant.workDurationMs).toBe(3000);
   });
 });
 

@@ -52,6 +52,7 @@ pub mod pocket;
 pub mod posthog;
 pub mod pushover;
 pub mod quickbooks;
+pub mod readwise;
 pub mod resend;
 pub mod salesforce;
 pub mod sentry;
@@ -131,6 +132,8 @@ pub struct ProxyConfig {
 pub enum ProxyAuth {
     /// Send as `Authorization: Bearer <token>`. Token comes from OAuth or credential field.
     Bearer { credential_key: &'static str },
+    /// Send as `Authorization: Token <token>`.
+    Token { credential_key: &'static str },
     /// Send as a custom header (e.g. `X-API-Key: <value>`).
     Header {
         name: &'static str,
@@ -199,6 +202,18 @@ pub trait Integration: Send + Sync {
     /// and the server injects auth automatically — no secrets in the LLM context.
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         None
+    }
+
+    /// Path-prefix routing overrides for the credential proxy.
+    ///
+    /// Each entry is `(path_prefix, replacement_base_url)`. When the incoming
+    /// proxy path starts with `path_prefix`, the proxy strips that prefix and
+    /// forwards to `replacement_base_url/<rest>` instead of the `ProxyConfig`
+    /// base_url. Useful when a single OAuth credential covers APIs on multiple
+    /// subdomains (e.g. Google Docs at docs.googleapis.com vs Drive at
+    /// www.googleapis.com). Default: no overrides (everything goes to base_url).
+    fn path_routes(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
     }
 
     /// Extra PEM-encoded root certificate to trust when calling this
@@ -295,6 +310,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(google_docs::GoogleDocs),
         Box::new(google_sheets::GoogleSheets),
         Box::new(quickbooks::QuickBooks),
+        Box::new(readwise::Readwise),
         Box::new(loops::Loops),
         Box::new(resend::Resend),
         Box::new(supabase::Supabase),
@@ -495,6 +511,15 @@ impl ConnectionManager {
             .iter()
             .find(|i| i.def().id == id)
             .and_then(|i| i.proxy_config())
+    }
+
+    /// Look up path-prefix routing overrides for a connection by ID.
+    pub fn find_path_routes(&self, id: &str) -> &'static [(&'static str, &'static str)] {
+        self.integrations
+            .iter()
+            .find(|i| i.def().id == id)
+            .map(|i| i.path_routes())
+            .unwrap_or(&[])
     }
 
     /// Look up the integration definition by ID.

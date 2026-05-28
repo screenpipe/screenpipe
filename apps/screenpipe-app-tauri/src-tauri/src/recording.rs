@@ -919,6 +919,10 @@ pub async fn spawn_screenpipe(
         }
         Ok(Err(e)) => {
             state.is_starting.store(false, Ordering::SeqCst);
+            state.is_starting_capture.store(false, Ordering::SeqCst);
+            if e.contains("no monitors matched") {
+                crate::health::set_recording_status(crate::health::RecordingStatus::Error);
+            }
             Err(e)
         }
         Err(_) => {

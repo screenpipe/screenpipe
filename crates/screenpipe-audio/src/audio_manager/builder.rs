@@ -24,6 +24,46 @@ use crate::{
 
 use crate::audio_manager::AudioManager;
 
+/// When following system defaults, ensure both input and output types appear in
+/// `enabled_devices`. Skips enrolling the current default for a type the user
+/// has explicitly muted via tray/API (`user_disabled_devices`).
+pub(crate) async fn ensure_system_default_device_types(
+    options: &mut AudioManagerOptions,
+    user_disabled: &HashSet<String>,
+) {
+    if options.is_disabled || !options.use_system_default_audio {
+        return;
+    }
+
+    let has_output = options.enabled_devices.iter().any(|name| {
+        parse_audio_device(name)
+            .map(|d| d.device_type == DeviceType::Output)
+            .unwrap_or(false)
+    });
+    if !has_output {
+        if let Ok(output) = default_output_device().await {
+            let name = output.to_string();
+            if !user_disabled.contains(&name) {
+                options.enabled_devices.insert(name);
+            }
+        }
+    }
+
+    let has_input = options.enabled_devices.iter().any(|name| {
+        parse_audio_device(name)
+            .map(|d| d.device_type == DeviceType::Input)
+            .unwrap_or(false)
+    });
+    if !has_input {
+        if let Ok(input) = default_input_device() {
+            let name = input.to_string();
+            if !user_disabled.contains(&name) {
+                options.enabled_devices.insert(name);
+            }
+        }
+    }
+}
+
 /// Controls when Whisper transcription runs.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptionMode {
@@ -283,28 +323,7 @@ impl AudioManagerBuilder {
             options.enabled_devices = HashSet::from_iter(devices);
         }
 
-        if !options.is_disabled && options.use_system_default_audio {
-            let has_output = options.enabled_devices.iter().any(|name| {
-                parse_audio_device(name)
-                    .map(|d| d.device_type == DeviceType::Output)
-                    .unwrap_or(false)
-            });
-            if !has_output {
-                if let Ok(output) = default_output_device().await {
-                    options.enabled_devices.insert(output.to_string());
-                }
-            }
-            let has_input = options.enabled_devices.iter().any(|name| {
-                parse_audio_device(name)
-                    .map(|d| d.device_type == DeviceType::Input)
-                    .unwrap_or(false)
-            });
-            if !has_input {
-                if let Ok(input) = default_input_device() {
-                    options.enabled_devices.insert(input.to_string());
-                }
-            }
-        }
+        ensure_system_default_device_types(options, &HashSet::new()).await;
 
         Ok(options.clone())
     }

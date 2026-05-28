@@ -13,7 +13,9 @@ use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    core::device::{default_input_device, default_output_device, parse_audio_device, DeviceType},
+    core::device::{
+        default_input_device, default_output_device, parse_audio_device, AudioDevice, DeviceType,
+    },
     device::device_manager::DeviceManager,
 };
 
@@ -28,6 +30,21 @@ fn is_legacy_display_output(device_name: &str) -> bool {
     device_name.contains("Display") && device_name.contains("(output)")
 }
 
+/// True when the device has an open stream that has not latched `is_disconnected`.
+///
+/// `DeviceManager::is_running` flips true when the record pipeline attaches — before
+/// the first audio frame — so we also require a live stream handle. Streams that
+/// failed to open never get inserted; streams that died (timeout, zero-fill hijack)
+/// set `is_disconnected` and are treated as not running so recovery can retry.
+fn is_device_actively_streaming(device_manager: &DeviceManager, device: &AudioDevice) -> bool {
+    if !device_manager.is_running(device) {
+        return false;
+    }
+    device_manager
+        .stream(device)
+        .is_some_and(|stream| !stream.is_disconnected())
+}
+
 /// True when an enabled device of `device_type` is actively recording.
 /// `enabled_devices` alone is not enough — a failed startup leaves the name
 /// enrolled but no stream running, which previously blocked output recovery.
@@ -40,7 +57,7 @@ fn is_device_type_running(
         parse_audio_device(name)
             .ok()
             .filter(|d| d.device_type == device_type)
-            .is_some_and(|d| device_manager.is_running(&d))
+            .is_some_and(|d| is_device_actively_streaming(device_manager, &d))
     })
 }
 
@@ -472,7 +489,7 @@ pub async fn start_device_monitor(
                             let current = audio_manager.enabled_devices().await;
                             let has_correct_input = parse_audio_device(&default_input_name)
                                 .ok()
-                                .is_some_and(|d| device_manager.is_running(&d));
+                                .is_some_and(|d| is_device_actively_streaming(&device_manager, &d));
 
                             if !has_correct_input {
                                 info!(
@@ -512,7 +529,7 @@ pub async fn start_device_monitor(
                             let current = audio_manager.enabled_devices().await;
                             let has_correct_output = parse_audio_device(&default_output_name)
                                 .ok()
-                                .is_some_and(|d| device_manager.is_running(&d));
+                                .is_some_and(|d| is_device_actively_streaming(&device_manager, &d));
 
                             if !has_correct_output {
                                 info!(

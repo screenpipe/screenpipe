@@ -231,15 +231,29 @@ fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
 }
 
 fn get_effective_recording_status() -> RecordingStatus {
-    let opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    let real = get_recording_status();
+    let mut opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((status, expiry)) = opt.as_ref() {
         if std::time::Instant::now() < *expiry {
+            // Don't mask a failed start — optimistic "Starting" is only useful
+            // while capture is genuinely booting, not after a terminal error.
+            if *status == RecordingStatus::Starting
+                && matches!(
+                    real,
+                    RecordingStatus::Error
+                        | RecordingStatus::Paused
+                        | RecordingStatus::Stopped
+                )
+            {
+                *opt = None;
+                drop(opt);
+                return real;
+            }
             return status.clone();
         }
     }
     drop(opt);
     // Clear expired optimistic status
-    let real = get_recording_status();
     let mut opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((ref s, _)) = *opt {
         // Clear if real status caught up or expired
@@ -670,6 +684,8 @@ fn create_dynamic_menu(
         let label = match effective_status {
             RecordingStatus::Recording => "Recording",
             RecordingStatus::Paused => "Paused — click to resume",
+            RecordingStatus::Starting => "Starting…",
+            RecordingStatus::Error => "Error — click to retry",
             _ => "Stopped — click to record",
         };
         let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)

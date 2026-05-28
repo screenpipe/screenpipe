@@ -34,7 +34,7 @@ function piEvt(sessionId: string, event: AgentInnerEvent): AgentEventEnvelope {
 }
 
 function reset() {
-  useChatStore.setState({ sessions: {}, currentId: null });
+  useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 }
 
 function seed(id: string, overrides: Partial<SessionRecord> = {}) {
@@ -180,6 +180,71 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
     );
     expect(useChatStore.getState().sessions.A.messages ?? []).toEqual([]);
     expect(useChatStore.getState().sessions.A.streamingMessageId).toBeFalsy();
+  });
+
+  it("keeps one assistant message across turn_end + assistant restart after switch-away", async () => {
+    // Reproduces the user's bug: switch away while a tool-using reply is
+    // mid-stream, then background routing takes over and sees an internal
+    // turn_end followed by another assistant message_start. That must stay in
+    // the SAME assistant bubble instead of splitting into multiple rows.
+    seed("A", {
+      status: "streaming",
+      isLoading: true,
+      isStreaming: true,
+      streamingMessageId: "msg-1",
+      streamingText: "Let me check. ",
+      contentBlocks: [{ type: "text", text: "Let me check. " }],
+      messages: [
+        {
+          id: "msg-1",
+          role: "assistant",
+          content: "Let me check. ",
+          contentBlocks: [{ type: "text", text: "Let me check. " }],
+          timestamp: 1_234,
+        },
+      ],
+      messageCount: 1,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(piEvt("A", { type: "turn_end" }));
+    await handlePiEvent(
+      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "bash",
+        args: { command: "echo hi" },
+      } as any),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_end",
+        toolCallId: "tool-1",
+        result: { content: [{ text: "hi" }] },
+      } as any),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Done." },
+      }),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.messages).toHaveLength(1);
+    expect(session.streamingMessageId).toBe("msg-1");
+    const assistant = session.messages![0] as any;
+    expect(assistant.id).toBe("msg-1");
+    expect(assistant.content).toBe("Let me check. Done.");
+    expect(assistant.contentBlocks.map((b: any) => b.type)).toEqual([
+      "text",
+      "tool",
+      "text",
+    ]);
+    expect(assistant.contentBlocks[1].toolCall.result).toBe("hi");
   });
 });
 

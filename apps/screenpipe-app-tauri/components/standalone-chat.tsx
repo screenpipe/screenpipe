@@ -761,6 +761,7 @@ interface Message {
   retryPrompt?: string; // when set, renders a retry CTA on error messages
   interruptedBySteer?: boolean;
   steeredResponse?: boolean;
+  workDurationMs?: number; // wall-clock work duration for coalesced pipe-run assistants
 }
 
 type QueuedDisplayPayload = {
@@ -2208,7 +2209,11 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
 }
 
 function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: boolean): GroupedBlock[] {
-  if (!hideThinkingBlocks) return grouped;
+  // Run always: collapsing consecutive tool-groups into a single
+  // "Worked for X min" rail is useful regardless of the thinking-block
+  // visibility setting. `hideThinkingBlocks` only controls whether
+  // thinking blocks get absorbed into the work-group (true) or shown
+  // as separate pills (false).
 
   const out: GroupedBlock[] = [];
   let pendingToolCalls: ToolCall[] = [];
@@ -2251,8 +2256,15 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: b
     }
 
     if (group.type === "thinking") {
-      pendingDurationMs += group.durationMs ?? 0;
-      pendingKey ??= group.key;
+      if (hideThinkingBlocks) {
+        pendingDurationMs += group.durationMs ?? 0;
+        pendingKey ??= group.key;
+        continue;
+      }
+      // Show thinking pills inline — flush pending tool work first so
+      // ordering is preserved and the thinking pill renders separately.
+      flushPending();
+      out.push(group);
       continue;
     }
 
@@ -2455,12 +2467,17 @@ function MessageContent({
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
           }
           if (group.type === "work-group") {
+            // Fall back to message-level workDurationMs when the
+            // grouping pass collected no thinking-block duration (e.g.
+            // pipe runs whose agent emits no thinking deltas — the
+            // parser captures wall-clock time on the ChatMessage).
+            const durationMs = group.durationMs > 0 ? group.durationMs : (message.workDurationMs ?? 0);
             return (
               <ToolCallGroup
                 key={`work-${group.key}`}
                 toolCalls={group.toolCalls}
                 defaultExpanded={!hasText}
-                summaryOverride={formatWorkDuration(group.durationMs)}
+                summaryOverride={formatWorkDuration(durationMs)}
                 hideCount={hasText}
               />
             );
@@ -8177,6 +8194,12 @@ export function StandaloneChat({
               const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
               const canShowMessageActions = !item.showActionsWhenExpandedBy ||
                 expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
+              const isActiveStreamingAssistantMessage =
+                message.role === "assistant" &&
+                (isLoading || isStreaming) &&
+                message.id === activeSourceFooterMessageId;
+              const shouldShowMessageActionBar =
+                canShowMessageActions && !isActiveStreamingAssistantMessage;
               const nextAssistant = visibleMessages
                 .slice(messageIndex + 1)
                 .find((candidate) => candidate.role === "assistant");
@@ -8334,7 +8357,7 @@ export function StandaloneChat({
                 )}
               </div>
               )}
-              {!hideSupersededSteerBody && canShowMessageActions ? (
+              {!hideSupersededSteerBody && shouldShowMessageActionBar ? (
                 <>
                 {/* Action buttons - appear on hover, outside the message box */}
                 {editingMessageId !== message.id && (

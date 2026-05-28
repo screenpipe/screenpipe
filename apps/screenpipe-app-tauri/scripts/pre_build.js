@@ -238,7 +238,7 @@ async function copyBunBinary() {
 			const tmpZip = path.join(cwd, `bun-darwin-${label}.zip`);
 			const tmpDir = path.join(cwd, `bun-darwin-${label}-tmp`);
 			try {
-				await downloadFile(url, tmpZip, { retries: 10 });
+				await downloadFile(url, tmpZip, { retries: 10, timeoutMs: 120000 });
 				await $`unzip -o ${tmpZip} -d ${tmpDir}`;
 				// The zip contains a folder like bun-darwin-aarch64/bun or bun-darwin-x64/bun
 				const entries = await fs.readdir(tmpDir);
@@ -313,6 +313,40 @@ async function copySystemBinary(binaryName, destination) {
 //      `/System/Library/`, or `@executable_path`/`@rpath`/`@loader_path`.
 //      Anything else (brew's Cellar, MacPorts, /Users/...) is fragile and
 //      will SIGABRT in production. This is the v2.4.243 crash class.
+// Run a system command with a hard timeout via Bun.spawn. Returns the
+// captured stdout text. We previously used `await $`cmd`.text()` here but
+// observed an indefinite hang on macOS Sequoia where the bun shell helper
+// would wedge mid-iteration after the second sidecar — no output, no
+// network, no children, just a spinning `R`-state process. Tooling-level
+// timeouts are cheap insurance: `file` and `otool` always return in <1s
+// in practice, so any wait longer than `timeoutMs` is a bug we want to
+// fail loudly on rather than burn the workflow's 180-min ceiling.
+async function runWithTimeout(cmd, { timeoutMs = 30_000, label } = {}) {
+	const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe' });
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		proc.kill('SIGKILL');
+	}, timeoutMs);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	clearTimeout(timer);
+	if (timedOut) {
+		throw new Error(
+			`${label || cmd.join(' ')} timed out after ${timeoutMs}ms — likely a bun shell / system-tool hang.`
+		);
+	}
+	if (exitCode !== 0) {
+		throw new Error(
+			`${label || cmd.join(' ')} exited ${exitCode}:\n${stderr || stdout}`
+		);
+	}
+	return stdout;
+}
+
 async function verifyMacosSidecarsSelfContained() {
 	const SAFE_PREFIXES = [
 		'/usr/lib/',
@@ -328,7 +362,7 @@ async function verifyMacosSidecarsSelfContained() {
 	console.log('verifying macOS sidecars are self-contained...');
 	for (const bin of sidecars) {
 		const expectedArch = bin.endsWith('-aarch64-apple-darwin') ? 'arm64' : 'x86_64';
-		const fileOut = (await $`file ${bin}`.text()).trim();
+		const fileOut = (await runWithTimeout(['file', bin], { label: `file ${bin}` })).trim();
 		// `file` on a fat binary lists every slice; on a thin binary, just one.
 		// Either way the expected arch token must appear.
 		if (!new RegExp(`\\b${expectedArch}\\b`).test(fileOut)) {
@@ -338,7 +372,7 @@ async function verifyMacosSidecarsSelfContained() {
 				`filename promises ${expectedArch} — Tauri ships it under the matching target.`
 			);
 		}
-		const out = await $`otool -L ${bin}`.text();
+		const out = await runWithTimeout(['otool', '-L', bin], { label: `otool -L ${bin}` });
 		for (const raw of out.split('\n')) {
 			const line = raw.trim();
 			if (!line) continue;
