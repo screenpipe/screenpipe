@@ -11,7 +11,7 @@ use commands::show_main_window;
 use serde_json::json;
 use std::env;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
@@ -127,6 +127,9 @@ mod safe_icon;
 mod shortcuts;
 mod vault;
 mod viewer;
+
+#[cfg(target_os = "macos")]
+static MIC_FOCUS_CAPTURE_RESTART: AtomicBool = AtomicBool::new(false);
 use base64::Engine;
 use health::start_health_check;
 use log_files::{get_log_files, get_screenpipe_data_dir};
@@ -936,6 +939,28 @@ async fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_http::init())
         .on_window_event(|window, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::WindowEvent::Focused(true) => {
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if !permissions::check_microphone_permission().permitted() {
+                        return;
+                    }
+                    if !health::get_audio_device_status().is_empty() {
+                        return;
+                    }
+                    if MIC_FOCUS_CAPTURE_RESTART
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                    {
+                        return;
+                    }
+                    info!(
+                        "Microphone permission newly granted (focus return) — restarting capture for audio reinit"
+                    );
+                    permissions::restart_capture_on_mic_grant(app).await;
+                });
+            }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);
