@@ -3353,15 +3353,14 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         {!settings.disableAudio && coreaudioTapAvailable && settings.experimentalCoreaudioSystemAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
-            <div className="flex items-start space-x-2.5">
-              <VolumeX className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-              <div className="flex-1">
+            <div className="flex items-center space-x-2.5">
+              <VolumeX className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
                 <h3 className="text-sm font-medium text-foreground">
                   Exclude apps from system audio
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Audio from these apps will be filtered out of system-audio
-                  capture. Changes apply within ~1 minute without restarting recording.
+                  Audio from these apps will be filtered out of system-audio capture.
                 </p>
               </div>
             </div>
