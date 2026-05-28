@@ -16,7 +16,7 @@ import {
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
-import { stripPromptPlumbing, systemFallbackTitle, isFallbackLikeTitle as isFallbackLikeTitleUtil } from "@/lib/utils/chat-title";
+import { stripPromptPlumbing, systemFallbackTitle, isFallbackLikeTitle as isFallbackLikeTitleUtil, shouldAcceptTitleSource } from "@/lib/utils/chat-title";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
@@ -231,9 +231,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       const { useChatStore } = await import("@/lib/stores/chat-store");
       const session = useChatStore.getState().sessions[id];
       if (session) {
+        // Never downgrade title priority (fallback < ai < user).
+        if (!shouldAcceptTitleSource(session.titleSource, resolvedTitleSource)) return;
         useChatStore.getState().actions.patch(id, {
           title: resolvedTitle,
           ...(resolvedTitleSource ? { titleSource: resolvedTitleSource } : {}),
+          // Clear any in-flight streaming partial when a higher-priority title
+          // (user rename or finalized AI) arrives from another window.
+          ...(resolvedTitleSource === "user" || resolvedTitleSource === "ai"
+            ? { streamingTitle: undefined }
+            : {}),
         });
       }
     } catch (e) {
@@ -567,14 +574,18 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
               } catch {}
             }
           } else {
-            // AI returned null — clear streaming state, keep fallback
+            // AI returned null — clear streaming state, keep fallback.
+            // Allow retry on next render by removing the attempt guard.
+            aiTitleAttemptedRef.current.delete(convId);
             try {
               const { useChatStore } = await import("@/lib/stores/chat-store");
               useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
             } catch {}
           }
         } catch (error) {
-          // Clear streamingTitle on error
+          // Clear streamingTitle on error.
+          // Allow retry on next render by removing the attempt guard.
+          aiTitleAttemptedRef.current.delete(convId);
           try {
             const { useChatStore } = await import("@/lib/stores/chat-store");
             useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });

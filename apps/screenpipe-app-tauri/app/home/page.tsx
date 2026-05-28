@@ -54,6 +54,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
+import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
 import {
   formatShortcutDisplay,
   type ChatLoadConversationPayload,
@@ -289,14 +290,11 @@ function HomeContent() {
           }
           // Respect titleSource priority: user > ai > fallback.
           // Never downgrade an existing higher-priority source.
-          const existingSource = existing.titleSource;
-          const incomingSource = titleSource;
-          const wouldDowngrade =
-            existingSource === "user" && incomingSource !== "user";
-          if (!wouldDowngrade && (existing.title !== nextTitle || (incomingSource && existingSource !== incomingSource))) {
+          if (!shouldAcceptTitleSource(existing.titleSource, titleSource)) return;
+          if (existing.title !== nextTitle || (titleSource && existing.titleSource !== titleSource)) {
             store.actions.patch(id, {
               title: nextTitle,
-              ...(incomingSource ? { titleSource: incomingSource } : {}),
+              ...(titleSource ? { titleSource } : {}),
             });
           }
         },

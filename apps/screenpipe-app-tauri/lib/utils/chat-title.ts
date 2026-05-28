@@ -4,6 +4,26 @@
 
 export type ChatTitleSource = "fallback" | "ai" | "user";
 
+const TITLE_SOURCE_RANK: Record<ChatTitleSource, number> = {
+  fallback: 0,
+  ai: 1,
+  user: 2,
+};
+
+/**
+ * Return true when an incoming titleSource is equal or higher priority than
+ * the existing one. Priority: fallback < ai < user.
+ * Treats undefined/null as "fallback".
+ */
+export function shouldAcceptTitleSource(
+  existingSource: ChatTitleSource | undefined | null,
+  incomingSource: ChatTitleSource | undefined | null,
+): boolean {
+  const existing = TITLE_SOURCE_RANK[existingSource ?? "fallback"];
+  const incoming = TITLE_SOURCE_RANK[incomingSource ?? "fallback"];
+  return incoming >= existing;
+}
+
 /**
  * Strip prompt-plumbing wrappers from user message content so they never
  * leak into fallback titles or AI title input. Handles all known wrapper
