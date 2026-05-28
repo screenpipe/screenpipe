@@ -62,6 +62,7 @@ import {
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { systemFallbackTitle } from "@/lib/utils/chat-title";
+import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
   useChatStore,
   sessionRecordFromMeta,
@@ -166,6 +167,8 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   const sid = envelope.sessionId;
   const inner = envelope.event;
   if (!sid || !inner) return; // events without a session id or body can't be routed
+  // Internal Pi sessions (title generation, etc.) — never routed to chat store
+  if (isInternalTitleSession(sid)) return;
   // Pipe sessions are only routed when chat-store already has a record
   // for them — i.e. the user clicked into a pipe-watch view, which
   // upserted the session. Unwatched pipes go to the pipe-run-recorder
