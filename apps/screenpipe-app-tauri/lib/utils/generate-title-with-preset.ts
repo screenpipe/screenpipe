@@ -130,8 +130,23 @@ async function generateTitleViaPi(
       return;
     }
 
-    if (evt.type === "agent_end" || evt.type === "turn_end") {
-      settle(accumulated || null);
+    // turn_end is a mid-agent boundary (e.g. between tool-call turns) —
+    // screenpipe-cloud emits it before agent_end with no content. Ignore it.
+    if (evt.type === "turn_end") return;
+
+    if (evt.type === "agent_end") {
+      let text = accumulated;
+      const usedFallback = !text && Array.isArray(evt.messages);
+      // Fallback: extract from agent_end messages payload (same as standalone-chat.tsx:5404-5411)
+      if (usedFallback) {
+        text = (evt.messages as any[])
+          .filter((m: any) => m.role === "assistant")
+          .flatMap((m: any) => (Array.isArray(m.content) ? m.content : [])
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text))
+          .join("\n\n");
+      }
+      settle(text || null);
       return;
     }
 
