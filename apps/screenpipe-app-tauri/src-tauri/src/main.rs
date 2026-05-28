@@ -56,6 +56,7 @@ mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
+mod local_file_guard;
 mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;
@@ -140,7 +141,13 @@ use window::RewindWindowId;
 #[tauri::command]
 #[specta::specta]
 fn get_env(name: &str) -> String {
-    std::env::var(String::from(name)).unwrap_or(String::from(""))
+    const ALLOWED_ENV_VARS: &[&str] = &["SCREENPIPE_E2E_SEED"];
+    if !cfg!(any(debug_assertions, feature = "e2e")) || !ALLOWED_ENV_VARS.contains(&name) {
+        warn!("blocked renderer env read for {}", name);
+        return String::new();
+    }
+
+    std::env::var(String::from(name)).unwrap_or_default()
 }
 
 /// Returns which E2E seeds are requested (env SCREENPIPE_E2E_SEED, comma-separated).
@@ -164,15 +171,11 @@ use tokio::time::{sleep, Duration};
 
 #[tauri::command]
 #[specta::specta]
-async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
-    use std::path::Path;
-
+async fn get_media_file(app: AppHandle, file_path: &str) -> Result<serde_json::Value, String> {
     const MAX_RETRIES: u32 = 3;
     const INITIAL_DELAY_MS: u64 = 100;
 
     debug!("Reading media file: {}", file_path);
-
-    let path = Path::new(file_path);
 
     // Retry loop to handle files that may be in the process of being written
     let mut last_error = String::new();
@@ -186,6 +189,21 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
             sleep(Duration::from_millis(delay)).await;
         }
 
+        let path = match local_file_guard::validate_local_file(
+            &app,
+            file_path,
+            local_file_guard::LocalFilePurpose::MediaRead,
+        ) {
+            Ok(path) => path,
+            Err(e) => {
+                last_error = e;
+                if attempt < MAX_RETRIES {
+                    continue;
+                }
+                return Err(last_error);
+            }
+        };
+
         if !path.exists() {
             last_error = format!("File does not exist: {}", file_path);
             if attempt < MAX_RETRIES {
@@ -195,7 +213,7 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
         }
 
         // Read file contents
-        match tokio::fs::read(path).await {
+        match tokio::fs::read(&path).await {
             Ok(contents) => {
                 // Check for empty or suspiciously small files (might still be writing)
                 if contents.is_empty() {
@@ -217,7 +235,7 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
                 let data = base64::prelude::BASE64_STANDARD.encode(&contents);
 
                 // Determine MIME type
-                let mime_type = get_mime_type(file_path);
+                let mime_type = get_mime_type(path.to_string_lossy().as_ref());
 
                 return Ok(serde_json::json!({
                     "data": data,
@@ -261,11 +279,22 @@ fn get_mime_type(path: &str) -> String {
 
 #[tauri::command]
 #[specta::specta]
-async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, String> {
+async fn upload_file_to_s3(
+    app: AppHandle,
+    file_path: &str,
+    signed_url: &str,
+) -> Result<bool, String> {
     debug!("Starting upload for file: {}", file_path);
 
+    local_file_guard::validate_upload_url(signed_url)?;
+    let path = local_file_guard::validate_local_file(
+        &app,
+        file_path,
+        local_file_guard::LocalFilePurpose::UploadRead,
+    )?;
+
     // Read file contents - do this outside retry loop to avoid multiple reads
-    let file_contents = match tokio::fs::read(file_path).await {
+    let file_contents = match tokio::fs::read(&path).await {
         Ok(contents) => {
             debug!("Successfully read file of size: {} bytes", contents.len());
             contents

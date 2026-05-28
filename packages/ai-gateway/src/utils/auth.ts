@@ -12,7 +12,6 @@ import { validateSubscription } from './subscription';
  * @returns Promise resolving to boolean indicating if token is valid
  */
 export async function verifyClerkToken(env: Env, token: string): Promise<{ valid: boolean; userId?: string }> {
-  console.log('verifying clerk token', token);
   try {
     const payload = await verifyToken(token, {
       secretKey: env.CLERK_SECRET_KEY,
@@ -220,7 +219,7 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
 
   // Clerk user IDs - resolve to UUID first, then check subscription
   if (CLERK_USER_ID_REGEX.test(token)) {
-    console.log('Clerk user ID detected, resolving to UUID:', token);
+    console.log('Clerk user ID detected, resolving to UUID');
     try {
       // Resolve clerk_id to Supabase UUID (has_active_cloud_subscription expects uuid)
       const userResponse = await fetch(
@@ -291,7 +290,7 @@ async function validateScreenpipeToken(token: string): Promise<{ isValid: boolea
     if (response.ok) {
       const data = await response.json() as { success?: boolean; user?: ScreenpipeUserData };
       const userData = data.user;
-      console.log('Valid screenpipe user token, user:', userData?.email);
+      console.log('Valid screenpipe user token');
       return {
         isValid: true,
         userId: userData?.clerk_id || userData?.id || userData?.email,

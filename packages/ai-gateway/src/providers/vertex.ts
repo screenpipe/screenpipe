@@ -664,7 +664,7 @@ function sanitizeContentBlock(block: any): any {
 		const originalText = block.text;
 		block.text = unwrapText(block.text);
 		if (originalText !== block.text) {
-			console.log('proxyToVertex: fixed text from', JSON.stringify(originalText), 'to', JSON.stringify(block.text));
+			console.log('proxyToVertex: normalized nested text content');
 		}
 	}
 
@@ -733,19 +733,9 @@ export async function proxyToVertex(
 		};
 		console.log('proxyToVertex: model=', body.model, 'stream=', body.stream, 'messages count=', body.messages?.length);
 
-		// Debug: log message structure before sanitization
-		if (body.messages && body.messages.length > 0) {
-			console.log('proxyToVertex: BEFORE sanitization, message[2] content:', JSON.stringify(body.messages[2]?.content, null, 2));
-		}
-
 		// Sanitize messages to fix common formatting issues
 		if (body.messages) {
 			body.messages = sanitizeMessages(body.messages);
-		}
-
-		// Debug: log message structure after sanitization
-		if (body.messages && body.messages.length > 0) {
-			console.log('proxyToVertex: AFTER sanitization, message[2] content:', JSON.stringify(body.messages[2]?.content, null, 2));
 		}
 
 		const isStreaming = body.stream === true;

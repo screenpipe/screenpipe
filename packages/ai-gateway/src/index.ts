@@ -39,7 +39,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 		// Authenticate and get tier info for all other endpoints
 		const authResult = await validateAuth(request, env);
-		console.log('auth result:', { tier: authResult.tier, deviceId: authResult.deviceId });
+		console.log('auth result:', { tier: authResult.tier });
 
 		// Check rate limit with tier info
 		const rateLimit = await checkRateLimit(request, env, authResult);

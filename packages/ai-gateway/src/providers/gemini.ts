@@ -106,7 +106,7 @@ export class GeminiProvider implements AIProvider {
 				const query = match[1]?.trim().replace(/[?.!]+$/, '') ||
 					content.replace(/search|internet|web|the|for|about|use/gi, '').trim();
 				if (query.length > 2) {
-					console.log('[Gemini] Web search intent detected:', query);
+					console.log('[Gemini] Web search intent detected');
 					return query;
 				}
 			}
@@ -186,7 +186,7 @@ export class GeminiProvider implements AIProvider {
 
 		if (webSearchCall) {
 			const query = webSearchCall.functionCall.args?.query || webSearchCall.functionCall.args?.q || '';
-			console.log('[Gemini] Model called web_search, executing for:', query);
+			console.log('[Gemini] Model called web_search');
 
 			try {
 				const searchResult = await this.executeWebSearch(query);
@@ -239,7 +239,7 @@ export class GeminiProvider implements AIProvider {
 		if (!hasWebSearch) {
 			const webSearchQuery = this.detectWebSearchIntent(body.messages);
 			if (webSearchQuery) {
-				console.log('[Gemini] Fallback web search for:', webSearchQuery);
+				console.log('[Gemini] Fallback web search');
 				return this.createDirectWebSearchStream(webSearchQuery);
 			}
 		}
@@ -303,7 +303,7 @@ export class GeminiProvider implements AIProvider {
 							// Before closing, check if we have a pending web search to execute
 							if (pendingWebSearch) {
 								const query = pendingWebSearch.args?.query || pendingWebSearch.args?.q || '';
-								console.log('[Gemini] Executing pending web_search:', query);
+								console.log('[Gemini] Executing pending web_search');
 
 								controller.enqueue(
 									new TextEncoder().encode(
@@ -378,7 +378,7 @@ export class GeminiProvider implements AIProvider {
 
 										if (part.functionCall) {
 											const funcName = part.functionCall.name;
-											console.log('[Gemini] Model called function:', funcName, JSON.stringify(part.functionCall.args || {}));
+											console.log('[Gemini] Model called function:', funcName);
 
 											if (funcName === 'web_search' || funcName === 'google_search') {
 												pendingWebSearch = {
@@ -541,7 +541,7 @@ export class GeminiProvider implements AIProvider {
 			},
 		};
 
-		console.log('[Gemini] Executing web search for:', query);
+		console.log('[Gemini] Executing web search');
 		const searchHeaders = await this.getAuthHeaders();
 
 		const response = await fetch(url, {

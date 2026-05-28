@@ -40,7 +40,7 @@ export const subscriptionCache = new SubscriptionCache();
  * @returns Promise resolving to boolean indicating if subscription is valid
  */
 export async function validateSubscription(env: Env, userId: string): Promise<boolean> {
-  console.log('validating user id has cloud sub', userId);
+  console.log('validating user has cloud subscription');
   // Check cache first
   const cached = subscriptionCache.get(userId);
   if (cached !== null) {
@@ -80,7 +80,7 @@ export async function validateSubscription(env: Env, userId: string): Promise<bo
   // Check by Clerk user ID - allow all signed-in Clerk users for Agent SDK
   // TODO: Add proper subscription checks for Clerk users
   if (CLERK_USER_ID_REGEX.test(userId)) {
-    console.log('Allowing Clerk user ID for Agent SDK:', userId);
+    console.log('Allowing Clerk user ID for Agent SDK');
     subscriptionCache.set(userId, true);
     return true;
   }
@@ -97,8 +97,8 @@ export async function validateSubscription(env: Env, userId: string): Promise<bo
       });
 
       if (response.ok) {
-        const userData = await response.json() as { email?: string };
-        console.log('Valid screenpipe user token, user:', userData?.email);
+        await response.json();
+        console.log('Valid screenpipe user token');
         subscriptionCache.set(userId, true);
         return true;
       } else {

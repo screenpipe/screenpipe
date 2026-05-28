@@ -115,8 +115,14 @@ pub enum ViewerContent {
 /// up the renderer.
 #[tauri::command]
 #[specta::specta]
-pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
-    let p = Path::new(&path);
+pub async fn read_viewer_file(app: AppHandle, path: String) -> Result<ViewerContent, String> {
+    let canonical = crate::local_file_guard::validate_local_file(
+        &app,
+        &path,
+        crate::local_file_guard::LocalFilePurpose::ViewerRead,
+    )?;
+    let p = canonical.as_path();
+    let path = canonical.to_string_lossy().into_owned();
     let metadata = tokio::fs::metadata(p)
         .await
         .map_err(|e| format!("cannot read {}: {}", path, e))?;
@@ -226,7 +232,15 @@ fn looks_binary(bytes: &[u8]) -> bool {
 /// Reveal a file in the OS file browser (Finder / Explorer / etc).
 #[tauri::command]
 #[specta::specta]
-pub async fn reveal_in_default_browser(path: String) -> Result<(), String> {
+pub async fn reveal_in_default_browser(app: AppHandle, path: String) -> Result<(), String> {
+    let path = crate::local_file_guard::validate_local_file(
+        &app,
+        &path,
+        crate::local_file_guard::LocalFilePurpose::Reveal,
+    )?
+    .to_string_lossy()
+    .into_owned();
+
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
