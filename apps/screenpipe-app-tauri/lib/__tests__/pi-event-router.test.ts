@@ -22,7 +22,12 @@ vi.mock("@/lib/chat-storage", () => ({
   saveConversationFile: vi.fn(async () => undefined),
 }));
 
-import { handlePiEvent, handleTerminated } from "../stores/pi-event-router";
+import { saveConversationFile } from "@/lib/chat-storage";
+import {
+  flushPendingSaves,
+  handlePiEvent,
+  handleTerminated,
+} from "../stores/pi-event-router";
 import { useChatStore, type SessionRecord } from "../stores/chat-store";
 import type { AgentEventEnvelope, AgentInnerEvent } from "../events/types";
 
@@ -34,6 +39,7 @@ function piEvt(sessionId: string, event: AgentInnerEvent): AgentEventEnvelope {
 }
 
 function reset() {
+  vi.clearAllMocks();
   useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 }
 
@@ -275,5 +281,39 @@ describe("pi-event-router: agent_terminated", () => {
     seed("A", { status: "streaming" });
     handleTerminated({ sessionId: "A", source: "pi", exitCode: 0 });
     expect(useChatStore.getState().sessions.A.status).toBe("idle");
+  });
+
+  it("persists display labels for backgrounded chats", async () => {
+    seed("A", {
+      status: "streaming",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content:
+            "search screenpipe for what happened during this meeting and summarize it",
+          displayContent: "Summarize meeting: Design Review",
+          timestamp: 1_234,
+        },
+      ],
+      messageCount: 1,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    handleTerminated({ sessionId: "A", source: "pi", exitCode: 0 });
+    await flushPendingSaves();
+
+    expect(saveConversationFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "A",
+        title: "Summarize meeting: Design Review",
+        messages: [
+          expect.objectContaining({
+            id: "user-1",
+            displayContent: "Summarize meeting: Design Review",
+          }),
+        ],
+      })
+    );
   });
 });

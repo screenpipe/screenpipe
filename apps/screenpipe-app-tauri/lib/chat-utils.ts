@@ -70,6 +70,8 @@ export function extractConversationHistorySyncUserText(value?: string | null): s
 export interface ChatPrefillData {
   context: string;
   prompt?: string;
+  /** Short user-facing label shown in chat while `prompt` remains the payload sent to Pi. */
+  displayLabel?: string;
   frameId?: number;
   autoSend?: boolean;
   source?: string;

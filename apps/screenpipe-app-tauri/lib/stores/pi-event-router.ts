@@ -61,7 +61,7 @@ import {
 } from "@/lib/chat-storage";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
-import { systemFallbackTitle } from "@/lib/utils/chat-title";
+import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
   useChatStore,
@@ -602,16 +602,17 @@ const saveQueue = new Map<string, Promise<void>>();
  *  saveQueue tail for each id so already-running saves finish before
  *  the window closes. Used by the close-on-quit hook in
  *  `mountPiEventRouter`. */
-async function flushPendingSaves(): Promise<void> {
+export async function flushPendingSaves(): Promise<void> {
   const sessions = useChatStore.getState().sessions;
   const ids = Object.keys(sessions).filter((id) => {
     const s = sessions[id];
     return !!s.messages && s.messages.length > 0;
   });
   await Promise.all(ids.map((id) => persistBackgroundSession(id)));
-  // Await the entire saveQueue tail so any in-flight save (queued
-  // before flush) also completes. persistBackgroundSession returns the
-  // promise it just appended, so the previous await covers the tail.
+  // Also await any queue tails that were already in-flight before this
+  // flush started, even if their sessions no longer appear in the
+  // current store snapshot.
+  await Promise.all([...saveQueue.values()]);
 }
 
 /**
@@ -658,7 +659,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       const firstUserMsg = messages.find(
         (m: any) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
       ) as any;
-      const derivedTitle: string = systemFallbackTitle(firstUserMsg?.content);
+      const derivedTitle: string = deriveFallbackConversationTitle(firstUserMsg);
 
       // Background saves use fallback titles; AI titles generated in foreground
       const title = existing?.title || derivedTitle;
@@ -708,6 +709,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.intent ? { intent: m.intent } : {}),
             ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
             timestamp: m.timestamp,
+            ...(m.displayContent ? { displayContent: m.displayContent } : {}),
             ...(blocks?.length ? { contentBlocks: blocks } : {}),
             ...(m.images?.length ? { images: m.images } : {}),
             ...(m.model ? { model: m.model } : {}),

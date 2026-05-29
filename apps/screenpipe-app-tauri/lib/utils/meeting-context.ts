@@ -67,6 +67,47 @@ function timestampMs(iso: string): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function isGenericMeetingTitle(title: string | null | undefined, meetingApp: string | null | undefined): boolean {
+  const normalizedTitle = title?.trim().toLowerCase();
+  if (!normalizedTitle) return true;
+  if (["untitled", "untitled meeting", "meeting"].includes(normalizedTitle)) {
+    return true;
+  }
+
+  const normalizedApp = meetingApp?.trim().toLowerCase();
+  if (normalizedApp && normalizedTitle === normalizedApp) {
+    return true;
+  }
+
+  return false;
+}
+
+function formatMeetingLabelTime(iso: string): string {
+  return new Date(iso)
+    .toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+    .replace(",", "");
+}
+
+export function buildMeetingSummarizeDisplayLabel(meeting: MeetingRecord): string {
+  const title = meeting.title?.trim();
+  if (!isGenericMeetingTitle(title, meeting.meeting_app) && title) {
+    return `Summarize meeting: ${title}`;
+  }
+
+  const app = meeting.meeting_app?.trim();
+  const formattedTime = formatMeetingLabelTime(meeting.meeting_start);
+  if (app && app.toLowerCase() !== "manual") {
+    return `Summarize ${app} meeting: ${formattedTime}`;
+  }
+
+  return `Summarize meeting: ${formattedTime}`;
+}
+
 function sortAudioChunks(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
   return [...chunks].sort((a, b) => {
     const byTime = timestampMs(a.timestamp) - timestampMs(b.timestamp);

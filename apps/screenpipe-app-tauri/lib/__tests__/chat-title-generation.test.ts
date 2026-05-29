@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  deriveFallbackConversationTitle,
   stripPromptPlumbing,
   systemFallbackTitle,
   isFallbackLikeTitle,
@@ -177,6 +178,36 @@ describe("systemFallbackTitle", () => {
     expect(systemFallbackTitle("new chat features I want")).toBe(
       "new chat features I want"
     );
+  });
+});
+
+// ─── deriveFallbackConversationTitle ───────────────────────────────────────
+
+describe("deriveFallbackConversationTitle", () => {
+  it("prefers displayContent over raw prompt text", () => {
+    expect(
+      deriveFallbackConversationTitle({
+        displayContent: "Summarize meeting: Design Review",
+        content: "search screenpipe for what happened during this meeting and summarize it",
+      })
+    ).toBe("Summarize meeting: Design Review");
+  });
+
+  it("falls back to cleaned prompt text when no displayContent exists", () => {
+    expect(
+      deriveFallbackConversationTitle({
+        content: "<role>expert</role> Create a custom screenpipe automation",
+      })
+    ).toBe("Create a custom screenpipe automation");
+  });
+
+  it("ignores blank displayContent and still derives from content", () => {
+    expect(
+      deriveFallbackConversationTitle({
+        displayContent: "   ",
+        content: "Optimize this pipe for reliability and retries",
+      })
+    ).toBe("Optimize this pipe for reliability and retries");
   });
 });
 

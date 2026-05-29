@@ -272,6 +272,10 @@ follow these prompt engineering best practices (from anthropic's guide):
 after analyzing, show me the improved pipe.md and explain what you changed and why.`;
 }
 
+function buildOptimizeDisplayLabel(pipeName: string): string {
+  return `Optimize pipe: ${pipeName.trim()}`;
+}
+
 function parsePipeError(stderr: string): {
   type: "daily_limit" | "credits_exhausted" | "rate_limit" | "unknown";
   message: string;
@@ -1831,6 +1835,7 @@ export function PipesSection() {
                           navigateHomeAndPrefill({
                             context: "the user wants to optimize their pipe",
                             prompt: buildOptimizePrompt(pipe.config.name),
+                            displayLabel: buildOptimizeDisplayLabel(pipe.config.name),
                             autoSend: true,
                           });
                         }}

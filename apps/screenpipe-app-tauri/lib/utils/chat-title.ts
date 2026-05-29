@@ -4,6 +4,11 @@
 
 export type ChatTitleSource = "fallback" | "ai" | "user";
 
+export interface TitleSourceMessageLike {
+  content?: string | null;
+  displayContent?: string | null;
+}
+
 const TITLE_SOURCE_RANK: Record<ChatTitleSource, number> = {
   fallback: 0,
   ai: 1,
@@ -53,6 +58,20 @@ export function systemFallbackTitle(
 }
 
 /**
+ * Derive the UI/system fallback title for a conversation from the first
+ * real user message. Prefer a short user-facing display label when present
+ * (meeting summaries, pipe actions, etc.), otherwise fall back to a cleaned
+ * slice of the raw prompt text.
+ */
+export function deriveFallbackConversationTitle(
+  firstUserMessage?: TitleSourceMessageLike | null,
+): string {
+  const displayTitle = firstUserMessage?.displayContent?.trim();
+  if (displayTitle) return displayTitle;
+  return systemFallbackTitle(firstUserMessage?.content);
+}
+
+/**
  * Check whether a title looks like a system-generated fallback (as opposed
  * to a deliberate user rename). Used to decide whether AI title generation
  * should run. This function is intentionally broad — it must recognize
@@ -80,4 +99,3 @@ export function isFallbackLikeTitle(
       : false)
   );
 }
-

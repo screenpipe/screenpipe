@@ -47,7 +47,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
-import { stripPromptPlumbing } from "@/lib/utils/chat-title";
+import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -62,6 +62,7 @@ import {
   normalizeAppTag,
   formatShortcutDisplay,
   extractConversationHistorySyncUserText,
+  isInjectedTitleSourcePrompt,
   isConversationHistorySyncPrompt,
   type ChatLoadConversationPayload,
   shouldHandleChatLoadConversationForWindow,
@@ -2555,6 +2556,12 @@ function getMessageIntentLabel(message: Message): string | null {
   return null;
 }
 
+function isPlaceholderConversationTitle(value?: string | null): boolean {
+  if (!value) return true;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "" || normalized === "new chat" || normalized === "untitled";
+}
+
 function isSteeredAssistantMessage(message: Message): boolean {
   return message.role === "assistant" && (message.intent === "steer" || message.steeredResponse === true);
 }
@@ -2805,17 +2812,16 @@ function ChatTitleMenu({
   );
   const isPinned = session?.pinned ?? false;
   const firstUserMsg = messages.find(
-    (m) => m.role === "user" && !isConversationHistorySyncPrompt(m.content)
+    (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
   );
-  const derivedTitle = firstUserMsg?.content
-    ? stripPromptPlumbing(firstUserMsg.content).slice(0, 50).trim()
+  const derivedTitle = firstUserMsg
+    ? deriveFallbackConversationTitle(firstUserMsg)
     : undefined;
   const hasMessages = messages.length > 0;
   const title =
     streamingTitle ||
     (storeTitle &&
-      storeTitle !== "new chat" &&
-      storeTitle !== "untitled" &&
+      !isPlaceholderConversationTitle(storeTitle) &&
       !isConversationHistorySyncPrompt(storeTitle)
         ? storeTitle
         : derivedTitle || (hasMessages ? "untitled" : ""));
@@ -3733,8 +3739,8 @@ export function StandaloneChat({
 
   // Listen for chat-prefill events from search modal and pipe creation
   useEffect(() => {
-    const unlisten = listen<{ context: string; prompt?: string; frameId?: number; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
-      const { context, prompt, frameId, autoSend, source, targetWindow } = event.payload;
+    const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
+      const { context, prompt, displayLabel, frameId, autoSend, source, targetWindow } = event.payload;
 
       // Only process if this window is the intended target (or no target for backwards compat)
       if (targetWindow && getCurrentWindow().label !== targetWindow) return;
@@ -3781,7 +3787,7 @@ export function StandaloneChat({
             autoSendBypassRef.current = true;
             await new Promise(r => setTimeout(r, 200));
             if (sendMessageRef.current) {
-              await sendMessageRef.current(fullMessage);
+              await sendMessageRef.current(fullMessage, displayLabel);
               setInput("");
               if (inputRef.current) inputRef.current.style.height = "auto";
             }
@@ -6576,6 +6582,10 @@ export function StandaloneChat({
         });
       }
       storeState.actions.appendMessage(sidNow, newUserMessage as any);
+      const currentTitle = useChatStore.getState().sessions[sidNow]?.title;
+      if (displayLabel && isPlaceholderConversationTitle(currentTitle)) {
+        storeState.actions.patch(sidNow, { title: displayLabel });
+      }
       storeState.actions.appendMessage(sidNow, {
         id: assistantMessageId,
         role: "assistant",

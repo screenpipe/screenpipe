@@ -16,7 +16,11 @@ import {
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
-import { systemFallbackTitle, shouldAcceptTitleSource } from "@/lib/utils/chat-title";
+import {
+  deriveFallbackConversationTitle,
+  isFallbackLikeTitle,
+  shouldAcceptTitleSource,
+} from "@/lib/utils/chat-title";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
@@ -466,11 +470,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const existing = await loadConversationFile(convId);
 
-    // Find first real user message, skipping injected metadata
-    const firstUserMsg = msgs.find(
-      (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
-    );
-    const fallbackTitle = systemFallbackTitle(firstUserMsg?.content);
+    // Find first real user message, skipping injected metadata.
+    const firstUserMsg = msgs.find((m) => (
+      m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
+    ));
+    const fallbackTitle = deriveFallbackConversationTitle(firstUserMsg);
     const existingTitle = existing?.title?.trim() || null;
 
     const hasValidPreset =
@@ -478,12 +482,24 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       selectedPreset.provider &&
       selectedPreset.model?.trim();
 
-    // Title priority: user > ai > fallback
-    // Preserve existing title if it has higher priority than fallback
     const existingSource = existing?.titleSource;
-    const shouldPreserveExisting = existingSource === "user" || existingSource === "ai";
-    const title = shouldPreserveExisting && existingTitle ? existingTitle : fallbackTitle;
-    const titleSource: "user" | "ai" | "fallback" = shouldPreserveExisting && existingSource ? existingSource : "fallback";
+    const existingLooksFallback = isFallbackLikeTitle(
+      existingTitle,
+      fallbackTitle,
+      firstUserMsg?.content,
+    );
+    // Title priority: user > ai > fallback.
+    // Also preserve legacy non-fallback titles that predate titleSource.
+    const preservedTitleSource: "user" | "ai" | null =
+      existingSource === "user" || existingSource === "ai"
+        ? existingSource
+        : existingTitle && !existingLooksFallback
+          ? "user"
+          : null;
+    const title =
+      preservedTitleSource && existingTitle ? existingTitle : fallbackTitle;
+    const titleSource: "user" | "ai" | "fallback" =
+      preservedTitleSource ?? "fallback";
 
     // Start AI title generation in background (once per conversation)
     // Only generate if current title is fallback priority
