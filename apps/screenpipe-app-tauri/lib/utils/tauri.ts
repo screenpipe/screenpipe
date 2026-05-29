@@ -1003,7 +1003,7 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
  * returns as soon as Rust owns the queued item; the prompt is written only
  * after the active turn finishes.
  */
-async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null, displayPreview: string | null) : Promise<Result<string, string>> {
     if (typeof window !== "undefined" && (window as any).__e2eCaptureNextPiPrompt) {
         (window as any).__e2ePiPromptCaptures = (window as any).__e2ePiPromptCaptures || [];
         (window as any).__e2ePiPromptCaptures.push({
@@ -1014,7 +1014,7 @@ async piQueuePrompt(sessionId: string | null, message: string, images: PiImageCo
         });
     }
     try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images }) };
+    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images, displayPreview }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

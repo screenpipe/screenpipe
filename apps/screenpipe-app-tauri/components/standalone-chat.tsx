@@ -60,6 +60,7 @@ import {
   buildAppMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
+  extractConversationHistorySyncUserText,
   isConversationHistorySyncPrompt,
   type ChatLoadConversationPayload,
   shouldHandleChatLoadConversationForWindow,
@@ -5246,7 +5247,7 @@ export function StandaloneChat({
             // processing the followUp turn.
           }
 
-          const text = (() => {
+          const rawText = (() => {
             const c = data.message?.content;
             if (typeof c === "string") return c;
             if (Array.isArray(c)) {
@@ -5257,6 +5258,7 @@ export function StandaloneChat({
             }
             return "";
           })();
+          const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
           const pendingOptimisticSteer = optimisticSteerRef.current;
           const isPendingOptimisticSteerEcho = Boolean(
@@ -5265,17 +5267,6 @@ export function StandaloneChat({
           );
           const shouldConsumePendingOptimisticSteer = isPendingOptimisticSteerEcho;
           const preMatchedTurnIntent = findTurnIntentForUserStart(piSessionIdRef.current, text, pendingNextPiUserDisplayRef.current);
-
-          // Skip the chat panel's own injected `<conversation_history>...`
-          // sync prompt (see promptMessage construction at the piPrompt call).
-          // Pi echoes it back as a message_start (user) event; we've already
-          // stored the real user-typed message locally via sendPiMessage, so
-          // adding this would create a phantom user bubble whose first 50
-          // chars look like `<conversation_history>\nassistant: [tool: ...`
-          // and corrupt the chat title on next save.
-          if (text.startsWith("<conversation_history>")) {
-            return;
-          }
 
           if (!piMessageIdRef.current || isPendingOptimisticSteerEcho || preMatchedTurnIntent?.kind === "steer") {
             const sidForStartedUser = piSessionIdRef.current;
@@ -6370,6 +6361,7 @@ export function StandaloneChat({
         piSessionIdRef.current,
         queuedPrompt,
         piImages.length > 0 ? piImages : null,
+        queuedPreviewForText(userMessage),
       );
       const queuedTurnIntentId = `queued-${result.status === "ok" ? result.data : Date.now()}`;
       if (result.status !== "ok") {

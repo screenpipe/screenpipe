@@ -2000,6 +2000,7 @@ pub async fn pi_queue_prompt(
     session_id: Option<String>,
     message: String,
     images: Option<Vec<PiImageContent>>,
+    display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
     let queue = {
@@ -2014,12 +2015,13 @@ pub async fn pi_queue_prompt(
             .ok_or("Pi command queue not initialized")?
     };
 
-    let cmd = build_prompt_command(message.clone(), images)?;
+    let preview = display_preview.unwrap_or_else(|| message.clone());
+    let cmd = build_prompt_command(message, images)?;
     let (queue_id, _rx) = queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::Prompt,
-            message,
+            preview,
             true,
         )
         .await?;
