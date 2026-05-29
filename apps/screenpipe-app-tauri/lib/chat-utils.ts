@@ -11,7 +11,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
 
-export function isConversationHistorySyncPrompt(value?: string | null): boolean {
+export function isConversationHistorySyncPrompt(value?: string | null): value is string {
   return typeof value === "string" && value.startsWith("<conversation_history>");
 }
 
