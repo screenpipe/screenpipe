@@ -488,7 +488,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Start AI title generation in background (once per conversation)
     // Only generate if current title is fallback priority
     const rawContent = firstUserMsg?.content?.trim() || null;
+    // Opt-out: when the user disables auto title generation (to save tokens),
+    // skip the extra LLM call entirely — chats keep the fallback title.
+    const autoTitleEnabled = settings?.autoGenerateChatTitles !== false;
     if (
+      autoTitleEnabled &&
       titleSource === "fallback" &&
       rawContent &&
       hasValidPreset &&
