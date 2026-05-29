@@ -169,7 +169,7 @@ create the pipe.md file, install it, and enable it. here is what the user wants:
 function navigateHomeAndPrefill(data: ChatPrefillData): void {
   // Store prefill data before navigating — the page will reload so
   // any code after location change won't execute.
-  sessionStorage.setItem("pendingChatPrefill", JSON.stringify(data));
+  sessionStorage.setItem("pendingChatPrefill", JSON.stringify({ ...data, targetWindow: "home" }));
   const url = new URL(window.location.href);
   url.searchParams.set("section", "home");
   window.location.href = url.toString();

@@ -176,7 +176,7 @@ function getReadmeFromPipeMd(raw: string): string {
 }
 
 function navigateHomeAndPrefill(data: ChatPrefillData): void {
-  sessionStorage.setItem("pendingChatPrefill", JSON.stringify(data));
+  sessionStorage.setItem("pendingChatPrefill", JSON.stringify({ ...data, targetWindow: "home" }));
   const url = new URL(window.location.href);
   url.searchParams.set("section", "home");
   window.location.href = url.toString();

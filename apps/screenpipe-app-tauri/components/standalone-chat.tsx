@@ -3648,7 +3648,7 @@ export function StandaloneChat({
       try {
         const data = JSON.parse(pending);
         // Small delay to let the chat fully initialize without showing setup flashes.
-        setTimeout(() => emit("chat-prefill", data), 120);
+        setTimeout(() => emit("chat-prefill", { ...data, targetWindow: data.targetWindow || windowLabel }), 120);
       } catch {
         setIsPreparingPrefill(false);
       }
@@ -5353,12 +5353,11 @@ export function StandaloneChat({
               nextRows = rows;
               return rows;
             });
-            if (nextRows) {
-              void saveConversation(nextRows, {
-                refreshHistory: false,
-                syncActiveConversation: false,
-              });
-            }
+            // Do not eagerly persist from the queued-turn recovery path.
+            // When Pi has just terminated/restarted, this branch can run before
+            // the active chat/session state fully settles and create a second
+            // saved conversation id. Normal streaming/completion saves still
+            // persist the real chat once the foreground session is stable.
 
             piMessageIdRef.current = queuedTurnAssistantId;
             piStreamingTextRef.current = "";
