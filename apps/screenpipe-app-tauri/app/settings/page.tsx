@@ -19,11 +19,13 @@ import {
   BarChart3,
   Gift,
   ChevronLeft,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
 import { useRouter } from "next/navigation";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { AccountSection } from "@/components/settings/account-section";
 import ShortcutSection from "@/components/settings/shortcut-section";
 import { AIPresets } from "@/components/settings/ai-presets";
@@ -40,6 +42,8 @@ import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
+
+const DOCUMENTATION_URL = "https://docs.screenpi.pe";
 
 type SettingsSection =
   | "account"
@@ -224,6 +228,14 @@ function SettingsContent() {
   const allItems: NavItem[] = navGroups.flatMap((g) => g.items as NavItem[]);
   const currentLabel = allItems.find((s) => s.id === section)?.label ?? "Settings";
 
+  const openDocumentation = async () => {
+    try {
+      await openUrl(DOCUMENTATION_URL);
+    } catch {
+      toast({ title: "failed to open documentation", variant: "destructive" });
+    }
+  };
+
   const renderSection = () => {
     switch (section) {
       case "general":       return <GeneralSettings />;
@@ -310,6 +322,29 @@ function SettingsContent() {
               </div>
             )
           )}
+        </div>
+
+        {/* Documentation */}
+        <div className={cn("p-2 border-t", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
+          <button
+            type="button"
+            data-testid="settings-nav-documentation"
+            onClick={openDocumentation}
+            className={cn(
+              "w-full flex items-center space-x-2.5 px-3 py-2 rounded-lg text-left transition-all duration-150 group",
+              isTranslucent
+                ? "vibrant-nav-item vibrant-nav-hover"
+                : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <ExternalLink
+              className={cn(
+                "h-4 w-4 transition-colors flex-shrink-0",
+                isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground",
+              )}
+            />
+            <span className="text-xs font-medium truncate">Documentation</span>
+          </button>
         </div>
       </AppSidebar>
 
