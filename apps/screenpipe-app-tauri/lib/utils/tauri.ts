@@ -70,7 +70,7 @@ async calendarGetCurrentMeeting() : Promise<Result<CalendarEventItem[], string>>
 /**
  * Get calendar events in a time window.
  */
-async calendarGetEvents(hoursBack: bigint | null, hoursAhead: bigint | null) : Promise<Result<CalendarEventItem[], string>> {
+async calendarGetEvents(hoursBack: number | null, hoursAhead: number | null) : Promise<Result<CalendarEventItem[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("calendar_get_events", { hoursBack, hoursAhead }) };
 } catch (e) {
@@ -182,7 +182,7 @@ async completeOnboarding() : Promise<Result<null, string>> {
 /**
  * Copy a frame deeplink (screenpipe://frame/N) to clipboard. Native API only.
  */
-async copyDeeplinkToClipboard(frameId: bigint) : Promise<Result<null, string>> {
+async copyDeeplinkToClipboard(frameId: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("copy_deeplink_to_clipboard", { frameId }) };
 } catch (e) {
@@ -194,7 +194,7 @@ async copyDeeplinkToClipboard(frameId: bigint) : Promise<Result<null, string>> {
  * Copy a frame image to the system clipboard (native API, works in Tauri webview).
  * Fetches the frame from the local server and uses arboard for clipboard access.
  */
-async copyFrameToClipboard(frameId: bigint) : Promise<Result<null, string>> {
+async copyFrameToClipboard(frameId: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("copy_frame_to_clipboard", { frameId }) };
 } catch (e) {
@@ -214,7 +214,7 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async deleteCacheFiles(paths: string[]) : Promise<Result<bigint, string>> {
+async deleteCacheFiles(paths: string[]) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_cache_files", { paths }) };
 } catch (e) {
@@ -263,7 +263,7 @@ async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result
  * through the same Rust-side callback adapter production uses, then let the
  * frontend's default pipe handlers record it as a completed pipe run.
  */
-async e2eEmitPipeStream(pipeName: string, executionId: bigint, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
+async e2eEmitPipeStream(pipeName: string, executionId: number, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_emit_pipe_stream", { pipeName, executionId, deltaCount }) };
 } catch (e) {
@@ -612,7 +612,7 @@ async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean |
  * Shows Main, emits the navigation event from the app handle (not a webview),
  * then closes the Search window.
  */
-async searchNavigateToTimeline(timestamp: string, frameId: bigint | null, searchTerms: string[] | null, searchResultsJson: string | null, searchQuery: string | null) : Promise<Result<null, string>> {
+async searchNavigateToTimeline(timestamp: string, frameId: number | null, searchTerms: string[] | null, searchResultsJson: string | null, searchQuery: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("search_navigate_to_timeline", { timestamp, frameId, searchTerms, searchResultsJson, searchQuery }) };
 } catch (e) {
@@ -1738,14 +1738,14 @@ error: string | null;
  * Unix epoch seconds when the current phase was entered. Lets the UI
  * show "X minutes" on slow migrations.
  */
-sinceEpochSecs: bigint }
+sinceEpochSecs: number }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
  * Also includes whether the browser is currently running.
  */
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
-export type CacheFile = { path: string; label: string; size_bytes: bigint }
+export type CacheFile = { path: string; label: string; size_bytes: number }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type CalendarEventItem = { id: string; title: string;
 /**
@@ -1772,15 +1772,15 @@ source?: string }
 export type CalendarStatus = { available: boolean; authorized: boolean; authorizationStatus: string; calendarCount: number }
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
-export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: bigint }
+export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
-export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
+export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
-export type LogFile = { name: string; path: string; modified_at: bigint }
+export type LogFile = { name: string; path: string; modified_at: number }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null;
@@ -1855,7 +1855,7 @@ preview: string;
  * Unix epoch milliseconds for "queued at" — drives the relative-time
  * label in the UI ("queued 4s ago").
  */
-queuedAtMs: bigint }
+queuedAtMs: number }
 export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
@@ -1962,7 +1962,7 @@ filterMusic: boolean;
  * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
  * Also controls the max deferral cap during active meetings.
  */
-batchMaxDurationSecs?: bigint | null;
+batchMaxDurationSecs?: number | null;
 /**
  * Custom vocabulary for transcription biasing and word replacement.
  * Previously stored in SettingsStore.extra["vocabularyWords"].
@@ -2010,12 +2010,12 @@ disableMeetingDetector?: boolean;
  * Override `EventDrivenCaptureConfig::idle_capture_interval_ms` (milliseconds).
  * None = follow active PowerProfile.
  */
-idleCaptureIntervalMs?: bigint | null;
+idleCaptureIntervalMs?: number | null;
 /**
  * Override `EventDrivenCaptureConfig::visual_check_interval_ms` (milliseconds).
  * None = follow active PowerProfile.
  */
-visualCheckIntervalMs?: bigint | null;
+visualCheckIntervalMs?: number | null;
 /**
  * Override `EventDrivenCaptureConfig::visual_change_threshold` (0.0–1.0).
  * None = follow active PowerProfile.
@@ -2025,7 +2025,7 @@ visualChangeThreshold?: number | null;
  * Override `EventDrivenCaptureConfig::min_capture_interval_ms` (milliseconds).
  * None = follow active PowerProfile.
  */
-minCaptureIntervalMs?: bigint | null;
+minCaptureIntervalMs?: number | null;
 /**
  * Default behavior when a meeting is detected.
  * `"ask"` (default) surfaces a "+ HD" action on the existing meeting
@@ -2043,7 +2043,7 @@ hdRecordingDefault?: string;
  * exploding disk usage. Clamped to >= 33 ms (30 fps ceiling) by the
  * controller.
  */
-hdRecordingIntervalMs?: bigint;
+hdRecordingIntervalMs?: number;
 /**
  * Override `EventDrivenCaptureConfig::capture_on_keystroke`.
  * None = engine default (false). When true, non-printable key events
@@ -2086,7 +2086,7 @@ extractionThreadPriority?: string;
  * Skip UIA tree captures within this many ms after the most recent input.
  * 0 disables. Ignored when `prioritize_input_latency` is false.
  */
-pauseExtractionOnInputMs?: bigint;
+pauseExtractionOnInputMs?: number;
 /**
  * Window titles to exclude from capture.
  */
@@ -2351,15 +2351,15 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
 /**
  * Sync status response.
  */
-export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: bigint | null; storageLimit: bigint | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
+export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: number | null; storageLimit: number | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null }
-export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: bigint } | { kind: "image"; data_url: string; name: string; path: string } |
+export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: number } | { kind: "image"; data_url: string; name: string; path: string } |
 /**
  * Non-text, non-image file (random binary). The UI surfaces a
  * polite "open in default app" prompt instead of rendering bytes
  * as garbled text.
  */
-{ kind: "binary"; name: string; path: string; total_bytes: bigint } | { kind: "error"; message: string; path: string }
+{ kind: "binary"; name: string; path: string; total_bytes: number } | { kind: "error"; message: string; path: string }
 /**
  * Custom vocabulary entry for transcription biasing and word replacement.
  */

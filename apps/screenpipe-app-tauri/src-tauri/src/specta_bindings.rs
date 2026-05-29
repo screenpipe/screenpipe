@@ -28,7 +28,7 @@ pub fn default_bindings_path() -> PathBuf {
 }
 
 fn typescript_exporter() -> Typescript {
-    Typescript::default().bigint(BigIntExportBehavior::BigInt)
+    Typescript::default().bigint(BigIntExportBehavior::Number)
 }
 
 /// Export bindings using an already-built tauri-specta registry.
