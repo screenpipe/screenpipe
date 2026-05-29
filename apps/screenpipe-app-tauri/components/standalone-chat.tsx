@@ -65,6 +65,7 @@ import {
   extractConversationHistorySyncUserText,
   isConversationHistorySyncPrompt,
   shouldPersistQueuedTurnRecovery,
+  type ChatTargetWindow,
   type ChatLoadConversationPayload,
   shouldHandleChatLoadConversationForWindow,
 } from "@/lib/chat-utils";
@@ -2977,6 +2978,9 @@ export function StandaloneChat({
    *  affordance in the floating window — that window has no AppSidebar. */
   hideInlineHistory?: boolean;
 } = {}) {
+  const getChatWindowLabel = (): ChatTargetWindow =>
+    getCurrentWindow().label === "chat" ? "chat" : "home";
+
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   // Drop the macOS traffic-light reservation when the window is fullscreen
@@ -3634,7 +3638,7 @@ export function StandaloneChat({
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
   // to avoid the event being lost when the chat webview is freshly created.
   useEffect(() => {
-    const windowLabel = getCurrentWindow().label;
+    const windowLabel = getChatWindowLabel();
     emit("chat-ready", { windowLabel });
     // Also respond to "chat-ping" for when the chat is already open
     const unlisten = listen<{ targetWindow?: string }>("chat-ping", (event) => {
@@ -3885,10 +3889,10 @@ export function StandaloneChat({
   useEffect(() => {
     const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
       const { conversationId: convId, targetWindow } = event.payload;
-      const windowLabel = getCurrentWindow().label;
+      const windowLabel = getChatWindowLabel();
       if (!shouldHandleChatLoadConversationForWindow(
         { conversationId: convId, targetWindow },
-        windowLabel === "chat" ? "chat" : "home",
+        windowLabel,
       )) {
         return;
       }
