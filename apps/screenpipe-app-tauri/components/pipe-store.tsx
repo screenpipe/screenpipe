@@ -64,6 +64,7 @@ import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
 import { ChatPrefillData } from "@/lib/chat-utils";
+import { useFeedbackStore } from "@/lib/stores/feedback-store";
 // --- Types ---
 
 interface StorePipe {
@@ -312,6 +313,7 @@ export function PipeStoreView() {
 function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const { settings } = useSettings();
   const { toast } = useToast();
+  const openFeedback = useFeedbackStore((s) => s.openFeedback);
   const token = settings.user?.token;
 
   // Browse state
@@ -553,7 +555,18 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     } catch (err: any) {
       toast({
         title: "failed to install pipe",
-        description: err.message,
+        description: (
+          <span>
+            {err.message}{" "}
+            <button
+              type="button"
+              className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
+              onClick={() => openFeedback(`Pipe install failed (${slug}): ${err.message}`)}
+            >
+              report issue
+            </button>
+          </span>
+        ),
         variant: "destructive",
       });
     } finally {

@@ -604,43 +604,6 @@ function parseRateLimitWaitSeconds(errorStr: string): number {
   return Math.min(Math.max(secs, 1), 60);
 }
 
-function isConnectionError(errorStr: string): boolean {
-  const s = errorStr.toLowerCase();
-  return (
-    s.includes("connection error") ||
-    s.includes("connection refused") ||
-    s.includes("econnrefused") ||
-    s.includes("econnreset") ||
-    s.includes("failed to fetch") ||
-    s.includes("network error") ||
-    s.includes("fetch failed") ||
-    s.includes("socket hang up") ||
-    s.includes("etimedout") ||
-    s.includes("connect timeout")
-  );
-}
-
-function buildConnectionErrorMessage(provider?: string, model?: string): string {
-  switch (provider) {
-    case "native-ollama":
-      return "Ollama isn't running. Start it with `ollama serve`, then try again.";
-    case "screenpipe-cloud":
-    case "pi":
-      return "Couldn't reach the AI — check your internet connection.";
-    case "openai":
-    case "openai-chatgpt":
-      return "Couldn't connect to OpenAI. Check your internet connection or API key in settings.";
-    case "anthropic":
-      return "Couldn't connect to Anthropic. Check your internet connection or API key in settings.";
-    case "custom":
-      return model
-        ? `Couldn't connect to model "${model}". Check the base URL and model name in your AI settings.`
-        : "Couldn't connect to the AI endpoint. Check the base URL in your AI settings.";
-    default:
-      return "Couldn't connect to the AI. Check your settings or internet connection.";
-  }
-}
-
 // Helper to get timezone offset string (e.g., "+1" or "-5")
 function getTimezoneOffsetString(): string {
   const offsetMinutes = new Date().getTimezoneOffset();
@@ -5250,17 +5213,6 @@ export function StandaloneChat({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade." } : m)
               );
             }
-          } else if (isConnectionError(errorStr)) {
-            if (piMessageIdRef.current) {
-              const msgId = piMessageIdRef.current;
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? {
-                  ...m,
-                  content: buildConnectionErrorMessage(activePreset?.provider, activePreset?.model),
-                  retryPrompt: lastUserMessageRef.current || undefined,
-                } : m)
-              );
-            }
           }
         } else if (data.type === "message_update" && data.assistantMessageEvent?.type === "error") {
           // Pi's LLM returned an error (e.g. rate limit, overloaded)
@@ -5297,13 +5249,6 @@ export function StandaloneChat({
               // Transient error — Pi was still busy when the prompt arrived.
               // Don't show it; Pi will process the message once it's free.
               console.warn("[Pi] Agent busy, waiting for it to finish:", fullError);
-            } else if (isConnectionError(fullError)) {
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? {
-                  ...m,
-                  content: buildConnectionErrorMessage(activePreset?.provider, activePreset?.model),
-                } : m)
-              );
             } else {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${fullError || "Something went wrong"}` } : m)
@@ -5547,8 +5492,6 @@ export function StandaloneChat({
                 content = buildRateLimitMessage(errStr);
               } else if (errStr.includes("model_not_allowed")) {
                 content = "This model requires an upgrade.";
-              } else if (isConnectionError(errStr)) {
-                content = buildConnectionErrorMessage(activePreset?.provider, activePreset?.model);
               } else {
                 content = errStr;
               }
@@ -5761,14 +5704,6 @@ export function StandaloneChat({
                 prev.map((m) => m.id === msgId ? {
                   ...m,
                   content: "Something went wrong on the server.",
-                  retryPrompt: lastUserMessageRef.current || undefined,
-                } : m)
-              );
-            } else if (isConnectionError(errorStr)) {
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? {
-                  ...m,
-                  content: buildConnectionErrorMessage(activePreset?.provider, activePreset?.model),
                   retryPrompt: lastUserMessageRef.current || undefined,
                 } : m)
               );
@@ -6882,9 +6817,6 @@ export function StandaloneChat({
           retryPrompt = userMessage;
         } else if (rawError.includes("not found")) {
           errorMsg = `Model "${activePreset?.model}" not found. Check your AI preset in settings.`;
-        } else if (isConnectionError(rawError)) {
-          errorMsg = buildConnectionErrorMessage(activePreset?.provider, activePreset?.model);
-          retryPrompt = userMessage;
         } else {
           errorMsg = rawError;
           retryPrompt = userMessage;

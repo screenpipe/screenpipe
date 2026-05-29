@@ -23,6 +23,7 @@ export function FeedbackDialog() {
           <DialogTitle className="text-sm font-medium">report an issue</DialogTitle>
         </DialogHeader>
         <ShareLogsButton
+          key={prefillText}
           prefillText={prefillText}
           onComplete={closeFeedback}
         />
