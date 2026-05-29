@@ -91,6 +91,7 @@ interface UseChatConversationsOpts {
 }
 
 interface SaveConversationOptions {
+  explicitConversationId?: string;
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
 }
@@ -460,7 +461,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // during startNewConversation (setConversationId(null) → … →
     // setConversationId(newSid)); without the fallback the save would mint
     // a fresh uuid and duplicate the conversation.
-    const convId = conversationId || piSessionIdRef.current || crypto.randomUUID();
+    // Narrow escape hatch for recovery-only saves that already proved the
+    // authoritative active session id before calling into shared persistence.
+    const convId =
+      options.explicitConversationId ||
+      conversationId ||
+      piSessionIdRef.current ||
+      crypto.randomUUID();
 
     // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");

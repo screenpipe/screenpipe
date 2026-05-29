@@ -197,4 +197,25 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
     expect(saveCalls).toHaveLength(1);
     expect(saveCalls[0].id).toBe("fresh-sid");
   });
+
+  it("uses an explicit conversation id override for recovery-only saves", async () => {
+    const messages = [{ id: "u1", role: "user", content: "hello again", timestamp: 1 }];
+
+    const { result } = renderHook(() =>
+      useHarness({
+        initialMessages: messages,
+        initialConversationId: "chat-old",
+        initialPiSessionId: "chat-new",
+      }),
+    );
+
+    await act(async () => {
+      await result.current.hook.saveConversation(messages, {
+        explicitConversationId: "chat-recovery",
+      });
+    });
+
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].id).toBe("chat-recovery");
+  });
 });

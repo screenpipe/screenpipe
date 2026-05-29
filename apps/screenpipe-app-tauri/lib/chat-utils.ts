@@ -84,6 +84,12 @@ export interface ChatLoadConversationPayload {
   targetWindow?: ChatTargetWindow;
 }
 
+export interface RecoverySaveIdentity {
+  conversationId: string | null;
+  recoverySessionId: string | null;
+  panelSessionId?: string | null;
+}
+
 export const RECENT_CHAT_SEARCH_HANDOFF_EVENT = "recent-chat-search-handoff";
 
 export interface RecentChatSearchHandoffPayload {
@@ -102,6 +108,27 @@ export function shouldActivateHomeSectionForChatLoadConversation(
   payload: ChatLoadConversationPayload | null | undefined,
 ): boolean {
   return shouldHandleChatLoadConversationForWindow(payload, "home");
+}
+
+export function buildPrefillReplayPayload(
+  data: ChatPrefillData & { targetWindow?: ChatTargetWindow },
+  windowLabel: ChatTargetWindow,
+): ChatPrefillData & { targetWindow: ChatTargetWindow } {
+  return {
+    ...data,
+    targetWindow: data.targetWindow || windowLabel,
+  };
+}
+
+export function shouldPersistQueuedTurnRecovery({
+  conversationId,
+  recoverySessionId,
+  panelSessionId,
+}: RecoverySaveIdentity): boolean {
+  if (!conversationId || !recoverySessionId) return false;
+  if (conversationId !== recoverySessionId) return false;
+  if (panelSessionId && panelSessionId !== recoverySessionId) return false;
+  return true;
 }
 
 const CHAT_READY_TIMEOUT_MS = 2500;
