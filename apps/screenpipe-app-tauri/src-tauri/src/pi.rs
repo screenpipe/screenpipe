@@ -42,6 +42,12 @@ fn read_lines_lossy(reader: &mut BufReader<impl std::io::Read>) -> Option<String
 const TEXT_DELTA_EMIT_BATCH_MS: u128 = 50;
 const TEXT_DELTA_EMIT_BATCH_CHARS: usize = 1_200;
 
+/// Session-ID prefix for internal title-generation sessions.
+/// These sessions produce very short output (≤50 chars) and must bypass
+/// text-delta batching so titles stream visibly token-by-token.
+/// Keep in sync with TypeScript: lib/utils/internal-session.ts → INTERNAL_TITLE_PREFIX
+const TITLE_SESSION_PREFIX: &str = "__title:";
+
 struct PendingAgentTextDelta {
     event: Value,
     delta: String,
@@ -1750,23 +1756,35 @@ pub async fn pi_start_inner(
                     }
 
                     if let Some(delta) = assistant_text_delta(&event).map(str::to_owned) {
-                        let pending =
-                            pending_text_delta.get_or_insert_with(|| PendingAgentTextDelta {
-                                event: event.clone(),
-                                delta: String::new(),
-                                started_at: std::time::Instant::now(),
-                            });
-                        pending.event = event;
-                        pending.delta.push_str(&delta);
+                        // Title sessions bypass batching — they produce ≤50 chars
+                        // and must stream token-by-token for visible animation.
+                        if sid_clone.starts_with(TITLE_SESSION_PREFIX) {
+                            let mut immediate = event;
+                            set_assistant_text_delta(&mut immediate, delta);
+                            if let Err(e) = emit_agent_event(&app_handle, &sid_clone, immediate) {
+                                error!("Failed to emit title text_delta: {}", e);
+                            }
+                        } else {
+                            // Normal sessions: batch text deltas to reduce IPC chatter.
+                            let pending =
+                                pending_text_delta.get_or_insert_with(|| PendingAgentTextDelta {
+                                    event: event.clone(),
+                                    delta: String::new(),
+                                    started_at: std::time::Instant::now(),
+                                });
+                            pending.event = event;
+                            pending.delta.push_str(&delta);
 
-                        if pending.delta.len() >= TEXT_DELTA_EMIT_BATCH_CHARS
-                            || pending.started_at.elapsed().as_millis() >= TEXT_DELTA_EMIT_BATCH_MS
-                        {
-                            flush_pending_text_delta(
-                                &app_handle,
-                                &sid_clone,
-                                &mut pending_text_delta,
-                            );
+                            if pending.delta.len() >= TEXT_DELTA_EMIT_BATCH_CHARS
+                                || pending.started_at.elapsed().as_millis()
+                                    >= TEXT_DELTA_EMIT_BATCH_MS
+                            {
+                                flush_pending_text_delta(
+                                    &app_handle,
+                                    &sid_clone,
+                                    &mut pending_text_delta,
+                                );
+                            }
                         }
                     } else {
                         flush_pending_text_delta(&app_handle, &sid_clone, &mut pending_text_delta);

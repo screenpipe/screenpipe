@@ -95,6 +95,12 @@ interface SaveConversationOptions {
   syncActiveConversation?: boolean;
 }
 
+/** Module-scope guard for AI title generation — survives component remounts
+ *  and is shared across all hook instances so two StandaloneChat mounts
+ *  (chat window + home page) never both fire for the same conversation.
+ *  Entries are removed on failure/null to allow retry. */
+const aiTitleAttempted = new Set<string>();
+
 export function useChatConversations(opts: UseChatConversationsOpts) {
   const {
     messages,
@@ -118,7 +124,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     selectedPreset,
     inlineHistoryEnabled = true,
   } = opts;
-  const aiTitleAttemptedRef = useRef<Set<string>>(new Set());
   const componentUnmountedRef = useRef(false);
 
   const [showHistory, setShowHistoryRaw] = useState(() => {
@@ -487,9 +492,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       titleSource === "fallback" &&
       rawContent &&
       hasValidPreset &&
-      !aiTitleAttemptedRef.current.has(convId)
+      !aiTitleAttempted.has(convId)
     ) {
-      aiTitleAttemptedRef.current.add(convId);
+      aiTitleAttempted.add(convId);
 
       // Generate title in background (non-blocking)
       // Pass the full raw user message — the AI can parse wrapper tags
@@ -561,25 +566,23 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
               }
             } else {
               // Title was upgraded (e.g. user renamed) while we were generating —
-              // just clear the streaming state.
+              // just clear the streaming state. Keep guard entry to prevent re-trigger.
               try {
                 const { useChatStore } = await import("@/lib/stores/chat-store");
                 useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
               } catch {}
             }
           } else {
-            // AI returned null — clear streaming state, keep fallback.
-            // Allow retry on next render by removing the attempt guard.
-            aiTitleAttemptedRef.current.delete(convId);
+            // AI returned null — clear streaming state, allow retry.
+            aiTitleAttempted.delete(convId);
             try {
               const { useChatStore } = await import("@/lib/stores/chat-store");
               useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
             } catch {}
           }
         } catch (error) {
-          // Clear streamingTitle on error.
-          // Allow retry on next render by removing the attempt guard.
-          aiTitleAttemptedRef.current.delete(convId);
+          // Clear streamingTitle on error, allow retry.
+          aiTitleAttempted.delete(convId);
           try {
             const { useChatStore } = await import("@/lib/stores/chat-store");
             useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });

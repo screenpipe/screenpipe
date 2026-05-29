@@ -11,6 +11,11 @@ import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 const TITLE_MAX_LENGTH = 50;
 const TITLE_TIMEOUT_MS = 15000;
 const TITLE_PROJECT_DIR = "pi-title";
+/** Settle the title this many ms after the last text_delta, without waiting
+ *  for agent_end. 300ms is ~4× the typical LLM inter-token gap (20-80ms).
+ *  If a provider has unusually high inter-token latency the title may
+ *  finalize before the last token; agent_end still acts as a fallback. */
+const TITLE_IDLE_SETTLE_MS = 300;
 
 // ─── Prompt & validation (unchanged) ─────────────────────────────────────────
 
@@ -106,6 +111,7 @@ async function generateTitleViaPi(
   let accumulated = "";
   let done = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let idleTimerId: ReturnType<typeof setTimeout> | null = null;
   let resolveResponse!: (value: string | null) => void;
   const responsePromise = new Promise<string | null>((resolve) => {
     resolveResponse = resolve;
@@ -117,6 +123,10 @@ async function generateTitleViaPi(
     if (timeoutId !== null) {
       clearTimeout(timeoutId);
       timeoutId = null;
+    }
+    if (idleTimerId !== null) {
+      clearTimeout(idleTimerId);
+      idleTimerId = null;
     }
     resolveResponse(value);
   };
@@ -136,8 +146,18 @@ async function generateTitleViaPi(
       accumulated += delta;
       if (onDelta) {
         const partial = normalizeTitle(accumulated);
-        if (partial) onDelta(partial);
+        if (partial && !isLikelyBadTitle(partial)) onDelta(partial);
       }
+
+      // Reset idle-finalization timer — if no more tokens arrive within
+      // TITLE_IDLE_SETTLE_MS, finalize with accumulated text instead of
+      // waiting for the full agent_end lifecycle (which can lag 500ms+).
+      if (idleTimerId !== null) clearTimeout(idleTimerId);
+      idleTimerId = setTimeout(() => {
+        idleTimerId = null;
+        settle(accumulated || null);
+      }, TITLE_IDLE_SETTLE_MS);
+
       return;
     }
 
@@ -202,10 +222,14 @@ async function generateTitleViaPi(
     const rawResponse = await responsePromise;
     return validateTitleCandidate(rawResponse);
   } finally {
-    // Ensure timeout is cancelled even on early return / error
+    // Ensure timeouts are cancelled even on early return / error
     if (timeoutId !== null) {
       clearTimeout(timeoutId);
       timeoutId = null;
+    }
+    if (idleTimerId !== null) {
+      clearTimeout(idleTimerId);
+      idleTimerId = null;
     }
     if (unregister) unregister();
     commands.piStop(sessionId).catch(() => {});

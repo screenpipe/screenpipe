@@ -213,3 +213,36 @@ describe("text_delta batching", () => {
     expect(seen).toEqual(["hi", "agent_end"]);
   });
 });
+
+describe("title session fast-path", () => {
+  it("dispatches text deltas immediately for __title: sessions (no batching)", async () => {
+    const seen: string[] = [];
+    registerForeground("__title:test-123", (envelope) => {
+      seen.push(envelope.event.assistantMessageEvent?.delta ?? "");
+    });
+
+    // Two deltas for a __title: session — each should dispatch immediately
+    await __testing.dispatchEvent(textDeltaEnv("__title:test-123", "He"));
+    await __testing.dispatchEvent(textDeltaEnv("__title:test-123", "llo"));
+
+    // Both should have been dispatched synchronously (no timer wait needed)
+    expect(seen).toEqual(["He", "llo"]);
+  });
+
+  it("still batches text deltas for non-title sessions (regression guard)", async () => {
+    const seen: string[] = [];
+    registerDefault((envelope) => {
+      seen.push(envelope.event.assistantMessageEvent?.delta ?? "");
+    });
+
+    await __testing.dispatchEvent(textDeltaEnv("normal-session", "He"));
+    await __testing.dispatchEvent(textDeltaEnv("normal-session", "llo"));
+
+    // Should still be batched — nothing dispatched yet
+    expect(seen).toEqual([]);
+
+    // After the batch timer fires, we get the coalesced delta
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(seen).toEqual(["Hello"]);
+  });
+});
