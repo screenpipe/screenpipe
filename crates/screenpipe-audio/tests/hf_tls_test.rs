@@ -63,8 +63,15 @@ mod tests {
             )
         });
 
-        println!("TLS handshake OK — sha: {:?}, files: {}", info.sha, info.siblings.len());
-        assert!(!info.siblings.is_empty(), "repo should have at least one file");
+        println!(
+            "TLS handshake OK — sha: {:?}, files: {}",
+            info.sha,
+            info.siblings.len()
+        );
+        assert!(
+            !info.siblings.is_empty(),
+            "repo should have at least one file"
+        );
     }
 
     /// Full download test: fetches the smallest quantized whisper model (~42 MB).
@@ -85,14 +92,17 @@ mod tests {
             return;
         }
 
-        let path = api.repo(repo).get("ggml-tiny-q8_0.bin").unwrap_or_else(|e| {
-            panic!(
-                "model download failed: {e}\n\
+        let path = api
+            .repo(repo)
+            .get("ggml-tiny-q8_0.bin")
+            .unwrap_or_else(|e| {
+                panic!(
+                    "model download failed: {e}\n\
                  If you are behind a corp proxy → this is the UnknownIssuer bug \
                  fixed by switching hf-hub from rustls-tls to native-tls (PR #3658).\n\
                  To remove the proxy CA and confirm it fails: certutil -delstore Root mitmproxy"
-            )
-        });
+                )
+            });
 
         println!("downloaded to: {:?}", path);
         assert!(path.exists(), "downloaded file must exist on disk");
