@@ -165,6 +165,9 @@ export interface ChatConversation {
 		 *  "re-open" button is shown in the chat header). */
 		collapsed?: boolean;
 	};
+	/** Title source priority: user > ai > fallback. Used to prevent
+	 *  lower-priority titles from overwriting higher-priority ones. */
+	titleSource?: "user" | "ai" | "fallback";
 }
 
 export interface ChatHistoryStore {
@@ -274,6 +277,10 @@ export type Settings = SettingsStore & {
 	translucentSidebar?: boolean;
 	/** Hide model "thinking" reasoning blocks in chat (default: true) */
 	hideThinkingBlocks?: boolean;
+	/** Auto-generate chat titles with the LLM after the first message.
+	 *  Costs one extra inference per new chat. Disable to save tokens —
+	 *  chats fall back to a title derived from the first message (default: true) */
+	autoGenerateChatTitles?: boolean;
 	/** Notification preferences — which notification sources are enabled */
 	notificationPrefs?: {
 		captureStalls: boolean;

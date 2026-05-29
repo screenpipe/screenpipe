@@ -47,6 +47,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
+import { stripPromptPlumbing } from "@/lib/utils/chat-title";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -60,6 +61,7 @@ import {
   buildAppMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
+  extractConversationHistorySyncUserText,
   isConversationHistorySyncPrompt,
   type ChatLoadConversationPayload,
   shouldHandleChatLoadConversationForWindow,
@@ -2795,6 +2797,9 @@ function ChatTitleMenu({
   const storeTitle = useChatStore((s) =>
     conversationId ? s.sessions[conversationId]?.title : undefined
   );
+  const streamingTitle = useChatStore((s) =>
+    conversationId ? s.sessions[conversationId]?.streamingTitle : undefined
+  );
   const session = useChatStore((s) =>
     conversationId ? s.sessions[conversationId] : undefined
   );
@@ -2802,14 +2807,18 @@ function ChatTitleMenu({
   const firstUserMsg = messages.find(
     (m) => m.role === "user" && !isConversationHistorySyncPrompt(m.content)
   );
-  const derivedTitle = firstUserMsg?.content?.slice(0, 50);
+  const derivedTitle = firstUserMsg?.content
+    ? stripPromptPlumbing(firstUserMsg.content).slice(0, 50).trim()
+    : undefined;
+  const hasMessages = messages.length > 0;
   const title =
-    storeTitle &&
-    storeTitle !== "new chat" &&
-    storeTitle !== "untitled" &&
-    !isConversationHistorySyncPrompt(storeTitle)
-      ? storeTitle
-      : derivedTitle || "";
+    streamingTitle ||
+    (storeTitle &&
+      storeTitle !== "new chat" &&
+      storeTitle !== "untitled" &&
+      !isConversationHistorySyncPrompt(storeTitle)
+        ? storeTitle
+        : derivedTitle || (hasMessages ? "untitled" : ""));
 
   // No conversation id OR no real content → don't render. The "+ New"
   // button on the right is enough; no point showing actions for a
@@ -3511,6 +3520,7 @@ export function StandaloneChat({
     setIsStreaming,
     setPastedImages,
     settings,
+    selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,
   });
 
@@ -5246,7 +5256,7 @@ export function StandaloneChat({
             // processing the followUp turn.
           }
 
-          const text = (() => {
+          const rawText = (() => {
             const c = data.message?.content;
             if (typeof c === "string") return c;
             if (Array.isArray(c)) {
@@ -5257,6 +5267,7 @@ export function StandaloneChat({
             }
             return "";
           })();
+          const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
           const pendingOptimisticSteer = optimisticSteerRef.current;
           const isPendingOptimisticSteerEcho = Boolean(
@@ -5265,17 +5276,6 @@ export function StandaloneChat({
           );
           const shouldConsumePendingOptimisticSteer = isPendingOptimisticSteerEcho;
           const preMatchedTurnIntent = findTurnIntentForUserStart(piSessionIdRef.current, text, pendingNextPiUserDisplayRef.current);
-
-          // Skip the chat panel's own injected `<conversation_history>...`
-          // sync prompt (see promptMessage construction at the piPrompt call).
-          // Pi echoes it back as a message_start (user) event; we've already
-          // stored the real user-typed message locally via sendPiMessage, so
-          // adding this would create a phantom user bubble whose first 50
-          // chars look like `<conversation_history>\nassistant: [tool: ...`
-          // and corrupt the chat title on next save.
-          if (text.startsWith("<conversation_history>")) {
-            return;
-          }
 
           if (!piMessageIdRef.current || isPendingOptimisticSteerEcho || preMatchedTurnIntent?.kind === "steer") {
             const sidForStartedUser = piSessionIdRef.current;
@@ -6370,6 +6370,7 @@ export function StandaloneChat({
         piSessionIdRef.current,
         queuedPrompt,
         piImages.length > 0 ? piImages : null,
+        queuedPreviewForText(userMessage),
       );
       const queuedTurnIntentId = `queued-${result.status === "ok" ? result.data : Date.now()}`;
       if (result.status !== "ok") {
@@ -6564,7 +6565,7 @@ export function StandaloneChat({
       if (!storeState.sessions[sidNow]) {
         storeState.actions.upsert({
           id: sidNow,
-          title: "new chat",
+          title: "untitled",
           preview: "",
           status: "streaming",
           messageCount: 0,

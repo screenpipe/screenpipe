@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { Archive, CheckSquare, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -188,6 +189,8 @@ export function ChatHistoryView({
     let cancelled = false;
     let unlistenDeleted: (() => void) | undefined;
     let unlistenVisibility: (() => void) | undefined;
+    let unlistenSaved: (() => void) | undefined;
+    let unlistenRenamed: (() => void) | undefined;
     (async () => {
       unlistenDeleted = await listen("chat-deleted", () => {
         if (cancelled) return;
@@ -197,11 +200,23 @@ export function ChatHistoryView({
         if (cancelled) return;
         void load();
       });
+      // Listen for save events so AI title updates and new chats appear
+      unlistenSaved = await listen("chat-conversation-saved", () => {
+        if (cancelled) return;
+        void load();
+      });
+      // Listen for rename events so user renames update immediately
+      unlistenRenamed = await listen("chat-renamed", () => {
+        if (cancelled) return;
+        void load();
+      });
     })();
     return () => {
       cancelled = true;
       unlistenDeleted?.();
       unlistenVisibility?.();
+      unlistenSaved?.();
+      unlistenRenamed?.();
     };
   }, [load]);
 
@@ -363,7 +378,7 @@ export function ChatHistoryView({
                   conv.hidden ? "text-muted-foreground" : "text-foreground"
                 )}
               >
-                {conv.title || "untitled"}
+                {(isConversationHistorySyncPrompt(conv.title) ? undefined : conv.title) || "untitled"}
               </p>
             </div>
 

@@ -11,8 +11,56 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
 
-export function isConversationHistorySyncPrompt(value?: string | null): boolean {
+/**
+ * Detect if content is app-injected metadata (not real user content).
+ * Used to filter when deriving conversation titles and sanitizing display.
+ *
+ * Canonical implementation — imported by pi-event-router.ts and
+ * use-chat-conversations.ts. Update here only.
+ *
+ * Returns true for:
+ * - <conversation_history>...</conversation_history> (sync prompts)
+ * - <role>...</role> (bare metadata with no user content)
+ * - <role>...</role><system>...</system> (bare metadata)
+ *
+ * Returns false for:
+ * - <role>expert</role> analyze this (has user content after tags)
+ * - Normal user messages
+ */
+export function isInjectedTitleSourcePrompt(content?: string | null): boolean {
+  if (typeof content !== "string") return false;
+  const trimmed = content.trimStart();
+
+  // Skip <conversation_history> sync prompts
+  if (trimmed.startsWith("<conversation_history>")) return true;
+
+  // Skip ONLY bare role/system tags with no actual user content
+  // Pattern: <role>...</role> optionally followed by <system>...</system>, nothing else
+  const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
+  if (bareMetadataOnly.test(trimmed)) return true;
+
+  // Any other content (including <role> with user text after it) is real
+  return false;
+}
+
+/**
+ * Detect `<conversation_history>` sync prompts that Pi echoes back as
+ * user events. Used by display code to hide these from the sidebar/title.
+ *
+ * This is intentionally narrow — only matches conversation_history tags.
+ * For broader title-derivation filtering (bare <role>/<system> tags),
+ * use `isInjectedTitleSourcePrompt` instead.
+ */
+export function isConversationHistorySyncPrompt(value?: string | null): value is string {
   return typeof value === "string" && value.startsWith("<conversation_history>");
+}
+
+export function extractConversationHistorySyncUserText(value?: string | null): string | null {
+  if (!isConversationHistorySyncPrompt(value)) return null;
+  const closingTag = "</conversation_history>";
+  const closingTagIndex = value.indexOf(closingTag);
+  if (closingTagIndex === -1) return "";
+  return value.slice(closingTagIndex + closingTag.length).replace(/^\s+/, "");
 }
 
 // ============================================================================

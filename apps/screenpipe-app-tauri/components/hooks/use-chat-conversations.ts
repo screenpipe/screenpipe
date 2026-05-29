@@ -15,7 +15,10 @@ import {
 } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
-import { commands } from "@/lib/utils/tauri";
+import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
+import { systemFallbackTitle, shouldAcceptTitleSource } from "@/lib/utils/chat-title";
+import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
+import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
   loadConversationFile,
@@ -83,6 +86,7 @@ interface UseChatConversationsOpts {
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
   setPastedImages: Dispatch<SetStateAction<string[]>>;
   settings: any;
+  selectedPreset?: AIPreset | null;
   inlineHistoryEnabled?: boolean;
 }
 
@@ -90,6 +94,12 @@ interface SaveConversationOptions {
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
 }
+
+/** Module-scope guard for AI title generation — survives component remounts
+ *  and is shared across all hook instances so two StandaloneChat mounts
+ *  (chat window + home page) never both fire for the same conversation.
+ *  Entries are removed on failure/null to allow retry. */
+const aiTitleAttempted = new Set<string>();
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
   const {
@@ -111,8 +121,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setIsStreaming,
     setPastedImages,
     settings,
+    selectedPreset,
     inlineHistoryEnabled = true,
   } = opts;
+  const componentUnmountedRef = useRef(false);
 
   const [showHistory, setShowHistoryRaw] = useState(() => {
     try { return localStorage.getItem("screenpipe:chat-history-open") === "true"; } catch { return false; }
@@ -126,6 +138,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   }, []);
   const [historySearch, setHistorySearch] = useState("");
   const [fileConversations, setFileConversations] = useState<ConversationMeta[]>([]);
+
+  // Track component unmount to prevent post-unmount work in async AI title callback
+  useEffect(() => {
+    return () => {
+      componentUnmountedRef.current = true;
+    };
+  }, []);
 
   // Run migration from store.bin on mount, then load conversations from files
   const migrationDoneRef = useRef(false);
@@ -168,6 +187,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       lastUserMessageAt,
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
+      titleSource: conversation.titleSource,
     };
 
     setFileConversations((prev) => {
@@ -183,6 +203,68 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     });
     lastHistoryQueryRef.current = "";
   }, [historySearch]);
+
+  const syncConversationTitleState = useCallback(async (
+    id: string,
+    {
+      title,
+      titleSource,
+    }: {
+      title?: string | null;
+      titleSource?: "fallback" | "ai" | "user";
+    } = {},
+  ) => {
+    let resolvedTitle = title?.trim() || null;
+    let resolvedTitleSource = titleSource;
+    let loadedConversation: ChatConversation | null = null;
+
+    if (!resolvedTitle || !resolvedTitleSource) {
+      try {
+        await markConversationFileChanged(id);
+        loadedConversation = await loadConversationFile(id);
+        if (!loadedConversation) return;
+        resolvedTitle = resolvedTitle || loadedConversation.title?.trim() || null;
+        resolvedTitleSource = resolvedTitleSource || loadedConversation.titleSource;
+      } catch {
+        return;
+      }
+    }
+
+    if (!resolvedTitle) return;
+
+    try {
+      const { useChatStore } = await import("@/lib/stores/chat-store");
+      const session = useChatStore.getState().sessions[id];
+      if (session) {
+        // Never downgrade title priority (fallback < ai < user).
+        if (!shouldAcceptTitleSource(session.titleSource, resolvedTitleSource)) return;
+        useChatStore.getState().actions.patch(id, {
+          title: resolvedTitle,
+          ...(resolvedTitleSource ? { titleSource: resolvedTitleSource } : {}),
+          // Clear any in-flight streaming partial when a higher-priority title
+          // (user rename or finalized AI) arrives from another window.
+          ...(resolvedTitleSource === "user" || resolvedTitleSource === "ai"
+            ? { streamingTitle: undefined }
+            : {}),
+        });
+      }
+    } catch (e) {
+      console.warn("[chat-title] failed to sync local title state", { id, error: e });
+    }
+
+    if (!loadedConversation) {
+      try {
+        await markConversationFileChanged(id);
+        loadedConversation = await loadConversationFile(id);
+      } catch {
+        loadedConversation = null;
+      }
+    }
+
+    if (loadedConversation) {
+      upsertFileConversationMeta(loadedConversation);
+    }
+  }, [upsertFileConversationMeta]);
 
   useEffect(() => {
     if (!inlineHistoryEnabled || !showHistory) {
@@ -302,25 +384,36 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       );
       unlistenFns.push(unlistenVisibility);
 
-      const unlistenSaved = await listen<{ id: string; title?: string }>(
+      const unlistenSaved = await listen<{ id: string; title?: string; titleSource?: "fallback" | "ai" | "user" }>(
         "chat-conversation-saved",
         async (event) => {
           if (cancelled) return;
-          const { id } = event.payload ?? {};
+          const { id, title, titleSource } = event.payload ?? {};
           if (!id) return;
-          if (id === conversationId || id === piSessionIdRef.current) return;
-          try {
-            await markConversationFileChanged(id);
-            const conv = await loadConversationFile(id);
-            if (!cancelled && conv) {
-              upsertFileConversationMeta(conv);
-            }
-          } catch {
-            // ignore: a later explicit history refresh can repair the list
+
+          // The current conversation's transcript may be newer in local state
+          // than on disk, but title metadata should still converge to the
+          // persisted value across windows.
+          if (id === conversationId || id === piSessionIdRef.current) {
+            await syncConversationTitleState(id, { title, titleSource });
+            return;
           }
+
+          await syncConversationTitleState(id, { title, titleSource });
         },
       );
       unlistenFns.push(unlistenSaved);
+
+      const unlistenRenamed = await listen<{ id: string; title: string }>(
+        "chat-renamed",
+        async (event) => {
+          if (cancelled) return;
+          const { id, title } = event.payload ?? {};
+          if (!id || !title) return;
+          await syncConversationTitleState(id, { title, titleSource: "user" });
+        },
+      );
+      unlistenFns.push(unlistenRenamed);
     })().catch(() => {
       // ignore: chat still works without cross-window sync listeners
     });
@@ -335,6 +428,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     scheduleHistoryRefresh,
     setConversationId,
     setMessages,
+    syncConversationTitleState,
     upsertFileConversationMeta,
   ]);
 
@@ -372,23 +466,143 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const existing = await loadConversationFile(convId);
 
-    // Derive a title from the first user message, but skip messages that are
-    // the chat panel's own injected `<conversation_history>...` sync prompt
-    // (Pi can echo that back as a message_start (user) event, leaking it into
-    // the messages array — see the prompt construction at the piPrompt call).
+    // Find first real user message, skipping injected metadata
     const firstUserMsg = msgs.find(
-      (m) => m.role === "user" && !m.content.startsWith("<conversation_history>")
+      (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
     );
-    const derivedTitle = firstUserMsg?.content.slice(0, 50) || "New Chat";
-    // Preserve any previously-persisted title (user renames, pipe-run titles
-    // like `pipe-opportunity-scout-gpt55 #8209`). Only fall through to the
-    // derived title when the file has no title yet. Mirrors the router's
-    // background-save logic in pi-event-router.ts.
-    const title = existing?.title || derivedTitle;
+    const fallbackTitle = systemFallbackTitle(firstUserMsg?.content);
+    const existingTitle = existing?.title?.trim() || null;
+
+    const hasValidPreset =
+      selectedPreset &&
+      selectedPreset.provider &&
+      selectedPreset.model?.trim();
+
+    // Title priority: user > ai > fallback
+    // Preserve existing title if it has higher priority than fallback
+    const existingSource = existing?.titleSource;
+    const shouldPreserveExisting = existingSource === "user" || existingSource === "ai";
+    const title = shouldPreserveExisting && existingTitle ? existingTitle : fallbackTitle;
+    const titleSource: "user" | "ai" | "fallback" = shouldPreserveExisting && existingSource ? existingSource : "fallback";
+
+    // Start AI title generation in background (once per conversation)
+    // Only generate if current title is fallback priority
+    const rawContent = firstUserMsg?.content?.trim() || null;
+    // Opt-out: when the user disables auto title generation (to save tokens),
+    // skip the extra LLM call entirely — chats keep the fallback title.
+    const autoTitleEnabled = settings?.autoGenerateChatTitles !== false;
+    if (
+      autoTitleEnabled &&
+      titleSource === "fallback" &&
+      rawContent &&
+      hasValidPreset &&
+      !aiTitleAttempted.has(convId)
+    ) {
+      aiTitleAttempted.add(convId);
+
+      // Generate title in background (non-blocking)
+      // Pass the full raw user message — the AI can parse wrapper tags
+      // and extract intent better than the simple regex stripper.
+      void (async () => {
+        try {
+          const aiTitle = await titleCreatedByAI(
+            rawContent,
+            selectedPreset,
+            settings?.user?.token ?? null,
+            async (partial) => {
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                const session = useChatStore.getState().sessions[convId];
+                // Only stream partial title while still at fallback priority.
+                // If the user renamed (titleSource === "user") or AI already
+                // settled, stop updating.
+                if (!session || (session.titleSource && session.titleSource !== "fallback")) return;
+                useChatStore.getState().actions.patch(convId, { streamingTitle: partial });
+              } catch {}
+            },
+          );
+
+          if (aiTitle) {
+            // Reload conversation to check title priority
+            const existingConv = await loadConversationFile(convId);
+            if (!existingConv) {
+              // Conversation deleted — clear streaming state
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+              } catch {}
+              return;
+            }
+
+            // Only update if current title is still fallback priority
+            if (existingConv.titleSource === "fallback" || !existingConv.titleSource) {
+              existingConv.title = aiTitle;
+              existingConv.titleSource = "ai";
+              await saveConversationFile(existingConv);
+
+              // Clear streamingTitle atomically with the final title apply
+              // so the sidebar transitions directly from partial → final
+              // with no fallback flicker.
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(convId, {
+                  title: aiTitle,
+                  titleSource: "ai",
+                  streamingTitle: undefined,
+                });
+              } catch (e) {
+                console.warn("[chat-title] failed to update chat store", { convId, error: e });
+              }
+
+              try {
+                await emit("chat-conversation-saved", {
+                  id: convId,
+                  title: existingConv.title,
+                  titleSource: "ai" as const,
+                });
+              } catch {
+                // Ignore - webview may have reloaded
+              }
+
+              // React state update — only safe while mounted
+              if (!componentUnmountedRef.current) {
+                upsertFileConversationMeta(existingConv);
+              }
+            } else {
+              // Title was upgraded (e.g. user renamed) while we were generating —
+              // just clear the streaming state. Keep guard entry to prevent re-trigger.
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+              } catch {}
+            }
+          } else {
+            // AI returned null — clear streaming state, allow retry.
+            aiTitleAttempted.delete(convId);
+            try {
+              const { useChatStore } = await import("@/lib/stores/chat-store");
+              useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+            } catch {}
+          }
+        } catch (error) {
+          // Clear streamingTitle on error, allow retry.
+          aiTitleAttempted.delete(convId);
+          try {
+            const { useChatStore } = await import("@/lib/stores/chat-store");
+            useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
+          } catch {}
+          console.warn("[chat-title] background title generation failed", {
+            convId,
+            error,
+          });
+        }
+      })();
+    }
 
     const conversation: ChatConversation = {
       id: convId,
       title,
+      titleSource,
       // Persist the full transcript. The previous slice(-100) was silently
       // dropping the oldest messages on every save, so any chat that grew
       // past 100 messages walked forward and lost its early history. If
@@ -488,6 +702,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       await emit("chat-conversation-saved", {
         id: conversation.id,
         title: conversation.title,
+        titleSource: conversation.titleSource,
       });
     } catch {
       // ignore broadcast failures; local save already succeeded
@@ -633,7 +848,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const conv = await loadConversationFile(convId);
     if (!conv) return;
-    await saveConversationFile({ ...conv, title: trimmed, updatedAt: Date.now() });
+    await saveConversationFile({ ...conv, title: trimmed, titleSource: "user", updatedAt: Date.now() });
     await refreshFileConversations();
     // Mirror to the in-memory store so the chat sidebar reflects the new
     // title without waiting for app restart. Some call sites already patch
@@ -642,7 +857,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     try {
       const { useChatStore } = await import("@/lib/stores/chat-store");
       if (useChatStore.getState().sessions[convId]) {
-        useChatStore.getState().actions.patch(convId, { title: trimmed });
+        useChatStore.getState().actions.patch(convId, { title: trimmed, titleSource: "user", streamingTitle: undefined });
       }
     } catch (e) {
       console.warn("[chat] failed to sync rename to store:", e);
@@ -770,6 +985,47 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     //     disk would silently drop tokens that arrived since the last
     //     persisted agent_end.
     const existing = store.sessions[conv.id];
+    const needsPersistedSync =
+      !existing ||
+      !existing.hydratedAt ||
+      !existing.messages ||
+      existing.messages.length === 0 ||
+      existing.titleSource == null;
+    let persisted: ChatConversation | null = null;
+
+    if (needsPersistedSync) {
+      const { loadConversationFile } = await import("@/lib/chat-storage");
+      persisted = await loadConversationFile(conv.id);
+      if (persisted) {
+        if (!store.sessions[conv.id]) {
+          store.actions.upsert({
+            id: conv.id,
+            title: persisted.title || "untitled",
+            ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
+            preview: "",
+            status: "idle",
+            messageCount: persisted.messages?.length ?? 0,
+            createdAt: persisted.createdAt ?? Date.now(),
+            updatedAt: persisted.updatedAt ?? Date.now(),
+            pinned: persisted.pinned === true,
+            unread: false,
+            ...(persisted.hidden === true ? { hidden: true } : {}),
+            ...(persisted.kind ? { kind: persisted.kind } : {}),
+            ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+          });
+        } else {
+          store.actions.patch(conv.id, {
+            title: persisted.title || existing?.title || "untitled",
+            ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
+            pinned: persisted.pinned === true,
+            hidden: persisted.hidden === true,
+            updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
+            ...(persisted.kind ? { kind: persisted.kind } : {}),
+            ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+          });
+        }
+      }
+    }
     let messagesForPanel: any[];
     if (existing?.messages && existing.messages.length > 0) {
       messagesForPanel = existing.messages as any[];
@@ -801,10 +1057,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       store.actions.markHydrated(conv.id);
     } else {
       // Cold session — load from disk and seed the store.
-      const { loadConversationFile } = await import("@/lib/chat-storage");
-      const loaded = await loadConversationFile(conv.id);
       const full =
-        loaded ||
+        persisted ||
         (Array.isArray((conv as ChatConversation).messages)
           ? (conv as ChatConversation)
           : null);
@@ -836,6 +1090,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         store.actions.upsert({
           id: conv.id,
           title: full.title || "untitled",
+          ...(full.titleSource ? { titleSource: full.titleSource } : {}),
           preview: "",
           status: "idle",
           messageCount: messagesForPanel.length,
@@ -852,6 +1107,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         });
       } else if (conv.kind || conv.pipeContext) {
         store.actions.patch(conv.id, {
+          title: full.title || store.sessions[conv.id]?.title || "untitled",
+          ...(full.titleSource ? { titleSource: full.titleSource } : {}),
+          pinned: full.pinned === true,
+          hidden: full.hidden === true,
+          updatedAt: Math.max(store.sessions[conv.id]?.updatedAt ?? 0, full.updatedAt ?? 0),
           ...(conv.kind ? { kind: conv.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : {}),
         });

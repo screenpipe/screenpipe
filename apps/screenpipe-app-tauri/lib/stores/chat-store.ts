@@ -23,6 +23,7 @@
 import { create } from "zustand";
 import type { ConversationKind, PipeContext } from "@/lib/hooks/use-settings";
 import type { ConversationMeta } from "@/lib/chat-storage";
+import type { ChatTitleSource } from "@/lib/utils/chat-title";
 
 export type SessionStatus =
   | "idle" // not currently producing output
@@ -45,8 +46,14 @@ export type StoredContentBlock = unknown;
 export interface SessionRecord {
   /** Pi `session_id` — also the uuid used by `commands.piStart`. */
   id: string;
-  /** Display title — derived from first user message or `"new chat"`. */
+  /** Display title — derived from first user message or `"untitled"`. */
   title: string;
+  /** Who currently owns the title. User titles always win over AI/fallback. */
+  titleSource?: ChatTitleSource;
+  /** Partial AI title being streamed — displayed in sidebar/header while
+   *  generation is in progress. Cleared on completion or failure.
+   *  Never persisted to disk. */
+  streamingTitle?: string;
   /** Last assistant or user message preview, truncated for the sidebar. */
   preview: string;
   /** Current liveness state (drives the sidebar dot / pulse). */
@@ -264,6 +271,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             ? {
                 ...existing,
                 title: r.title,
+                titleSource: r.titleSource ?? existing.titleSource,
                 preview: r.preview,
                 messageCount: r.messageCount,
                 pinned: existing.pinned || r.pinned,
@@ -558,6 +566,7 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
   return {
     id: m.id,
     title: m.title || "untitled",
+    titleSource: m.titleSource,
     preview: "",
     status: "idle",
     messageCount: m.messageCount,

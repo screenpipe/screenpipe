@@ -43,6 +43,7 @@ import {
   type AgentTerminatedPayload,
   type AgentSessionEvictedPayload,
 } from "./types";
+import { isInternalTitleSession } from "@/lib/utils/internal-session";
 
 export type EventHandler = (envelope: AgentEventEnvelope) => void | Promise<void>;
 export type TerminatedHandler = (payload: AgentTerminatedPayload) => void | Promise<void>;
@@ -132,6 +133,13 @@ async function dispatchEvent(envelope: AgentEventEnvelope): Promise<void> {
   if (!envelope?.sessionId || !envelope.event) return;
 
   if (isAssistantTextDelta(envelope)) {
+    // Title sessions bypass batching — emit every token immediately
+    // for visible character-by-character streaming in the sidebar.
+    if (isInternalTitleSession(envelope.sessionId)) {
+      await dispatchEventNow(envelope);
+      return;
+    }
+
     const existing = pendingTextDeltas.get(envelope.sessionId);
     const delta = envelope.event.assistantMessageEvent?.delta ?? "";
     if (existing) {
