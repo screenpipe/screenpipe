@@ -4,56 +4,94 @@
 
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader, Brain, Clock, Users } from "lucide-react";
+import { Loader, Check, ChevronDown } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { scheduleFirstRunNotification } from "@/lib/notifications";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 
-// Gmail badge shown on paths that benefit from email context
-const GMAIL_BOOSTED_PATHS = new Set(["memory", "people"]);
+type Pipe = {
+  slug: string;
+  title: string;
+  subtitle: string;
+  defaultOn: boolean;
+  gmailBoost: boolean;
+};
 
-const PATHS = [
+// Defaults are the 4 most universal pipes. digital-clone leads because it's
+// the breakout install (~4.8k organic store installs in 30d vs ~40 for
+// todo-list — the prior "universal" pipe in the 3-path flow).
+const PIPES: Pipe[] = [
   {
-    id: "memory",
-    icon: Brain,
-    title: "I forget everything",
-    subtitle: "Daily summaries · search history · never miss a follow-up",
-    pipes: ["obsidian-daily-summary", "todo-list-assistant"],
-    notification: {
-      title: "🧠 Memory enabled",
-      body: "Screenpipe will now:\n\n- Summarize your day automatically\n- Remind you about things you forgot\n\nFirst summary tonight.",
-    },
+    slug: "digital-clone",
+    title: "digital-clone",
+    subtitle: "your AI you",
+    defaultOn: true,
+    gmailBoost: true,
   },
   {
-    id: "time",
-    icon: Clock,
-    title: "I waste too much time",
-    subtitle: "Automatic time tracking · meeting notes · smart reminders",
-    pipes: ["toggl-time-tracker", "todo-list-assistant"],
-    notification: {
-      title: "⏱ Time tracking enabled",
-      body: "Screenpipe will now:\n\n- Track time across every app automatically\n- Remind you about follow-ups\n\nFirst report in a few hours.",
-    },
+    slug: "obsidian-daily-summary",
+    title: "daily-summary",
+    subtitle: "nightly recap of your day",
+    defaultOn: true,
+    gmailBoost: true,
   },
   {
-    id: "people",
-    icon: Users,
-    title: "I lose track of people",
-    subtitle: "Remember every conversation · auto-CRM · relationship insights",
-    pipes: ["personal-crm", "todo-list-assistant"],
-    notification: {
-      title: "👥 People tracking enabled",
-      body: "Screenpipe will now:\n\n- Remember everyone you meet\n- Track what you discussed\n- Remind you to follow up\n\nFirst update in a few hours.",
-    },
+    slug: "meeting-intel",
+    title: "meeting-notes",
+    subtitle: "auto-transcribe every call",
+    defaultOn: true,
+    gmailBoost: false,
   },
-] as const;
+  {
+    slug: "todo-list-assistant",
+    title: "todo-assistant",
+    subtitle: "never miss a follow-up",
+    defaultOn: true,
+    gmailBoost: true,
+  },
+  {
+    slug: "personal-crm",
+    title: "personal-crm",
+    subtitle: "remember everyone you meet",
+    defaultOn: false,
+    gmailBoost: true,
+  },
+  {
+    slug: "toggl-time-tracker",
+    title: "time-tracker",
+    subtitle: "where your time really goes",
+    defaultOn: false,
+    gmailBoost: false,
+  },
+  {
+    slug: "focus-assistant",
+    title: "focus-assistant",
+    subtitle: "nudge when you drift",
+    defaultOn: false,
+    gmailBoost: false,
+  },
+  {
+    slug: "ai-prompt-journal",
+    title: "prompt-journal",
+    subtitle: "save every AI prompt you send",
+    defaultOn: false,
+    gmailBoost: false,
+  },
+];
 
-type PathId = (typeof PATHS)[number]["id"];
-type Phase = "choose" | "enabling" | "done";
+const DEFAULT_SLUGS = PIPES.filter((p) => p.defaultOn).map((p) => p.slug);
+
+type Phase = "choose" | "enabling";
 
 async function waitForServer(maxWaitMs = 30000): Promise<void> {
   const start = Date.now();
@@ -68,10 +106,8 @@ async function waitForServer(maxWaitMs = 30000): Promise<void> {
 }
 
 // Best-effort immediate run after install/enable so `pipe_scheduled_run`
-// fires within seconds of the user picking a path, instead of waiting for
-// the next cron tick (hours/days). Closes the 41% pick→run gap measured
-// in PostHog (last 14d: 218 picked pipe-step → 128 had pipe actually run).
-// Silent on failure — never blocks onboarding completion.
+// fires within seconds of the user finishing onboarding, instead of waiting
+// for the next cron tick (hours/days). Silent on failure.
 async function triggerImmediateRun(slug: string): Promise<void> {
   try {
     await localFetch(`/pipes/${slug}/run`, {
@@ -99,12 +135,11 @@ async function installAndEnable(slug: string, retries = 3): Promise<void> {
         const enableBody = await enableRes.json().catch(() => ({}));
         if (!enableBody.error) {
           await triggerImmediateRun(slug);
-          return; // pipe was already installed and is now enabled
+          return;
         }
       }
 
       // Not installed — install from store
-      // pipe_store_install also returns HTTP 200 on error, so check body too
       const installRes = await localFetch("/pipes/store/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -112,10 +147,11 @@ async function installAndEnable(slug: string, retries = 3): Promise<void> {
       });
       const installBody = await installRes.json().catch(() => ({}));
       if (!installRes.ok || installBody.error) {
-        throw new Error(`install ${slug}: ${installBody.error || installRes.status}`);
+        throw new Error(
+          `install ${slug}: ${installBody.error || installRes.status}`
+        );
       }
 
-      // Enable after install
       const enable2 = await localFetch(`/pipes/${slug}/enable`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -132,21 +168,85 @@ async function installAndEnable(slug: string, retries = 3): Promise<void> {
       throw new Error(`enable ${slug} after install: ${enable2.status}`);
     } catch (err) {
       if (attempt === retries) throw err;
-      // Stringify explicitly: `console.warn(..., err)` collapses Error
-      // instances to `{}` once they hit the Rust log capture (their
-      // useful fields aren't enumerable). This was the source of the
-      // unhelpful "pipe X attempt 1/3 failed, retrying... {}" log lines
-      // we couldn't diagnose for chris@lovephoenixhomes.com on 2026-05-06.
-      const msg = (err as Error)?.stack ?? (err as Error)?.message ?? String(err);
-      console.warn(`pipe ${slug} attempt ${attempt}/${retries} failed, retrying...`, msg);
+      // Stringify explicitly: console.warn(..., err) collapses Error
+      // instances to {} once they hit the Rust log capture.
+      const msg =
+        (err as Error)?.stack ?? (err as Error)?.message ?? String(err);
+      console.warn(
+        `pipe ${slug} attempt ${attempt}/${retries} failed, retrying...`,
+        msg
+      );
       await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
   }
 }
 
+function PipeRow({
+  pipe,
+  selected,
+  gmailConnected,
+  onToggle,
+  delay,
+}: {
+  pipe: Pipe;
+  selected: boolean;
+  gmailConnected: boolean;
+  onToggle: (slug: string) => void;
+  delay: number;
+}) {
+  const showGmailBadge = gmailConnected && pipe.gmailBoost;
+  return (
+    <motion.button
+      type="button"
+      role="checkbox"
+      aria-checked={selected}
+      aria-label={`${pipe.title}: ${pipe.subtitle}`}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay, duration: 0.35 }}
+      onClick={() => onToggle(pipe.slug)}
+      className={`w-full text-left border p-3 transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground ${
+        selected
+          ? "border-foreground/40 bg-foreground/[0.03]"
+          : "border-foreground/10 hover:border-foreground/30"
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className={`w-4 h-4 border flex items-center justify-center shrink-0 transition-colors ${
+            selected
+              ? "border-foreground bg-foreground"
+              : "border-foreground/30"
+          }`}
+        >
+          {selected && (
+            <Check className="w-3 h-3 text-background" strokeWidth={3} />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="font-mono text-sm font-semibold">{pipe.title}</p>
+            {showGmailBadge && (
+              <span className="font-mono text-[8px] px-1 py-0.5 border border-foreground/20 text-muted-foreground/60 leading-none shrink-0">
+                + gmail
+              </span>
+            )}
+          </div>
+          <p className="font-mono text-[11px] text-muted-foreground mt-0.5">
+            {pipe.subtitle}
+          </p>
+        </div>
+      </div>
+    </motion.button>
+  );
+}
+
 export default function PickPipe() {
   const [phase, setPhase] = useState<Phase>("choose");
-  const [selected, setSelected] = useState<PathId | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(DEFAULT_SLUGS)
+  );
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [showSkip, setShowSkip] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +267,8 @@ export default function PickPipe() {
 
   // Check if Gmail was connected in the previous connect-apps step
   useEffect(() => {
-    commands.oauthStatus("gmail", null)
+    commands
+      .oauthStatus("gmail", null)
       .then((res) => {
         if (res.status === "ok" && res.data.connected) {
           setGmailConnected(true);
@@ -176,47 +277,82 @@ export default function PickPipe() {
       .catch(() => {});
   }, []);
 
-  const handleSelect = useCallback(
-    async (pathId: PathId) => {
-      setSelected(pathId);
-      setPhase("enabling");
-      setError(null);
+  // Expand the onboarding window when customize opens so the 4 optional
+  // pipes don't push the install button below the fold. The parent route
+  // sets pipe step to 500x620 (fits 4 default pipes); customize adds 4
+  // more rows (~58px each = ~232px).
+  useEffect(() => {
+    const height = customizeOpen ? 860 : 620;
+    commands.setWindowSize("Onboarding", 500, height).catch(() => {});
+  }, [customizeOpen]);
 
-      const path = PATHS.find((p) => p.id === pathId)!;
+  const toggle = useCallback((slug: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  }, []);
+
+  const customized = useMemo(() => {
+    if (selected.size !== DEFAULT_SLUGS.length) return true;
+    return !DEFAULT_SLUGS.every((s) => selected.has(s));
+  }, [selected]);
+
+  const defaultPipes = useMemo(() => PIPES.filter((p) => p.defaultOn), []);
+  const optionalPipes = useMemo(() => PIPES.filter((p) => !p.defaultOn), []);
+
+  const handleInstall = useCallback(async () => {
+    if (selected.size === 0) return;
+    if (isCompletingRef.current) return;
+    isCompletingRef.current = true;
+    setPhase("enabling");
+    setError(null);
+
+    const slugs = Array.from(selected);
+
+    try {
+      await Promise.all(slugs.map((slug) => installAndEnable(slug)));
+
+      // Keep legacy event name + path:"bundle" so existing PostHog dashboards
+      // keep working alongside the new bundle-shape properties.
+      posthog.capture("onboarding_path_selected", {
+        path: "bundle",
+        pipes: slugs,
+        pipe_count: slugs.length,
+        customized,
+        time_spent_ms: Date.now() - mountTimeRef.current,
+      });
 
       try {
-        await Promise.all(path.pipes.map((slug) => installAndEnable(slug)));
+        await completeOnboarding();
+      } catch {}
+      try {
+        scheduleFirstRunNotification();
+      } catch {}
 
-        posthog.capture("onboarding_path_selected", {
-          path: pathId,
-          pipes: path.pipes,
-          time_spent_ms: Date.now() - mountTimeRef.current,
+      try {
+        await localFetch("/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: `🚀 ${slugs.length} pipe${slugs.length === 1 ? "" : "s"} enabled`,
+            body: "Screenpipe is set up. Your first results arrive shortly.",
+          }),
         });
-
-        try {
-          await completeOnboarding();
-        } catch {}
-        try {
-          scheduleFirstRunNotification();
-        } catch {}
-
-        try {
-          await localFetch("/notify", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(path.notification),
-          });
-        } catch {}
-      } catch (err) {
-        const msg = (err as Error)?.stack ?? (err as Error)?.message ?? String(err);
-        console.error("failed to enable pipes:", msg);
-        setError("Couldn't enable — try again or skip");
-        setPhase("choose");
-        setSelected(null);
-      }
-    },
-    [completeOnboarding]
-  );
+      } catch {}
+    } catch (err) {
+      const msg =
+        (err as Error)?.stack ?? (err as Error)?.message ?? String(err);
+      console.error("failed to enable pipes:", msg);
+      setError("Couldn't install all pipes — try again or skip");
+      setPhase("choose");
+      // Release guard on failure so retry works; success path keeps it set
+      // because onboarding completion will close the window.
+      isCompletingRef.current = false;
+    }
+  }, [selected, customized, completeOnboarding]);
 
   const handleSkip = useCallback(async () => {
     if (isCompletingRef.current) return;
@@ -226,8 +362,9 @@ export default function PickPipe() {
     posthog.capture("onboarding_completed");
 
     try {
-      // best-effort install of default pipe — don't block onboarding completion
-      await installAndEnable("todo-list-assistant").catch((e) => {
+      // Best-effort install of digital-clone — the breakout pipe — so even
+      // skippers leave with the highest-value pipe enabled.
+      await installAndEnable("digital-clone").catch((e) => {
         const msg = (e as Error)?.stack ?? (e as Error)?.message ?? String(e);
         console.warn("failed to install default pipe:", msg);
       });
@@ -278,57 +415,77 @@ export default function PickPipe() {
     );
   }
 
+  const count = selected.size;
+
   return (
-    <div className="flex flex-col items-center justify-center space-y-6 py-4">
+    <div className="flex flex-col items-center justify-center space-y-5 py-4">
       <RecordingDot />
 
       <motion.div
-        className="flex flex-col items-center space-y-5 w-full max-w-sm"
+        className="flex flex-col items-center space-y-4 w-full max-w-sm"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.5 }}
       >
         <h2 className="font-mono text-lg font-bold text-center">
-          What brings you here?
+          We picked these for you
         </h2>
 
-        <div className="flex flex-col gap-3 w-full">
-          {PATHS.map((path, i) => {
-            const Icon = path.icon;
-            const showGmailBadge = gmailConnected && GMAIL_BOOSTED_PATHS.has(path.id);
-            return (
-              <motion.button
-                key={path.id}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 + i * 0.1, duration: 0.4 }}
-                onClick={() => handleSelect(path.id)}
-                className="w-full text-left border border-foreground/10 p-4 hover:border-foreground/40 transition-all duration-150 group"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 border border-foreground/20 flex items-center justify-center shrink-0 group-hover:border-foreground/40 transition-colors">
-                    <Icon className="w-4 h-4 text-foreground/60 group-hover:text-foreground transition-colors" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-mono text-sm font-semibold">
-                        {path.title}
-                      </p>
-                      {showGmailBadge && (
-                        <span className="font-mono text-[8px] px-1 py-0.5 border border-foreground/20 text-muted-foreground/60 leading-none shrink-0">
-                          + gmail
-                        </span>
-                      )}
-                    </div>
-                    <p className="font-mono text-[11px] text-muted-foreground mt-0.5">
-                      {path.subtitle}
-                    </p>
-                  </div>
-                </div>
-              </motion.button>
-            );
-          })}
+        <div className="flex flex-col gap-2 w-full">
+          {defaultPipes.map((p, i) => (
+            <PipeRow
+              key={p.slug}
+              pipe={p}
+              selected={selected.has(p.slug)}
+              gmailConnected={gmailConnected}
+              onToggle={toggle}
+              delay={0.3 + i * 0.08}
+            />
+          ))}
         </div>
+
+        <button
+          onClick={() => setCustomizeOpen((o) => !o)}
+          className="font-mono text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center gap-1 self-start"
+        >
+          <ChevronDown
+            className={`w-3 h-3 transition-transform ${
+              customizeOpen ? "" : "-rotate-90"
+            }`}
+          />
+          customize ({optionalPipes.length} more available)
+        </button>
+
+        <AnimatePresence initial={false}>
+          {customizeOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25 }}
+              className="flex flex-col gap-2 w-full overflow-hidden"
+            >
+              {optionalPipes.map((p, i) => (
+                <PipeRow
+                  key={p.slug}
+                  pipe={p}
+                  selected={selected.has(p.slug)}
+                  gmailConnected={gmailConnected}
+                  onToggle={toggle}
+                  delay={i * 0.04}
+                />
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <button
+          onClick={handleInstall}
+          disabled={count === 0}
+          className="w-full border border-foreground p-3 font-mono text-sm font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-foreground hover:text-background transition-colors"
+        >
+          install {count} pipe{count === 1 ? "" : "s"} →
+        </button>
 
         <AnimatePresence>
           {error && (
@@ -352,13 +509,13 @@ export default function PickPipe() {
               onClick={handleSkip}
               className="font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
             >
-              Just let me explore →
+              skip — just record for now
             </motion.button>
           )}
         </AnimatePresence>
 
         <p className="font-mono text-[9px] text-muted-foreground/30 text-center">
-          You can add more from the pipe store anytime.
+          you can add more from the pipe store anytime.
         </p>
       </motion.div>
     </div>

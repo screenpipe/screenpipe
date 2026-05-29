@@ -13,10 +13,12 @@ pub mod login;
 pub mod mcp;
 pub mod pipe;
 pub mod presets;
+pub mod search;
 pub mod status;
 mod store_file;
 pub mod survey;
 pub mod sync;
+pub mod team;
 pub mod vault;
 pub mod vision;
 
@@ -181,6 +183,19 @@ pub enum Command {
         /// Port to check for running server
         #[arg(short = 'p', long, default_value_t = 3030)]
         port: u16,
+    },
+
+    /// Search screen + audio history directly from the local SQLite DB
+    /// (no daemon required — opens `~/.screenpipe/db.sqlite` read-side
+    /// via WAL while sp may be writing).
+    Search(SearchArgs),
+
+    /// Enterprise: query teammates' screen + audio history via
+    /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a
+    /// `team_api_token` minted at https://screenpi.pe/enterprise?tab=tokens.
+    Team {
+        #[command(subcommand)]
+        subcommand: TeamCommand,
     },
 
     /// Manage pipes (scheduled agents on screen data)
@@ -1392,6 +1407,195 @@ pub enum BackupCommand {
 pub enum AuthCommand {
     /// Print the current local API authentication token
     Token,
+}
+
+// =============================================================================
+// Search args
+// =============================================================================
+
+/// Mirrors the HTTP `/search` query string so terminal use, jq filters, and
+/// pipe scripts share the same vocabulary. Output is the same `ContentItem`
+/// shape the API returns — `screenpipe search` and `curl /search` are
+/// interchangeable for downstream consumers.
+#[derive(Parser, Clone, Debug)]
+pub struct SearchArgs {
+    /// Search query (omit for a time-only browse — pair with `--start`).
+    #[arg(value_name = "QUERY")]
+    pub q: Option<String>,
+
+    /// Content kind: all | ocr | audio | accessibility | input | memory
+    #[arg(long, default_value = "all")]
+    pub content_type: String,
+
+    /// Max results returned (default 10 to protect terminals).
+    #[arg(short = 'n', long, default_value_t = 10)]
+    pub limit: u32,
+
+    /// Pagination offset.
+    #[arg(long, default_value_t = 0)]
+    pub offset: u32,
+
+    /// Start of the time window. Accepts ISO 8601 (`2026-01-15T10:00:00Z`)
+    /// or relative (`30m ago`, `2h ago`, `7d ago`, `now`).
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// End of the time window. Same accepted formats as `--start`. Defaults
+    /// to now if `--start` is set.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Filter by app name (case-insensitive substring).
+    #[arg(long)]
+    pub app: Option<String>,
+
+    /// Filter by window title (case-insensitive substring).
+    #[arg(long)]
+    pub window: Option<String>,
+
+    /// Filter by browser URL substring.
+    #[arg(long)]
+    pub browser_url: Option<String>,
+
+    /// Filter by frame_name substring.
+    #[arg(long)]
+    pub frame_name: Option<String>,
+
+    /// Filter by speaker name (audio rows, case-insensitive partial match).
+    #[arg(long)]
+    pub speaker: Option<String>,
+
+    /// Restrict to focused-window rows only.
+    #[arg(long)]
+    pub focused: bool,
+
+    /// Restrict accessibility hits to text visually present on the captured
+    /// frame (drops off-screen scrollback). Only meaningful for content_type
+    /// = `accessibility` or `all`.
+    #[arg(long)]
+    pub on_screen: bool,
+
+    /// Filter results by device name (e.g. "MacBook Pro").
+    #[arg(long)]
+    pub device_name: Option<String>,
+
+    /// Filter results by machine identifier (sync UUID).
+    #[arg(long)]
+    pub machine_id: Option<String>,
+
+    /// Drop rows whose text is shorter than this many chars.
+    #[arg(long)]
+    pub min_length: Option<usize>,
+
+    /// Drop rows whose text is longer than this many chars.
+    #[arg(long)]
+    pub max_length: Option<usize>,
+
+    /// Middle-truncate each result's text to this many chars before printing.
+    #[arg(long)]
+    pub max_content_length: Option<usize>,
+
+    /// Data directory. Default `$HOME/.screenpipe`.
+    #[arg(long, value_hint = ValueHint::DirPath)]
+    pub data_dir: Option<String>,
+
+    /// Emit JSON-lines (one ContentItem per line) instead of human text.
+    /// The schema matches `GET /search` exactly.
+    #[arg(long)]
+    pub json: bool,
+}
+
+// =============================================================================
+// Team (enterprise) subcommands
+// =============================================================================
+
+/// Mirrors the `screenpipe-team` skill 1:1 — same endpoints, same vocabulary.
+/// All three variants hit `https://screenpi.pe/api/enterprise/v1/*` directly
+/// with the admin's `team_api_token` from `~/.screenpipe/enterprise.json`
+/// (or `SCREENPIPE_TEAM_API_TOKEN` env override). No daemon needed.
+#[derive(Subcommand, Debug)]
+pub enum TeamCommand {
+    /// List devices reporting to this org
+    Devices(TeamDevicesArgs),
+    /// Substring search across the team's screen + audio history
+    Search(TeamSearchArgs),
+    /// Chronological dump for one device — use after `devices` + `search`
+    /// have narrowed down a person and a moment
+    Records(TeamRecordsArgs),
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamDevicesArgs {
+    /// Emit compact JSON-lines (one device per line). Default is pretty JSON.
+    #[arg(long)]
+    pub raw: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamSearchArgs {
+    /// Search query (case-insensitive substring across app, window, frame
+    /// text, audio transcript, speaker, device label, browser URL).
+    pub query: String,
+
+    /// Restrict to one device — get the id from `screenpipe team devices`.
+    #[arg(long)]
+    pub device_id: Option<String>,
+
+    /// Exact match on app_name (case-insensitive), e.g. `Excel`, `Slack`.
+    #[arg(long)]
+    pub app: Option<String>,
+
+    /// Relative time window — accepts `24h`, `2d`, `30m`, `1w`. Default 24h.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// ISO 8601 start (alternative to `--since`).
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// ISO 8601 end. Defaults to now.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Max results. Server caps at 200; default 20 to protect terminals.
+    #[arg(short = 'n', long, default_value_t = 20)]
+    pub limit: u32,
+
+    /// Emit compact JSON-lines (one result per line). Default is pretty JSON.
+    #[arg(long)]
+    pub raw: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamRecordsArgs {
+    /// Device id to dump records for (required — without it you'd get the
+    /// whole org, which is rarely useful).
+    #[arg(long)]
+    pub device_id: String,
+
+    /// Record kind: `frame` (screen) / `audio` / `all`. Default `all`.
+    #[arg(long, default_value = "all")]
+    pub kind: String,
+
+    /// Relative time window — `4h`, `1d`, `30m`. Default 4h.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// ISO 8601 start (alternative to `--since`).
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// ISO 8601 end. Defaults to now.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Max records. Server caps at 200; default 50.
+    #[arg(short = 'n', long, default_value_t = 50)]
+    pub limit: u32,
+
+    /// Emit compact JSON-lines (one record per line). Default is pretty JSON.
+    #[arg(long)]
+    pub raw: bool,
 }
 
 // =============================================================================

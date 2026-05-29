@@ -36,7 +36,10 @@ static OAUTH: OAuthConfig = OAuthConfig {
              Chat.ReadWrite \
              Team.ReadBasic.All ChannelMessage.Read.All",
         ),
-        ("prompt", "consent"),
+        // select_account so a second connect shows Microsoft's account picker
+        // instead of silently consenting under the already-signed-in account —
+        // otherwise "add another account" can never reach a different tenant.
+        ("prompt", "consent select_account"),
     ],
     redirect_uri_override: None,
 };

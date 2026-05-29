@@ -20,7 +20,20 @@ fn encode_single_audio(
 ) -> anyhow::Result<()> {
     debug!("Starting FFmpeg process");
 
-    let mut command = screenpipe_core::ffmpeg_cmd(find_ffmpeg_path().unwrap());
+    // SCREENPIPE-CLI-T0 / T5: the previous `.expect("Failed to spawn FFmpeg
+    // process")` panicked the worker thread (no bundled ffmpeg on Linux,
+    // user hasn't installed it). Same for find_ffmpeg_path().unwrap(),
+    // stdin.take().expect(), wait_with_output().unwrap(), and
+    // to_str().unwrap() — none should panic the recording pipeline. Return
+    // a clear error so the caller can log and skip the chunk instead.
+    let ffmpeg_path = find_ffmpeg_path()
+        .ok_or_else(|| anyhow::anyhow!("ffmpeg not found in PATH or bundled binaries — install ffmpeg (e.g. `apt install ffmpeg` / `brew install ffmpeg`) and restart"))?;
+
+    let output_path_str = output_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("output path is not valid UTF-8: {}", output_path.display()))?;
+
+    let mut command = screenpipe_core::ffmpeg_cmd(ffmpeg_path);
     command
         .args([
             "-hide_banner",
@@ -46,7 +59,7 @@ fn encode_single_audio(
             "+faststart", // Optimize for web streaming
             "-f",
             "mp4",
-            output_path.to_str().unwrap(),
+            output_path_str,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -62,16 +75,23 @@ fn encode_single_audio(
     debug!("FFmpeg command: {:?}", command);
 
     #[allow(clippy::zombie_processes)]
-    let mut ffmpeg = command.spawn().expect("Failed to spawn FFmpeg process");
+    let mut ffmpeg = command
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn FFmpeg process: {e}"))?;
     debug!("FFmpeg process spawned");
-    let mut stdin = ffmpeg.stdin.take().expect("Failed to open stdin");
+    let mut stdin = ffmpeg
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to open FFmpeg stdin"))?;
 
     stdin.write_all(data)?;
 
     debug!("Dropping stdin");
     drop(stdin);
     debug!("Waiting for FFmpeg process to exit");
-    let output = ffmpeg.wait_with_output().unwrap();
+    let output = ffmpeg
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("FFmpeg wait failed: {e}"))?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

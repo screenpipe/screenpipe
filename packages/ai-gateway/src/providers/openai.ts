@@ -227,7 +227,11 @@ export class OpenAIProvider implements AIProvider {
 					if (call?.id) knownToolCallIds.add(call.id);
 				}
 			}
-			if (msg.role === 'tool' && msg.tool_call_id && !knownToolCallIds.has(msg.tool_call_id)) {
+			// Drop tool messages with missing OR unknown tool_call_id. OpenAI
+			// 400s either way ("messages with role 'tool' must be a response
+			// to a preceding message with 'tool_calls'"); the previous guard
+			// only caught the second case.
+			if (msg.role === 'tool' && (!msg.tool_call_id || !knownToolCallIds.has(msg.tool_call_id))) {
 				continue;
 			}
 			filtered.push(msg);

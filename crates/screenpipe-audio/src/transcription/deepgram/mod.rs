@@ -34,7 +34,7 @@ impl DeepgramTranscriptionConfig {
 
     pub fn screenpipe_cloud(token: String) -> Self {
         Self {
-            endpoint: "https://api.screenpi.pe/v1/listen".to_string(),
+            endpoint: "https://api.screenpipe.com/v1/listen".to_string(),
             auth_token: token,
             auth_header_prefix: "Bearer",
         }

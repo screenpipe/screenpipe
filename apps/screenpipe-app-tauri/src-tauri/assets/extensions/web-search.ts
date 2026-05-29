@@ -32,7 +32,7 @@ export default function (pi: ExtensionAPI) {
 
       const apiKey = process.env.SCREENPIPE_API_KEY || "";
       const response = await fetch(
-        "https://api.screenpi.pe/v1/web-search",
+        "https://api.screenpipe.com/v1/web-search",
         {
           method: "POST",
           headers: {

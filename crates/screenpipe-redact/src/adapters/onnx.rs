@@ -156,10 +156,7 @@ impl OnnxConfig {
                 // a real integrity check.
                 if !expected_sha.starts_with("REPLACE_") && !sha256_matches(&target, expected_sha)?
                 {
-                    tracing::warn!(
-                        "v45 phase 3 {} sha256 mismatch, re-downloading",
-                        filename
-                    );
+                    tracing::warn!("v45 phase 3 {} sha256 mismatch, re-downloading", filename);
                 } else {
                     continue;
                 }
@@ -428,8 +425,7 @@ mod runtime {
                 .try_extract_array::<f32>()
                 .map_err(|e| RedactError::Runtime(format!("extract logits: {e}")))?;
             let logits_view = logits_view.view();
-            let logits = logits_view
-                .index_axis(Axis(0), 0); // drop batch dim → [seq_len, num_labels]
+            let logits = logits_view.index_axis(Axis(0), 0); // drop batch dim → [seq_len, num_labels]
 
             // Argmax per token
             let mut label_ids = Vec::with_capacity(len);
@@ -490,7 +486,9 @@ mod runtime {
         let mut out = Vec::new();
         let mut cur: Option<(SpanLabel, usize, usize)> = None;
         // Helper to push current span if any.
-        let flush = |cur: &mut Option<(SpanLabel, usize, usize)>, out: &mut Vec<RedactedSpan>, text: &str| {
+        let flush = |cur: &mut Option<(SpanLabel, usize, usize)>,
+                     out: &mut Vec<RedactedSpan>,
+                     text: &str| {
             if let Some((label, start, end)) = cur.take() {
                 if end > start {
                     out.push(RedactedSpan {
@@ -595,26 +593,28 @@ mod runtime {
     }
 
     fn build_session(model_path: &std::path::Path) -> Result<Session, RedactError> {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Session, ort::Error> {
-            let builder = Session::builder()?
-                .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_intra_threads(num_cpus_physical())?;
-            #[cfg(feature = "onnx-coreml")]
-            let builder = builder.with_execution_providers([
-                ort::execution_providers::CoreMLExecutionProvider::default()
-                    .with_subgraphs(true)
-                    .build(),
-                ort::execution_providers::CPUExecutionProvider::default().build(),
-            ])?;
-            #[cfg(feature = "onnx-directml")]
-            let builder = builder.with_execution_providers([
-                ort::execution_providers::DirectMLExecutionProvider::default()
-                    .with_device_id(0)
-                    .build(),
-                ort::execution_providers::CPUExecutionProvider::default().build(),
-            ])?;
-            builder.commit_from_file(model_path)
-        })) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || -> Result<Session, ort::Error> {
+                let builder = Session::builder()?
+                    .with_optimization_level(GraphOptimizationLevel::Level3)?
+                    .with_intra_threads(num_cpus_physical())?;
+                #[cfg(feature = "onnx-coreml")]
+                let builder = builder.with_execution_providers([
+                    ort::execution_providers::CoreMLExecutionProvider::default()
+                        .with_subgraphs(true)
+                        .build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                ])?;
+                #[cfg(feature = "onnx-directml")]
+                let builder = builder.with_execution_providers([
+                    ort::execution_providers::DirectMLExecutionProvider::default()
+                        .with_device_id(0)
+                        .build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                ])?;
+                builder.commit_from_file(model_path)
+            },
+        )) {
             Ok(Ok(session)) => Ok(session),
             Ok(Err(e)) => Err(RedactError::Runtime(format!("ort session: {e}"))),
             Err(payload) => {

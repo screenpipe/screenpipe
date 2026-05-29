@@ -41,6 +41,11 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 tempfile = "3"
 image = "0.25"
 
+[[example]]
+name = "v45_phase3_smoke"
+path = "examples/v45_phase3_smoke.rs"
+required-features = ["onnx-cpu"]
+
 # Optional model adapters. Off by default so the crate builds without
 # any heavy ML deps. Picks the platform-appropriate accelerator.
 #

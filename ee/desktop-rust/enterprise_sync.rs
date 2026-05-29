@@ -626,47 +626,75 @@ pub async fn run_one_sync(
         cursor.last_memory_ts = Some(cutoff.to_rfc3339());
     }
 
-    let frames = local
-        .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
-        .await?;
-    let audio = local
-        .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
-        .await?;
+    // Per-stream sync policy is fetched fresh on every tick — the admin can
+    // flip toggles in the dashboard and the device picks them up on the next
+    // 5-min policy poll. A disabled stream means we don't even hit the local
+    // API for its rows; the cursor for that kind stays put, so re-enabling
+    // resumes from where the toggle-off happened (capped by SAFE_BACKFILL
+    // anyway).
+    let streams = crate::enterprise_policy::current_sync_streams();
+
+    let frames = if streams.frames {
+        local
+            .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let audio = if streams.audio {
+        local
+            .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
+            .await?
+    } else {
+        Vec::new()
+    };
     // UI events are best-effort — a backend that doesn't expose them yet
     // (or blocks the search query) shouldn't kill the whole sync batch.
     // The frame + audio paths are the load-bearing ones.
-    let ui = match local
-        .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            warn!("enterprise sync: ui fetch failed (skipping): {}", e);
-            Vec::new()
+    let ui = if streams.ui_events {
+        match local
+            .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("enterprise sync: ui fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     // One snapshot per tick. Best-effort — failure to encode/fetch
     // shouldn't block the rest of the batch.
-    let snapshots: Vec<SnapshotRow> = match local.fetch_latest_snapshot().await {
-        Ok(Some(s)) => vec![s],
-        Ok(None) => Vec::new(),
-        Err(e) => {
-            warn!("enterprise sync: snapshot fetch failed (skipping): {}", e);
-            Vec::new()
+    let snapshots: Vec<SnapshotRow> = if streams.snapshots {
+        match local.fetch_latest_snapshot().await {
+            Ok(Some(s)) => vec![s],
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                warn!("enterprise sync: snapshot fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     // Memories are best-effort too — a client that predates the trait
     // method, or a server without the /memories route, must not kill
     // the frame+audio path. The default trait impl returns empty.
-    let memories = match local
-        .fetch_memories_since(cursor.last_memory_ts.as_deref(), PAGE_LIMIT)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            warn!("enterprise sync: memory fetch failed (skipping): {}", e);
-            Vec::new()
+    let memories = if streams.memories {
+        match local
+            .fetch_memories_since(cursor.last_memory_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("enterprise sync: memory fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     if frames.is_empty()
@@ -1870,5 +1898,191 @@ mod tests {
             .await
             .unwrap();
         // Mock asserts call shape on drop.
+    }
+
+    // ─── per-stream sync gate (PR #3581) ───────────────────────────────
+    //
+    // Lock in the contract that a disabled stream never hits the local API
+    // for its rows and never appears in the upstream payload. This is the
+    // load-bearing privacy guarantee for enterprise: admins flipping a
+    // toggle in the dashboard expect the device to stop syncing that kind
+    // immediately, not on the next restart.
+
+    /// Mock that tracks call counts per LocalApiClient method. Returns one
+    /// row per enabled method so we can prove via the upstream payload that
+    /// disabled methods produced nothing.
+    struct CallCountingLocal {
+        frames_calls: Mutex<u32>,
+        audio_calls: Mutex<u32>,
+        ui_calls: Mutex<u32>,
+        snapshot_calls: Mutex<u32>,
+        memories_calls: Mutex<u32>,
+    }
+
+    impl CallCountingLocal {
+        fn new() -> Self {
+            Self {
+                frames_calls: Mutex::new(0),
+                audio_calls: Mutex::new(0),
+                ui_calls: Mutex::new(0),
+                snapshot_calls: Mutex::new(0),
+                memories_calls: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for CallCountingLocal {
+        async fn fetch_frames_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            *self.frames_calls.lock().unwrap() += 1;
+            Ok(vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "f")])
+        }
+
+        async fn fetch_audio_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            *self.audio_calls.lock().unwrap() += 1;
+            Ok(vec![audio(1, "2026-05-07T10:00:00Z", "a")])
+        }
+
+        async fn fetch_ui_events_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<UiEventRow>, EnterpriseSyncError> {
+            *self.ui_calls.lock().unwrap() += 1;
+            Ok(vec![ui_event(1, "2026-05-07T10:00:00Z", "Arc", "Send")])
+        }
+
+        async fn fetch_latest_snapshot(&self) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
+            *self.snapshot_calls.lock().unwrap() += 1;
+            Ok(Some(snapshot(1, "2026-05-07T10:00:00Z")))
+        }
+
+        async fn fetch_memories_since(
+            &self,
+            _since: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
+            *self.memories_calls.lock().unwrap() += 1;
+            Ok(vec![memory(1, "2026-05-07T10:00:00Z", "m")])
+        }
+    }
+
+    /// Pull the `kind` field out of every JSONL line in a captured POST body.
+    /// Used to assert which streams made it onto the wire.
+    fn jsonl_kinds(body: &[u8]) -> Vec<String> {
+        std::str::from_utf8(body)
+            .unwrap()
+            .split('\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn sync_gate_skips_disabled_streams_and_lets_enabled_through() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+
+        // Disable frames, ui, snapshots. Keep audio + memories on.
+        crate::enterprise_policy::set_sync_streams(false, true, false, true, false);
+
+        // Capture the POST body so we can assert what actually crossed the
+        // wire — the most direct evidence that the gate worked, not just
+        // a "didn't call fetch_X" inference.
+        let captured: std::sync::Arc<Mutex<Option<Vec<u8>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let captured_for_responder = captured.clone();
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(move |req: &wiremock::Request| {
+                *captured_for_responder.lock().unwrap() = Some(req.body.clone());
+                wiremock::ResponseTemplate::new(200)
+            })
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = CallCountingLocal::new();
+        let http = reqwest::Client::new();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
+
+        // Disabled streams: zero local-API calls. This is the wasted-fetch
+        // avoidance promise from the PR description.
+        assert_eq!(
+            *local.frames_calls.lock().unwrap(),
+            0,
+            "frames disabled — fetch_frames_since must not be called"
+        );
+        assert_eq!(
+            *local.ui_calls.lock().unwrap(),
+            0,
+            "ui disabled — fetch_ui_events_since must not be called"
+        );
+        assert_eq!(
+            *local.snapshot_calls.lock().unwrap(),
+            0,
+            "snapshots disabled — fetch_latest_snapshot must not be called"
+        );
+
+        // Enabled streams: called exactly once per tick.
+        assert_eq!(*local.audio_calls.lock().unwrap(), 1);
+        assert_eq!(*local.memories_calls.lock().unwrap(), 1);
+
+        // Upstream payload: only audio + memory kinds present. This is the
+        // privacy contract the admin-facing toggle exists to enforce.
+        let body = captured.lock().unwrap().clone().expect("POST captured");
+        let kinds = jsonl_kinds(&body);
+        assert!(kinds.iter().any(|k| k == "audio"));
+        assert!(kinds.iter().any(|k| k == "memory"));
+        assert!(
+            !kinds.iter().any(|k| k == "frame"),
+            "frame in payload despite frames=false: kinds={kinds:?}"
+        );
+        assert!(
+            !kinds.iter().any(|k| k == "ui"),
+            "ui in payload despite ui_events=false: kinds={kinds:?}"
+        );
+        assert!(
+            !kinds.iter().any(|k| k == "snapshot"),
+            "snapshot in payload despite snapshots=false: kinds={kinds:?}"
+        );
+
+        // Cursors for disabled streams stay put → re-enabling the stream
+        // picks up from the toggle-off point (capped by SAFE_BACKFILL).
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T09:00:00Z"),
+            "disabled-stream cursor must not advance"
+        );
+
+        assert_eq!(report.audio, 1);
+        assert_eq!(report.memories, 1);
+        assert_eq!(report.frames, 0);
+
+        // Reset to defaults so the binary-wide static doesn't leak into
+        // other tests that may run later in the same process.
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true);
     }
 }

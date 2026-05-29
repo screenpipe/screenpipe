@@ -35,7 +35,10 @@ static DEF: IntegrationDef = IntegrationDef {
     description: "Read-only access to Google Calendar events via OAuth. \
         Endpoints: \
         GET /connections/google-calendar/events?hours_back=1&hours_ahead=8 — list upcoming events. \
-        GET /connections/google-calendar/status — check connection status and email.",
+        GET /connections/google-calendar/status — check connection status and email. \
+        Multi-account: when more than one Google account is connected you must pick which one — \
+        pass `instance=<email>` as a query param (e.g. /events?instance=alice@example.com&hours_ahead=24). \
+        Without it, the request fails with an ambiguous-account error.",
     fields: &[],
 };
 

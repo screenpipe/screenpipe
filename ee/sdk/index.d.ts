@@ -47,12 +47,23 @@ export interface RecorderOptions {
    * (case-insensitive). While a matching window is in focus, the recorder
    * skips writing frames — the MP4 contains a hard cut over the filtered
    * period. Mirrors the engine's `--ignored-windows` CLI flag.
+   *
+   * Each pattern may use an optional `App::Title` scope: `"Slack::#hr"`
+   * skips only the #hr window inside Slack and leaves other Slack channels
+   * recording. `"::Confidential"` matches any app whose title contains
+   * "Confidential". Plain `"Slack"` keeps the legacy "app OR title
+   * contains" behavior.
    */
   ignoredWindows?: Array<string>
   /**
    * Substring whitelist. If non-empty, frames are written ONLY while the
    * focused app name or window title matches at least one pattern.
    * Mirrors the engine's `--included-windows` CLI flag.
+   *
+   * Scoped entries (`"Greenhouse::Candidates"`) create a per-app whitelist
+   * — other apps stay unaffected, so this whitelists only that window
+   * without inadvertently blocking Slack/Chrome. Unscoped entries keep
+   * the legacy "must match app or title" global semantics.
    */
   includedWindows?: Array<string>
   /**
@@ -209,7 +220,8 @@ export interface FilterStatus {
  * Patch passed to `Recorder.setFilters({...})` for live filter updates.
  * Any field omitted (or sent as `null`) clears that list. All three fields
  * follow the same matching semantics as the matching `RecorderOptions`
- * fields.
+ * fields — including the `App::Title` scope convention on
+ * `ignoredWindows` / `includedWindows`.
  */
 export interface FilterPatch {
   ignoredWindows?: Array<string>

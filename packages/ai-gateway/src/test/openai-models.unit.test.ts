@@ -212,6 +212,23 @@ describe('OpenAI API accounting and routing', () => {
 		expect(formatted.map((m: any) => m.role)).toEqual(['user', 'user']);
 	});
 
+	// Tool messages with no tool_call_id at all are equally invalid — OpenAI
+	// requires one to bind back to the prior assistant.tool_calls turn.
+	it('drops tool messages with missing tool_call_id', () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		const formatted = provider.formatMessages([
+			{ role: 'user', content: 'list files' },
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{ id: 'call_42', type: 'function', function: { name: 'ls', arguments: '{}' } }],
+			},
+			{ role: 'tool', content: 'orphan output, no id' },
+		]);
+		expect(formatted).toHaveLength(2);
+		expect(formatted.map((m: any) => m.role)).toEqual(['user', 'assistant']);
+	});
+
 	// Sentry SCREENPIPE-AI-PROXY-Y: "400 Unsupported value: 'temperature'
 	// does not support 0.7 with this model. Only the default (1) is supported."
 	// New OpenAI models keep being added to the temperature-locked list. The

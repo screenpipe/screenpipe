@@ -22,6 +22,8 @@ mod audio_device;
 mod permission;
 mod power;
 
+pub use power::is_power_capture_paused;
+
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};

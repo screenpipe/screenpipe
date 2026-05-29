@@ -190,7 +190,7 @@ pub struct AppState {
     pub api_auth: bool,
     /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
     pub api_auth_key: Option<String>,
-    /// Cloud JWT (Clerk) used to authenticate proxied requests to api.screenpi.pe.
+    /// Cloud JWT (Clerk) used to authenticate proxied requests to api.screenpipe.com.
     /// Held in a RwLock so the desktop shell can refresh it after login/logout
     /// without rebuilding the server. The pi-agent's bash deliberately can't see
     /// this token — agent calls localhost/v1/chat/completions and the server
@@ -288,7 +288,7 @@ impl SCServer {
     }
 
     /// Set the cloud JWT used to authenticate proxied chat-completion calls
-    /// to api.screenpi.pe. Safe to call before or after `start()` — the route
+    /// to api.screenpipe.com. Safe to call before or after `start()` — the route
     /// reads the inner Arc on each request. Callers can also clone the Arc
     /// directly (see `cloud_token_handle`) to update it from elsewhere.
     pub fn with_cloud_token(self, token: Option<String>) -> Self {
@@ -713,7 +713,7 @@ impl SCServer {
                 axum::routing::post(crate::routes::transcribe::transcribe_handler)
                     .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)), // 250MB
             )
-            // Local proxy → api.screenpi.pe/v1/chat/completions. Lets the
+            // Local proxy → api.screenpipe.com/v1/chat/completions. Lets the
             // pi-agent's bash do cloud media analysis without ever seeing the
             // cloud JWT (which the wrapper unsets). Body limit bumped because
             // requests embed base64'd audio/images.

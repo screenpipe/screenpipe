@@ -262,7 +262,7 @@ function SyncOnboarding({ onSubscribe, onRefresh, isLoading, isRefreshing, isLog
               variant="outline"
               onClick={async () => {
                 const { open } = await import("@tauri-apps/plugin-shell");
-                await open("https://screenpi.pe/login");
+                await open("https://screenpipe.com/login");
               }}
             >
               Log in to continue

@@ -9,6 +9,7 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 export function isConversationHistorySyncPrompt(value?: string | null): boolean {
   return typeof value === "string" && value.startsWith("<conversation_history>");
@@ -28,8 +29,115 @@ export interface ChatPrefillData {
   useHomeChat?: boolean;
 }
 
+export type ChatTargetWindow = "home" | "chat";
+
+export interface ChatLoadConversationPayload {
+  conversationId: string;
+  targetWindow?: ChatTargetWindow;
+}
+
+export const RECENT_CHAT_SEARCH_HANDOFF_EVENT = "recent-chat-search-handoff";
+
+export interface RecentChatSearchHandoffPayload {
+  direction: 1 | -1;
+  targetWindow: ChatTargetWindow;
+}
+
+export function shouldHandleChatLoadConversationForWindow(
+  payload: ChatLoadConversationPayload | null | undefined,
+  windowLabel: ChatTargetWindow,
+): boolean {
+  return !payload?.targetWindow || payload.targetWindow === windowLabel;
+}
+
+export function shouldActivateHomeSectionForChatLoadConversation(
+  payload: ChatLoadConversationPayload | null | undefined,
+): boolean {
+  return shouldHandleChatLoadConversationForWindow(payload, "home");
+}
+
 const CHAT_READY_TIMEOUT_MS = 2500;
 const CHAT_READY_MAX_ATTEMPTS = 3;
+const PENDING_CHAT_PREFILL_KEY = "pendingChatPrefill";
+const RECENT_CHAT_SEARCH_ORIGIN_KEY = "recentChatSearchOrigin";
+
+export function markSearchOpenedFromChatSurface(targetWindow: ChatTargetWindow): void {
+  try {
+    localStorage.setItem(
+      RECENT_CHAT_SEARCH_ORIGIN_KEY,
+      JSON.stringify({ targetWindow }),
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export function clearSearchOpenedFromChatSurface(): void {
+  try {
+    localStorage.removeItem(RECENT_CHAT_SEARCH_ORIGIN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function readSearchOpenedFromChatSurface(): ChatTargetWindow | null {
+  try {
+    const raw = localStorage.getItem(RECENT_CHAT_SEARCH_ORIGIN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { targetWindow?: ChatTargetWindow };
+    if (parsed.targetWindow !== "home" && parsed.targetWindow !== "chat") return null;
+    return parsed.targetWindow;
+  } catch {
+    clearSearchOpenedFromChatSurface();
+    return null;
+  }
+}
+
+export async function waitForChatReady(targetWindow: ChatTargetWindow): Promise<void> {
+  let chatReady = false;
+  for (let attempt = 1; attempt <= CHAT_READY_MAX_ATTEMPTS; attempt++) {
+    chatReady = await new Promise<boolean>((resolve) => {
+      let resolved = false;
+      const done = (ready: boolean) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
+        unlistenPromise.then((fn) => fn());
+        resolve(ready);
+      };
+
+      const timeout = setTimeout(() => done(false), CHAT_READY_TIMEOUT_MS);
+      const unlistenPromise = listen<{ windowLabel?: string }>(
+        "chat-ready",
+        (event) => {
+          const readyWindow = event.payload?.windowLabel;
+          if (readyWindow && readyWindow !== targetWindow) return;
+          done(true);
+        },
+      );
+
+      setTimeout(() => {
+        emit("chat-ping", { targetWindow });
+      }, 50);
+    });
+
+    if (chatReady) return;
+  }
+
+  throw new Error(`chat did not become ready in ${targetWindow} window`);
+}
+
+export async function openChatConversationInCurrentChatSurface(
+  conversationId: string,
+): Promise<void> {
+  const currentWindowLabel = getCurrentWindow().label;
+  const payload: ChatLoadConversationPayload = {
+    conversationId,
+    targetWindow: currentWindowLabel === "chat" ? "chat" : "home",
+  };
+  useChatStore.getState().actions.setCurrent(conversationId);
+  await emit("chat-load-conversation", payload);
+}
 
 /**
  * Show a chat window and reliably deliver a chat-prefill event.
@@ -53,10 +161,9 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
     const url = new URL(window.location.href);
     const isHomeRoute = url.pathname === "/home";
     const isHomeSection = url.searchParams.get("section") === "home";
-
     if (!isHomeRoute || !isHomeSection) {
       sessionStorage.setItem(
-        "pendingChatPrefill",
+        PENDING_CHAT_PREFILL_KEY,
         JSON.stringify({ ...data, targetWindow }),
       );
       window.location.assign("/home?section=home");
@@ -72,44 +179,7 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
     await commands.showWindow("Chat");
   }
 
-  let chatReady = false;
-  for (let attempt = 1; attempt <= CHAT_READY_MAX_ATTEMPTS; attempt++) {
-    // Wait for the chat component to signal readiness in the intended window.
-    chatReady = await new Promise<boolean>((resolve) => {
-      let resolved = false;
-      const done = (ready: boolean) => {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(timeout);
-        unlistenPromise.then((fn) => fn());
-        resolve(ready);
-      };
-
-      const timeout = setTimeout(() => done(false), CHAT_READY_TIMEOUT_MS);
-      const unlistenPromise = listen<{ windowLabel?: string }>(
-        "chat-ready",
-        (event) => {
-          const readyWindow = event.payload?.windowLabel;
-          if (readyWindow && readyWindow !== targetWindow) return;
-          done(true);
-        },
-      );
-
-      // Ping in case chat is already mounted and won't re-emit on its own.
-      setTimeout(() => {
-        emit("chat-ping", { targetWindow });
-      }, 50);
-    });
-
-    if (chatReady) {
-      break;
-    }
-  }
-
-  if (!chatReady) {
-    throw new Error(`chat did not become ready in ${targetWindow} window`);
-  }
-
+  await waitForChatReady(targetWindow);
   await emit("chat-prefill", { ...data, targetWindow });
 }
 

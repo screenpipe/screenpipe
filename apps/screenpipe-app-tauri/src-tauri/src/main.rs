@@ -752,6 +752,7 @@ async fn main() {
                 commands::get_enterprise_team_api_token,
                 commands::get_cloud_token,
                 enterprise_policy::set_enterprise_policy,
+                enterprise_policy::set_sync_streams,
                 commands::get_disk_usage,
                 commands::list_cache_files,
                 commands::delete_cache_files,
@@ -875,6 +876,8 @@ async fn main() {
                 hardware::get_hardware_capability,
                 // Store encryption
                 store::reencrypt_store,
+                // Autostart
+                commands::set_autostart,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -1030,6 +1033,7 @@ async fn main() {
             commands::set_cloud_media_analysis_skill,
             commands::get_enterprise_license_key,
             enterprise_policy::set_enterprise_policy,
+            enterprise_policy::set_sync_streams,
             commands::save_enterprise_license_key,
             commands::save_enterprise_team_config,
             commands::get_enterprise_team_api_token,
@@ -1217,6 +1221,7 @@ async fn main() {
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
             store::reencrypt_store,
+            commands::set_autostart,
         ])
         .setup(move |app| {
             //deep link register_all

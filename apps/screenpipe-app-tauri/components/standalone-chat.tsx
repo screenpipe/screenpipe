@@ -27,9 +27,11 @@ import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { MemoizedReactMarkdown } from "@/components/markdown";
-import { VideoComponent } from "@/components/rewind/video";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  MemoizedReactMarkdown,
+  chatUrlTransform,
+  openScreenpipeViewerLink,
+} from "@/components/markdown";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
@@ -58,6 +60,8 @@ import {
   normalizeAppTag,
   formatShortcutDisplay,
   isConversationHistorySyncPrompt,
+  type ChatLoadConversationPayload,
+  shouldHandleChatLoadConversationForWindow,
 } from "@/lib/chat-utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
@@ -67,6 +71,7 @@ import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
 import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
 import {
+  computeChatCitationPlan,
   formatSourceCitationsMarkdown,
   sourceCitationsFromMessage,
   type SourceCitation,
@@ -641,7 +646,7 @@ Never POST, PUT, or PATCH to a connection proxy unless the user explicitly asks 
 
 # Local server auth
 
-The local screenpipe server (localhost:3030) requires a bearer token, exposed as env var SCREENPIPE_API_AUTH_KEY. Every curl to localhost:3030 must include \`-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"\`. Don't ask the user for a key — you already have it. On 401, retry without the header (auth is disabled on that install).
+The local screenpipe server (localhost:3030) requires a bearer token, exposed as env var SCREENPIPE_LOCAL_API_KEY. Every curl to localhost:3030 must include \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`. Don't ask the user for a key — you already have it. On 401, retry without the header (auth is disabled on that install).
 
 # Search rules (DB has 600k+ rows)
 
@@ -654,8 +659,9 @@ The local screenpipe server (localhost:3030) requires a bearer token, exposed as
 
 # Showing media
 
-- Markdown only: \`![description](/path/to/file.mp4)\` or \`![description](/path/to/image.jpg)\`
-- Use the exact file_path / audio_file_path from results. Never construct or guess paths.
+- Markdown only: use \`![description](</absolute/path/to/file.mp4>)\` or \`![description](</absolute/path/to/image.jpg>)\`.
+- Always wrap local file paths in angle brackets because screenpipe paths often contain spaces or parentheses.
+- Use the exact file_path / audio_file_path from results inside the angle brackets. Never construct or guess paths.
 - Verify the file exists (\`ls\` / \`Test-Path\`) before showing it. If missing, retry the search instead of rendering a broken player.
 
 # Deep links — sparingly
@@ -698,7 +704,7 @@ function buildConnectionsContext(
   const entries = withDesc
     .map((c) => `## ${c.name} (${c.id})\n${c.description}`)
     .join("\n\n");
-  return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"\`.\n\n${entries}`;
+  return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`.\n\n${entries}`;
 }
 
 interface SearchResult {
@@ -1164,14 +1170,108 @@ function classifyCurl(cmd: string): CurlPresentation | null {
     return { label: "Listed connections", connectionIconName: "connections" };
   }
   if (path.startsWith("/connections/")) {
-    const name = path.split("/")[2];
+    const segments = path.split("/").slice(2); // [name, ...sub]
+    const name = segments[0];
+    const sub = segments.slice(1).join("/");
+    const icon = name;
+
+    // --- Gmail-specific labels (the connection has custom endpoints, not a proxy) ---
+    if (name === "gmail") {
+      if (sub === "send" && method === "POST") {
+        const body = curlBodyJson(cmd);
+        const to = typeof body?.to === "string" ? body.to : null;
+        return {
+          label: to ? `Sent email to ${trunc(to, 40)}` : "Sent email via Gmail",
+          connectionIconName: icon,
+        };
+      }
+      if (sub === "messages") {
+        const q = url.searchParams.get("q");
+        return {
+          label: q ? `Searched Gmail "${trunc(q, 30)}"` : "Listed Gmail messages",
+          connectionIconName: icon,
+        };
+      }
+      if (sub.startsWith("messages/")) {
+        return { label: "Read Gmail message", connectionIconName: icon };
+      }
+      if (sub === "instances") {
+        return { label: "Listed Gmail accounts", connectionIconName: icon };
+      }
+    }
+
+    // --- Google Calendar ---
+    if (name === "google-calendar") {
+      if (sub === "events") {
+        return { label: "Listed calendar events", connectionIconName: icon };
+      }
+      if (sub === "status") {
+        return { label: "Checked calendar connection", connectionIconName: icon };
+      }
+    }
+
+    // --- Proxy endpoints (Google Docs/Sheets, Notion, etc.) ---
+    if (sub.startsWith("proxy/")) {
+      const proxyPath = sub.slice("proxy/".length);
+      // Google Docs API
+      if (proxyPath.startsWith("docs/v1/documents")) {
+        if (method === "POST" && proxyPath.endsWith(":batchUpdate")) {
+          return { label: "Edited Google Doc", connectionIconName: icon };
+        }
+        if (method === "POST") {
+          return { label: "Created Google Doc", connectionIconName: icon };
+        }
+        return { label: "Read Google Doc", connectionIconName: icon };
+      }
+      // Drive API (used by google-docs for file listing + creation)
+      if (proxyPath.startsWith("drive/v3/files")) {
+        if (proxyPath.includes("/export")) {
+          return { label: "Exported Drive file", connectionIconName: icon };
+        }
+        if (method === "POST") {
+          return { label: "Created Drive file", connectionIconName: icon };
+        }
+        return { label: "Listed Drive files", connectionIconName: icon };
+      }
+      // Drive resumable/multipart upload
+      if (proxyPath.startsWith("upload/")) {
+        return { label: "Uploaded file to Drive", connectionIconName: icon };
+      }
+      // Google Sheets API
+      if (name === "google-sheets") {
+        if (proxyPath.endsWith(":append")) {
+          return { label: "Appended to sheet", connectionIconName: icon };
+        }
+        if (proxyPath.includes("/values/")) {
+          return {
+            label: method === "GET" ? "Read sheet values" : "Updated sheet values",
+            connectionIconName: icon,
+          };
+        }
+        return { label: "Sheets request", connectionIconName: icon };
+      }
+      // Generic proxy fallback — name the action by verb, not "Configured"
+      if (method === "POST") return { label: `Posted to ${name}`, connectionIconName: icon };
+      if (method === "PATCH" || method === "PUT") {
+        return { label: `Updated via ${name}`, connectionIconName: icon };
+      }
+      return { label: `Read from ${name}`, connectionIconName: icon };
+    }
+
+    // --- Catch-all for connection root + unrecognized subpaths ---
     if (method === "DELETE") {
-      return { label: `Removed ${name} connection`, connectionIconName: name };
+      return { label: `Removed ${name} connection`, connectionIconName: icon };
     }
-    if (method === "POST" || method === "PATCH" || method === "PUT") {
-      return { label: `Configured ${name} connection`, connectionIconName: name };
+    // Root POST/PATCH/PUT on /connections/<id> is the actual "configure" action.
+    if (!sub && (method === "POST" || method === "PATCH" || method === "PUT")) {
+      return { label: `Configured ${name} connection`, connectionIconName: icon };
     }
-    return { label: `${name} connection`, connectionIconName: name };
+    // Sub-path POST/PATCH/PUT is an action, not a configuration change.
+    if (method === "POST") return { label: `Posted to ${name}`, connectionIconName: icon };
+    if (method === "PATCH" || method === "PUT") {
+      return { label: `Updated via ${name}`, connectionIconName: icon };
+    }
+    return { label: `${name} connection`, connectionIconName: icon };
   }
 
   if (path === "/pipes") {
@@ -1229,11 +1329,12 @@ function friendlyToolLabel(toolCall: ToolCall): string {
       if (result) return result.label;
       // Fallback for non-API curls / arbitrary shell — strip the auth-header
       // boilerplate so the truncation surfaces the meaningful tail, not the
-      // 80-char "-H Authorization: Bearer $SCREENPIPE_API_AUTH_KEY" header.
+      // 80-char "-H Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" header.
+      // Matches both the canonical and deprecated alias name.
       const stripped = cmd
         .replace(/^\s*curl\s+/, "curl ")
         .replace(/\s-s\s+/g, " ")
-        .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+\$?SCREENPIPE_API_AUTH_KEY['"]\s*/g, " ")
+        .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+\$?SCREENPIPE_(LOCAL_API|API_AUTH)_KEY['"]\s*/g, " ")
         .replace(/\s-H\s+['"]Content-Type:\s*application\/json['"]\s*/g, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -1336,7 +1437,23 @@ function endpointFamily(path: string): string {
   if (path === "/search") return "Screen search";
   if (path === "/activity-summary") return "Activity";
   if (path === "/raw_sql") return "Database";
-  if (path.startsWith("/connections/")) return "Connection";
+  if (path.startsWith("/connections/")) {
+    // Narrow the chip to the action surface, not just "Connection", so the AI's
+    // user-visible card matches the verb in the title (Sent email → EMAIL).
+    const segments = path.split("/").slice(2);
+    const name = segments[0];
+    const sub = segments.slice(1).join("/");
+    if (name === "gmail" && sub === "send") return "Email";
+    if (name === "gmail") return "Gmail";
+    if (name === "google-calendar") return "Calendar";
+    if (name === "google-docs") return "Doc";
+    if (name === "google-sheets") return "Sheet";
+    if (name === "slack") return "Slack";
+    if (name === "notion") return "Notion";
+    if (name === "telegram") return "Telegram";
+    if (name === "discord") return "Discord";
+    return "Connection";
+  }
   if (path.startsWith("/meetings")) return "Meetings";
   if (path.startsWith("/speakers")) return "Speakers";
   if (path.startsWith("/pipes")) return "Pipes";
@@ -1355,6 +1472,29 @@ function parseToolResultJson(result: string | undefined): any | null {
 function summarizeToolResult(result: string | undefined, family: string): string | undefined {
   const json = parseToolResultJson(result);
   if (!json) return result?.trim() ? trunc(result.trim().replace(/\s+/g, " "), 120) : undefined;
+
+  // Connection-specific successes: read the actual response shape so the
+  // summary reflects what just happened ("Email sent", "Doc created") instead
+  // of the generic "JSON response returned" fallback.
+  if (family.startsWith("/connections/")) {
+    if (family === "/connections/gmail/send" && (json?.data?.id || json?.id || json?.threadId)) {
+      return "Email sent";
+    }
+    if (family.startsWith("/connections/google-docs/proxy/docs/v1/documents")) {
+      if (family.endsWith(":batchUpdate")) return "Document updated";
+      if (json?.documentId) return "Document created";
+    }
+    if (family.startsWith("/connections/google-docs/proxy/drive/v3/files") && json?.id) {
+      return json?.mimeType?.includes("spreadsheet") ? "Spreadsheet created" : "Drive file created";
+    }
+    if (family.startsWith("/connections/google-docs/proxy/upload/drive/v3/files") && json?.id) {
+      return "File uploaded";
+    }
+    if (family.endsWith(":append") && json?.updates?.updatedCells) {
+      return `Appended ${json.updates.updatedCells} cell${json.updates.updatedCells === 1 ? "" : "s"}`;
+    }
+    if (typeof json?.error === "string") return trunc(json.error, 120);
+  }
 
   const noun = family === "/memories" ? "memories"
     : family === "/search" ? "results"
@@ -1905,6 +2045,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
           : "dark:prose-invert"
       )}
       remarkPlugins={[remarkGfm]}
+      urlTransform={chatUrlTransform}
       rehypePlugins={[rehypeRaw]}
       components={{
         p({ children }) {
@@ -1938,15 +2079,16 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
           );
         },
         a({ href, children, ...props }) {
-          const isMediaLink = href?.toLowerCase().match(/\.(mp4|mp3|wav|webm)$/);
-          if (isMediaLink && href) {
-            return <VideoComponent filePath={href} className="my-2" />;
-          }
-
-          if (href?.startsWith("screenpipe://timeline") || href?.startsWith("screenpipe://frame")) {
-            const handleTimelineClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+          if (
+            href?.startsWith("screenpipe://timeline") ||
+            href?.startsWith("screenpipe://frame") ||
+            href?.startsWith("screenpipe://view")
+          ) {
+            const handleScreenpipeLinkClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
               e.preventDefault();
               try {
+                if (await openScreenpipeViewerLink(href)) return;
+
                 if (href.startsWith("screenpipe://frame")) {
                   const frameId = href.split("frame/")[1]?.replace(/^\//, "");
                   if (frameId) {
@@ -1967,14 +2109,14 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
                   }
                 }
               } catch (error) {
-                console.error("Failed to navigate to timeline:", error);
+                console.error("Failed to open screenpipe link:", error);
               }
             };
 
             return (
               <a
                 href="#"
-                onClick={handleTimelineClick}
+                onClick={handleScreenpipeLinkClick}
                 className="underline underline-offset-2 text-blue-500 hover:text-blue-400 cursor-pointer inline"
                 {...props}
               >
@@ -1989,39 +2131,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             </a>
           );
         },
-        img({ src, alt, ...props }) {
-          if (!src) return null;
-          if (src.toLowerCase().endsWith(".mp4")) {
-            return <VideoComponent filePath={src} className="my-2" />;
-          }
-          // try asset protocol for local paths, fall back to http serve
-          let imgSrc = src;
-          if (src.startsWith("/")) {
-            try {
-              imgSrc = convertFileSrc(src);
-            } catch {
-              imgSrc = `${getApiBaseUrl()}/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
-            }
-          }
-          return (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imgSrc}
-              alt={alt || ""}
-              className="max-w-full h-auto rounded-md my-2 border border-border"
-              loading="lazy"
-              onError={(e) => {
-                // fallback: if asset protocol fails, try convertFileSrc or raw path
-                const target = e.currentTarget;
-                if (src.startsWith("/") && !target.dataset.retried) {
-                  target.dataset.retried = "1";
-                  target.src = convertFileSrc(src);
-                }
-              }}
-              {...props}
-            />
-          );
-        },
         pre({ children, ...props }) {
           return (
             <pre className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-neutral-950 p-3 my-2 text-xs max-w-full not-prose" {...props}>
@@ -2031,7 +2140,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
         },
         code({ className, children, ...props }) {
           const content = String(children).replace(/\n$/, "");
-          const isMedia = content.trim().toLowerCase().match(/\.(mp4|mp3|wav|webm)$/);
           const match = /language-(\w+)/.exec(className || "");
           const language = match?.[1] || "";
           const isCodeBlock = className?.includes("language-");
@@ -2042,10 +2150,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
 
           if (language === "app-stats") {
             return <AppStatsBlock content={content} />;
-          }
-
-          if (isMedia) {
-            return <VideoComponent filePath={content.trim()} className="my-2" />;
           }
 
           if (isCodeBlock) {
@@ -2223,19 +2327,15 @@ function ToolCallGroup({
         className="w-full flex items-center gap-2 py-1 text-left min-w-0 group"
       >
         {/* Status indicator */}
-        {!hideCount && (
+        {!hideCount && hasRunning && (
           <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
-            {hasRunning ? (
-              <motion.span
-                className="inline-block"
-                animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
-                transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
-              >
-                [{doneCount}/{total}]
-              </motion.span>
-            ) : (
-              <span>[{total}]</span>
-            )}
+            <motion.span
+              className="inline-block"
+              animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
+              transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
+            >
+              [{doneCount}/{total}]
+            </motion.span>
           </span>
         )}
 
@@ -3082,6 +3182,8 @@ export function StandaloneChat({
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const autoScrollFrameRef = useRef<number | null>(null);
   // Tracks the input section's width so we can collapse the auto-suggestion
   // chips into a popover when the chat column is narrow (e.g. when the
   // BrowserSidebar opens and squeezes the chat). Updated by a ResizeObserver
@@ -3692,62 +3794,66 @@ export function StandaloneChat({
   loadConversationRef.current = loadConversation;
   startNewConversationRef.current = startNewConversation;
 
-  useEffect(() => {
-    const unlisten = listen<{ conversationId: string }>("chat-load-conversation", async (event) => {
-      const { conversationId: convId } = event.payload;
-      const { loadConversationFile } = await import("@/lib/chat-storage");
-      const { useChatStore } = await import("@/lib/stores/chat-store");
+  const openConversationLocally = useCallback(async (convId: string) => {
+    const { loadConversationFile } = await import("@/lib/chat-storage");
+    const { useChatStore } = await import("@/lib/stores/chat-store");
 
-      // 0) Already on this conversation — skip the snapshot+swap. The
-      //    page-level listener handles navigation back to home; we
-      //    just make sure currentId reflects the panel so the sidebar
-      //    re-highlights the row. Without this short-circuit, clicking
-      //    the already-loaded chat from a non-home section would
-      //    snapshot+reset+rehydrate the same id and briefly blank the
-      //    panel.
-      if (convId === piSessionIdRef.current) {
-        useChatStore.getState().actions.setCurrent(convId);
-        emit("chat-current-session", { id: convId });
-        return;
-      }
-
-      // 1) Disk first — saved conversations are the canonical source.
-      const conv = await loadConversationFile(convId);
-      if (conv) {
-        loadConversationRef.current(conv);
-        return;
-      }
-
-      // 2) Store fallback — the conversation may exist only in memory
-      //    because it was started in this session and hasn't completed
-      //    a turn yet (no agent_end → no save). Without this branch,
-      //    clicking back to a chat that's been streaming in the
-      //    background would fall through to startNewConversation and
-      //    silently WIPE the in-memory state.
-      const session = useChatStore.getState().sessions[convId];
-      if (session?.messages && session.messages.length > 0) {
-        // Stub conversation — loadConversation prefers store messages
-        // over the conv arg whenever the store has them, so the empty
-        // messages array here is just a satisfaction of the type.
-        loadConversationRef.current({
-          id: convId,
-          title: session.title || "untitled",
-          messages: [],
-          createdAt: Date.now(),
-          updatedAt: session.updatedAt,
-        });
-        return;
-      }
-
-      // 3) Truly new id (sidebar's "+ new chat" path) — adopt the
-      //    requested id so sidebar + chat (and the chat-store's
-      //    currentId) all agree from message 0.
-      await startNewConversationRef.current(convId);
-      // Mirror the new id back to the sidebar so its currentId matches.
+    // Already on this conversation — keep the store/sidebar in sync without
+    // forcing a redundant snapshot+swap.
+    if (convId === piSessionIdRef.current) {
+      useChatStore.getState().actions.setCurrent(convId);
       emit("chat-current-session", { id: convId });
+      return;
+    }
+
+    const conv = await loadConversationFile(convId);
+    if (conv) {
+      loadConversationRef.current(conv);
+      return;
+    }
+
+    const session = useChatStore.getState().sessions[convId];
+    if (session?.messages && session.messages.length > 0) {
+      // `loadConversation` will prefer the store's live message list for this
+      // id, but the metadata here should still mirror the session as closely
+      // as possible so this fallback stays behaviorally aligned with disk loads.
+      loadConversationRef.current({
+        id: convId,
+        title: session.title || "untitled",
+        messages: [],
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      });
+      return;
+    }
+
+    await startNewConversationRef.current(convId);
+    emit("chat-current-session", { id: convId });
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
+      const { conversationId: convId, targetWindow } = event.payload;
+      const windowLabel = getCurrentWindow().label;
+      if (!shouldHandleChatLoadConversationForWindow(
+        { conversationId: convId, targetWindow },
+        windowLabel === "chat" ? "chat" : "home",
+      )) {
+        return;
+      }
+      await openConversationLocally(convId);
     });
     return () => { unlisten.then((fn) => fn()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openConversationLocally]);
+
+  // Cmd+N / Ctrl+N from home/page emits this so the user can immediately type
+  // after a new chat is created without having to click into the textarea.
+  useEffect(() => {
+    const unlisten = listen("chat-focus-input", () => {
+      inputRef.current?.focus();
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, []);
 
   // Tell the sidebar which session is current whenever the chat panel
@@ -3764,12 +3870,11 @@ export function StandaloneChat({
   }, [conversationId]);
 
   // E2E hook: expose a function to seed a user message into a session.
-  // Required by parallel-chat.spec.ts because `ensureAssistantPlaceholder`
-  // (added 2026-04-29 in e1f55023d) only creates an assistant bubble when
+  // Required by chat-streaming-performance.spec.ts because
+  // `ensureAssistantPlaceholder` only creates an assistant bubble when
   // the last message in LOCAL React state is `role: "user"`. Without a
   // way to inject a user message, the test's pure pi_event-faking path
-  // can't materialize any assistant DOM and CI has been red on every PR
-  // since.
+  // can't materialize any assistant DOM.
   //
   // Three places get updated:
   //   1. Local React state (`setMessages`) — what `ensureAssistantPlaceholder`
@@ -3902,9 +4007,9 @@ export function StandaloneChat({
         handleAgentEventDataRef.current?.(envelope.event);
       });
       // E2E seam: agent_event delivery to the panel is gated on this
-      // foreground registration completing. parallel-chat.spec.ts waits
-      // on this signal before emitting events; without it, deltas race
-      // the registration window and go to the default router, which
+      // foreground registration completing. Tests can wait on this
+      // signal before emitting events; without it, deltas race the
+      // registration window and go to the default router, which
       // early-returns for `store.currentId === sid`, silently dropping
       // them. Cleared in the cleanup below so successive switches don't
       // see a stale id.
@@ -4330,14 +4435,28 @@ export function StandaloneChat({
     if (!isSettingsLoaded) return;
     // Don't overwrite pipe-specific preset when watching a pipe execution
     if (activePipeExecution) return;
-    const defaultPreset = settings.aiPresets?.find((p) => p.defaultPreset);
-    const next = defaultPreset || settings.aiPresets?.[0];
-    // Only update if the preset actually changed (avoid triggering downstream restart)
+    const presets = settings.aiPresets ?? [];
+    const fallback = presets.find((p) => p.defaultPreset) ?? presets[0];
     setActivePreset((prev) => {
-      if (prev && next && prev.provider === next.provider && prev.model === next.model) {
-        return prev; // same reference → no re-render → no restart
+      // First load — pick the default.
+      if (!prev) return fallback;
+      // User's selection still exists. Re-bind to the latest object so edits
+      // in the Settings tab flow through, but keep the same id (don't snap
+      // back to the default just because settings got rewritten by an
+      // unrelated update — loadUser, team sync, device discovery, etc).
+      const stillThere = presets.find((p) => p.id === prev.id);
+      if (stillThere) {
+        return stillThere.provider === prev.provider &&
+          stillThere.model === prev.model &&
+          stillThere.url === prev.url &&
+          (stillThere as any).apiKey === (prev as any).apiKey &&
+          (stillThere as any).maxTokens === (prev as any).maxTokens &&
+          stillThere.prompt === prev.prompt
+          ? prev
+          : stillThere;
       }
-      return next;
+      // Preset was deleted — fall back to default.
+      return fallback;
     });
   }, [settings.aiPresets, isSettingsLoaded]);
 
@@ -4389,53 +4508,89 @@ export function StandaloneChat({
     return () => window.removeEventListener("keydown", handleEscape);
   }, [showMentionDropdown, isLoading, isStreaming]);
 
-  // Smart auto-scroll: only scroll to bottom if user is near the bottom.
-  // If user scrolled up to read, don't interrupt them.
-  useEffect(() => {
-    if (!isUserScrolledUp) {
-      if (isStreaming || isLoading) {
-        const container = scrollContainerRef.current;
-        if (container) {
-          container.scrollTop = container.scrollHeight;
-        } else {
-          messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-        }
-        return;
-      }
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, isUserScrolledUp, isLoading, isStreaming]);
+  const isNearScrollBottom = useCallback((container: HTMLDivElement) => {
+    return container.scrollHeight - container.scrollTop - container.clientHeight <= 150;
+  }, []);
 
-  // Drive isUserScrolledUp from an IntersectionObserver on the end-of-messages
-  // sentinel. This reacts automatically to scroll, content growing/shrinking
-  // (streamed tokens, loader exit, collapsible source blocks), and root resize
-  // — unlike the prior scroll/ResizeObserver setup, which missed internal
-  // content size changes and left a phantom "new content" pill on screen.
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior });
+    }
+  }, []);
+
+  const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    if (autoScrollFrameRef.current != null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+    }
+
+    scrollMessagesToBottom(behavior);
+    autoScrollFrameRef.current = requestAnimationFrame(() => {
+      scrollMessagesToBottom("auto");
+      autoScrollFrameRef.current = requestAnimationFrame(() => {
+        scrollMessagesToBottom("auto");
+        autoScrollFrameRef.current = null;
+      });
+    });
+  }, [scrollMessagesToBottom]);
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const nearBottom = isNearScrollBottom(container);
+    stickToBottomRef.current = nearBottom;
+    setIsUserScrolledUp((prev) => (prev === !nearBottom ? prev : !nearBottom));
+  }, [isNearScrollBottom]);
+
+  // Loading a saved conversation should land at the newest message. Keep the
+  // panel pinned while markdown media loads and changes the message height.
   useEffect(() => {
-    const endEl = messagesEndRef.current;
-    const rootEl = scrollContainerRef.current;
-    if (!endEl || !rootEl || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        const scrolledUp = !entry.isIntersecting;
-        setIsUserScrolledUp((prev) => (prev === scrolledUp ? prev : scrolledUp));
-      },
-      {
-        root: rootEl,
-        // 150px buffer below the viewport — sentinel within this band of the
-        // visible area still counts as "at bottom".
-        rootMargin: "0px 0px 150px 0px",
-        threshold: 0,
-      },
-    );
-    observer.observe(endEl);
+    stickToBottomRef.current = true;
+    setIsUserScrolledUp(false);
+    scheduleScrollToBottom("auto");
+  }, [conversationId, scheduleScrollToBottom]);
+
+  // Smart auto-scroll: only follow new content while the user remains near the
+  // bottom. Once they scroll upward, leave the viewport alone.
+  useEffect(() => {
+    if (stickToBottomRef.current) {
+      scheduleScrollToBottom("auto");
+    }
+  }, [messages, isLoading, isStreaming, scheduleScrollToBottom]);
+
+  // Media players and collapsible sections can change height after the message
+  // array is already stable. ResizeObserver keeps old chats pinned through
+  // those late layout changes without treating them as a user scroll.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const content = container?.firstElementChild;
+    if (!container || !content || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) {
+        scheduleScrollToBottom("auto");
+      }
+    });
+    observer.observe(content);
     return () => observer.disconnect();
+  }, [scheduleScrollToBottom]);
+
+  useEffect(() => {
+    return () => {
+      if (autoScrollFrameRef.current != null) {
+        cancelAnimationFrame(autoScrollFrameRef.current);
+      }
+    };
   }, []);
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    stickToBottomRef.current = true;
+    scheduleScrollToBottom("smooth");
     setIsUserScrolledUp(false);
-  }, []);
+  }, [scheduleScrollToBottom]);
 
   // Preload recent speakers when filter popover opens
   useEffect(() => {
@@ -7276,9 +7431,24 @@ export function StandaloneChat({
     }
 
     if (m.role === "assistant") {
-      const citationsMarkdown = formatSourceCitationsMarkdown(sourceCitationsFromMessage(m));
-      if (citationsMarkdown) {
-        body = body ? `${body}\n\n${citationsMarkdown}` : citationsMarkdown;
+      // Mirror the in-app aggregation: if this message's per-message footer
+      // was folded into a turn-level aggregate, skip its Sources block here
+      // so we don't repeat the same files across every step of an agentic
+      // loop. The aggregated Sources block is appended after the last
+      // assistant of the turn instead.
+      const isDeferred = citationPlan.deferredMessageIds.has(m.id);
+      const turnAggregate = citationPlan.aggregatedAfter.get(m.id);
+      if (!isDeferred) {
+        const citationsMarkdown = formatSourceCitationsMarkdown(sourceCitationsFromMessage(m));
+        if (citationsMarkdown) {
+          body = body ? `${body}\n\n${citationsMarkdown}` : citationsMarkdown;
+        }
+      }
+      if (turnAggregate && turnAggregate.length > 0) {
+        const aggregateMarkdown = formatSourceCitationsMarkdown(turnAggregate);
+        if (aggregateMarkdown) {
+          body = body ? `${body}\n\n${aggregateMarkdown}` : aggregateMarkdown;
+        }
       }
     }
 
@@ -7368,7 +7538,7 @@ export function StandaloneChat({
                   onClick={() => {
                     if (!isPro) {
                       setAppFilterOpen(false);
-                      openUrl("https://screenpi.pe/onboarding");
+                      openUrl("https://screenpipe.com/onboarding");
                       return;
                     }
                     updateSettings({ piPrivacyFilter: !privacyOn });
@@ -7597,6 +7767,21 @@ export function StandaloneChat({
     isLoading || isStreaming
       ? piMessageIdRef.current ?? currentStreamingMessageId ?? null
       : null;
+
+  // Per-turn aggregation plan. Pipe sessions (pipe-run, pipe-watch) and any
+  // chat with an agentic loop (≥2 assistant messages with citations between
+  // user turns) fold their per-message footers into one aggregated footer
+  // rendered after the last assistant of the turn. Single-step turns keep
+  // their per-message footer untouched.
+  const isPipeSessionChat =
+    currentSessionKind === "pipe-run" || currentSessionKind === "pipe-watch";
+  const citationPlan = React.useMemo(
+    () =>
+      computeChatCitationPlan(messages, {
+        forceAggregate: isPipeSessionChat,
+      }),
+    [isPipeSessionChat, messages],
+  );
 
   return (
     <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -7829,6 +8014,7 @@ export function StandaloneChat({
           // the right edge of the window — the native webview faithfully
           // follows the placeholder rect off-screen.
           className="relative flex-1 min-w-0 overflow-y-auto overflow-x-hidden"
+          onScroll={handleMessagesScroll}
           onContextMenu={(e) => {
             if (messages.length === 0) return;
             e.preventDefault();
@@ -7991,7 +8177,8 @@ export function StandaloneChat({
                 !message.content &&
                 !message.contentBlocks?.length
               );
-              return (
+              const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
+              return [
             <motion.div
               key={message.id}
               initial={{ opacity: 0, y: 10 }}
@@ -8128,7 +8315,10 @@ export function StandaloneChat({
                 ) : (
                   <MessageContent
                     message={message}
-                    deferSourceFooter={message.id === activeSourceFooterMessageId}
+                    deferSourceFooter={
+                      citationPlan.deferredMessageIds.has(message.id) ||
+                      message.id === activeSourceFooterMessageId
+                    }
                     onImageClick={(images, index) => setImageViewer({ images, index })}
                     onRetry={(prompt) => sendMessage(prompt)}
                   />
@@ -8249,8 +8439,21 @@ export function StandaloneChat({
                 </>
               ) : null}
               </div>
-            </motion.div>
-              );
+            </motion.div>,
+            turnAggregatedCitations && turnAggregatedCitations.length > 0 ? (
+              <motion.div
+                key={`turn-sources-${message.id}`}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className="w-full"
+                data-testid="chat-turn-sources"
+              >
+                <SourceCitationFooter citations={turnAggregatedCitations} />
+              </motion.div>
+            ) : null,
+              ];
             });
           })()}
         </AnimatePresence>
@@ -8769,13 +8972,20 @@ export function StandaloneChat({
                 showModelOnly
                 containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
                 triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
-                onPresetChange={setActivePreset}
                 onPresetSaved={handlePiRestart}
-                controlledPresetId={activePipeExecution ? activePreset?.id : undefined}
-                onControlledSelect={activePipeExecution ? (id) => {
+                controlledPresetId={
+                  activePreset?.id ??
+                  settings.aiPresets?.find((p) => p.defaultPreset)?.id ??
+                  settings.aiPresets?.[0]?.id ??
+                  null
+                }
+                onControlledSelect={(id) => {
+                  if (!id) return;
                   const match = settings.aiPresets?.find((p) => p.id === id);
-                  if (match) setActivePreset(match);
-                } : undefined}
+                  if (!match) return;
+                  setActivePreset(match);
+                  if (!activePipeExecution) handlePiRestart(match);
+                }}
               />
               {(() => {
                 const hasInput = input.trim().length > 0 || pastedImages.length > 0;

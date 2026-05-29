@@ -10,9 +10,14 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { commands } from "@/lib/utils/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Loader2, Lock, LogOut, Table2 } from "lucide-react";
+import { Loader2, Lock, LogOut, Plus, Table2 } from "lucide-react";
 import posthog from "posthog-js";
 import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
+
+interface SheetsAccount {
+  instance: string | null;
+  displayName: string | null;
+}
 
 export function GoogleSheetsCard({
   onConnectionChange,
@@ -21,28 +26,39 @@ export function GoogleSheetsCard({
 } = {}) {
   const { settings } = useSettings();
   const isPro = !!settings.user?.cloud_subscribed;
-  const [connected, setConnected] = useState(false);
-  const [email, setEmail] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<SheetsAccount[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
 
-  const fetchStatus = useCallback(async () => {
+  const fetchAccounts = useCallback(async () => {
     try {
+      const list = await commands.oauthListInstances("google-sheets");
+      if (list.status === "ok" && list.data.length > 0) {
+        setAccounts(
+          list.data.map((i) => ({
+            instance: i.instance ?? null,
+            displayName: i.display_name ?? null,
+          }))
+        );
+        return;
+      }
       const status = await commands.oauthStatus("google-sheets", null);
-      if (status.status === "ok") {
-        setConnected(status.data.connected);
-        setEmail(status.data.display_name ?? null);
+      if (status.status === "ok" && status.data.connected) {
+        setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
+      } else {
+        setAccounts([]);
       }
     } catch (e) {
       console.error("failed to fetch google sheets status:", e);
-      setConnected(false);
-      setEmail(null);
+      setAccounts([]);
     }
   }, []);
 
   useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
+    fetchAccounts();
+  }, [fetchAccounts]);
+
+  const connected = accounts.length > 0;
 
   const handleConnect = async () => {
     setIsConnecting(true);
@@ -50,7 +66,7 @@ export function GoogleSheetsCard({
       const res = await commands.oauthConnect("google-sheets", null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_sheets_connected");
-        await fetchStatus();
+        await fetchAccounts();
         notifyConnectionsUpdated();
         onConnectionChange?.();
       }
@@ -60,19 +76,19 @@ export function GoogleSheetsCard({
     setIsConnecting(false);
   };
 
-  const handleDisconnect = async () => {
-    setIsDisconnecting(true);
+  const handleDisconnect = async (instance: string | null) => {
+    const key = instance ?? "__default__";
+    setDisconnecting(key);
     try {
-      await commands.oauthDisconnect("google-sheets", null);
-      setConnected(false);
-      setEmail(null);
-      posthog.capture("google_sheets_disconnected");
+      await commands.oauthDisconnect("google-sheets", instance ?? null);
+      posthog.capture("google_sheets_disconnected", { instance });
+      await fetchAccounts();
       notifyConnectionsUpdated();
       onConnectionChange?.();
     } catch (e) {
       console.error("failed to disconnect google sheets:", e);
     }
-    setIsDisconnecting(false);
+    setDisconnecting(null);
   };
 
   return (
@@ -94,7 +110,7 @@ export function GoogleSheetsCard({
               </h3>
               {connected && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
-                  connected
+                  {accounts.length} account{accounts.length > 1 ? "s" : ""}
                 </span>
               )}
             </div>
@@ -104,7 +120,36 @@ export function GoogleSheetsCard({
               create, and update spreadsheets.
             </p>
 
-            {!connected && !isPro ? (
+            {accounts.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {accounts.map((account) => {
+                  const key = account.instance ?? "__default__";
+                  const isDisconnecting = disconnecting === key;
+                  return (
+                    <div key={key} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground truncate">
+                        {account.displayName || account.instance || "default account"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDisconnect(account.instance)}
+                        disabled={isDisconnecting}
+                        className="text-xs text-muted-foreground hover:text-destructive h-6 px-2 shrink-0"
+                      >
+                        {isDisconnecting ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <LogOut className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!isPro && !connected ? (
               <div className="flex flex-col gap-1.5">
                 <Button disabled size="sm" className="gap-1.5 text-xs opacity-60">
                   <Lock className="h-3 w-3" />pro required
@@ -116,7 +161,7 @@ export function GoogleSheetsCard({
                   upgrade to pro to connect
                 </button>
               </div>
-            ) : !connected ? (
+            ) : (
               <div className="space-y-2">
                 <Button
                   variant="outline"
@@ -127,30 +172,19 @@ export function GoogleSheetsCard({
                 >
                   {isConnecting ? (
                     <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : connected ? (
+                    <Plus className="h-3 w-3 mr-1.5" />
                   ) : (
                     <Table2 className="h-3 w-3 mr-1.5" />
                   )}
                   {isConnecting
                     ? "Waiting for Google..."
+                    : connected
+                    ? "Add another account"
                     : "Connect Google Sheets"}
                 </Button>
-                <GoogleOAuthUnverifiedAppHint />
+                {!connected && <GoogleOAuthUnverifiedAppHint />}
               </div>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleDisconnect}
-                disabled={isDisconnecting}
-                className="text-xs text-muted-foreground hover:text-destructive h-7 px-2"
-              >
-                {isDisconnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <LogOut className="h-3 w-3 mr-1.5" />
-                )}
-                Disconnect
-              </Button>
             )}
           </div>
         </div>
@@ -158,10 +192,12 @@ export function GoogleSheetsCard({
         <div className="px-4 py-2 bg-muted/50 border-t border-border">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>
-              {connected && email
-                ? `connected as ${email}`
-                : connected
-                ? "google sheets connected"
+              {connected
+                ? accounts.length > 1
+                  ? `${accounts.length} accounts synced`
+                  : accounts[0]?.displayName
+                  ? `connected as ${accounts[0].displayName}`
+                  : "google sheets connected"
                 : "Lets AI read and update your Google Sheets"}
             </span>
             <span className="ml-auto">

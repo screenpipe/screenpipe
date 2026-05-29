@@ -8,16 +8,31 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 import { Toaster } from "@/components/ui/toaster";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { BrowserPairingDialog } from "@/components/browser-pairing-dialog";
+import { RecentChatSwitcherController } from "@/components/chat/recent-chat-switcher-controller";
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import {
+  clearSearchOpenedFromChatSurface,
+  markSearchOpenedFromChatSurface,
+  openChatConversationInCurrentChatSurface,
+} from "@/lib/chat-utils";
 
 const inter = Inter({ subsets: ["latin"] });
+
+function isChatFocusedRecentSwitcherRoute(
+  pathname: string | null,
+  section: string | null,
+): boolean {
+  if (pathname === "/chat") return true;
+  if (pathname !== "/home") return false;
+  return !section || section === "home";
+}
 
 // Debounced localStorage writer
 const createDebouncer = (wait: number) => {
@@ -27,6 +42,36 @@ const createDebouncer = (wait: number) => {
     timeout = setTimeout(() => fn(), wait);
   };
 };
+
+function RecentChatSwitcherMount() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const isRecentChatSwitcherEnabled = isChatFocusedRecentSwitcherRoute(
+    pathname,
+    searchParams.get("section"),
+  );
+
+  useEffect(() => {
+    // /search runs in its own window. Preserve the marker so that search can
+    // yield Ctrl+Tab back to the chat surface that opened it.
+    if (pathname === "/search") return;
+    if (!isRecentChatSwitcherEnabled) {
+      clearSearchOpenedFromChatSurface();
+      return;
+    }
+    markSearchOpenedFromChatSurface(pathname === "/chat" ? "chat" : "home");
+  }, [isRecentChatSwitcherEnabled, pathname]);
+
+  if (!isRecentChatSwitcherEnabled) return null;
+
+  return (
+    <RecentChatSwitcherController
+      onActivateConversation={(id) => {
+        void openChatConversationInCurrentChatSurface(id);
+      }}
+    />
+  );
+}
 
 export default function RootLayout({
   children,
@@ -302,18 +347,28 @@ export default function RootLayout({
           }}
         />
       </head>
-      <Providers>
-        <body className={`${inter.className} scrollbar-hide ${isSearch ? "bg-transparent" : ""}`}>
+      <body className={`${inter.className} scrollbar-hide ${isSearch ? "bg-transparent" : ""}`}>
+        {/* Providers sits INSIDE <body> so the body element is present in
+            both the static export and the first client render. With Providers
+            wrapping <body>, gating Providers' children on a post-mount flag
+            (see app/providers.tsx) would also blank the body — the resulting
+            shape mismatch with the prerendered HTML is exactly what triggered
+            React #419 (hydration recovery) → #185 (infinite loop during
+            recovery render) on every first launch after auto-update. */}
+        <Providers>
           {!isOverlay && <DeeplinkHandler />}
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}
+          <Suspense fallback={null}>
+            <RecentChatSwitcherMount />
+          </Suspense>
           {/* TODO: vault lock UI disabled — CLI-only for now */}
           {/* {!isOverlay && <VaultLockDialog />} */}
           {children}
           {!isOverlay && <Toaster />}
-        </body>
-      </Providers>
+        </Providers>
+      </body>
     </html>
   );
 }

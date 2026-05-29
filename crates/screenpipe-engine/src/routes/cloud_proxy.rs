@@ -7,7 +7,7 @@
 //! agent never sees the cloud JWT. Agent-driven media analysis goes through
 //! this route instead: agent → localhost:3030/v1/chat/completions (auth'd
 //! with the local sp-key the wrapper auto-injects) → server forwards to
-//! api.screenpi.pe with the user's cloud JWT held in AppState.
+//! api.screenpipe.com with the user's cloud JWT held in AppState.
 
 use axum::{
     body::Body,
@@ -20,7 +20,7 @@ use tracing::warn;
 
 use crate::server::AppState;
 
-const CLOUD_BASE_URL: &str = "https://api.screenpi.pe";
+const CLOUD_BASE_URL: &str = "https://api.screenpipe.com";
 
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,

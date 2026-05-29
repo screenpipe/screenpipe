@@ -411,6 +411,46 @@ pub async fn list_connected_oauth_instances(
     connected
 }
 
+/// Build a human/AI-readable explanation of why an OAuth lookup failed for
+/// `(integration_id, instance)`. Without this, every miss collapses to the
+/// same "not connected" string — which is wrong (and infuriating) when the
+/// user *is* connected and the real problem is multi-account ambiguity, the
+/// shape that hit Gmail when two accounts were authorized.
+///
+/// Four cases the caller cares about:
+/// - no instances at all                       → "not connected, please connect"
+/// - one instance, default lookup unhealthy    → "instance X token can't refresh, reconnect"
+/// - multiple instances, none specified        → "ambiguous: pick one of [X, Y]"
+/// - explicit instance specified but unhealthy → "instance X token can't refresh, reconnect"
+pub async fn describe_oauth_error(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    display_name: &str,
+    instance: Option<&str>,
+) -> String {
+    let instances: Vec<String> = list_oauth_instances(store, integration_id)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    match (instance, instances.as_slice()) {
+        (Some(inst), _) => format!(
+            "{display_name} account '{inst}' is not connected or its token can't be refreshed — reconnect it in Settings > Connections"
+        ),
+        (None, []) => format!(
+            "{display_name} not connected — use 'Connect {display_name}' in Settings > Connections"
+        ),
+        (None, [only]) => format!(
+            "{display_name} account '{only}' token can't be refreshed — reconnect it in Settings > Connections"
+        ),
+        (None, many) => format!(
+            "multiple {display_name} accounts connected ({}) — specify which one with `instance`. On JSON-body endpoints add `\"instance\": \"<email>\"` to the request body; on proxy/query endpoints add `?instance=<email>` (e.g. instance=\"{}\")",
+            many.join(", "),
+            many[0],
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Write / delete
 // ---------------------------------------------------------------------------

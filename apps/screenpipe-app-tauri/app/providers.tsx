@@ -5,7 +5,7 @@
 "use client";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
-import { useEffect, Suspense } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { ChangelogDialogProvider } from "@/lib/hooks/use-changelog-dialog";
 import { SettingsProvider } from "@/lib/hooks/use-settings";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -31,6 +31,24 @@ export const Providers = forwardRef<
   HTMLDivElement,
   { children: React.ReactNode }
 >(({ children }, ref) => {
+  // Gate children rendering until after first effect. The Next.js static
+  // export prerenders the whole tree at build time, and several boot-path
+  // components (settings via createDefaultSettingsObject → platform(),
+  // Date.now() initializers in chat-sidebar's useMinuteTick, etc.)
+  // produce different output at build time vs first client render. The
+  // resulting mismatch surfaces as React #419 (hydration recovery), and
+  // React's fallback "re-render the entire root on the client" path then
+  // trips React #185 (max update depth) deep in the message list — the
+  // symptom users see is the "something went wrong" boundary on every
+  // first launch after auto-update. mounted=false on the initial render
+  // matches the static prerender (both produce no children), so hydration
+  // succeeds; the post-mount effect flips mounted=true and the real tree
+  // renders client-only without a hydration step.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Hook console to write to disk — batched to avoid IPC-per-log CPU drain
   useEffect(() => {
     const origLog = console.log;
@@ -115,7 +133,7 @@ export const Providers = forwardRef<
             <ChangelogDialogProvider>
               <PermissionMonitorProvider>
                 <UpdateListenerMount />
-                <PostHogProvider client={posthog}>{children}</PostHogProvider>
+                <PostHogProvider client={posthog}>{mounted ? children : null}</PostHogProvider>
               </PermissionMonitorProvider>
             </ChangelogDialogProvider>
           </ThemeProvider>

@@ -502,7 +502,12 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "butter.us",
                     "livestorm.co",
                     "ping.gg",
-                    "cal.com",
+                    // Cal.com is primarily a scheduling product — its booking
+                    // dashboard (app.cal.com/event-types) and booking pages
+                    // (cal.com/{user}/{event}) aren't calls. Only Cal Video
+                    // (app.cal.com/video/{uid}) is a live meeting URL. Matching
+                    // bare "cal.com" caused false positives on the dashboard.
+                    "cal.com/video",
                     "daily.co",
                     "app.daily.co",
                     "pop.com",
@@ -3314,6 +3319,114 @@ mod tests {
             assert!(
                 mute_matches.is_empty(),
                 "profile should not match standalone 'Mute' button"
+            );
+        }
+    }
+
+    /// Returns the generic-fallback profile (the one with broad URL patterns
+    /// like `daily.co`, `cal.com/video`, `pop.com`). Picks it by detecting the
+    /// distinctive `meet.jit.si` URL pattern.
+    fn generic_profile() -> MeetingDetectionProfile {
+        load_detection_profiles()
+            .into_iter()
+            .find(|p| {
+                p.app_identifiers
+                    .browser_url_patterns
+                    .contains(&"meet.jit.si")
+            })
+            .expect("generic fallback profile present")
+    }
+
+    /// Mirrors the lowercase substring match used by `has_browser_meeting_url`
+    /// and `db_find_browser_meetings`.
+    fn url_matches_any_pattern(url: &str, patterns: &[&str]) -> bool {
+        let url_lower = url.to_lowercase();
+        patterns
+            .iter()
+            .any(|p| url_lower.contains(&p.to_lowercase()))
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_cal_dashboard_url() {
+        // Regression: bare `cal.com` URL pattern matched the cal.com booking
+        // dashboard, which then put Arc into the "candidate browser" set and
+        // let an unrelated tab's "Leave at the door" button fire a phantom
+        // meeting. Dashboard URLs are not calls.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://app.cal.com/event-types",
+            "https://app.cal.com/bookings/upcoming",
+            "https://cal.com/louis/30min",
+            "https://cal.com/pricing",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "cal.com dashboard URL {url:?} should NOT match a meeting profile"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_matches_cal_video_url() {
+        // The actual Cal Video URL (live meeting) must still match.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://app.cal.com/video/abc123",
+            "https://app.cal.com/video/8f3e-meeting-uid",
+        ] {
+            assert!(
+                url_matches_any_pattern(url, patterns),
+                "Cal Video URL {url:?} should match the generic profile"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_url_patterns_are_path_qualified_for_known_lookalikes() {
+        // Any URL pattern that is just `<service>.com` for a service that
+        // also runs a marketing/dashboard site at the same host will trip
+        // the same class of false positive that hit cal.com (regression in
+        // f9cdb1bb7). Lock in the path-qualified shape for services we've
+        // already narrowed — re-broadening them in the patterns list should
+        // require updating this test, which is the whole point.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+
+        let must_be_path_qualified = ["cal.com", "dialpad.com"];
+        for host in must_be_path_qualified {
+            let bare_present = patterns.iter().any(|p| *p == host);
+            assert!(
+                !bare_present,
+                "url pattern {host:?} must be path-qualified (e.g. {host}/<call-route>), \
+                 not a bare host — otherwise dashboard/marketing URLs match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_marketing_lookalikes_for_narrowed_hosts() {
+        // Concrete URL regression set for hosts we've already narrowed. If
+        // any of these match, we've silently re-broadened the pattern and
+        // the cal.com-class bug is back. Add hosts here as we narrow them.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            // cal.com marketing/dashboard — only /video is a call.
+            "https://cal.com/",
+            "https://cal.com/blog/how-to-schedule-meetings",
+            "https://cal.com/signup",
+            "https://app.cal.com/settings/billing",
+            // dialpad — only /meetings is a call route.
+            "https://www.dialpad.com/",
+            "https://www.dialpad.com/pricing",
+            "https://dialpad.com/blog",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "marketing/dashboard URL {url:?} should NOT match a meeting profile \
+                 (regression of the cal.com false-positive class)"
             );
         }
     }

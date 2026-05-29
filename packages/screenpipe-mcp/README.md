@@ -34,14 +34,21 @@ The MCP server can run over HTTP using the [Streamable HTTP transport](https://m
 
 ```bash
 # loopback only (default)
-npx screenpipe-mcp-http --port 3031
+npx -y screenpipe-mcp --http --port 3031
 
 # expose to your LAN with bearer auth
-npx screenpipe-mcp-http --listen-on-lan --api-key $(openssl rand -hex 16)
+npx -y screenpipe-mcp --http --listen-on-lan --api-key $(openssl rand -hex 16)
 
-# or from source
-npm run start:http -- --port 3031
+# or from source — must build first so dist/ exists
+bun install && bun run build
+bun run start:http -- --port 3031
 ```
+
+> Tip: `npx screenpipe-mcp-http` (without `--http`) does **not** work —
+> npm resolves by package name, and there is no `screenpipe-mcp-http`
+> package. The HTTP server ships as a transport inside the
+> `screenpipe-mcp` package; use `--http` as shown above, or invoke the
+> bin directly with `npx -p screenpipe-mcp screenpipe-mcp-http`.
 
 The server exposes:
 - **MCP endpoint**: `http://localhost:3031/mcp` — Streamable HTTP transport (POST for requests, GET for SSE stream)
@@ -115,7 +122,7 @@ npx @modelcontextprotocol/inspector npx screenpipe-mcp
 | Mode | Command | Use Case |
 |------|---------|----------|
 | **stdio** (default) | `npx screenpipe-mcp` | Claude Desktop, local MCP clients |
-| **HTTP** | `npx screenpipe-mcp-http` | Remote clients, network access, OpenClaw on VPS |
+| **HTTP** | `npx screenpipe-mcp --http` | Remote clients, network access, OpenClaw on VPS |
 
 ## Available Tools
 

@@ -523,6 +523,7 @@ impl ServerCore {
         let redact_shutdown = Arc::new(Notify::new());
 
         if config.async_pii_redaction {
+            use screenpipe_redact::adapters::onnx::{OnnxConfig, OnnxRedactor};
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
             use screenpipe_redact::adapters::tinfoil::{TinfoilConfig, TinfoilRedactor};
             use screenpipe_redact::pipeline::{Pipeline, PipelineConfig};
@@ -568,27 +569,51 @@ impl ServerCore {
                 let pool = db.pool.clone();
                 let shutdown = redact_shutdown.clone();
                 tokio::spawn(async move {
+                    // Prefer v45 phase 3 ONNX (~278 MB INT8, HIPAA 90.2%,
+                    // sub-10 ms p50, gets CoreML on macOS / DirectML on
+                    // Windows / CPU on Linux via the redact-onnx-* CI
+                    // feature). Fall back to the legacy OPF v6 candle
+                    // adapter (~2.8 GB) if the ONNX feature isn't
+                    // compiled in or the HF download fails.
                     info!(
-                        "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
-                         ~/.screenpipe/models/opf-v6/)"
+                        "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
+                         cached at ~/.screenpipe/models/v45_phase3_onnx/)"
                     );
-                    let pipeline = match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                    let onnx_result =
+                        OnnxRedactor::load_or_download(OnnxConfig::default()).await;
+                    let pipeline = match onnx_result {
                         Ok(adapter) => {
                             info!(
                                 "starting async text-PII reconciliation worker (backend=local, \
-                                 opf-rs)"
+                                 v45_phase3_onnx)"
                             );
                             let ai: Arc<dyn Redactor> = Arc::new(adapter);
                             Pipeline::regex_then_ai(ai, PipelineConfig::default())
                         }
-                        Err(e) => {
+                        Err(onnx_err) => {
                             warn!(
-                                "couldn't load local OPF redactor ({e}); running text-PII \
-                                 worker in regex-only mode. Switch backend to 'tinfoil' in \
-                                 Settings → Privacy → AI PII removal to use the cloud enclave \
-                                 instead."
+                                "couldn't load v45 phase 3 ONNX redactor ({onnx_err}); falling \
+                                 back to OPF v6 candle"
                             );
-                            Pipeline::regex_only()
+                            match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                                Ok(adapter) => {
+                                    info!(
+                                        "starting async text-PII reconciliation worker \
+                                         (backend=local, opf-rs fallback)"
+                                    );
+                                    let ai: Arc<dyn Redactor> = Arc::new(adapter);
+                                    Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "couldn't load OPF redactor either ({e}); running \
+                                         text-PII worker in regex-only mode. Switch backend \
+                                         to 'tinfoil' in Settings → Privacy → AI PII removal \
+                                         to use the cloud enclave instead."
+                                    );
+                                    Pipeline::regex_only()
+                                }
+                            }
                         }
                     };
                     let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;

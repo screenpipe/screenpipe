@@ -4,7 +4,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge } from "lucide-react";
+import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge, MicOff, PauseCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { localFetch } from "@/lib/api";
@@ -16,15 +16,22 @@ interface PowerState {
   os_low_power: boolean;
 }
 
+type ActiveProfile =
+  | "performance"
+  | "balanced"
+  | "saver"
+  | "audio_paused"
+  | "full_pause";
+
 interface PowerStatus {
   state: PowerState;
-  active_profile: "performance" | "balanced" | "saver";
+  active_profile: ActiveProfile;
   user_pref: "auto" | "performance" | "battery_saver";
 }
 
 type PowerMode = "auto" | "performance" | "battery_saver";
 
-const PROFILE_INFO = {
+const PROFILE_INFO: Record<ActiveProfile, { label: string; description: string; icon: typeof Zap }> = {
   performance: {
     label: "Performance",
     description: "Full capture quality and frequency",
@@ -40,6 +47,23 @@ const PROFILE_INFO = {
     description: "Minimal capture, aggressive power saving",
     icon: Leaf,
   },
+  audio_paused: {
+    label: "Audio Paused",
+    description: "Battery ≤20% — vision continues, audio + Whisper off",
+    icon: MicOff,
+  },
+  full_pause: {
+    label: "Full Pause",
+    description: "Battery ≤10% or OS low-power — capture paused",
+    icon: PauseCircle,
+  },
+};
+
+// Fallback for any future Rust profile variant that lands before the UI knows about it.
+const UNKNOWN_PROFILE_INFO = {
+  label: "Unknown",
+  description: "Reported by backend but not recognized by this app version",
+  icon: Gauge,
 } as const;
 
 export function BatterySaverSection() {
@@ -104,7 +128,7 @@ export function BatterySaverSection() {
   }
 
   const { state, active_profile, user_pref } = status;
-  const profileInfo = PROFILE_INFO[active_profile];
+  const profileInfo = PROFILE_INFO[active_profile] ?? UNKNOWN_PROFILE_INFO;
   const ProfileIcon = profileInfo.icon;
 
   const modes: { value: PowerMode; label: string; description: string }[] = [
