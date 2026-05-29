@@ -10,7 +10,7 @@ use axum::{
 use oasgen::{oasgen, OaSchema};
 
 use screenpipe_db::DatabaseManager;
-use screenpipe_db::{MeetingRecord, MeetingTranscriptSegment};
+use screenpipe_db::{MeetingRecord, MeetingTranscriptSegment, MEETING_END_REASON_EXPLICIT_STOP};
 
 use crate::meeting_telemetry::{capture_detection_decision, capture_detection_feedback};
 use crate::server::AppState;
@@ -585,7 +585,12 @@ pub(crate) async fn stop_meeting_handler(
 
     state
         .db
-        .end_meeting_with_typed_text(id, &now, body.append_typed_text)
+        .end_meeting_with_typed_text(
+            id,
+            &now,
+            body.append_typed_text,
+            Some(MEETING_END_REASON_EXPLICIT_STOP),
+        )
         .await
         .map_err(|e| {
             (

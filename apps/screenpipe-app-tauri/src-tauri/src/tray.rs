@@ -5,7 +5,8 @@
 use crate::commands::{hide_main_window, show_main_window};
 use crate::enterprise_policy::{is_app_ui_hidden, is_tray_item_hidden};
 use crate::health::{
-    get_audio_device_status, get_recording_info, get_recording_status, DeviceKind, RecordingStatus,
+    get_audio_device_status, get_high_fps_status, get_recording_info, get_recording_status,
+    set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
 use crate::recording::{local_api_context_from_app, RecordingState};
 use crate::store::{get_store, OnboardingStore, SettingsStore};
@@ -173,6 +174,10 @@ fn pause_remaining() -> Option<std::time::Duration> {
             Some(t.total - elapsed)
         }
     })
+}
+
+fn format_remaining_secs(secs: u64) -> String {
+    format_remaining(std::time::Duration::from_secs(secs))
 }
 
 fn format_remaining(d: std::time::Duration) -> String {
@@ -705,6 +710,51 @@ fn create_dynamic_menu(
                 .build()?;
             menu_builder = menu_builder.item(&pause_submenu);
         }
+
+        // HD recording: timer submenu when idle, "Stop" item when active.
+        // No indefinite mode — every session has a natural end (meeting end
+        // or timer expiry). Hits /capture/hd/{start,stop} so changes take
+        // effect on the next capture tick.
+        let hd = get_high_fps_status();
+        let fps_label = if hd.interval_ms > 0 {
+            format!(" — ~{} fps", 1000 / hd.interval_ms)
+        } else {
+            String::new()
+        };
+        if hd.active {
+            // Format remaining time succinctly: 1h 23m / 47m / 12s.
+            let remaining = format_remaining_secs(hd.remaining_secs);
+            let why = match hd.session_kind.as_str() {
+                "meeting" => "until call ends",
+                "prewarm_pending" => "awaiting call",
+                _ => "left",
+            };
+            let label = format!(
+                "Stop HD recording ({}, {} {})",
+                fps_label.trim_start_matches(" — "),
+                remaining,
+                why,
+            );
+            menu_builder = menu_builder.item(
+                &MenuItemBuilder::with_id("stop_hd_recording", label).build(app)?,
+            );
+            // "Just realized I want to keep recording" path. +30 min is
+            // the most common "one more demo / one more topic" extension;
+            // bigger bumps go via the API or restart timer from scratch.
+            menu_builder = menu_builder.item(
+                &MenuItemBuilder::with_id("extend_hd_30", "Extend HD by +30 min").build(app)?,
+            );
+        } else {
+            // Idle: offer timer-bound sessions only. The meeting-bound path
+            // is reached via the meeting-start notification's "+ HD" action.
+            let submenu = SubmenuBuilder::new(app, format!("Record HD for…{}", fps_label))
+                .item(&MenuItemBuilder::with_id("hd_timer_15", "15 minutes").build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_30", "30 minutes").build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_60", "1 hour").build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_120", "2 hours").build(app)?)
+                .build()?;
+            menu_builder = menu_builder.item(&submenu);
+        }
     }
 
     // TODO: vault lock tray item disabled — CLI-only for now
@@ -910,6 +960,125 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = app_handle.run_on_main_thread(move || {
                 if let Err(e) = force_tray_rebuild(&app_for_rebuild) {
                     error!("tray rebuild failed: {}", e);
+                }
+            });
+        }
+        "stop_hd_recording" => {
+            let cached = get_high_fps_status();
+            // Optimistic local update so a rapid second click doesn't see
+            // stale state. Server response reconciles afterward.
+            set_high_fps_status(HighFpsCacheEntry {
+                active: false,
+                interval_ms: cached.interval_ms,
+                session_kind: String::new(),
+                remaining_secs: 0,
+            });
+            let api = local_api_context_from_app(&app_handle);
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                if let Err(e) = api
+                    .apply_auth(client.post(api.url("/capture/hd/stop")))
+                    .header("Content-Type", "application/json")
+                    .send()
+                    .await
+                {
+                    error!("stop_hd POST failed: {} — rolling back optimistic cache", e);
+                    set_high_fps_status(cached);
+                }
+            });
+        }
+        "extend_hd_30" => {
+            let cached = get_high_fps_status();
+            // Optimistic local update: bump the cached remaining so the
+            // next menu open shows the new value without waiting for the
+            // 1-sec poll.
+            set_high_fps_status(HighFpsCacheEntry {
+                remaining_secs: cached.remaining_secs + 30 * 60,
+                ..cached.clone()
+            });
+            let api = local_api_context_from_app(&app_handle);
+            let body = serde_json::json!({ "additionalSecs": 30 * 60 });
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                if let Err(e) = api
+                    .apply_auth(client.post(api.url("/capture/hd/extend")))
+                    .header("Content-Type", "application/json")
+                    .body(body.to_string())
+                    .send()
+                    .await
+                {
+                    error!(
+                        "extend_hd POST failed: {} — rolling back optimistic cache",
+                        e
+                    );
+                    set_high_fps_status(cached);
+                }
+            });
+        }
+        id if id.starts_with("hd_timer_") => {
+            let minutes: u64 = id
+                .strip_prefix("hd_timer_")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30);
+            let duration_secs = minutes * 60;
+            // Optimistic local update for tray responsiveness; server
+            // response reconciles the canonical state (incl. clamped
+            // duration if user picked a value out of range).
+            let cached = get_high_fps_status();
+            set_high_fps_status(HighFpsCacheEntry {
+                active: true,
+                interval_ms: cached.interval_ms,
+                session_kind: "timer".to_string(),
+                remaining_secs: duration_secs,
+            });
+            let api = local_api_context_from_app(&app_handle);
+            let body = serde_json::json!({
+                "boundTo": "timer",
+                "durationSecs": duration_secs,
+            });
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                match api
+                    .apply_auth(client.post(api.url("/capture/hd/start")))
+                    .header("Content-Type", "application/json")
+                    .body(body.to_string())
+                    .send()
+                    .await
+                {
+                    Ok(res) if res.status().is_success() => {
+                        if let Ok(body) = res.json::<serde_json::Value>().await {
+                            let kind = body
+                                .get("session")
+                                .and_then(|s| s.get("kind"))
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("timer")
+                                .to_string();
+                            set_high_fps_status(HighFpsCacheEntry {
+                                active: body["active"].as_bool().unwrap_or(true),
+                                interval_ms: body["intervalMs"]
+                                    .as_u64()
+                                    .unwrap_or(cached.interval_ms),
+                                session_kind: kind,
+                                remaining_secs: body["remainingSecs"]
+                                    .as_u64()
+                                    .unwrap_or(duration_secs),
+                            });
+                        }
+                    }
+                    Ok(res) => {
+                        error!(
+                            "hd_timer POST returned {}, rolling back optimistic cache",
+                            res.status()
+                        );
+                        set_high_fps_status(cached);
+                    }
+                    Err(e) => {
+                        error!(
+                            "hd_timer POST failed: {} — rolling back optimistic cache",
+                            e
+                        );
+                        set_high_fps_status(cached);
+                    }
                 }
             });
         }

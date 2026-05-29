@@ -426,8 +426,12 @@ async fn main() {
             .find(|a| a.starts_with("screenpipe://"))
             .cloned();
 
+        let focus_port: u16 = std::env::var("SCREENPIPE_FOCUS_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(11435);
         if let Ok(resp) = reqwest::Client::new()
-            .post("http://127.0.0.1:11435/focus")
+            .post(format!("http://127.0.0.1:{}/focus", focus_port))
             .timeout(std::time::Duration::from_secs(2))
             .json(&serde_json::json!({
                 "args": args,
@@ -1663,7 +1667,11 @@ async fn main() {
             let app_handle = app.handle().clone();
 
             // Initialize server first (core service)
-            let server_shutdown_tx = spawn_server(app_handle.clone(), 11435);
+            let focus_port: u16 = std::env::var("SCREENPIPE_FOCUS_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(11435);
+            let server_shutdown_tx = spawn_server(app_handle.clone(), focus_port);
             app.manage(server_shutdown_tx);
 
 

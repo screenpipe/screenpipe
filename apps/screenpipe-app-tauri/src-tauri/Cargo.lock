@@ -10876,7 +10876,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.285"
+version = "2.4.289"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11000,7 +11000,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11075,7 +11075,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11087,10 +11087,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "eventkit-rs",
@@ -11110,6 +11111,7 @@ dependencies = [
  "screenpipe-secrets",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -11120,7 +11122,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11171,7 +11173,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11196,7 +11198,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11265,7 +11267,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11281,7 +11283,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11310,7 +11312,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -11321,7 +11323,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11374,7 +11376,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11394,7 +11396,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.349"
+version = "0.3.350"
 dependencies = [
  "argon2",
  "chacha20poly1305",

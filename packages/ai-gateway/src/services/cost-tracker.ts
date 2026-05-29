@@ -34,6 +34,7 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'claude-sonnet-4-6': { input: 3.00, output: 15.00 },
   'claude-opus-4-6': { input: 15.00, output: 75.00 },
   'claude-opus-4-7': { input: 5.00, output: 25.00 },
+  'claude-opus-4-8': { input: 5.00, output: 25.00 },
   'claude-3-5-sonnet': { input: 3.00, output: 15.00 },
   'claude-3-5-haiku': { input: 0.80, output: 4.00 },
   // OpenRouter models

@@ -25,6 +25,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 
 import {
   openScreenpipeViewerLink,
+  rewriteLocalMarkdownLinksForChat,
   screenpipeViewerPathFromHref,
 } from "@/components/markdown";
 
@@ -110,5 +111,30 @@ describe("openScreenpipeViewerLink", () => {
     await expect(
       openScreenpipeViewerLink("screenpipe://view?path=/tmp/x.jpg"),
     ).rejects.toThrow("viewer window crashed");
+  });
+});
+
+describe("rewriteLocalMarkdownLinksForChat", () => {
+  it("rewrites local document links to viewer deeplinks", () => {
+    expect(
+      rewriteLocalMarkdownLinksForChat("[doc](file:///Users/me/test%20note.md)"),
+    ).toBe(
+      "[doc](screenpipe://view?path=%2FUsers%2Fme%2Ftest%20note.md)",
+    );
+  });
+
+  it("leaves image markdown untouched so paths with parentheses still render", () => {
+    const input = "![img](/Users/me/test (1).png)";
+    expect(rewriteLocalMarkdownLinksForChat(input)).toBe(input);
+  });
+
+  it("keeps local media links as local paths so recordings still render inline", () => {
+    expect(
+      rewriteLocalMarkdownLinksForChat(
+        "[clip](file:///Users/me/System%20Audio%20(output)_2026-05-25_11-27-00.mp4)",
+      ),
+    ).toBe(
+      "[clip](</Users/me/System Audio (output)_2026-05-25_11-27-00.mp4>)",
+    );
   });
 });

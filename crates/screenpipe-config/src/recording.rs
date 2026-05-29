@@ -198,6 +198,30 @@ pub struct RecordingSettings {
     #[serde(rename = "minCaptureIntervalMs", default)]
     pub min_capture_interval_ms: Option<u64>,
 
+    /// Default behavior when a meeting is detected.
+    /// `"ask"` (default) surfaces a "+ HD" action on the existing meeting
+    /// notification; `"always"` auto-starts a meeting-bound HD session
+    /// every time; `"never"` is opt-out — only the manual tray timer
+    /// can start a session.
+    ///
+    /// Runtime-mutable via `POST /capture/hd/settings`; this field
+    /// just seeds the controller on startup.
+    #[serde(
+        rename = "hdRecordingDefault",
+        default = "default_hd_recording_default"
+    )]
+    pub hd_recording_default: String,
+
+    /// Capture debounce (ms) installed while an HD session is active.
+    /// Default 100 ms ≈ 10 fps — smooth enough for human replay without
+    /// exploding disk usage. Clamped to >= 33 ms (30 fps ceiling) by the
+    /// controller.
+    #[serde(
+        rename = "hdRecordingIntervalMs",
+        default = "default_hd_recording_interval_ms"
+    )]
+    pub hd_recording_interval_ms: u64,
+
     /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
     /// None = engine default (false). When true, non-printable key events
     /// (Arrow / Enter / Tab / Esc, modifier combos like Ctrl+S) fire a paired
@@ -497,6 +521,8 @@ impl Default for RecordingSettings {
             visual_check_interval_ms: None,
             visual_change_threshold: None,
             min_capture_interval_ms: None,
+            hd_recording_default: default_hd_recording_default(),
+            hd_recording_interval_ms: default_hd_recording_interval_ms(),
             capture_on_keystroke: None,
             capture_on_clipboard: None,
             capture_scroll: None,
@@ -567,6 +593,14 @@ fn default_pause_extraction_on_input_ms() -> u64 {
 
 fn default_pii_backend() -> String {
     "local".to_string()
+}
+
+fn default_hd_recording_default() -> String {
+    "ask".to_string()
+}
+
+fn default_hd_recording_interval_ms() -> u64 {
+    100
 }
 
 #[cfg(test)]

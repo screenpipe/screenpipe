@@ -36,6 +36,7 @@ use screenpipe_engine::{
         vision::handle_vision_command,
         Cli, Command, RecordArgSources,
     },
+    high_fps_controller::HighFpsController,
     hot_frame_cache::HotFrameCache,
     start_meeting_watcher, start_power_manager, start_sleep_monitor, start_speaker_identification,
     start_ui_recording,
@@ -930,6 +931,86 @@ async fn main() -> anyhow::Result<()> {
         info!("snapshot compaction disabled via --disable-snapshot-compaction");
     }
 
+    // Build the shared high-FPS controller once. Same instance feeds the
+    // VisionManager (so each capture loop reacts on the next tick) and the
+    // SCServer (so HTTP toggles, the tray menu, and pipes can all hit it
+    // without an engine restart). Seed from the persisted RecordingSettings
+    // so a user who already toggled the auto-mode preference keeps it.
+    let high_fps_controller = Arc::new(HighFpsController::new(
+        meeting_detector.clone(),
+        config.hd_recording_default,
+        config.hd_recording_interval_ms,
+    ));
+
+    // Wire `meeting_ended` → controller.handle_meeting_ended so a
+    // meeting-bound session auto-stops when the call ends. Without this,
+    // the only safety net is the 4-hour hard cap.
+    {
+        let controller = high_fps_controller.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut sub =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            while let Some(event) = sub.next().await {
+                let meeting_id = event
+                    .data
+                    .get("meeting_id")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
+                if let Some(id) = meeting_id {
+                    controller.handle_meeting_ended(id);
+                }
+            }
+        });
+    }
+
+    // On every `meeting_started`:
+    //   1. Always upgrade any active PrewarmPending session to Meeting{id}
+    //      so the user gets full call coverage instead of the 1hr clip.
+    //      Safe regardless of default_mode — only PrewarmPending sessions
+    //      are upgraded; explicit timers and existing meeting bindings
+    //      are left alone.
+    //   2. If default_mode = Always AND no session is pending an upgrade,
+    //      auto-start a meeting-bound session.
+    //   Ask mode is handled by the desktop shell (it adds a "+ HD" action
+    //   to the existing notification).
+    {
+        let controller = high_fps_controller.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut sub =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+            while let Some(event) = sub.next().await {
+                let meeting_id = event
+                    .data
+                    .get("meeting_id")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
+                let Some(id) = meeting_id else { continue };
+
+                // Step 1: prewarm-pending upgrade is universal.
+                controller.try_upgrade_pending_to_meeting(id);
+
+                // Step 2: auto-start only for Always mode AND only if the
+                // upgrade above didn't already bind a session.
+                let snap = controller.snapshot();
+                if !matches!(
+                    snap.default_mode,
+                    screenpipe_engine::high_fps_controller::DefaultMode::Always
+                ) {
+                    continue;
+                }
+                let already_bound = matches!(
+                    snap.kind,
+                    Some(screenpipe_engine::high_fps_controller::SessionKind::Meeting { .. })
+                );
+                if !already_bound {
+                    controller.start_meeting_session(id);
+                }
+            }
+        });
+    }
+
     // Create VisionManager for event-driven capture on all monitors
     let (handle, capture_trigger_tx, linker_tx) = if !config.disable_vision {
         let vision_config =
@@ -937,7 +1018,8 @@ async fn main() -> anyhow::Result<()> {
         let vision_manager = Arc::new(
             VisionManager::new(vision_config, db_clone.clone(), vision_handle.clone())
                 .with_hot_frame_cache(hot_frame_cache.clone())
-                .with_power_profile(power_manager.subscribe()),
+                .with_power_profile(power_manager.subscribe())
+                .with_high_fps_controller(high_fps_controller.clone()),
         );
 
         // Get the broadcast trigger sender BEFORE moving the VisionManager into
@@ -1234,7 +1316,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("failed to start pipe scheduler: {}", e);
     }
     let shared_pipe_manager = std::sync::Arc::new(tokio::sync::Mutex::new(pipe_manager));
-    let server = server.with_pipe_manager(shared_pipe_manager.clone());
+    let server = server
+        .with_pipe_manager(shared_pipe_manager.clone())
+        .with_high_fps_controller(high_fps_controller.clone());
 
     // Install pi agent in background
     tokio::spawn(async move {

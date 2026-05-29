@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::event_driven_capture::{CaptureTriggerMsg, TriggerSender};
 use crate::focus_aware_controller::FocusAwareController;
 use crate::frame_linker_actor::{linker_channel, spawn_frame_linker, LinkerSender};
+use crate::high_fps_controller::HighFpsController;
 use crate::hot_frame_cache::HotFrameCache;
 use crate::power::PowerProfile;
 
@@ -97,6 +98,12 @@ pub struct VisionManager {
     /// controller report Active for all monitors, preserving the pre-feature
     /// behaviour for those users.
     focus_controller: Arc<FocusAwareController>,
+    /// Shared runtime control for the HD-recording override (bound
+    /// sessions only — see `HighFpsController`). `None` means the
+    /// feature is unavailable on this engine (e.g. vision-only build
+    /// with no detector / no AppState route surface). Each capture loop
+    /// polls `snapshot()` once per tick.
+    high_fps_controller: Option<Arc<HighFpsController>>,
     /// Set when the user's monitor allowlist matched zero connected displays and
     /// we fell back to recording every monitor. Clears the filter for hot-plug too.
     stale_allowlist_fallback: Arc<AtomicBool>,
@@ -148,6 +155,7 @@ impl VisionManager {
             hot_frame_cache: None,
             power_profile_rx: None,
             focus_controller,
+            high_fps_controller: None,
             stale_allowlist_fallback: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -161,6 +169,13 @@ impl VisionManager {
     /// Set the power profile receiver so capture loops adapt to battery state.
     pub fn with_power_profile(mut self, rx: watch::Receiver<PowerProfile>) -> Self {
         self.power_profile_rx = Some(rx);
+        self
+    }
+
+    /// Wire the shared high-FPS controller so capture loops can react to
+    /// manual toggles and meeting-detected transitions at runtime.
+    pub fn with_high_fps_controller(mut self, controller: Arc<HighFpsController>) -> Self {
+        self.high_fps_controller = Some(controller);
         self
     }
 
@@ -479,6 +494,7 @@ impl VisionManager {
         let power_profile_rx = self.power_profile_rx.clone();
         let focus_controller = self.focus_controller.clone();
         let linker_tx = Some(self.linker_tx.clone());
+        let high_fps_controller = self.high_fps_controller.clone();
 
         info!(
             "Starting event-driven capture for monitor {} (device: {})",
@@ -507,6 +523,7 @@ impl VisionManager {
                 power_profile_rx,
                 focus_controller,
                 linker_tx,
+                high_fps_controller,
             )
             .await
             {

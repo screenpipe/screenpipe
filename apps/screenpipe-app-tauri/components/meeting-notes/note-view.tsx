@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -189,6 +190,15 @@ export function NoteView({
       note: meeting.note ?? "",
     };
   }, [meeting.id, initialTranscriptOpen]);
+
+  useEffect(() => {
+    posthog.capture("meeting_note_opened", {
+      meeting_id: meeting.id,
+      is_live: isLive,
+      has_title: !!meeting.title,
+      has_note: !!meeting.note,
+    });
+  }, [meeting.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -392,6 +402,11 @@ export function NoteView({
   }, [saveState.kind, save, title, attendees, note]);
 
   const handleSummarize = async () => {
+    posthog.capture("meeting_summarize_clicked", {
+      meeting_id: meeting.id,
+      was_live: isLive,
+      pipe_slug: settings.meetingSummaryPipeSlug || "meeting-summary",
+    });
     setSummarizing(true);
     try {
       const last = lastSavedRef.current;

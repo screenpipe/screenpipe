@@ -30,6 +30,10 @@
   </a>
 </p>
 
+
+
+
+
 ![image](https://github.com/user-attachments/assets/5b977f48-0355-498f-a3ba-37e5de3b6c62)
 ![image](https://github.com/user-attachments/assets/dec2e07c-b3d5-46dd-9f36-c0c26a82c9fb)
 
@@ -90,6 +94,12 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 - filters (window, app, chrome extensions, passwords, PII)
 - optional encryption at rest
 - works offline
+
+## sdk
+
+[tauri, electron, swift sdk available today](https://github.com/screenpipe/screenpipe/tree/main/ee/sdk)
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/a5b49966-b607-47cb-b0fa-e5f9aec14351" />
 
 ---
 
