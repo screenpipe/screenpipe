@@ -4273,14 +4273,18 @@ Pipe name: {}
 /// run "now" — they expected it then. Better to no-op than surprise them.
 const ONE_OFF_STALE_THRESHOLD: chrono::Duration = chrono::Duration::hours(1);
 
-/// Grace window for catching a missed cron slot. A cron schedule means
-/// wall-clock time — "every day at 7am" should fire at 7am, not "the moment
-/// the app notices it hasn't run today." Without this, a pipe installed at
-/// 6pm with a 7am cron fires immediately (cron.after(epoch).next() is a
-/// 1970 slot, now >= 1970 ⇒ fire); same trap when the app was off across
-/// a scheduled slot. We absorb scheduler-tick latency and brief downtime,
-/// but skip catch-up beyond that — wait for the next scheduled slot.
+/// Grace window applied only to never-run pipes (last_run = epoch) to prevent
+/// them from firing immediately on install. Without this, a freshly installed
+/// "every day at 7am" pipe would fire at 6pm the same day because
+/// cron.after(epoch).next() is a 1970 slot and now >= 1970 is always true.
 const CRON_GRACE_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
+
+/// How far back a previously-run pipe will look for a missed cron slot on
+/// restart. 12 hours covers the common case (app was asleep, system reboot,
+/// app crash) without firing very stale slots after multi-day downtime.
+/// Example: "every day at 7am" pipe, app starts at 7:12am → fires immediately.
+/// Example: app offline 3+ days, restarts → waits for next scheduled slot.
+const CRON_CATCHUP_WINDOW: chrono::Duration = chrono::Duration::hours(12);
 
 /// Validate that a `schedule: at <iso>` timestamp isn't already stale.
 /// Returns `Ok(())` for any non-one-off schedule. Called from `install_pipe`
@@ -4527,16 +4531,19 @@ fn should_run(schedule: &str, last_run: DateTime<Utc>) -> bool {
         }
         Some(ParsedSchedule::Cron(cron)) => {
             let now = Utc::now();
-            // Anchor at max(last_run, now - grace) so we only consider slots that
-            // (a) haven't already been claimed by a prior run, and (b) aren't so
-            // stale that firing now would surprise the user. Without the grace
-            // anchor, a newly-installed pipe (last_run = epoch) or one whose app
-            // was off across a scheduled slot would fire immediately on the next
-            // tick — wrong for wall-clock cron. With it, those cases wait for the
-            // next future slot, which is what "every day at 7am" actually means.
-            let search_from = std::cmp::max(last_run, now - CRON_GRACE_WINDOW);
+            // For pipes that have never run (last_run = epoch), anchor the search
+            // to a recent window so stale past slots don't fire immediately on install.
+            // For previously-run pipes, allow catch-up within CRON_CATCHUP_WINDOW so a
+            // slot missed while the app was offline (e.g., "every day at 7am" pipe, app
+            // starts at 7:12am) fires immediately. Slots older than 12h are skipped —
+            // after extended downtime just wait for the next scheduled occurrence.
+            let search_from = if last_run == DateTime::UNIX_EPOCH {
+                now - CRON_GRACE_WINDOW
+            } else {
+                std::cmp::max(last_run, now - CRON_CATCHUP_WINDOW)
+            };
             match cron.after(&search_from).next() {
-                Some(next) => next <= now,
+                Some(next) => now >= next,
                 None => false,
             }
         }
@@ -5180,6 +5187,24 @@ mod tests {
         let cron_str = format!("0 {} {} * * * *", now.minute(), now.hour());
         let yesterday = now - chrono::Duration::hours(25);
         assert!(should_run(&cron_str, yesterday));
+    }
+
+    #[test]
+    fn test_should_run_cron_missed_slot_catchup() {
+        // Regression: app was offline during the scheduled slot. When it restarts
+        // minutes (or hours) after the slot, the pipe must still fire — not silently
+        // wait until tomorrow. Reproduces the "morning-brief didn't run" report where
+        // the app started at 7:12am after missing the 7am slot.
+        use chrono::Timelike;
+        let now = Utc::now();
+        // Build a cron expression whose last slot was ~12 minutes ago
+        let slot_time = now - chrono::Duration::minutes(12);
+        let cron_str = format!("0 {} {} * * * *", slot_time.minute(), slot_time.hour());
+        let last_run = now - chrono::Duration::hours(25); // ran yesterday
+        assert!(
+            should_run(&cron_str, last_run),
+            "pipe whose slot passed 12 minutes ago must fire on app restart, not wait until tomorrow"
+        );
     }
 
     #[test]
