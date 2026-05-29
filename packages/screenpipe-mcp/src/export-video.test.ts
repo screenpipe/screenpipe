@@ -74,6 +74,34 @@ describe("export-video MCP tool", () => {
         const mockResponse = createMockSearchResponse([100, 101, 102, 103, 104]);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(mockResponse));
+      } else if (url.pathname === "/export" && req.method === "POST") {
+        // Default audio+video path: engine resolves frames + synced audio from the
+        // range and returns a summary (no frame_ids, no WebSocket).
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          let parsed: { start?: string; end?: string; meeting_id?: number } = {};
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            // fall through to validation below
+          }
+          if (!parsed.start && !parsed.end && parsed.meeting_id === undefined) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "provide either meeting_id or start/end" }));
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              output_path: "/tmp/screenpipe/exports/export_20260101_000000.mp4",
+              frame_count: 42,
+              audio_chunk_count: 7,
+              duration_secs: 123.4,
+              file_size_bytes: 2 * 1024 * 1024,
+            }),
+          );
+        });
       } else {
         res.writeHead(404);
         res.end();
@@ -339,10 +367,54 @@ describe("export-video MCP tool", () => {
 
     expect(frameIds.length).toBe(0);
   });
+
+  it("should export with synced audio via POST /export by default (no fps)", async () => {
+    // Default path: post the range to /export; the engine resolves frames + audio
+    // and returns a summary. No /search, no frame_ids, no WebSocket.
+    const response = await fetch(`http://localhost:${serverPort}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start: "2024-01-15T10:00:00Z", end: "2024-01-15T10:30:00Z" }),
+    });
+
+    expect(response.ok).toBe(true);
+    const data = (await response.json()) as {
+      output_path: string;
+      frame_count: number;
+      audio_chunk_count: number;
+      file_size_bytes: number;
+    };
+    expect(data.output_path).toMatch(/\.mp4$/);
+    expect(typeof data.frame_count).toBe("number");
+    expect(data.audio_chunk_count).toBeGreaterThan(0);
+
+    // Mirror the MCP success formatting for the audio+video path.
+    const sizeMb = data.file_size_bytes
+      ? (data.file_size_bytes / (1024 * 1024)).toFixed(1)
+      : null;
+    const text =
+      `Video exported (with audio): ${data.output_path}\n` +
+      `${data.frame_count} frames | ${data.audio_chunk_count} audio chunks` +
+      (sizeMb ? ` | ${sizeMb} MB` : "");
+    expect(text).toContain("with audio");
+    expect(text).toContain("audio chunks");
+    expect(text).toContain(data.output_path);
+  });
+
+  it("should 400 from /export when neither meeting_id nor start/end is given", async () => {
+    const response = await fetch(`http://localhost:${serverPort}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(response.status).toBe(400);
+  });
 });
 
 describe("export-video tool schema validation", () => {
   it("should have correct input schema", () => {
+    // fps is optional with NO default: omitting it exports a real-time video with
+    // synced audio; setting it opts into a silent timelapse.
     const schema = {
       type: "object",
       properties: {
@@ -356,7 +428,6 @@ describe("export-video tool schema validation", () => {
         },
         fps: {
           type: "number",
-          default: 1.0,
         },
       },
       required: ["start_time", "end_time"],
@@ -365,6 +436,6 @@ describe("export-video tool schema validation", () => {
     expect(schema.required).toContain("start_time");
     expect(schema.required).toContain("end_time");
     expect(schema.required).not.toContain("fps"); // fps is optional
-    expect(schema.properties.fps.default).toBe(1.0);
+    expect("default" in schema.properties.fps).toBe(false); // no default → audio+video by default
   });
 });

@@ -649,6 +649,110 @@ pub(crate) async fn stop_meeting_handler(
     Ok(JsonResponse(meeting))
 }
 
+/// Export request: pass `meeting_id` to export a meeting (its window is resolved
+/// from the DB), or `start`/`end` for an arbitrary wall-clock range (`end` defaults
+/// to now). `start`/`end` accept ISO 8601 or relative (`"2h ago"`, `"now"`). Same
+/// `meeting_id` XOR `start`/`end` contract as the `screenpipe export` CLI and the
+/// in-app `export_recording` Tauri command.
+#[derive(OaSchema, Deserialize, Debug)]
+pub struct ExportRequest {
+    #[serde(default)]
+    pub meeting_id: Option<i64>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub end: Option<String>,
+    /// Absolute output .mp4 path. If omitted, writes to `<data-dir>/exports/`.
+    #[serde(default)]
+    pub output_path: Option<String>,
+}
+
+#[derive(OaSchema, Serialize, Debug)]
+pub struct ExportResponse {
+    pub output_path: String,
+    pub frame_count: usize,
+    pub audio_chunk_count: usize,
+    pub duration_secs: f64,
+    pub file_size_bytes: u64,
+}
+
+/// Render a recording to a single MP4 (screen frames + synced audio) via the engine
+/// export core. Pass `meeting_id` (window resolved from the DB) or `start`/`end` for an
+/// arbitrary range. Long-running: the caller should show a progress indicator. Writes to
+/// `output_path` if given, else the data dir's `exports/` folder. This is the HTTP twin of
+/// the `screenpipe export` CLI — same `meeting_id` XOR `start`/`end` contract.
+#[oasgen]
+pub(crate) async fn export_handler(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<ExportRequest>,
+) -> Result<JsonResponse<ExportResponse>, (StatusCode, JsonResponse<Value>)> {
+    let bad_request = |msg: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({ "error": msg })),
+        )
+    };
+    let server_error = |e: anyhow::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({ "error": e.to_string() })),
+        )
+    };
+
+    // Explicit output path wins; otherwise name a file under `<data-dir>/exports/`.
+    let explicit_output = body
+        .output_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from);
+    let default_output = |stem: String| {
+        state
+            .screenpipe_dir
+            .join("exports")
+            .join(format!("{stem}_{}.mp4", Utc::now().format("%Y%m%d_%H%M%S")))
+    };
+
+    // meeting_id XOR start/end, same contract as the `screenpipe export` CLI.
+    let summary = match (body.meeting_id, body.start.is_some() || body.end.is_some()) {
+        (Some(id), _) => {
+            let output = explicit_output.unwrap_or_else(|| default_output(format!("meeting_{id}")));
+            crate::meeting_export::export_meeting_to_mp4(&state.db, id, &output)
+                .await
+                .map_err(server_error)?
+        }
+        (None, true) => {
+            let start_raw = body.start.as_deref().ok_or_else(|| {
+                bad_request("end requires start (give the range a beginning)".to_string())
+            })?;
+            let start = crate::routes::time::parse_flexible_datetime(start_raw)
+                .map_err(|e| bad_request(format!("start: {e}")))?;
+            let end = match body.end.as_deref() {
+                Some(s) => crate::routes::time::parse_flexible_datetime(s)
+                    .map_err(|e| bad_request(format!("end: {e}")))?,
+                None => Utc::now(),
+            };
+            let output = explicit_output.unwrap_or_else(|| default_output("export".to_string()));
+            crate::meeting_export::export_range_to_mp4(&state.db, start, end, &output)
+                .await
+                .map_err(server_error)?
+        }
+        (None, false) => {
+            return Err(bad_request(
+                "provide either meeting_id or start/end".to_string(),
+            ))
+        }
+    };
+
+    Ok(JsonResponse(ExportResponse {
+        output_path: summary.output_path,
+        frame_count: summary.frame_count,
+        audio_chunk_count: summary.audio_chunk_count,
+        duration_secs: summary.duration_secs,
+        file_size_bytes: summary.file_size_bytes,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

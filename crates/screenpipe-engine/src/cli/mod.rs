@@ -8,6 +8,7 @@ pub mod backup;
 mod browser;
 pub mod connection;
 pub mod db;
+pub mod export;
 pub mod install;
 pub mod login;
 pub mod mcp;
@@ -285,6 +286,51 @@ pub enum Command {
         #[arg(long, value_hint = ValueHint::DirPath)]
         data_dir: Option<String>,
     },
+
+    /// Export a recording to a single MP4 (screen frames + synced audio).
+    /// Pass `--meeting-id` to export a meeting (start/end resolved for you),
+    /// or `--start`/`--end` for an arbitrary time range. Reads
+    /// `~/.screenpipe/db.sqlite` directly — no daemon required.
+    #[command(alias = "export-meeting")]
+    Export(ExportArgs),
+}
+
+// =============================================================================
+// Export args
+// =============================================================================
+
+/// Two entry points, one renderer: `--meeting-id` resolves a meeting's
+/// start/end from the DB; `--start`/`--end` take an explicit wall-clock range.
+/// Exactly one of the two must be supplied (they're mutually exclusive).
+#[derive(Parser, Clone)]
+pub struct ExportArgs {
+    /// Meeting id to export — resolves the meeting's start/end automatically
+    /// (see `screenpipe search` or the app's meetings list). Mutually
+    /// exclusive with `--start`/`--end`.
+    #[arg(long, alias = "id", conflicts_with_all = ["start", "end"])]
+    pub meeting_id: Option<i64>,
+
+    /// Start of the time range. Accepts ISO 8601 (`2026-01-15T10:00:00Z`) or
+    /// relative (`30m ago`, `2h ago`, `7d ago`, `now`). Pair with `--end`.
+    #[arg(long)]
+    pub start: Option<String>,
+
+    /// End of the time range. Same accepted formats as `--start`. Defaults to
+    /// now when `--start` is set.
+    #[arg(long)]
+    pub end: Option<String>,
+
+    /// Output .mp4 path. Defaults to `<data-dir>/exports/<name>_<timestamp>.mp4`.
+    #[arg(short = 'o', long, value_hint = ValueHint::FilePath)]
+    pub output: Option<String>,
+
+    /// Data directory. Default to $HOME/.screenpipe
+    #[arg(long, value_hint = ValueHint::DirPath)]
+    pub data_dir: Option<String>,
+
+    /// Open the resulting MP4 with the OS default player when done.
+    #[arg(long, default_value_t = false)]
+    pub open: bool,
 }
 
 // =============================================================================

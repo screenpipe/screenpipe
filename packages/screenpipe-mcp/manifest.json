@@ -32,7 +32,7 @@
     },
     {
       "name": "export-video",
-      "description": "Export screen recordings as MP4 video for a specific time range"
+      "description": "Export screen recordings as an MP4 for a time range — with synced audio by default (pass fps for a silent timelapse)"
     },
     {
       "name": "list-meetings",

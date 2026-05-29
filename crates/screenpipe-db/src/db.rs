@@ -1851,6 +1851,29 @@ impl DatabaseManager {
         Ok(rows)
     }
 
+    /// Audio chunks for MP4 export: one row per physical chunk file (NOT joined to
+    /// `audio_transcriptions`, which would return a row per transcript segment and cause the same
+    /// file to be mixed in multiple times). Returns `(id, file_path, timestamp)` where `timestamp`
+    /// is the chunk's true file-start, so each chunk can be delayed onto the timeline exactly once.
+    pub async fn get_audio_chunks_in_range_for_export(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<(i64, String, DateTime<Utc>)>, SqlxError> {
+        let rows = sqlx::query_as::<_, (i64, String, DateTime<Utc>)>(
+            r#"SELECT ac.id, ac.file_path, ac.timestamp
+               FROM audio_chunks ac
+               WHERE ac.timestamp >= ?1 AND ac.timestamp <= ?2
+                 AND ac.file_path NOT LIKE 'cloud://%'
+               ORDER BY ac.timestamp ASC"#,
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Get audio chunks by explicit IDs (used by re-transcribe when frontend sends chunk IDs).
     pub async fn get_audio_chunks_by_ids(
         &self,
@@ -4232,6 +4255,40 @@ impl DatabaseManager {
         .fetch_all(&self.pool)
         .await?;
         Ok(ids)
+    }
+
+    /// Get all frames within a time range for meeting/video export.
+    ///
+    /// Returns `(frame_id, file_path, offset_index, timestamp, is_snapshot)` ordered by
+    /// timestamp. `file_path` is the snapshot JPEG for snapshot frames, otherwise the backing
+    /// video chunk. Resolving everything in one query avoids an N+1 per-frame `get_frame` call
+    /// and gives the caller real per-frame timestamps to compute display durations.
+    pub async fn get_frames_in_range_for_export(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<(i64, String, i64, DateTime<Utc>, bool)>, SqlxError> {
+        let rows = sqlx::query_as::<_, (i64, String, i64, DateTime<Utc>, bool)>(
+            r#"
+            SELECT
+                frames.id,
+                COALESCE(frames.snapshot_path, video_chunks.file_path) as file_path,
+                frames.offset_index,
+                frames.timestamp,
+                CASE WHEN frames.snapshot_path IS NOT NULL AND frames.snapshot_path != ''
+                     THEN 1 ELSE 0 END as is_snapshot
+            FROM frames
+            LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
+            WHERE frames.timestamp >= ?1 AND frames.timestamp <= ?2
+              AND COALESCE(frames.snapshot_path, video_chunks.file_path) IS NOT NULL
+            ORDER BY frames.timestamp ASC
+            "#,
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// Get frames near a given frame_id for validation/fallback.

@@ -389,15 +389,21 @@ const TOOLS: Tool[] = [
   {
     name: "export-video",
     description:
-      "Export an MP4 video of screen recordings for a time range. " +
-      "Returns the file path. Can take a few minutes for long ranges.",
+      "Export an MP4 of screen recordings for a time range, WITH synced microphone audio by default. " +
+      "Returns the file path. Can take a few minutes for long ranges. " +
+      "Pass `fps` only if you want a silent timelapse instead of a real-time video with audio.",
     annotations: { title: "Export Video", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
         start_time: { type: "string", description: "ISO 8601 UTC or relative" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        fps: { type: "number", description: "Output FPS (default 1.0). Higher = smoother but larger file.", default: 1.0 },
+        fps: {
+          type: "number",
+          description:
+            "Optional. If set, exports a SILENT timelapse at this FPS (no audio). " +
+            "Omit it to get a real-time video with synced audio.",
+        },
       },
       required: ["start_time", "end_time"],
     },
@@ -1333,13 +1339,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "export-video": {
         const startTime = normalizeTime(args.start_time as string);
         const endTime = normalizeTime(args.end_time as string);
-        const fps = (args.fps as number) || 1.0;
 
         if (!startTime || !endTime) {
           return {
             content: [{ type: "text", text: "Error: start_time and end_time are required" }],
           };
         }
+
+        // Default path: a real-time MP4 with synced microphone audio, rendered
+        // server-side by the engine export core (the `screenpipe export` CLI's HTTP
+        // twin). MCP runs on the same host as the backend, so the returned path is a
+        // local file. `fps` opts into the legacy silent timelapse below instead.
+        if (args.fps === undefined || args.fps === null) {
+          try {
+            const response = await callAPI("/export", {
+              method: "POST",
+              body: JSON.stringify({ start: startTime, end: endTime }),
+            });
+            const data = (await response.json()) as {
+              output_path: string;
+              frame_count: number;
+              audio_chunk_count: number;
+              duration_secs: number;
+              file_size_bytes: number;
+            };
+            const sizeMb = data.file_size_bytes
+              ? (data.file_size_bytes / (1024 * 1024)).toFixed(1)
+              : null;
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Video exported (with audio): ${data.output_path}\n` +
+                    `${data.frame_count ?? 0} frames | ${data.audio_chunk_count ?? 0} audio chunks` +
+                    (sizeMb ? ` | ${sizeMb} MB` : "") +
+                    ` | ${startTime} → ${endTime}`,
+                },
+              ],
+            };
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Export failed: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              ],
+            };
+          }
+        }
+
+        // --- legacy silent timelapse path (fps explicitly set) ---
+        const fps = args.fps as number;
 
         // Get frame IDs for the time range
         const searchParams = new URLSearchParams({
@@ -1454,7 +1506,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               {
                 type: "text",
                 text:
-                  `Video exported: ${exportResult.filePath}\n` +
+                  `Timelapse exported (no audio): ${exportResult.filePath}\n` +
                   `Frames: ${exportResult.frameCount} | ${startTime} → ${endTime} | ${fps} fps`,
               },
             ],

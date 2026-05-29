@@ -11,6 +11,7 @@ import {
   Check,
   Clock,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   Info,
@@ -27,8 +28,10 @@ import {
   Volume2,
   X,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import {
@@ -140,6 +143,7 @@ export function NoteView({
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const [summarizing, setSummarizing] = useState(false);
   const [retranscribing, setRetranscribing] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copied, setCopied] = useState(false);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
@@ -525,6 +529,92 @@ export function NoteView({
     }
   };
 
+  const handleExport = async () => {
+    if (exporting) return;
+    if (!meeting.meeting_end) {
+      toast({
+        title: "stop the meeting first",
+        description: "mp4 export runs on the saved frames and audio after a meeting ends.",
+      });
+      return;
+    }
+
+    const safeTitle = (title || "meeting")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .toLowerCase()
+      .slice(0, 60) || "meeting";
+    const dateStr = new Date(meeting.meeting_start).toISOString().slice(0, 10);
+
+    let target: string | null;
+    try {
+      target = await saveDialog({
+        defaultPath: `${safeTitle}-${dateStr}.mp4`,
+        filters: [{ name: "MP4 video", extensions: ["mp4"] }],
+      });
+    } catch (err) {
+      console.error("failed to open save dialog", err);
+      toast({
+        title: "couldn't open save dialog",
+        description: String(err),
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!target) return;
+
+    setExporting(true);
+    toast({
+      title: "exporting mp4…",
+      description: "stitching frames and audio — this can take a minute for long meetings.",
+    });
+    try {
+      // Calls the engine export core in-process via Tauri (no HTTP, no daemon
+      // dependency) — the in-app twin of the `screenpipe export` CLI. Reuses
+      // the running server core's DB handle. Rejects with the engine's error
+      // string on failure.
+      const summary = await invoke<{
+        output_path: string;
+        frame_count: number;
+        audio_chunk_count: number;
+        duration_secs: number;
+        file_size_bytes: number;
+      }>("export_recording", {
+        meetingId: meeting.id,
+        outputPath: target,
+      });
+
+      const sizeMb = summary?.file_size_bytes
+        ? (summary.file_size_bytes / (1024 * 1024)).toFixed(1)
+        : null;
+      toast({
+        title: "mp4 exported",
+        description: [
+          `${summary?.frame_count ?? 0} frames`,
+          `${summary?.audio_chunk_count ?? 0} audio chunks`,
+          sizeMb ? `${sizeMb} mb` : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+      try {
+        await openExternal(target);
+      } catch {
+        // opening the file is best-effort; the export itself succeeded.
+      }
+    } catch (err) {
+      console.error("failed to export meeting", err);
+      toast({
+        title: "couldn't export mp4",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handleCopy = async () => {
     if (copying) return;
     setCopying(true);
@@ -721,6 +811,21 @@ export function NoteView({
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleExport()}
+                  disabled={exporting}
+                  title="export meeting to mp4 (video + audio)"
+                  aria-label="export meeting to mp4"
+                  className="h-8 w-8 rounded-none p-0"
+                >
+                  {exporting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
                   )}
                 </Button>
               </>

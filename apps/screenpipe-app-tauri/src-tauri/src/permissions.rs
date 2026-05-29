@@ -125,7 +125,7 @@ fn request_av_permission(app: tauri::AppHandle, media_type: nokhwa_bindings_maco
         use tauri_nspanel::block::ConcreteBlock;
 
         let callback = move |granted: BOOL| {
-            if is_audio && granted {
+            if is_audio && granted != NO {
                 info!(
                     "Microphone permission granted via AV callback — restarting capture for audio reinit"
                 );

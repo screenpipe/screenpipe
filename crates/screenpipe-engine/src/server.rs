@@ -40,10 +40,10 @@ use crate::{
             vision_metrics_handler,
         },
         meetings::{
-            bulk_delete_meetings_handler, delete_meeting_handler, get_meeting_handler,
-            get_meeting_transcript_handler, list_meetings_handler, meeting_status_handler,
-            merge_meetings_handler, split_meeting_handler, start_meeting_handler,
-            stop_meeting_handler, update_meeting_handler,
+            bulk_delete_meetings_handler, delete_meeting_handler, export_handler,
+            get_meeting_handler, get_meeting_transcript_handler, list_meetings_handler,
+            meeting_status_handler, merge_meetings_handler, split_meeting_handler,
+            start_meeting_handler, stop_meeting_handler, update_meeting_handler,
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
@@ -638,6 +638,9 @@ impl SCServer {
             .get("/meetings", list_meetings_handler)
             .get("/meetings/status", meeting_status_handler)
             .post("/meetings/merge", merge_meetings_handler)
+            // General export: meeting_id XOR start/end → MP4 (frames + synced audio).
+            // HTTP twin of the `screenpipe export` CLI; used by the MCP export-video tool.
+            .post("/export", export_handler)
             .post("/meetings/bulk-delete", bulk_delete_meetings_handler)
             .post("/meetings/start", start_meeting_handler)
             .post("/meetings/stop", stop_meeting_handler)
