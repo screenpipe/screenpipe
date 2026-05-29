@@ -34,14 +34,16 @@ interface VideoChunk {
 
 export const ShareLogsButton = ({
   onComplete,
+  prefillText,
 }: {
   onComplete?: () => void;
+  prefillText?: string;
 }) => {
   const { toast } = useToast();
   const { settings } = useSettings();
   const [isSending, setIsSending] = useState(false);
   const [machineId, setMachineId] = useState("");
-  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackText, setFeedbackText] = useState(prefillText ?? "");
   const [isLoadingVideo, setIsLoadingVideo] = useState(false);
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [mergedVideoPath, setMergedVideoPath] = useState<string | null>(null);

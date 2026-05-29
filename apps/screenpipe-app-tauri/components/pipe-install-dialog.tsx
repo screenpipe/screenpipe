@@ -22,6 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
 import { PermissionsReview } from "@/components/pipe-store";
 import { localFetch } from "@/lib/api";
+import { useFeedbackStore } from "@/lib/stores/feedback-store";
 
 interface PipeInstallRequest {
   url: string;
@@ -52,6 +53,7 @@ export function PipeInstallDialog() {
   const [registryDetail, setRegistryDetail] = useState<RegistryPipeDetail | null>(null);
   const [, setSection] = useQueryState("section");
   const { toast } = useToast();
+  const openFeedback = useFeedbackStore((s) => s.openFeedback);
 
   // Listen for install-pipe events from deep link handler
   useEffect(() => {
@@ -149,7 +151,18 @@ export function PipeInstallDialog() {
     } catch (err: any) {
       toast({
         title: "failed to install pipe",
-        description: err.message,
+        description: (
+          <span>
+            {err.message}{" "}
+            <button
+              type="button"
+              className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
+              onClick={() => openFeedback(`Pipe install failed: ${err.message}`)}
+            >
+              report issue
+            </button>
+          </span>
+        ),
         variant: "destructive",
       });
     } finally {

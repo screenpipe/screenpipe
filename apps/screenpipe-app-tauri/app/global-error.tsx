@@ -78,7 +78,34 @@ export default function GlobalError({
               >
                 reload
               </button>
+              <button
+                onClick={() => {
+                  // App is fully crashed — React providers are down.
+                  // Open Discord in default browser so user can report with the error message.
+                  try {
+                    (window as any).__TAURI_INTERNALS__?.invoke("plugin:shell|open", {
+                      path: "https://discord.com/invite/screenpipe",
+                    }).catch(() => window.open("https://discord.com/invite/screenpipe", "_blank"));
+                  } catch {
+                    window.open("https://discord.com/invite/screenpipe", "_blank");
+                  }
+                }}
+                style={{
+                  padding: "0.5rem 1rem",
+                  backgroundColor: "#262626",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "0.375rem",
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
+                }}
+              >
+                get help
+              </button>
             </div>
+            <p style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.75rem" }}>
+              error: {error.message || "unknown"}
+            </p>
           </div>
         </div>
       </body>
