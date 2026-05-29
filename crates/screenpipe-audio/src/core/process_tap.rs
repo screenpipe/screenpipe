@@ -95,9 +95,9 @@ fn detect_os_version() -> Option<(u64, u64, u64)> {
 /// JSON shape) and surface as an empty exclusion list: losing the tap
 /// entirely is much worse for the user than losing the exclusion filter.
 mod exclusions {
+    use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::SystemTime;
-    use std::fs;
 
     use cidre::{arc, core_audio as ca, ns};
 
@@ -182,7 +182,7 @@ mod exclusions {
                     // ca::Process(pub Obj) where Obj(pub u32) is #[repr(transparent)].
                     // The inner u32 is the AudioObjectID that the tap descriptor
                     // expects (wrapped in ns::Number, see build_exclusion_array).
-                    let audio_obj_id = proc.0.0;
+                    let audio_obj_id = proc.0 .0;
                     if audio_obj_id != 0 {
                         out.push(audio_obj_id);
                     }
@@ -258,9 +258,8 @@ mod exclusions {
 
         #[test]
         fn entries_missing_bundle_id_are_skipped() {
-            let f = write_tmp(
-                r#"{"excluded_apps": [{}, {"bundle_id": "com.a"}, {"name": "no id"}]}"#,
-            );
+            let f =
+                write_tmp(r#"{"excluded_apps": [{}, {"bundle_id": "com.a"}, {"name": "no id"}]}"#);
             let (ids, _) = read_bundle_ids(f.path());
             assert_eq!(ids, vec!["com.a".to_string()]);
         }
@@ -273,7 +272,10 @@ mod exclusions {
             let (ids, mt) = read_bundle_ids(f.path());
             assert_eq!(
                 ids,
-                vec!["com.stremio.stremio".to_string(), "com.spotify.client".to_string()]
+                vec![
+                    "com.stremio.stremio".to_string(),
+                    "com.spotify.client".to_string()
+                ]
             );
             assert!(mt.is_some());
         }
@@ -666,8 +668,8 @@ pub fn spawn_process_tap_capture(
             let new_snapshot = exclusions::snapshot();
             let exclusion_set_changed =
                 new_snapshot.audio_object_ids != current_snapshot.audio_object_ids;
-            let exclusion_mtime_changed = new_snapshot.mtime.is_some()
-                && new_snapshot.mtime != current_snapshot.mtime;
+            let exclusion_mtime_changed =
+                new_snapshot.mtime.is_some() && new_snapshot.mtime != current_snapshot.mtime;
             let should_rebuild_for_exclusions = (exclusion_set_changed || exclusion_mtime_changed)
                 && last_rebuild
                     .map(|t| t.elapsed() >= REBUILD_COOLDOWN)
