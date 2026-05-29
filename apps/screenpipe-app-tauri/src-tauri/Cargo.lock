@@ -10957,6 +10957,7 @@ dependencies = [
  "sysinfo",
  "tauri",
  "tauri-build",
+ "tauri-helper",
  "tauri-nspanel",
  "tauri-plugin-autostart",
  "tauri-plugin-cli",
@@ -13424,6 +13425,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-helper"
+version = "0.2.1"
+source = "git+https://github.com/divanshu-go/tauri-helper?rev=663082dc44636cc505d51fb326a940956b6f70c3#663082dc44636cc505d51fb326a940956b6f70c3"
+dependencies = [
+ "rayon",
+ "serde",
+ "syn 2.0.117",
+ "tauri_helper_core",
+ "tauri_helper_macros",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "tauri-macros"
 version = "2.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13942,6 +13956,30 @@ dependencies = [
  "thiserror 2.0.18",
  "windows 0.61.3",
  "windows-version",
+]
+
+[[package]]
+name = "tauri_helper_core"
+version = "0.2.1"
+source = "git+https://github.com/divanshu-go/tauri-helper?rev=663082dc44636cc505d51fb326a940956b6f70c3#663082dc44636cc505d51fb326a940956b6f70c3"
+dependencies = [
+ "serde",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "tauri_helper_macros"
+version = "0.1.4"
+source = "git+https://github.com/divanshu-go/tauri-helper?rev=663082dc44636cc505d51fb326a940956b6f70c3#663082dc44636cc505d51fb326a940956b6f70c3"
+dependencies = [
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 2.0.117",
+ "tauri_helper_core",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]

@@ -29,12 +29,6 @@ use tracing_oslog::OsLogger;
 use updates::start_update_check;
 use window::ShowRewindWindow;
 
-// TypeScript bindings generation imports (only in debug builds)
-#[cfg(debug_assertions)]
-use specta_typescript::Typescript;
-#[cfg(debug_assertions)]
-use tauri_specta::{collect_commands, Builder};
-
 mod analytics;
 #[allow(deprecated)]
 mod icons;
@@ -51,8 +45,8 @@ mod embedded_server;
 mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
-mod hardware;
 mod google_calendar;
+mod hardware;
 mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
@@ -126,6 +120,7 @@ mod native_shortcut_reminder;
 mod notifications;
 mod safe_icon;
 mod shortcuts;
+mod specta_bindings;
 mod vault;
 mod viewer;
 
@@ -337,6 +332,31 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
     let client = reqwest::Client::new();
     let response = api.apply_auth(client.get(api.url("/health"))).send().await;
     Ok(response.is_ok())
+}
+
+/// Shared tauri-specta registry body.
+macro_rules! define_specta_builder {
+    () => {{
+        use crate::store::{OnboardingStore, SettingsStore};
+        use tauri_specta::Builder;
+
+        Builder::new()
+            .commands(tauri_helper::specta_collect_commands!())
+            .typ::<SettingsStore>()
+            .typ::<OnboardingStore>()
+            .typ::<sync::SyncStatusResponse>()
+            .typ::<sync::SyncDeviceInfo>()
+            .typ::<sync::SyncConfig>()
+            .typ::<calendar::CalendarStatus>()
+            .typ::<calendar::CalendarEventItem>()
+            .typ::<store::IcsCalendarEntry>()
+            .typ::<suggestions::CachedSuggestions>()
+            .typ::<suggestions::Suggestion>()
+            .typ::<hardware::HardwareCapability>()
+            .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
+            .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
+            .typ::<oauth::OAuthStatus>()
+    }};
 }
 
 #[tokio::main]
@@ -708,225 +728,22 @@ async fn main() {
         }
     }
 
-    // Generate TypeScript bindings in debug mode
+    // Generate TypeScript bindings in debug mode (also via `cargo test` — see
+    // specta_bindings.rs).
     #[cfg(debug_assertions)]
     {
-        use crate::store::{OnboardingStore, SettingsStore};
-
         info!("Generating TypeScript bindings...");
-        let builder = Builder::new()
-            .commands(collect_commands![
-                // Commands from permissions.rs
-                permissions::open_permission_settings,
-                permissions::request_permission,
-                permissions::reset_and_request_permission,
-                permissions::do_permissions_check,
-                permissions::check_microphone_permission,
-                permissions::check_screen_recording_permission,
-                permissions::check_accessibility_permission_cmd,
-                permissions::check_arc_installed,
-                permissions::check_coreaudio_process_tap_available,
-                permissions::check_arc_automation_permission,
-                permissions::request_arc_automation_permission,
-                permissions::get_installed_browsers,
-                permissions::check_browsers_automation_permission,
-                permissions::request_browsers_automation_permission,
-                permissions::get_browsers_automation_status,
-                permissions::request_single_browser_automation,
-                // Commands from audio_exclusions.rs
-                audio_exclusions::read_audio_exclusions,
-                audio_exclusions::write_audio_exclusions,
-                audio_exclusions::read_app_bundle_metadata,
-                // Commands from main.rs
-                get_env,
-                get_e2e_seed_flags,
-                vault_status,
-                vault_unlock,
-                get_log_files,
-                get_media_file,
-                upload_file_to_s3,
-                update_global_shortcuts,
-                spawn_screenpipe,
-                stop_screenpipe,
-                recording::start_capture,
-                recording::stop_capture,
-                recording::get_monitors,
-                recording::get_audio_devices,
-                recording::get_boot_phase,
-                // Commands from commands.rs
-                commands::is_enterprise_build_cmd,
-                commands::get_app_identifier,
-                enterprise_install_metadata::get_enterprise_install_metadata,
-                commands::set_cloud_media_analysis_skill,
-                commands::get_enterprise_license_key,
-                commands::save_enterprise_license_key,
-                commands::save_enterprise_team_config,
-                commands::get_enterprise_team_api_token,
-                commands::get_cloud_token,
-                commands::set_cloud_token,
-                enterprise_policy::set_enterprise_policy,
-                enterprise_policy::set_sync_streams,
-                commands::get_disk_usage,
-                commands::list_cache_files,
-                commands::delete_cache_files,
-                commands::open_pipe_window,
-                commands::update_show_screenpipe_shortcut,
-                commands::show_window,
-                commands::show_window_activated,
-                commands::show_main_window,
-                commands::hide_main_window,
-                commands::e2e_emit_agent_stream,
-                commands::e2e_emit_pipe_stream,
-                commands::open_login_window,
-                commands::open_google_calendar_auth_window,
-                commands::ensure_webview_focus,
-                commands::close_window,
-                commands::resize_search_window,
-                commands::search_navigate_to_timeline,
-                commands::reset_main_window,
-                commands::set_window_size,
-                // Onboarding commands
-                commands::get_onboarding_status,
-                commands::complete_onboarding,
-                commands::reset_onboarding,
-                commands::set_onboarding_step,
-                commands::show_onboarding_window,
-                commands::get_keychain_status,
-                commands::enable_keychain_encryption,
-                commands::disable_keychain_encryption,
-                commands::open_search_window,
-                // Shortcut reminder commands
-                commands::show_shortcut_reminder,
-                commands::hide_shortcut_reminder,
-                // Notification panel commands
-                commands::show_notification_panel,
-                commands::hide_notification_panel,
-                // In-app file viewer
-                viewer::open_viewer_window,
-                viewer::read_viewer_file,
-                viewer::reveal_in_default_browser,
-                // Window-specific shortcut commands (dynamic registration)
-                commands::register_window_shortcuts,
-                commands::unregister_window_shortcuts,
-                // Frame quick actions: copy frame image, copy deeplink, copy text
-                commands::copy_frame_to_clipboard,
-                commands::copy_deeplink_to_clipboard,
-                commands::copy_text_to_clipboard,
-                // Rollback commands
-                commands::rollback_to_version,
-                // Commands from tray.rs
-                set_tray_unhealth_icon,
-                set_tray_health_icon,
-                // Browser logging
-                write_browser_log,
-                write_browser_logs,
-                // Commands from sync.rs
-                sync::get_sync_status,
-                sync::set_sync_enabled,
-                sync::trigger_sync,
-                sync::get_sync_config,
-                sync::update_sync_config,
-                sync::get_sync_devices,
-                sync::remove_sync_device,
-                sync::delete_device_local_data,
-                sync::init_sync,
-                sync::lock_sync,
-                sync::delete_cloud_data,
-                // Pi commands
-                pi::pi_info,
-                pi::pi_start,
-                pi::pi_stop,
-                pi::pi_check,
-                pi::pi_install,
-                pi::pi_prompt,
-                pi::pi_queue_prompt,
-                pi::pi_steer,
-                pi::pi_steer_queued,
-                pi::pi_pending,
-                pi::pi_cancel_queued,
-                pi::pi_abort,
-                pi::pi_abort_active,
-                pi::pi_new_session,
-                pi::pi_set_model,
-                pi::pi_update_config,
-                pi::bun_check,
-                // ChatGPT OAuth commands
-                chatgpt_oauth::chatgpt_oauth_login,
-                chatgpt_oauth::chatgpt_oauth_status,
-                chatgpt_oauth::chatgpt_oauth_get_token,
-                chatgpt_oauth::chatgpt_oauth_logout,
-                chatgpt_oauth::chatgpt_oauth_models,
-                chatgpt_oauth::chatgpt_oauth_check_token,
-                // Generic OAuth commands (works for any OAuth integration)
-                oauth::oauth_connect,
-                oauth::oauth_cancel,
-                oauth::oauth_status,
-                oauth::oauth_disconnect,
-                oauth::oauth_list_instances,
-                // Pipe suggestions scheduler commands
-                pipe_suggestions_scheduler::pipe_suggestions_get_settings,
-                pipe_suggestions_scheduler::pipe_suggestions_update_settings,
-                // Calendar commands
-                calendar::calendar_status,
-                calendar::calendar_authorize,
-                calendar::calendar_reset_permission,
-                calendar::calendar_get_events,
-                calendar::calendar_get_current_meeting,
-                // ICS Calendar commands
-                ics_calendar::ics_calendar_get_entries,
-                ics_calendar::ics_calendar_save_entries,
-                ics_calendar::ics_calendar_test_url,
-                ics_calendar::ics_calendar_get_upcoming,
-                // Voice training
-                voice_training::train_voice,
-                // Suggestions
-                suggestions::get_cached_suggestions,
-                suggestions::force_regenerate_suggestions,
-                suggestions::set_enhanced_ai_suggestions,
-                // Config commands
-                config::validate_data_dir,
-                // Hardware detection
-                hardware::get_hardware_capability,
-                // Store encryption
-                store::reencrypt_store,
-                // Autostart
-                commands::set_autostart,
-            ])
-            .typ::<SettingsStore>()
-            .typ::<OnboardingStore>()
-            .typ::<sync::SyncStatusResponse>()
-            .typ::<sync::SyncDeviceInfo>()
-            .typ::<sync::SyncConfig>()
-            .typ::<calendar::CalendarStatus>()
-            .typ::<calendar::CalendarEventItem>()
-            .typ::<store::IcsCalendarEntry>()
-            .typ::<suggestions::CachedSuggestions>()
-            .typ::<suggestions::Suggestion>()
-            .typ::<hardware::HardwareCapability>()
-            .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
-            .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
-            .typ::<oauth::OAuthStatus>();
 
-        // Export to a temp file first, then only overwrite if content changed.
-        // This avoids triggering the Tauri dev watcher on every launch which
-        // causes an infinite rebuild loop.
-        let bindings_path = "../lib/utils/tauri.ts";
-        let tmp_path = format!("{}.tmp", bindings_path);
-        if let Err(e) = builder.export(
-            Typescript::default().bigint(specta_typescript::BigIntExportBehavior::BigInt),
-            &tmp_path,
-        ) {
-            eprintln!("Warning: Failed to export TypeScript bindings: {e}");
-        } else {
-            let new_content = std::fs::read(&tmp_path).unwrap_or_default();
-            let old_content = std::fs::read(bindings_path).unwrap_or_default();
-            if new_content != old_content {
-                if let Err(e) = std::fs::rename(&tmp_path, bindings_path) {
-                    eprintln!("Warning: Failed to move TypeScript bindings: {e}");
-                }
-            } else {
-                let _ = std::fs::remove_file(&tmp_path);
-            }
+        // tauri-specta command registry — must live in crate root scope for `collect_commands!`.
+        fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+            define_specta_builder!()
+        }
+
+        let bindings_path = specta_bindings::default_bindings_path();
+        if let Err(error) =
+            specta_bindings::write_bindings_if_changed_with(&bindings_path, specta_builder())
+        {
+            eprintln!("Warning: {error}");
         }
     }
 
@@ -1057,212 +874,7 @@ async fn main() {
         .manage(suggestions_state)
         .manage(pipe_suggestions_state)
         .manage(sync_scheduler)
-        .invoke_handler(tauri::generate_handler![
-            commands::is_enterprise_build_cmd,
-            commands::get_app_identifier,
-            enterprise_install_metadata::get_enterprise_install_metadata,
-            updates::get_pending_update,
-            updates::trigger_update_check,
-            commands::get_local_api_config,
-            commands::regenerate_api_auth_key,
-            commands::set_api_auth_key,
-            commands::set_cloud_media_analysis_skill,
-            commands::get_enterprise_license_key,
-            enterprise_policy::set_enterprise_policy,
-            enterprise_policy::set_sync_streams,
-            commands::save_enterprise_license_key,
-            commands::save_enterprise_team_config,
-            commands::get_enterprise_team_api_token,
-            commands::get_cloud_token,
-            commands::set_cloud_token,
-            spawn_screenpipe,
-            stop_screenpipe,
-            recording::start_capture,
-            recording::stop_capture,
-            recording::get_monitors,
-            recording::get_audio_devices,
-            recording::get_boot_phase,
-            permissions::open_permission_settings,
-            permissions::request_permission,
-            permissions::do_permissions_check,
-            permissions::check_microphone_permission,
-            permissions::check_screen_recording_permission,
-            permissions::check_accessibility_permission_cmd,
-            permissions::check_input_monitoring_permission_cmd,
-            permissions::request_input_monitoring_permission,
-            owned_browser::owned_browser_set_bounds,
-            owned_browser::owned_browser_navigate,
-            owned_browser::owned_browser_hide,
-            owned_browser::owned_browser_resolve_session_access,
-            permissions::reset_and_request_permission,
-            permissions::get_missing_permissions,
-            permissions::check_arc_installed,
-            permissions::check_coreaudio_process_tap_available,
-            permissions::check_arc_automation_permission,
-            permissions::request_arc_automation_permission,
-            audio_exclusions::read_audio_exclusions,
-            audio_exclusions::write_audio_exclusions,
-            audio_exclusions::read_app_bundle_metadata,
-            set_tray_unhealth_icon,
-            set_tray_health_icon,
-            write_browser_log,
-            write_browser_logs,
-            commands::update_show_screenpipe_shortcut,
-            commands::get_disk_usage,
-            commands::list_cache_files,
-            commands::delete_cache_files,
-            commands::open_pipe_window,
-            commands::show_window,
-            commands::show_window_activated,
-            commands::show_main_window,
-            commands::hide_main_window,
-            commands::e2e_emit_agent_stream,
-            commands::e2e_emit_pipe_stream,
-            commands::open_login_window,
-            commands::ensure_webview_focus,
-            commands::close_window,
-            commands::resize_search_window,
-            commands::search_navigate_to_timeline,
-            commands::reset_main_window,
-            commands::set_window_size,
-            // Permission recovery commands
-            commands::show_permission_recovery_window,
-            // Onboarding commands
-            commands::get_onboarding_status,
-            commands::complete_onboarding,
-            commands::reset_onboarding,
-            commands::set_onboarding_step,
-            commands::show_onboarding_window,
-            commands::get_keychain_status,
-            commands::enable_keychain_encryption,
-            commands::disable_keychain_encryption,
-            commands::open_search_window,
-            // Shortcut reminder commands
-            commands::show_shortcut_reminder,
-            commands::hide_shortcut_reminder,
-            // Notification panel commands
-            commands::show_notification_panel,
-            commands::hide_notification_panel,
-            // Window-specific shortcut commands (dynamic registration)
-            commands::register_window_shortcuts,
-            commands::unregister_window_shortcuts,
-            // Frame quick actions: copy frame image to clipboard
-            commands::copy_frame_to_clipboard,
-            commands::copy_deeplink_to_clipboard,
-            commands::copy_text_to_clipboard,
-            commands::open_note_path,
-            commands::open_windows_shell_target,
-            // In-app file viewer
-            viewer::open_viewer_window,
-            viewer::read_viewer_file,
-            viewer::reveal_in_default_browser,
-            // Overlay commands (Windows)
-            commands::enable_overlay_click_through,
-            commands::disable_overlay_click_through,
-            commands::is_overlay_click_through,
-            get_log_files,
-            get_media_file,
-            upload_file_to_s3,
-            update_global_shortcuts,
-            suspend_global_shortcuts,
-            resume_global_shortcuts,
-            get_env,
-            get_e2e_seed_flags,
-            commands::e2e_main_overlay_visible,
-            vault_status,
-            vault_unlock,
-            // Sync commands
-            sync::get_sync_status,
-            sync::set_sync_enabled,
-            sync::trigger_sync,
-            sync::get_sync_config,
-            sync::update_sync_config,
-            sync::get_sync_devices,
-            sync::remove_sync_device,
-            sync::delete_device_local_data,
-            sync::init_sync,
-            sync::lock_sync,
-            sync::delete_cloud_data,
-            // Pi commands
-            pi::pi_info,
-            pi::pi_start,
-            pi::pi_stop,
-            pi::pi_check,
-            pi::pi_install,
-            pi::pi_prompt,
-            pi::pi_queue_prompt,
-            pi::pi_steer,
-            pi::pi_steer_queued,
-            pi::pi_pending,
-            pi::pi_cancel_queued,
-            pi::pi_abort,
-            pi::pi_abort_active,
-            pi::pi_new_session,
-            pi::pi_set_model,
-            pi::pi_update_config,
-            pi::bun_check,
-            // ChatGPT OAuth commands
-            chatgpt_oauth::chatgpt_oauth_login,
-            chatgpt_oauth::chatgpt_oauth_status,
-            chatgpt_oauth::chatgpt_oauth_get_token,
-            chatgpt_oauth::chatgpt_oauth_logout,
-            chatgpt_oauth::chatgpt_oauth_models,
-            chatgpt_oauth::chatgpt_oauth_check_token,
-            // Generic OAuth commands (works for any OAuth integration)
-            oauth::oauth_connect,
-            oauth::oauth_cancel,
-            oauth::oauth_status,
-            oauth::oauth_disconnect,
-            oauth::oauth_list_instances,
-            // Pipe suggestions scheduler commands
-            pipe_suggestions_scheduler::pipe_suggestions_get_settings,
-            pipe_suggestions_scheduler::pipe_suggestions_update_settings,
-            // Calendar commands
-            calendar::calendar_status,
-            calendar::calendar_authorize,
-            calendar::calendar_reset_permission,
-            calendar::calendar_get_events,
-            calendar::calendar_get_current_meeting,
-            // ICS Calendar commands
-            ics_calendar::ics_calendar_get_entries,
-            ics_calendar::ics_calendar_save_entries,
-            ics_calendar::ics_calendar_test_url,
-            ics_calendar::ics_calendar_get_upcoming,
-            // Rollback commands
-            commands::rollback_to_version,
-            // OCR commands
-            commands::perform_ocr_on_image,
-            // Live Text (native macOS ImageAnalysisOverlayView)
-            livetext::livetext_is_available,
-            livetext::livetext_init,
-            livetext::livetext_analyze,
-            livetext::livetext_prefetch,
-            livetext::livetext_update_position,
-            livetext::livetext_highlight,
-            livetext::livetext_clear_highlights,
-            livetext::livetext_hide,
-            livetext::livetext_set_guard_rect,
-            // Voice training
-            voice_training::train_voice,
-            // Suggestions
-            suggestions::get_cached_suggestions,
-                suggestions::force_regenerate_suggestions,
-                suggestions::set_enhanced_ai_suggestions,
-            // Config commands
-            config::validate_data_dir,
-            // Hardware detection
-            hardware::get_hardware_capability,
-            // Remote sync (OpenClaw)
-            remote_sync_commands::remote_sync_test,
-            remote_sync_commands::remote_sync_now,
-            remote_sync_commands::remote_sync_discover_hosts,
-            remote_sync_commands::remote_sync_start_scheduler,
-            remote_sync_commands::remote_sync_stop_scheduler,
-            remote_sync_commands::remote_sync_scheduler_status,
-            commands::set_native_theme,
-            store::reencrypt_store,
-            commands::set_autostart,
-        ])
+        .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
             //deep link register_all
             #[cfg(any(windows, target_os = "linux"))]
@@ -2288,4 +1900,9 @@ async fn main() {
             error!("panic in run event handler: {:?}", e);
         }
     });
+}
+
+#[cfg(test)]
+pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    define_specta_builder!()
 }

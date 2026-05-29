@@ -15,6 +15,7 @@ rust-version = "1.92"
 
 [build-dependencies]
 tauri-build = { version = "=2.5.4", features = [] }
+tauri-helper = { git = "https://github.com/divanshu-go/tauri-helper", rev = "663082dc44636cc505d51fb326a940956b6f70c3" }
 # Used by build.rs on Windows MSVC targets (incl. cross-compiles from
 # Linux/macOS CI runners) to compile c/bswap_shim.c — provides
 # __builtin_bswap{16,32,64} as real functions to satisfy the aws-lc-sys
@@ -23,6 +24,7 @@ tauri-build = { version = "=2.5.4", features = [] }
 cc = "1"
 
 [dependencies]
+tauri-helper = { git = "https://github.com/divanshu-go/tauri-helper", rev = "663082dc44636cc505d51fb326a940956b6f70c3" }
 tauri = { version = "=2.10.1", features = [
   "protocol-asset",
   "macos-private-api",

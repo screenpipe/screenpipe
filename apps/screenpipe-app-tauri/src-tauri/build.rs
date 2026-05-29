@@ -319,6 +319,11 @@ void notif_free_string(char* ptr) { if (ptr) free(ptr); }
 }
 
 fn main() {
+    tauri_helper::generate_command_file(tauri_helper::TauriHelperOptions {
+        collect_all: true,
+        ..Default::default()
+    });
+
     // Stamp the build time so `main.rs` can self-quiesce Sentry reports
     // for ancient builds. This makes the Sentry inbox reflect what's
     // actually running today; users who never update gradually fall
