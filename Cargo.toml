@@ -21,7 +21,7 @@ edition = "2021"
 # AI
 tokenizers = "0.21.0"
 hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", default-features = false, features = [
-    "rustls-tls",
+    "native-tls",
     "tokio",
     "ureq",
 ] }

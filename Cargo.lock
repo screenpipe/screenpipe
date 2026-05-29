@@ -3830,10 +3830,10 @@ dependencies = [
  "http",
  "indicatif",
  "log",
+ "native-tls",
  "num_cpus",
  "rand 0.8.6",
  "reqwest 0.12.28",
- "rustls 0.23.40",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -4025,7 +4025,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -7375,8 +7374,6 @@ dependencies = [
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
- "rustls 0.23.40",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -7384,7 +7381,6 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-native-tls",
- "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
  "tower-http 0.6.10",
@@ -7394,7 +7390,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.4.2",
  "web-sys",
- "webpki-roots 1.0.7",
 ]
 
 [[package]]
