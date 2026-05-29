@@ -171,10 +171,63 @@ jobs:
           merge-multiple: true
       - name: Create platform npm dirs
         run: bun x napi create-npm-dir -t .
+      # Move each `screenpipe-sdk.<triple>.node` into the matching
+      # `npm/<triple>/` subdir. Without this step the platform packages
+      # publish as empty stubs (README + package.json, no binary) and
+      # `require('@screenpipe/sdk-darwin-arm64')` fails with
+      # "Cannot find module ... .node". This is what bit every release
+      # 0.1.0 → 0.4.1 — `napi prepublish` only updates the main
+      # package.json's optionalDependencies, it does NOT distribute the
+      # built binaries, and `napi artifacts` only works with the napi-rs
+      # GitHub Actions artifact naming convention which we don't use.
+      - name: Distribute native bindings into platform npm dirs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          moved=0
+          for nodefile in screenpipe-sdk.*.node; do
+            triple="${nodefile#screenpipe-sdk.}"
+            triple="${triple%.node}"
+            target_dir="npm/${triple}"
+            if [[ ! -d "$target_dir" ]]; then
+              echo "::error::No npm dir for triple '$triple' (file $nodefile)"
+              exit 1
+            fi
+            mv "$nodefile" "$target_dir/"
+            moved=$((moved + 1))
+            echo "Moved $nodefile → $target_dir/"
+          done
+          if [[ $moved -eq 0 ]]; then
+            echo "::error::No screenpipe-sdk.*.node files found — build artifact download likely failed"
+            exit 1
+          fi
+          # Each platform dir must now contain exactly its one .node.
+          for d in npm/*/; do
+            triple="$(basename "$d")"
+            expected="screenpipe-sdk.${triple}.node"
+            if [[ ! -f "$d$expected" ]]; then
+              echo "::error::Missing $d$expected after distribute"
+              exit 1
+            fi
+          done
+      # `napi prepublish` updates the main package.json so each
+      # optionalDependency line matches the current version. By default
+      # it ALSO publishes every platform tarball to npm AND creates a
+      # GitHub Release with the binaries attached — both of those steps
+      # need credentials and one of them creates side-effects we don't
+      # want (we publish from our own loop below and don't want random
+      # bot-authored GH releases). `--dry-run --skip-gh-release` keeps
+      # only the metadata update.
       - name: Prepare npm packages
-        run: bun run prepublishOnly
+        run: bun x napi prepublish -t npm --dry-run --skip-gh-release
       - name: Inspect package contents
-        run: npm pack --dry-run --ignore-scripts
+        run: |
+          npm pack --dry-run --ignore-scripts
+          echo "--- platform tarballs ---"
+          for d in npm/*/; do
+            echo "## $d"
+            (cd "$d" && npm pack --dry-run --ignore-scripts 2>&1 | tail -20)
+          done
       - name: Publish npm packages
         if: needs.validate.outputs.publish_npm == 'true'
         env:
@@ -191,14 +244,36 @@ jobs:
             exit 1
           fi
 
+          # Publish each platform tarball. Tolerate "already published"
+          # so we can recover from a partially-failed prior run without
+          # bumping the version (the 0.4.2 attempt published 4/4
+          # platforms then died on the main package — re-dispatching
+          # should fast-forward over those without burning a version).
           while IFS= read -r -d '' package_dir; do
             if [[ -f "$package_dir/package.json" ]]; then
               echo "Publishing $package_dir"
-              (cd "$package_dir" && npm publish --access public --tag "$NPM_TAG" --provenance)
+              if ! (cd "$package_dir" && npm publish --access public --tag "$NPM_TAG" --provenance --ignore-scripts 2>&1); then
+                # 403 "cannot publish over previously published version"
+                # is the only error we treat as benign. Check it
+                # explicitly so a real auth/network error still fails.
+                pv=$(node -p "require('./$package_dir/package.json').version")
+                pn=$(node -p "require('./$package_dir/package.json').name")
+                published=$(npm view "${pn}@${pv}" version 2>/dev/null || true)
+                if [[ "$published" == "$pv" ]]; then
+                  echo "::notice::${pn}@${pv} already published, skipping"
+                else
+                  echo "::error::Publish of $package_dir failed and version not on registry"
+                  exit 1
+                fi
+              fi
             fi
           done < <(find npm -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
-          npm publish --access public --tag "$NPM_TAG" --provenance
+          # `--ignore-scripts` keeps npm from auto-running our
+          # `prepublishOnly` hook, which is `napi prepublish -t npm`
+          # (no flags) and would try to re-publish the already-published
+          # platform packages. We've done all the prep explicitly above.
+          npm publish --access public --tag "$NPM_TAG" --provenance --ignore-scripts
 
   swift-mirror:
     # SPM cannot consume `ee/sdk/Package.swift` from a subdirectory of a

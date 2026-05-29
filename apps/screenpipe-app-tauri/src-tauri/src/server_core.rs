@@ -35,6 +35,12 @@ pub struct ServerCore {
     pub power_manager: Arc<PowerManagerHandle>,
     pub pipe_manager: Arc<tokio::sync::Mutex<screenpipe_core::pipes::PipeManager>>,
     pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
+    /// Shared HD-recording controller. Lives on ServerCore (not the per-
+    /// capture `Server`, which is recreated on every recording restart) so
+    /// the tray menu and `/capture/hd` routes keep working across capture
+    /// toggles. Handed to both the HTTP server and the VisionManager so HTTP
+    /// toggles and the capture loop see the same session state.
+    pub high_fps_controller: Arc<screenpipe_engine::high_fps_controller::HighFpsController>,
     pub data_dir: PathBuf,
     pub data_path: PathBuf,
     pub port: u16,
@@ -474,7 +480,92 @@ impl ServerCore {
             warn!("failed to start pipe scheduler: {}", e);
         }
         let shared_pipe_manager = Arc::new(tokio::sync::Mutex::new(pipe_manager));
-        let server = server.with_pipe_manager(shared_pipe_manager.clone());
+
+        // --- HD-recording controller ---
+        // One Arc shared between the HTTP server (so the tray menu,
+        // /capture/hd routes, and pipes can toggle HD without an engine
+        // restart) and the VisionManager in CaptureSession (so the capture
+        // loop raises FPS on the next tick). The standalone engine bin wires
+        // this the same way; #3661 only wired the CLI, so in the app
+        // /capture/hd returned 503 "controller unavailable (vision disabled)"
+        // and the tray "Record HD for N minutes" menu silently no-opped.
+        //
+        // detector = None: the meeting detector lives on the AudioManager and
+        // is (re)created per capture session, while this controller is
+        // server-scoped. Meeting binding is driven by the meeting_started /
+        // meeting_ended events below rather than a held detector handle;
+        // explicit timer sessions (the tray "Record HD for N minutes") need
+        // no detector at all.
+        let high_fps_controller = Arc::new(
+            screenpipe_engine::high_fps_controller::HighFpsController::new(
+                None,
+                config.hd_recording_default,
+                config.hd_recording_interval_ms,
+            ),
+        );
+
+        // meeting_ended → auto-stop a meeting-bound session when the call
+        // ends. Without this the only safety net is the 4-hour hard cap.
+        {
+            let controller = high_fps_controller.clone();
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                let mut sub =
+                    screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+                while let Some(event) = sub.next().await {
+                    let meeting_id = event
+                        .data
+                        .get("meeting_id")
+                        .and_then(|v| v.as_i64())
+                        .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
+                    if let Some(id) = meeting_id {
+                        controller.handle_meeting_ended(id);
+                    }
+                }
+            });
+        }
+
+        // meeting_started → (1) upgrade any prewarm-pending session to a
+        // meeting binding, and (2) auto-start a meeting-bound session when the
+        // user picked "always". Ask mode is handled by the desktop shell,
+        // which adds a "+ HD" action to the meeting notification.
+        {
+            let controller = high_fps_controller.clone();
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                let mut sub =
+                    screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+                while let Some(event) = sub.next().await {
+                    let meeting_id = event
+                        .data
+                        .get("meeting_id")
+                        .and_then(|v| v.as_i64())
+                        .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
+                    let Some(id) = meeting_id else { continue };
+
+                    controller.try_upgrade_pending_to_meeting(id);
+
+                    let snap = controller.snapshot();
+                    if !matches!(
+                        snap.default_mode,
+                        screenpipe_engine::high_fps_controller::DefaultMode::Always
+                    ) {
+                        continue;
+                    }
+                    let already_bound = matches!(
+                        snap.kind,
+                        Some(screenpipe_engine::high_fps_controller::SessionKind::Meeting { .. })
+                    );
+                    if !already_bound {
+                        controller.start_meeting_session(id);
+                    }
+                }
+            });
+        }
+
+        let server = server
+            .with_pipe_manager(shared_pipe_manager.clone())
+            .with_high_fps_controller(high_fps_controller.clone());
 
         // Install pi agent in background
         tokio::spawn(async move {
@@ -699,6 +790,7 @@ impl ServerCore {
             power_manager,
             pipe_manager: shared_pipe_manager,
             manual_meeting,
+            high_fps_controller,
             data_dir: local_data_dir,
             data_path,
             port: config.port,

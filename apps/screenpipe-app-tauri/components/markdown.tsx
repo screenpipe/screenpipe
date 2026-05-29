@@ -6,7 +6,7 @@ import ReactMarkdown, { defaultUrlTransform, Options } from 'react-markdown'
 import { commands } from "@/lib/utils/tauri";
 import { MediaComponent } from "@/components/rewind/media";
 import { getApiBaseUrl } from "@/lib/api";
-import { isMediaFilePath, normalizeLocalMediaMarkdown } from "@/lib/utils/media-file-path";
+import { isMediaFilePath, normalizeLocalMediaMarkdown, normalizeMediaFilePath } from "@/lib/utils/media-file-path";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 export function createScreenpipeUrlTransform(allowedHosts: readonly string[]) {
@@ -51,6 +51,91 @@ export async function openScreenpipeViewerLink(href: string): Promise<boolean> {
     throw new Error(result.error);
   }
   return true;
+}
+
+function unwrapMarkdownUrl(url: string): string {
+  const trimmed = url.trim();
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+export function resolveLocalPathFromMarkdownUrl(url: string): string | null {
+  const raw = unwrapMarkdownUrl(url);
+  if (!raw || raw.startsWith("screenpipe://")) {
+    return null;
+  }
+
+  const urlWithoutFragment = raw.split("#", 1)[0] ?? raw;
+
+  let candidate = urlWithoutFragment;
+  let wasFileUri = false;
+
+  if (/^file:\/\//i.test(candidate)) {
+    wasFileUri = true;
+    const withoutScheme = candidate.replace(/^file:\/\//i, "");
+    candidate = `/${withoutScheme.replace(/^\/+/, "")}`;
+  }
+
+  try {
+    candidate = decodeURIComponent(candidate);
+  } catch {
+    // Keep the original string when the markdown contains malformed escapes.
+  }
+
+  if (/^\/[A-Za-z]:[\\/]/.test(candidate)) {
+    candidate = candidate.slice(1);
+  }
+
+  if (candidate.startsWith("/") && (wasFileUri || !candidate.startsWith("//"))) {
+    return candidate;
+  }
+
+  if (/^[A-Za-z]:[\\/]/.test(candidate)) {
+    return candidate;
+  }
+
+  return null;
+}
+
+function wrapPathForMarkdown(path: string): string {
+  return `<${path.replace(/>/g, "%3E")}>`;
+}
+
+function rewriteLocalMediaLinksForChat(text: string): string {
+  return text.replace(
+    /(!?)\[([^\]]*)\]\(((?:file:\/\/\/?[^\n\r]+?|\/[^\n\r]+?|[A-Z]:[\\/][^\n\r]+?)\.(mp4|mp3|wav|webm|ogg|m4a))\)/gi,
+    (_match, sigil: string, label: string, rawPath: string) => {
+      const localPath =
+        resolveLocalPathFromMarkdownUrl(rawPath) ?? normalizeMediaFilePath(rawPath.trim());
+      const normalizedPath = normalizeMediaFilePath(localPath);
+      return `${sigil}[${label}](${wrapPathForMarkdown(normalizedPath)})`;
+    },
+  );
+}
+
+export function rewriteLocalMarkdownLinksForChat(text: string): string {
+  return rewriteLocalMediaLinksForChat(text).replace(
+    /(!?)\[([^\]\n]+)\]\((<[^>\n]+>|[^)\n]+)\)/g,
+    (match, sigil: string, label: string, rawUrl: string) => {
+      if (sigil === "!") {
+        return match;
+      }
+
+      const localPath = resolveLocalPathFromMarkdownUrl(rawUrl);
+      if (!localPath) {
+        return match;
+      }
+
+      const normalizedMediaPath = normalizeMediaFilePath(localPath);
+      if (isMediaFilePath(normalizedMediaPath)) {
+        return `[${label}](${wrapPathForMarkdown(normalizedMediaPath)})`;
+      }
+
+      return `[${label}](screenpipe://view?path=${encodeURIComponent(localPath)})`;
+    },
+  );
 }
 
 type MarkdownComponents = NonNullable<Options["components"]>;

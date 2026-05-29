@@ -59,7 +59,7 @@ pub fn open_permission_settings(permission: OSPermission) {
 #[tauri::command]
 #[specta::specta]
 #[allow(unused_variables)] // permission used on macOS
-pub async fn request_permission(permission: OSPermission) {
+pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
         use nokhwa_bindings_macos::AVMediaType;
@@ -87,7 +87,7 @@ pub async fn request_permission(permission: OSPermission) {
                     }
                     AVAuthorizationStatus::NotDetermined => {
                         // First time — show the system prompt
-                        request_av_permission(AVMediaType::Audio);
+                        request_av_permission(app.clone(), AVMediaType::Audio);
                     }
                     _ => {
                         open_permission_settings(OSPermission::Microphone);
@@ -115,12 +115,26 @@ pub async fn request_permission(permission: OSPermission) {
 }
 
 #[cfg(target_os = "macos")]
-fn request_av_permission(media_type: nokhwa_bindings_macos::AVMediaType) {
+fn request_av_permission(app: tauri::AppHandle, media_type: nokhwa_bindings_macos::AVMediaType) {
+    use nokhwa_bindings_macos::AVMediaType;
+
+    let is_audio = media_type == AVMediaType::Audio;
+    let app_for_callback = app.clone();
     crate::window::with_autorelease_pool(|| {
         use objc::{runtime::*, *};
         use tauri_nspanel::block::ConcreteBlock;
 
-        let callback = move |_: BOOL| {};
+        let callback = move |granted: BOOL| {
+            if is_audio && granted {
+                info!(
+                    "Microphone permission granted via AV callback — restarting capture for audio reinit"
+                );
+                let app = app_for_callback.clone();
+                tauri::async_runtime::spawn(async move {
+                    restart_capture_on_mic_grant(app).await;
+                });
+            }
+        };
         let cls = class!(AVCaptureDevice);
         let objc_fn_block: ConcreteBlock<(BOOL,), (), _> = ConcreteBlock::new(callback);
         let objc_fn_pass = objc_fn_block.copy();
@@ -128,6 +142,29 @@ fn request_av_permission(media_type: nokhwa_bindings_macos::AVMediaType) {
             let _: () = msg_send![cls, requestAccessForMediaType:media_type.into_ns_str() completionHandler:objc_fn_pass];
         };
     });
+}
+
+/// Stop and restart capture so `capture_session::start` re-queries TCC and
+/// repopulates audio devices. Matches the settings-toggle path.
+#[cfg(target_os = "macos")]
+pub(crate) async fn restart_capture_on_mic_grant(app: tauri::AppHandle) {
+    use tauri::Manager;
+
+    let need_stop = {
+        let state = app.state::<crate::recording::RecordingState>();
+        let is_running = state.capture.lock().await.is_some();
+        is_running
+    };
+    if need_stop {
+        let state = app.state::<crate::recording::RecordingState>();
+        if let Err(e) = crate::recording::stop_capture(state, app.clone()).await {
+            warn!("stop_capture before mic-grant audio reinit: {}", e);
+        }
+    }
+    let state = app.state::<crate::recording::RecordingState>();
+    if let Err(e) = crate::recording::start_capture(state, app.clone()).await {
+        warn!("start_capture after mic grant: {}", e);
+    }
 }
 
 // Accessibility permission APIs using ApplicationServices framework
@@ -345,7 +382,7 @@ pub async fn reset_and_request_permission(
         sleep(Duration::from_millis(500)).await;
 
         // Re-request the permission
-        request_permission(permission).await;
+        request_permission(app, permission).await;
 
         Ok(())
     }

@@ -33,11 +33,11 @@ export async function setupOpenBlas({ cwd, winArch }) {
 
 	if (!(await fs.exists(path.join(cwd, config.openblasRealname)))) {
 		if (winArch === 'arm64') {
-			await downloadFile(config.windows.openblasUrlArm64, `${config.windows.openblasNameArm64}.zip`, { retries: 5 })
+			await downloadFile(config.windows.openblasUrlArm64, `${config.windows.openblasNameArm64}.zip`, { retries: 5, timeoutMs: 120000 })
 			await $`${sevenZ} x ${config.windows.openblasNameArm64}.zip -o${config.openblasRealname} -y`
 			await fs.rm(path.join(cwd, `${config.windows.openblasNameArm64}.zip`), { force: true })
 		} else {
-			await downloadFile(config.windows.openblasUrl, `${config.windows.openblasName}.zip`, { retries: 5 })
+			await downloadFile(config.windows.openblasUrl, `${config.windows.openblasName}.zip`, { retries: 5, timeoutMs: 120000 })
 			await $`${sevenZ} x ${config.windows.openblasName}.zip -o${config.openblasRealname} -y`
 			await fs.rm(path.join(cwd, `${config.windows.openblasName}.zip`), { force: true })
 		}

@@ -15,9 +15,8 @@ import { useChatStore } from "@/lib/stores/chat-store";
  * Detect if content is app-injected metadata (not real user content).
  * Used to filter when deriving conversation titles and sanitizing display.
  *
- * This is the canonical implementation used across save paths and display.
- * IMPORTANT: Duplicated in pi-event-router.ts and use-chat-conversations.ts
- * for performance. If you change this logic, update all three locations.
+ * Canonical implementation — imported by pi-event-router.ts and
+ * use-chat-conversations.ts. Update here only.
  *
  * Returns true for:
  * - <conversation_history>...</conversation_history> (sync prompts)
@@ -52,8 +51,16 @@ export function isInjectedTitleSourcePrompt(content?: string | null): boolean {
  * For broader title-derivation filtering (bare <role>/<system> tags),
  * use `isInjectedTitleSourcePrompt` instead.
  */
-export function isConversationHistorySyncPrompt(value?: string | null): boolean {
-  return typeof value === "string" && value.trimStart().startsWith("<conversation_history>");
+export function isConversationHistorySyncPrompt(value?: string | null): value is string {
+  return typeof value === "string" && value.startsWith("<conversation_history>");
+}
+
+export function extractConversationHistorySyncUserText(value?: string | null): string | null {
+  if (!isConversationHistorySyncPrompt(value)) return null;
+  const closingTag = "</conversation_history>";
+  const closingTagIndex = value.indexOf(closingTag);
+  if (closingTagIndex === -1) return "";
+  return value.slice(closingTagIndex + closingTag.length).replace(/^\s+/, "");
 }
 
 // ============================================================================

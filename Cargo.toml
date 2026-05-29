@@ -72,4 +72,5 @@ incremental = true
 opt-level = 0
 
 [profile.dev.package."*"]
-opt-level = 2  # Optimize all dependencies (faster runtime, same compile time)
+opt-level = 2      # Optimize all dependencies (faster runtime, same compile time)
+debug = false      # deps don't need debug symbols — keeps target/ from ballooning

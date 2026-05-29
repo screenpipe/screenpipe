@@ -129,17 +129,20 @@ fn create_query_params(languages: Vec<Language>, vocabulary: &[VocabularyEntry])
         "model=nova-3&smart_format=true&sample_rate=16000&diarize=true&utterances=true",
     );
 
-    if !languages.is_empty() {
-        query_params = [
-            query_params,
-            "&".into(),
-            languages
-                .iter()
-                .map(|lang| format!("detect_language={}", lang.as_lang_code()))
-                .collect::<Vec<String>>()
-                .join("&"),
-        ]
-        .concat();
+    // Deepgram language selection (/listen). WITHOUT any language parameter Deepgram
+    // defaults to English and silently drops every other language — the cause of
+    // "automatic language detection only detects English".
+    //  - none selected → detect_language=true (auto-detect across all languages)
+    //  - one selected  → language=<code>      (force it; most accurate)
+    //  - many selected → detect_language=<code>&… (restrict auto-detection to the set)
+    match languages.as_slice() {
+        [] => query_params.push_str("&detect_language=true"),
+        [single] => query_params.push_str(&format!("&language={}", single.as_lang_code())),
+        many => {
+            for lang in many {
+                query_params.push_str(&format!("&detect_language={}", lang.as_lang_code()));
+            }
+        }
     }
 
     // Add vocabulary as Deepgram keyterms (Nova-3 uses `keyterm` instead of `keywords`)
@@ -584,6 +587,32 @@ fn parse_utterance_diarization_segments(result: &Value) -> Vec<TranscriptionDiar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_languages_enables_auto_detection() {
+        // Regression for #3550: with no language param Deepgram defaults to
+        // English, so auto-detect must explicitly request detect_language=true.
+        let params = create_query_params(vec![], &[]);
+        assert!(
+            params.contains("&detect_language=true"),
+            "expected detect_language=true, got: {params}"
+        );
+        assert!(!params.contains("language=en"));
+    }
+
+    #[test]
+    fn single_language_is_forced() {
+        let params = create_query_params(vec![Language::Portuguese], &[]);
+        assert!(params.contains("&language=pt"), "got: {params}");
+        assert!(!params.contains("detect_language"));
+    }
+
+    #[test]
+    fn multiple_languages_restrict_detection() {
+        let params = create_query_params(vec![Language::English, Language::Portuguese], &[]);
+        assert!(params.contains("&detect_language=en"), "got: {params}");
+        assert!(params.contains("&detect_language=pt"), "got: {params}");
+    }
 
     #[test]
     fn parses_deepgram_word_speakers_into_turns() {

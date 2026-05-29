@@ -20,6 +20,51 @@ const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
 const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
+/// Bounded retries for provider rate limiting (HTTP 429) in streaming runs.
+const MAX_RATE_LIMIT_RETRIES: usize = 3;
+/// Fallback wait when the 429 payload carries no `reset_in` hint.
+const RATE_LIMIT_DEFAULT_WAIT_SECS: u64 = 10;
+/// Cap so an oversized `reset_in` can't stall a pipe run indefinitely.
+const RATE_LIMIT_MAX_WAIT_SECS: u64 = 60;
+
+/// Parse the rate-limit retry hint (in seconds) from a pi error payload.
+///
+/// The cloud gateway returns a 429 body containing `"reset_in":<secs>` plus a
+/// human-readable "Please wait N seconds". We prefer the structured `reset_in`
+/// field and fall back to the prose. Returns `None` when no hint is present.
+fn parse_rate_limit_reset_secs(text: &str) -> Option<u64> {
+    // Prefer the structured "reset_in" field.
+    if let Some(idx) = text.find("\"reset_in\"") {
+        let rest = &text[idx + "\"reset_in\"".len()..];
+        let rest = rest.trim_start_matches(|c: char| c == ':' || c.is_whitespace());
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(secs) = digits.parse::<u64>() {
+            return Some(secs);
+        }
+    }
+    // Fall back to the human-readable "wait N seconds".
+    let lower = text.to_lowercase();
+    if let Some(idx) = lower.find("wait ") {
+        let rest = &lower[idx + "wait ".len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(secs) = digits.parse::<u64>() {
+            return Some(secs);
+        }
+    }
+    None
+}
+
+/// Whether a pi failure was caused by provider rate limiting (HTTP 429).
+fn is_rate_limit_error(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("429")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("requests per minute")
+        || lower.contains("too many requests")
+        || lower.contains("\"reset_in\"")
+}
+
 /// Fetch the model catalog from the Cloudflare Worker gateway and convert
 /// it into the format Pi's `models.json` expects.
 ///
@@ -1268,7 +1313,7 @@ impl AgentExecutor for PiExecutor {
             resolved_provider, resolved_model
         );
 
-        let output = self
+        let mut output = self
             .spawn_pi_streaming(
                 &pi_path,
                 prompt,
@@ -1300,7 +1345,7 @@ impl AgentExecutor for PiExecutor {
                 provider_url,
             )
             .await?;
-            return self
+            output = self
                 .spawn_pi_streaming(
                     &pi_path,
                     prompt,
@@ -1309,11 +1354,58 @@ impl AgentExecutor for PiExecutor {
                     &resolved_provider,
                     provider_api_key,
                     None,
-                    line_tx,
+                    line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
                 )
-                .await;
+                .await?;
+        }
+
+        // Retry on provider rate limiting (HTTP 429). The cloud gateway caps
+        // requests per minute; concurrent scheduler pressure or a single busy
+        // run can trip it. pi exits 0 but surfaces the 429 as an assistant
+        // error, so `output.success` is false with the payload (including
+        // "reset_in") in stderr. Honor that hint, wait, and re-run instead of
+        // failing the whole pipe — which previously left automations silently
+        // doing nothing. (Runs that legitimately exceed the per-minute budget
+        // also need scheduler pacing, but a wait-and-retry still beats a hard
+        // stop.)
+        let mut rate_limit_retries = 0usize;
+        while !output.success
+            && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
+            && is_rate_limit_error(&output.stderr)
+        {
+            rate_limit_retries += 1;
+            let wait_secs = parse_rate_limit_reset_secs(&output.stderr)
+                .unwrap_or(RATE_LIMIT_DEFAULT_WAIT_SECS)
+                .clamp(1, RATE_LIMIT_MAX_WAIT_SECS);
+            warn!(
+                "pi rate limited (attempt {}/{}), waiting {}s before retry (stderr: {})",
+                rate_limit_retries,
+                MAX_RATE_LIMIT_RETRIES,
+                wait_secs,
+                output.stderr.trim()
+            );
+            // Surface the wait to any UI/log consumer draining line_tx.
+            let _ = line_tx.send(format!(
+                r#"{{"type":"status","kind":"rate_limit_retry","wait_secs":{},"attempt":{},"max_attempts":{}}}"#,
+                wait_secs, rate_limit_retries, MAX_RATE_LIMIT_RETRIES
+            ));
+            tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+            output = self
+                .spawn_pi_streaming(
+                    &pi_path,
+                    prompt,
+                    &resolved_model,
+                    working_dir,
+                    &resolved_provider,
+                    provider_api_key,
+                    None,
+                    line_tx.clone(),
+                    continue_session,
+                    pipe_system_prompt,
+                )
+                .await?;
         }
 
         Ok(output)
@@ -2144,6 +2236,38 @@ mod tests {
             "invalid bytes should become replacement chars"
         );
         assert_eq!(lines[1], "OK");
+    }
+
+    #[test]
+    fn test_parse_rate_limit_reset_secs() {
+        // Real gateway 429 payload: prefer the structured "reset_in" field.
+        let payload = r#"{"error":"You've exceeded 25 requests per minute. Please wait 12 seconds before retrying.","tier":"logged_in","reset_in":12}"#;
+        assert_eq!(parse_rate_limit_reset_secs(payload), Some(12));
+
+        // As surfaced through pi (prefixed "LLM error:") with whitespace
+        // around the colon.
+        let wrapped = r#"LLM error: {"reset_in" : 9, "tier":"logged_in"}"#;
+        assert_eq!(parse_rate_limit_reset_secs(wrapped), Some(9));
+
+        // No structured field — fall back to the prose hint.
+        assert_eq!(
+            parse_rate_limit_reset_secs("rate limited, please wait 8 seconds"),
+            Some(8)
+        );
+
+        // Unrelated error carries no hint.
+        assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
+    }
+
+    #[test]
+    fn test_is_rate_limit_error() {
+        assert!(is_rate_limit_error("HTTP 429 Too Many Requests"));
+        assert!(is_rate_limit_error(
+            "You've exceeded 25 requests per minute"
+        ));
+        assert!(is_rate_limit_error(r#"{"reset_in":12}"#));
+        assert!(!is_rate_limit_error("model not found"));
+        assert!(!is_rate_limit_error("credits_exhausted"));
     }
 
     #[tokio::test]

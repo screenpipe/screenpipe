@@ -980,6 +980,17 @@ async piInstall() : Promise<Result<null, string>> {
  * command (new_session, abort) to fully complete before being written to stdin.
  */
 async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null, displayPreview: string | null) : Promise<Result<string, string>> {
+    // E2E observability: capture every pi_prompt invocation when the
+    // harness has armed the flag. No-op in production (flag is undefined).
+    if (typeof window !== "undefined" && (window as any).__e2eCaptureNextPiPrompt) {
+        (window as any).__e2ePiPromptCaptures = (window as any).__e2ePiPromptCaptures || [];
+        (window as any).__e2ePiPromptCaptures.push({
+            via: "pi_prompt",
+            sessionId,
+            message,
+            at: Date.now(),
+        });
+    }
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images, displayPreview }) };
 } catch (e) {
@@ -992,9 +1003,18 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
  * returns as soon as Rust owns the queued item; the prompt is written only
  * after the active turn finishes.
  */
-async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null, displayPreview: string | null) : Promise<Result<string, string>> {
+    if (typeof window !== "undefined" && (window as any).__e2eCaptureNextPiPrompt) {
+        (window as any).__e2ePiPromptCaptures = (window as any).__e2ePiPromptCaptures || [];
+        (window as any).__e2ePiPromptCaptures.push({
+            via: "pi_queue_prompt",
+            sessionId,
+            message,
+            at: Date.now(),
+        });
+    }
     try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images }) };
+    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images, displayPreview }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

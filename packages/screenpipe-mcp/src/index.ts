@@ -690,24 +690,49 @@ const TEAM_TOOLS: Tool[] = [
   {
     name: "team-records",
     description:
-      "Chronological raw dump of the org's telemetry for a time window. " +
-      "Returns oldest → newest (vs team-search which is recency-ranked). " +
-      "Use for ETL or \"walk me through X from Y to Z\" — NOT for question-answering, use team-search for that. " +
+      "Chronological dump of the org's data for a time window — both raw " +
+      "telemetry (frame/audio) and the structured outputs of the enterprise-" +
+      "worker pipes (sop/skill/trajectory/memory/workflow). " +
+      "Raw kinds return oldest → newest (vs team-search which is recency-ranked). " +
+      "Synthesized kinds return one record per device's latest run by default " +
+      "(set latest_only=false to walk run history). " +
+      "Use raw for ETL / \"walk me through X from Y to Z\". " +
+      "Use synthesized for \"what SOPs / skills / trajectories / memories did " +
+      "we extract from my team's work\" — each item carries evidence-cited " +
+      "event_ids/frame_ids that team-search can resolve back to raw records. " +
       "Auth: enterprise admin token.",
     annotations: { title: "Team Records", readOnlyHint: true, openWorldHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        device_id: { type: "string", description: "Restrict to one device (optional)." },
-        kind: { type: "string", enum: ["frame", "audio", "all"], description: "Record kind filter. Default: all.", default: "all" },
-        since: { type: "string", description: "ISO 8601 lower bound." },
-        until: { type: "string", description: "ISO 8601 upper bound." },
-        since_hours_ago: { type: "integer", description: "Convenience: equivalent to since=now-N*h." },
-        limit: { type: "integer", description: "Max records (default 50, max 200).", default: 50 },
+        device_id: { type: "string", description: "Restrict to one device (optional). Raw kinds only." },
+        kind: {
+          type: "string",
+          enum: ["frame", "audio", "all", "sop", "skill", "trajectory", "memory", "workflow"],
+          description:
+            "What to return. Raw: frame|audio|all (telemetry). " +
+            "Synthesized: sop|skill|trajectory|memory|workflow (pipe outputs). " +
+            "Default: all.",
+          default: "all",
+        },
+        since: { type: "string", description: "ISO 8601 lower bound. Raw kinds only." },
+        until: { type: "string", description: "ISO 8601 upper bound. Raw kinds only." },
+        since_hours_ago: { type: "integer", description: "Convenience: equivalent to since=now-N*h. Raw kinds only." },
+        limit: { type: "integer", description: "Max records (default 50, max 200). Raw kinds only.", default: 50 },
+        latest_only: {
+          type: "boolean",
+          description:
+            "Synthesized kinds only: if true (default), collapse to the newest " +
+            "run per device. Set false to walk run history.",
+          default: true,
+        },
       },
     },
   },
 ];
+
+// Pipe-output kinds map to /workflows/generated, raw kinds map to /records.
+const SYNTHESIZED_KINDS = new Set(["sop", "skill", "trajectory", "memory", "workflow"]);
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   // Team tools only surface when an enterprise token was discovered at boot.
@@ -1695,7 +1720,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         const response = await callAPI(`/meetings/${meetingId}`, {
-          method: "PATCH",
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -1820,10 +1845,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         }
-        // Map MCP tool name → /api/enterprise/v1 path
+        // Map MCP tool name → /api/enterprise/v1 path. team-records also
+        // routes synthesized pipe outputs (kind=sop|skill|...) to the
+        // workflows endpoint so callers see one tool surface for "give me
+        // the org's data."
+        const kindArg = typeof args.kind === "string" ? args.kind : "";
         const subpath =
           name === "team-search" ? "/search"
           : name === "team-devices" ? "/devices"
+          : name === "team-records" && SYNTHESIZED_KINDS.has(kindArg) ? "/workflows/generated"
           : "/records";
         // Forward every primitive arg as a query param. The server validates;
         // unknown params are ignored, so we don't need to gatekeep here.

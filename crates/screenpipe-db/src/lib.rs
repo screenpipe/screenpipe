@@ -11,7 +11,8 @@ pub mod write_queue;
 
 pub use db::{
     find_matching_a11y_positions, parse_all_text_positions, DatabaseManager, DeleteTimeRangeResult,
-    ImmediateTx, NewMeetingTranscriptSegment,
+    ImmediateTx, NewMeetingTranscriptSegment, MEETING_END_REASON_AUTO_END,
+    MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_SHUTDOWN,
 };
 pub use migration_worker::{
     create_migration_worker, MigrationCommand, MigrationConfig, MigrationResponse, MigrationStatus,

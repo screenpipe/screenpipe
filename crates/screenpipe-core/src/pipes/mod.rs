@@ -1159,6 +1159,12 @@ pub type ConnectionCheck = Arc<
 /// Default execution timeout: 10 minutes.
 const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
+/// Cooldown held after a scheduled run finishes *when other scheduled pipes
+/// are still queued behind the execution semaphore*. Spaces consecutive runs
+/// so the tail of one and the head of the next don't pile into the same
+/// rolling-minute rate-limit window. No-op when nothing is waiting.
+const SCHEDULED_RUN_SPACING_SECS: u64 = 5;
+
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
 /// Returns the generated token (if any) so the caller can clean it up later.
@@ -3897,6 +3903,26 @@ impl PipeManager {
                         // Clean up pipe token from server registry
                         if let Some(ref token) = pipe_token {
                             cleanup_pipe_token(token, token_registry_ref.as_ref());
+                        }
+
+                        // Stagger consecutive scheduled runs: if other pipes are
+                        // still queued behind the semaphore, hold this permit a few
+                        // seconds longer before releasing it. This smooths the gap
+                        // between the tail of this run and the head of the next so
+                        // they don't collide in the same rolling-minute rate-limit
+                        // window. Skipped for event-triggered pipes (latency-
+                        // sensitive, queue-bypassing) and a no-op under no contention.
+                        if !is_event_triggered {
+                            let others_waiting = {
+                                let qr = queued_ref.lock().await;
+                                !qr.is_empty()
+                            };
+                            if others_waiting {
+                                tokio::time::sleep(std::time::Duration::from_secs(
+                                    SCHEDULED_RUN_SPACING_SECS,
+                                ))
+                                .await;
+                            }
                         }
                     });
                 }

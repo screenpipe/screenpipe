@@ -153,6 +153,13 @@ pub struct RecordingConfig {
     pub visual_check_interval_ms: Option<u64>,
     pub visual_change_threshold: Option<f64>,
     pub min_capture_interval_ms: Option<u64>,
+    /// User preference for what happens when a meeting is detected.
+    /// Seeds `HighFpsController.default_mode`; runtime-mutable via
+    /// `POST /capture/hd/settings`. See `RecordingSettings.hd_recording_default`.
+    pub hd_recording_default: crate::high_fps_controller::DefaultMode,
+    /// Capture debounce (ms) installed while an HD session is active.
+    /// Clamped to >= 33 ms by the controller.
+    pub hd_recording_interval_ms: u64,
     /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
     /// None = engine default (false). See `RecordingSettings.capture_on_keystroke`.
     pub capture_on_keystroke: Option<bool>,
@@ -237,11 +244,7 @@ impl RecordingConfig {
                     "deepgram-live" | "deepgram_live" => Some(settings.deepgram_api_key.clone()),
                     _ => None,
                 },
-                settings
-                    .languages
-                    .iter()
-                    .find(|s| s.as_str() != "default")
-                    .cloned(),
+                single_language_code(&settings.languages),
                 settings.effective_user_name().map(str::to_string),
             ),
             audio_devices: settings.audio_devices.clone(),
@@ -315,6 +318,12 @@ impl RecordingConfig {
             visual_check_interval_ms: settings.visual_check_interval_ms,
             visual_change_threshold: settings.visual_change_threshold,
             min_capture_interval_ms: settings.min_capture_interval_ms,
+            hd_recording_default: match settings.hd_recording_default.as_str() {
+                "always" => crate::high_fps_controller::DefaultMode::Always,
+                "never" => crate::high_fps_controller::DefaultMode::Never,
+                _ => crate::high_fps_controller::DefaultMode::Ask,
+            },
+            hd_recording_interval_ms: settings.hd_recording_interval_ms,
             capture_on_keystroke: settings.capture_on_keystroke,
             capture_on_clipboard: settings.capture_on_clipboard,
             capture_scroll: settings.capture_scroll,
@@ -429,6 +438,24 @@ impl RecordingConfig {
     }
 }
 
+/// Picks the single language to force on the live meeting transcription
+/// websocket. Deepgram's streaming API either forces one language
+/// (`language=<code>`) or code-switches across many (`language=multi`); unlike
+/// the batch API there is no per-stream allow-list. So we force a language only
+/// when the user selected exactly one, and otherwise return `None` to let the
+/// live path fall back to multilingual auto-detection. Strings are canonicalized
+/// through `Language` so a settings value of either "spanish" or "es" yields "es".
+fn single_language_code(languages: &[String]) -> Option<String> {
+    let mut selected = languages
+        .iter()
+        .filter(|s| s.as_str() != "default")
+        .filter_map(|s| s.parse::<Language>().ok());
+    match (selected.next(), selected.next()) {
+        (Some(only), None) => Some(only.as_lang_code().to_string()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +506,50 @@ mod tests {
         let c = build(&settings_with(false, false));
         assert_eq!(c.listen_address, Ipv4Addr::LOCALHOST);
         assert!(!c.api_auth);
+    }
+
+    fn langs(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_language_means_multilingual() {
+        // Empty or "default"-only selections must not force a language; the
+        // live websocket then falls back to `language=multi`.
+        assert_eq!(single_language_code(&[]), None);
+        assert_eq!(single_language_code(&langs(&["default"])), None);
+    }
+
+    #[test]
+    fn single_language_is_forced_and_canonicalized() {
+        // The user's one pick is forced, and the raw settings string is
+        // normalized to an ISO code regardless of whether it was a name or code.
+        assert_eq!(
+            single_language_code(&langs(&["spanish"])),
+            Some("es".to_string())
+        );
+        assert_eq!(
+            single_language_code(&langs(&["es"])),
+            Some("es".to_string())
+        );
+        assert_eq!(
+            single_language_code(&langs(&["default", "portuguese"])),
+            Some("pt".to_string())
+        );
+    }
+
+    #[test]
+    fn multiple_languages_mean_multilingual() {
+        // Deepgram streaming has no per-stream allow-list, so 2+ picks fall
+        // back to multilingual rather than arbitrarily forcing the first.
+        assert_eq!(
+            single_language_code(&langs(&["spanish", "portuguese"])),
+            None
+        );
+    }
+
+    #[test]
+    fn unparseable_language_means_multilingual() {
+        assert_eq!(single_language_code(&langs(&["klingon"])), None);
     }
 }

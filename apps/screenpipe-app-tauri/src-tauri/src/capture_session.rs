@@ -82,7 +82,8 @@ impl CaptureSession {
             let vision_manager = Arc::new(
                 VisionManager::new(vision_config, db_clone, tokio::runtime::Handle::current())
                     .with_hot_frame_cache(server.hot_frame_cache.clone())
-                    .with_power_profile(server.power_manager.subscribe()),
+                    .with_power_profile(server.power_manager.subscribe())
+                    .with_high_fps_controller(server.high_fps_controller.clone()),
             );
 
             capture_trigger_tx = Some(vision_manager.trigger_sender());

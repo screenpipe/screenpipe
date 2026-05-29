@@ -998,14 +998,14 @@ const AISection = ({
             } else {
               // Fallback to hardcoded models
               setModels([
-                { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+                { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
                 { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
                 { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
               ]);
             }
           } catch {
             setModels([
-              { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+              { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
               { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
               { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
             ]);
@@ -1098,7 +1098,7 @@ const AISection = ({
             { id: "auto", name: "Auto (recommended)", provider: "screenpipe" },
             { id: "claude-haiku-4-5", name: "Haiku 4.5 (fast)", provider: "screenpipe" },
             { id: "claude-sonnet-4-5", name: "Sonnet 4.5 (balanced)", provider: "screenpipe" },
-            { id: "claude-opus-4-6", name: "Opus 4.6 (powerful, pro)", provider: "screenpipe" },
+            { id: "claude-opus-4-8", name: "Opus 4.8 (powerful, pro)", provider: "screenpipe" },
             { id: "gemini-3-flash", name: "Gemini 3 Flash (fast)", provider: "screenpipe" },
             { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite (cheapest)", provider: "screenpipe" },
             { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro (balanced)", provider: "screenpipe" },
@@ -1500,7 +1500,7 @@ const AISection = ({
                             key={model.id}
                             value={model.id}
                             onSelect={async () => {
-                              if (model.id === "claude-opus-4-6" && !settings.user?.cloud_subscribed) {
+                              if (model.id === "claude-opus-4-8" && !settings.user?.cloud_subscribed) {
                                 if (!settings.user?.token) {
                                   await commands.openLoginWindow();
                                 } else {
