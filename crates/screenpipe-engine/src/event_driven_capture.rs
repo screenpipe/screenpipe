@@ -227,8 +227,8 @@ pub struct EventDrivenCapture {
     last_capture: Instant,
     /// Last known idle_ms from ActivityFeed
     last_idle_ms: u64,
-    /// Instant of the last non-Idle, non-VisualChange trigger that produced a
-    /// successful capture. Used to detect extended AFK stretches and suppress
+    /// Instant of the last non-Idle trigger that produced a successful capture.
+    /// Used to detect extended AFK stretches and suppress
     /// redundant Idle frames. Initialized to Instant::now() so suppression does
     /// not kick in until afk_suppression_after_ms has elapsed from startup.
     last_non_idle_trigger: Instant,
@@ -258,9 +258,8 @@ impl EventDrivenCapture {
     /// Resets the AFK clock so Idle suppression won't engage for another
     /// `afk_suppression_after_ms` milliseconds.
     ///
-    /// Call this for every trigger that is NOT `Idle` or `VisualChange`.
-    /// `VisualChange` is excluded because automated visual changes (videos,
-    /// loading spinners) are not evidence the user is present at the keyboard.
+    /// Call this for every trigger that is NOT `Idle`. `VisualChange` is
+    /// included — a screen change is meaningful activity per issue spec.
     pub fn mark_non_idle_trigger(&mut self) {
         self.last_non_idle_trigger = Instant::now();
     }
