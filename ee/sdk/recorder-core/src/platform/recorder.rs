@@ -1076,6 +1076,7 @@ async fn paired_capture_loop_for_monitor(
             use_pii_removal,
             languages: Vec::new(),
             elements_ref_frame_id: None,
+            screenshot_disabled: false,
         };
 
         match paired_capture(&ctx, Some(&snapshot)).await {

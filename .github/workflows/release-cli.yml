@@ -125,9 +125,9 @@ jobs:
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             export CFLAGS="-mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
             export CXXFLAGS="-mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
-            cargo build --release -p screenpipe-engine --bin screenpipe --features metal,parakeet-mlx --target ${{ matrix.target }}
+            cargo build --release -p screenpipe-engine --bin screenpipe --features metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml --target ${{ matrix.target }}
           else
-            cargo build --release -p screenpipe-engine --bin screenpipe --features metal --target ${{ matrix.target }}
+            cargo build --release -p screenpipe-engine --bin screenpipe --features metal,redact-onnx-coreml --target ${{ matrix.target }}
           fi
 
       - name: Upload debug symbols to Sentry
@@ -346,7 +346,7 @@ jobs:
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: |
-          cargo build --release -p screenpipe-engine --bin screenpipe --target x86_64-pc-windows-msvc
+          cargo build --release -p screenpipe-engine --bin screenpipe --features directml,redact-onnx-directml --target x86_64-pc-windows-msvc
 
       - name: Upload debug symbols to Sentry
         shell: powershell
@@ -490,7 +490,7 @@ jobs:
 
       - name: Build CLI
         run: |
-          cargo build --release -p screenpipe-engine --bin screenpipe --target ${{ matrix.target }}
+          cargo build --release -p screenpipe-engine --bin screenpipe --features redact-onnx-cpu --target ${{ matrix.target }}
 
       - name: Upload debug symbols to Sentry
         env:

@@ -316,7 +316,7 @@ pub fn reencrypt_store_file(app: &AppHandle) {
                     .and_then(|s| s.get("encryptStore"))
                     .and_then(|v| v.as_bool())
             })
-            .unwrap_or(false);
+            .unwrap_or(true);
 
         if encrypt_enabled && !flag_path.exists() {
             let _ = std::fs::write(&flag_path, b"");

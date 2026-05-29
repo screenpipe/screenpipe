@@ -218,13 +218,27 @@ pub(crate) async fn load_oauth_json_with_instance(
         );
     }
 
-    // Fallback: callers that don't know about instances (instance=None)
-    // should still find the token when the user has a single named
-    // instance. Skip when instance is explicitly set — the caller wants
-    // that exact one.
+    // Fallback A: explicit instance that has no keyed entry but exactly one
+    // default-slot token exists. Happens when the user connected once before
+    // multi-account support (token stored under None), then passes
+    // ?instance=their@email.com. We know there is only one account so it is
+    // safe to serve it — we are not guessing between multiple accounts.
     if instance.is_some() {
+        let instances = list_oauth_instances(store, integration_id).await;
+        if matches!(instances.as_slice(), [None]) {
+            tracing::debug!(
+                "oauth: {} explicit instance {:?} not found, falling back to sole default-slot token",
+                integration_id,
+                instance,
+            );
+            let v = load_oauth_json_exact(store, integration_id, None).await?;
+            return Some((v, None));
+        }
         return None;
     }
+
+    // Fallback B: callers that don't know about instances (instance=None)
+    // should still find the token when the user has a single named instance.
     let instances = list_oauth_instances(store, integration_id).await;
     let named: Vec<String> = instances.into_iter().flatten().collect();
     match named.len() {
@@ -981,6 +995,54 @@ mod tests {
 
         let got = load_oauth_json(Some(&store), id, Some("other@example.com")).await;
         assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_instance_falls_back_to_sole_default_slot() {
+        // Bug: user connected once (token in default slot), then passes
+        // ?instance=their@email.com. The exact key doesn't exist but there's
+        // only one account — we should serve it rather than 401.
+        let store = mem_store().await;
+        let id = "_t_default_fallback";
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "default-tok", "refresh_token": "rt"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, Some("user@example.com")).await;
+        assert!(got.is_some(), "expected fallback to default slot");
+        assert_eq!(got.unwrap()["access_token"], "default-tok");
+    }
+
+    #[tokio::test]
+    async fn explicit_instance_does_not_fall_back_when_multiple_exist() {
+        // Two named accounts — passing a non-matching explicit instance must
+        // still return None; we cannot guess which account was meant.
+        let store = mem_store().await;
+        let id = "_t_no_fallback_multi";
+        store
+            .set_json(
+                &format!("oauth:{}:a@example.com", id),
+                &json!({"access_token": "A", "refresh_token": "ra"}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:b@example.com", id),
+                &json!({"access_token": "B", "refresh_token": "rb"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, Some("c@example.com")).await;
+        assert!(
+            got.is_none(),
+            "must not fall back when multiple accounts exist"
+        );
     }
 
     #[tokio::test]

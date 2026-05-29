@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::event_driven_capture::{CaptureTriggerMsg, TriggerSender};
 use crate::focus_aware_controller::FocusAwareController;
 use crate::frame_linker_actor::{linker_channel, spawn_frame_linker, LinkerSender};
+use crate::high_fps_controller::HighFpsController;
 use crate::hot_frame_cache::HotFrameCache;
 use crate::power::PowerProfile;
 
@@ -100,6 +101,15 @@ pub struct VisionManager {
     /// controller report Active for all monitors, preserving the pre-feature
     /// behaviour for those users.
     focus_controller: Arc<FocusAwareController>,
+    /// Shared runtime control for the HD-recording override (bound
+    /// sessions only — see `HighFpsController`). `None` means the
+    /// feature is unavailable on this engine (e.g. vision-only build
+    /// with no detector / no AppState route surface). Each capture loop
+    /// polls `snapshot()` once per tick.
+    high_fps_controller: Option<Arc<HighFpsController>>,
+    /// Set when the user's monitor allowlist matched zero connected displays and
+    /// we fell back to recording every monitor. Clears the filter for hot-plug too.
+    stale_allowlist_fallback: Arc<AtomicBool>,
 }
 
 impl VisionManager {
@@ -110,7 +120,9 @@ impl VisionManager {
         vision_handle: Handle,
     ) -> Self {
         // Single broadcast channel shared across all monitors + UI recorder.
-        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(64);
+        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(
+            crate::event_driven_capture::TRIGGER_CHANNEL_BUFFER,
+        );
 
         // Frame-linker actor: pairs UI events with the frames they
         // caused us to capture. Single shared instance across all
@@ -146,6 +158,8 @@ impl VisionManager {
             hot_frame_cache: None,
             power_profile_rx: None,
             focus_controller,
+            high_fps_controller: None,
+            stale_allowlist_fallback: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -158,6 +172,13 @@ impl VisionManager {
     /// Set the power profile receiver so capture loops adapt to battery state.
     pub fn with_power_profile(mut self, rx: watch::Receiver<PowerProfile>) -> Self {
         self.power_profile_rx = Some(rx);
+        self
+    }
+
+    /// Wire the shared high-FPS controller so capture loops can react to
+    /// manual toggles and meeting-detected transitions at runtime.
+    pub fn with_high_fps_controller(mut self, controller: Arc<HighFpsController>) -> Self {
+        self.high_fps_controller = Some(controller);
         self
     }
 
@@ -184,6 +205,12 @@ impl VisionManager {
     /// Uses prefix matching (name + resolution) so that position changes after
     /// reconnect don't break the filter.
     pub fn is_monitor_allowed(&self, monitor: &screenpipe_screen::monitor::SafeMonitor) -> bool {
+        if self
+            .stale_allowlist_fallback
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return true;
+        }
         if self.config.use_all_monitors || self.config.monitor_ids.is_empty() {
             return true;
         }
@@ -235,7 +262,36 @@ impl VisionManager {
             }
         }
 
-        let task_count = self.recording_tasks.len();
+        let mut task_count = self.recording_tasks.len();
+        if task_count == 0 && total_monitors > 0 && !self.config.use_all_monitors {
+            warn!(
+                "VisionManager: allowlist {:?} matched 0/{} display(s) — \
+                 falling back to all connected monitors (stale monitor_ids?)",
+                self.config.monitor_ids, total_monitors
+            );
+            self.stale_allowlist_fallback
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            for monitor in list_monitors().await {
+                let monitor_id = monitor.id();
+                if let Err(e) = self.start_monitor(monitor_id).await {
+                    warn!(
+                        "Failed to start recording on monitor {} during stale-id fallback: {:?}",
+                        monitor_id, e
+                    );
+                }
+            }
+            task_count = self.recording_tasks.len();
+            if task_count > 0 {
+                info!(
+                    "VisionManager started via stale monitor_ids fallback ({}/{} monitor(s))",
+                    task_count, total_monitors
+                );
+                return Ok(());
+            }
+            self.stale_allowlist_fallback
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+
         if task_count == 0 {
             // Roll status back so the next .start() attempt isn't blocked by the
             // idempotency guard above.
@@ -444,6 +500,7 @@ impl VisionManager {
         let power_profile_rx = self.power_profile_rx.clone();
         let focus_controller = self.focus_controller.clone();
         let linker_tx = Some(self.linker_tx.clone());
+        let high_fps_controller = self.high_fps_controller.clone();
 
         info!(
             "Starting event-driven capture for monitor {} (device: {})",
@@ -472,6 +529,7 @@ impl VisionManager {
                 power_profile_rx,
                 focus_controller,
                 linker_tx,
+                high_fps_controller,
             )
             .await
             {
@@ -601,41 +659,52 @@ mod tests {
         VisionManager::new(config, db, Handle::current())
     }
 
-    /// Regression: with an allowlist that matches zero physical monitors,
-    /// `start()` must return `Err` and leave status as `Stopped`, so the
-    /// outer `CaptureSession::start` stays None and the tray can retry.
-    ///
-    /// Before the fix: `start()` returned `Ok(())` silently with zero tasks,
-    /// and the outer detached spawn swallowed the no-op — leaving a "dead"
-    /// `CaptureSession` parked in `RecordingState.capture`. Every subsequent
-    /// tray click then hit the `is_some()` short-circuit in `recording.rs`.
+    /// When the allowlist is stale but physical monitors exist, fall back to
+    /// recording all connected displays instead of failing capture start.
     #[tokio::test]
-    async fn start_with_no_allowed_monitors_returns_err() {
-        // A stable_id prefix that cannot exist on any real host.
+    async fn start_with_stale_allowlist_falls_back_to_all_monitors() {
+        let monitors = list_monitors().await;
+        if monitors.is_empty() {
+            // Headless CI — nothing to fall back to.
+            return;
+        }
+
+        let stale = vec!["Display 999_9999x9999_0,0".to_string()];
+        let vm = make_vm_with_monitor_ids(stale).await;
+
+        vm.start()
+            .await
+            .expect("expected Ok via stale-id fallback when monitors exist");
+
+        assert!(
+            vm.recording_tasks.len() > 0,
+            "fallback should start at least one monitor task"
+        );
+        assert_eq!(vm.status().await, VisionManagerStatus::Running);
+
+        vm.stop().await.expect("stop after fallback start");
+    }
+
+    /// With zero physical monitors, a stale allowlist still fails cleanly.
+    #[tokio::test]
+    async fn start_with_no_connected_monitors_returns_err() {
+        let monitors = list_monitors().await;
+        if !monitors.is_empty() {
+            // Needs a headless environment — skip on dev machines with displays.
+            return;
+        }
+
         let stale = vec!["Display 999_9999x9999_0,0".to_string()];
         let vm = make_vm_with_monitor_ids(stale).await;
 
         let result = vm.start().await;
         assert!(
             result.is_err(),
-            "expected Err when allowlist matches zero monitors, got: {:?}",
+            "expected Err when no monitors are connected, got: {:?}",
             result
         );
-
-        // Status must be rolled back to Stopped so a subsequent retry
-        // (with a corrected allowlist) isn't blocked by the idempotency guard.
-        assert_eq!(
-            vm.status().await,
-            VisionManagerStatus::Stopped,
-            "status must be rolled back to Stopped on Err, otherwise retry is blocked"
-        );
-
-        // Recording tasks map must stay empty — nothing was spawned.
-        assert_eq!(
-            vm.recording_tasks.len(),
-            0,
-            "no tasks should exist after failed start"
-        );
+        assert_eq!(vm.status().await, VisionManagerStatus::Stopped);
+        assert_eq!(vm.recording_tasks.len(), 0);
     }
 
     /// Verify that stop_monitor completes promptly when the task finishes normally.

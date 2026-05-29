@@ -11,8 +11,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const WEBDRIVER_PORT = 4445;
-/** Focus/server port — single-instance check posts here; must be free for E2E. */
-const FOCUS_PORT = 11435;
+/** Focus/server port — single-instance check posts here; must be free for E2E.
+ *  Defaults to a non-default port so the e2e instance can coexist with a
+ *  developer's running production screenpipe app (which holds 11435). The
+ *  Rust binary reads `SCREENPIPE_FOCUS_PORT` from env when this differs. */
+const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? '11436');
 
 /** Kill any process listening on a port. No-op if none. */
 function killPort(port: number): void {
@@ -118,6 +121,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       ...process.env,
       SCREENPIPE_DATA_DIR: E2E_DATA_DIR,
       SCREENPIPE_E2E_SEED: E2E_SEED_FLAGS,
+      SCREENPIPE_FOCUS_PORT: String(FOCUS_PORT),
       TAURI_WEBDRIVER_PORT: String(port),
       // When the app panics under E2E (common during early platform bring-up),
       // a backtrace in CI logs is far more actionable than the default "run with

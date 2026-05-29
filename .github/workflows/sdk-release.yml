@@ -63,9 +63,20 @@ jobs:
               throw new Error(`${name} optional dependency is ${depVersion}, expected ${version}`);
             }
           }
-          const cargo = fs.readFileSync("Cargo.toml", "utf8");
-          if (!cargo.includes(`version = "${version}"`)) {
-            throw new Error(`Cargo.toml does not contain version = "${version}"`);
+          // All three Rust manifests in the SDK workspace must move
+          // together. recorder-core got missed during the 0.4.x bumps
+          // and silently sat at 0.3.0 — caught only because someone
+          // grepped versions by hand. Validate every workspace member.
+          const cargoManifests = [
+            "Cargo.toml",
+            "recorder-core/Cargo.toml",
+            "tauri/rust/Cargo.toml",
+          ];
+          for (const path of cargoManifests) {
+            const cargo = fs.readFileSync(path, "utf8");
+            if (!cargo.includes(`version = "${version}"`)) {
+              throw new Error(`${path} does not contain version = "${version}"`);
+            }
           }
           NODE
       - id: mode
@@ -160,10 +171,63 @@ jobs:
           merge-multiple: true
       - name: Create platform npm dirs
         run: bun x napi create-npm-dir -t .
+      # Move each `screenpipe-sdk.<triple>.node` into the matching
+      # `npm/<triple>/` subdir. Without this step the platform packages
+      # publish as empty stubs (README + package.json, no binary) and
+      # `require('@screenpipe/sdk-darwin-arm64')` fails with
+      # "Cannot find module ... .node". This is what bit every release
+      # 0.1.0 → 0.4.1 — `napi prepublish` only updates the main
+      # package.json's optionalDependencies, it does NOT distribute the
+      # built binaries, and `napi artifacts` only works with the napi-rs
+      # GitHub Actions artifact naming convention which we don't use.
+      - name: Distribute native bindings into platform npm dirs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          moved=0
+          for nodefile in screenpipe-sdk.*.node; do
+            triple="${nodefile#screenpipe-sdk.}"
+            triple="${triple%.node}"
+            target_dir="npm/${triple}"
+            if [[ ! -d "$target_dir" ]]; then
+              echo "::error::No npm dir for triple '$triple' (file $nodefile)"
+              exit 1
+            fi
+            mv "$nodefile" "$target_dir/"
+            moved=$((moved + 1))
+            echo "Moved $nodefile → $target_dir/"
+          done
+          if [[ $moved -eq 0 ]]; then
+            echo "::error::No screenpipe-sdk.*.node files found — build artifact download likely failed"
+            exit 1
+          fi
+          # Each platform dir must now contain exactly its one .node.
+          for d in npm/*/; do
+            triple="$(basename "$d")"
+            expected="screenpipe-sdk.${triple}.node"
+            if [[ ! -f "$d$expected" ]]; then
+              echo "::error::Missing $d$expected after distribute"
+              exit 1
+            fi
+          done
+      # `napi prepublish` updates the main package.json so each
+      # optionalDependency line matches the current version. By default
+      # it ALSO publishes every platform tarball to npm AND creates a
+      # GitHub Release with the binaries attached — both of those steps
+      # need credentials and one of them creates side-effects we don't
+      # want (we publish from our own loop below and don't want random
+      # bot-authored GH releases). `--dry-run --skip-gh-release` keeps
+      # only the metadata update.
       - name: Prepare npm packages
-        run: bun run prepublishOnly
+        run: bun x napi prepublish -t npm --dry-run --skip-gh-release
       - name: Inspect package contents
-        run: npm pack --dry-run --ignore-scripts
+        run: |
+          npm pack --dry-run --ignore-scripts
+          echo "--- platform tarballs ---"
+          for d in npm/*/; do
+            echo "## $d"
+            (cd "$d" && npm pack --dry-run --ignore-scripts 2>&1 | tail -20)
+          done
       - name: Publish npm packages
         if: needs.validate.outputs.publish_npm == 'true'
         env:
@@ -180,11 +244,96 @@ jobs:
             exit 1
           fi
 
+          # Publish each platform tarball. Tolerate "already published"
+          # so we can recover from a partially-failed prior run without
+          # bumping the version (the 0.4.2 attempt published 4/4
+          # platforms then died on the main package — re-dispatching
+          # should fast-forward over those without burning a version).
           while IFS= read -r -d '' package_dir; do
             if [[ -f "$package_dir/package.json" ]]; then
               echo "Publishing $package_dir"
-              (cd "$package_dir" && npm publish --access public --tag "$NPM_TAG" --provenance)
+              if ! (cd "$package_dir" && npm publish --access public --tag "$NPM_TAG" --provenance --ignore-scripts 2>&1); then
+                # 403 "cannot publish over previously published version"
+                # is the only error we treat as benign. Check it
+                # explicitly so a real auth/network error still fails.
+                pv=$(node -p "require('./$package_dir/package.json').version")
+                pn=$(node -p "require('./$package_dir/package.json').name")
+                published=$(npm view "${pn}@${pv}" version 2>/dev/null || true)
+                if [[ "$published" == "$pv" ]]; then
+                  echo "::notice::${pn}@${pv} already published, skipping"
+                else
+                  echo "::error::Publish of $package_dir failed and version not on registry"
+                  exit 1
+                fi
+              fi
             fi
           done < <(find npm -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
-          npm publish --access public --tag "$NPM_TAG" --provenance
+          # `--ignore-scripts` keeps npm from auto-running our
+          # `prepublishOnly` hook, which is `napi prepublish -t npm`
+          # (no flags) and would try to re-publish the already-published
+          # platform packages. We've done all the prep explicitly above.
+          npm publish --access public --tag "$NPM_TAG" --provenance --ignore-scripts
+
+  swift-mirror:
+    # SPM cannot consume `ee/sdk/Package.swift` from a subdirectory of a
+    # repo, so the Swift SDK ships from a separate mirror repo
+    # (`screenpipe/screenpipe-sdk-swift`) where `Package.swift` is at the
+    # root. This job keeps the mirror in lockstep with npm: every time we
+    # publish `@screenpipe/sdk@X.Y.Z`, we sync the Swift sources and tag
+    # `vX.Y.Z` on the mirror so SPM consumers get the matching version.
+    #
+    # Manual sync drift bit us once (mirror sat at v0.1.0 while npm was at
+    # v0.4.1) — gating this on the same `publish_npm` confirmation makes
+    # the two channels move together by construction.
+    needs: [validate, npm]
+    if: needs.validate.outputs.publish_npm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync Swift sources into screenpipe-sdk-swift mirror
+        env:
+          # PAT must have `repo` scope on screenpipe/screenpipe-sdk-swift.
+          # We reuse the existing PAT secret (already used by release-app)
+          # rather than minting a separate one — same trust boundary, one
+          # less secret to rotate.
+          GH_TOKEN: ${{ secrets.PAT }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::PAT secret is required to push to the Swift mirror"
+            exit 1
+          fi
+
+          work=$(mktemp -d)
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/screenpipe/screenpipe-sdk-swift.git" "$work/mirror"
+
+          # Per-directory rsync (not a root mirror) so the mirror's
+          # Swift-specific README.md / LICENSE.md aren't clobbered by the
+          # monorepo-wide README that documents Electron + Tauri + Node.
+          rsync -a --delete ee/sdk/Sources/ "$work/mirror/Sources/"
+          rsync -a --delete ee/sdk/Tests/   "$work/mirror/Tests/"
+          cp ee/sdk/Package.swift "$work/mirror/Package.swift"
+
+          cd "$work/mirror"
+          git config user.name  "screenpipe-bot"
+          git config user.email "bot@screenpi.pe"
+
+          if git diff --quiet; then
+            echo "Swift mirror already at v${VERSION} — nothing to sync"
+          else
+            git add Sources Tests Package.swift
+            git commit -m "chore: sync Swift SDK to v${VERSION}"
+            git push origin main
+          fi
+
+          # Tag even if the tree was identical — the mirror may have been
+          # synced ad-hoc earlier and just be missing the tag.
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists on mirror, skipping"
+          else
+            git tag "v${VERSION}"
+            git push origin "v${VERSION}"
+          fi

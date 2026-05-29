@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-tauri"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Native Tauri v2 plugin for the screenpipe SDK — in-process recorder, no Node bridge"
 license = "LicenseRef-Screenpipe-Enterprise"

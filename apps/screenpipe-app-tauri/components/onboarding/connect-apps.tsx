@@ -421,7 +421,7 @@ function IntegrationCard({
       )}
 
       <motion.div
-        className="flex flex-col gap-1.5"
+        className="flex flex-col gap-1.5 h-full"
         animate={{ opacity: isLocked ? 0.62 : 1 }}
         transition={{ duration: 0.4 }}
       >
@@ -443,7 +443,7 @@ function IntegrationCard({
           {integration.valueProp}
         </p>
 
-        <div className="mt-0.5 min-h-[20px] flex items-center">
+        <div className="mt-auto min-h-[20px] flex items-center">
           {isConnected && !isLocked ? (
             <motion.div
               className="flex flex-col gap-0.5 w-full"

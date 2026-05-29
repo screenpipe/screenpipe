@@ -11,7 +11,7 @@ use commands::show_main_window;
 use serde_json::json;
 use std::env;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
@@ -40,6 +40,7 @@ mod analytics;
 mod icons;
 use crate::analytics::start_analytics;
 mod agent_event_emitter;
+mod audio_exclusions;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -127,6 +128,9 @@ mod safe_icon;
 mod shortcuts;
 mod vault;
 mod viewer;
+
+#[cfg(target_os = "macos")]
+static MIC_FOCUS_CAPTURE_RESTART: AtomicBool = AtomicBool::new(false);
 use base64::Engine;
 use health::start_health_check;
 use log_files::{get_log_files, get_screenpipe_data_dir};
@@ -423,8 +427,12 @@ async fn main() {
             .find(|a| a.starts_with("screenpipe://"))
             .cloned();
 
+        let focus_port: u16 = std::env::var("SCREENPIPE_FOCUS_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(11435);
         if let Ok(resp) = reqwest::Client::new()
-            .post("http://127.0.0.1:11435/focus")
+            .post(format!("http://127.0.0.1:{}/focus", focus_port))
             .timeout(std::time::Duration::from_secs(2))
             .json(&serde_json::json!({
                 "args": args,
@@ -725,6 +733,10 @@ async fn main() {
                 permissions::request_browsers_automation_permission,
                 permissions::get_browsers_automation_status,
                 permissions::request_single_browser_automation,
+                // Commands from audio_exclusions.rs
+                audio_exclusions::read_audio_exclusions,
+                audio_exclusions::write_audio_exclusions,
+                audio_exclusions::read_app_bundle_metadata,
                 // Commands from main.rs
                 get_env,
                 get_e2e_seed_flags,
@@ -751,6 +763,7 @@ async fn main() {
                 commands::save_enterprise_team_config,
                 commands::get_enterprise_team_api_token,
                 commands::get_cloud_token,
+                commands::set_cloud_token,
                 enterprise_policy::set_enterprise_policy,
                 enterprise_policy::set_sync_streams,
                 commands::get_disk_usage,
@@ -924,6 +937,7 @@ async fn main() {
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
+        cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(None))),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -934,6 +948,28 @@ async fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_http::init())
         .on_window_event(|window, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::WindowEvent::Focused(true) => {
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if !permissions::check_microphone_permission().permitted() {
+                        return;
+                    }
+                    if !health::get_audio_device_status().is_empty() {
+                        return;
+                    }
+                    if MIC_FOCUS_CAPTURE_RESTART
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                    {
+                        return;
+                    }
+                    info!(
+                        "Microphone permission newly granted (focus return) — restarting capture for audio reinit"
+                    );
+                    permissions::restart_capture_on_mic_grant(app).await;
+                });
+            }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);
@@ -1038,6 +1074,7 @@ async fn main() {
             commands::save_enterprise_team_config,
             commands::get_enterprise_team_api_token,
             commands::get_cloud_token,
+            commands::set_cloud_token,
             spawn_screenpipe,
             stop_screenpipe,
             recording::start_capture,
@@ -1063,6 +1100,9 @@ async fn main() {
             permissions::check_coreaudio_process_tap_available,
             permissions::check_arc_automation_permission,
             permissions::request_arc_automation_permission,
+            audio_exclusions::read_audio_exclusions,
+            audio_exclusions::write_audio_exclusions,
+            audio_exclusions::read_app_bundle_metadata,
             set_tray_unhealth_icon,
             set_tray_health_icon,
             write_browser_log,
@@ -1635,7 +1675,11 @@ async fn main() {
             let app_handle = app.handle().clone();
 
             // Initialize server first (core service)
-            let server_shutdown_tx = spawn_server(app_handle.clone(), 11435);
+            let focus_port: u16 = std::env::var("SCREENPIPE_FOCUS_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(11435);
+            let server_shutdown_tx = spawn_server(app_handle.clone(), focus_port);
             app.manage(server_shutdown_tx);
 
 
@@ -1694,6 +1738,7 @@ async fn main() {
                 let server_arc = recording_state.server.clone();
                 let capture_arc = recording_state.capture.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
+                let cloud_token_arc = recording_state.cloud_token.clone();
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
@@ -1828,6 +1873,7 @@ async fn main() {
                                 &config,
                                 on_pipe_output,
                                 Some(owned_browser),
+                                cloud_token_arc.clone(),
                             )
                             .await
                             {

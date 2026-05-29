@@ -17,8 +17,7 @@ use screenpipe_audio::core::device::{
     get_cpal_device_and_config, AudioDevice, DeviceType, MACOS_OUTPUT_AUDIO_DEVICE_NAME,
 };
 use screenpipe_audio::{
-    core::device::{default_input_device, default_output_device, parse_audio_device},
-    meeting_detector::MeetingDetector,
+    core::device::resolve_audio_devices_for_capture, meeting_detector::MeetingDetector,
 };
 use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::find_ffmpeg_path;
@@ -37,6 +36,7 @@ use screenpipe_engine::{
         vision::handle_vision_command,
         Cli, Command, RecordArgSources,
     },
+    high_fps_controller::HighFpsController,
     hot_frame_cache::HotFrameCache,
     start_meeting_watcher, start_power_manager, start_sleep_monitor, start_speaker_identification,
     start_ui_recording,
@@ -733,33 +733,15 @@ async fn main() -> anyhow::Result<()> {
         list_monitors().await
     };
 
-    let mut audio_devices = Vec::new();
+    let audio_devices = if config.disable_audio {
+        Vec::new()
+    } else {
+        resolve_audio_devices_for_capture(&config.audio_devices, config.use_system_default_audio)
+            .await
+    };
 
-    if !config.disable_audio {
-        if config.audio_devices.is_empty()
-            || config.use_system_default_audio
-            || config.audio_devices == vec!["default".to_string()]
-        {
-            // Use default devices
-            if let Ok(input_device) = default_input_device() {
-                audio_devices.push(input_device.to_string());
-            }
-            if let Ok(output_device) = default_output_device().await {
-                audio_devices.push(output_device.to_string());
-            }
-        } else {
-            // Use specified devices
-            for d in &config.audio_devices {
-                match parse_audio_device(d) {
-                    Ok(device) => audio_devices.push(device.to_string()),
-                    Err(e) => warn!("skipping unparseable audio device '{}': {}", d, e),
-                }
-            }
-        }
-
-        if audio_devices.is_empty() {
-            warn!("no audio devices available.");
-        }
+    if !config.disable_audio && audio_devices.is_empty() {
+        warn!("no audio devices available.");
     }
 
     let audio_devices_clone = audio_devices.clone();
@@ -949,6 +931,86 @@ async fn main() -> anyhow::Result<()> {
         info!("snapshot compaction disabled via --disable-snapshot-compaction");
     }
 
+    // Build the shared high-FPS controller once. Same instance feeds the
+    // VisionManager (so each capture loop reacts on the next tick) and the
+    // SCServer (so HTTP toggles, the tray menu, and pipes can all hit it
+    // without an engine restart). Seed from the persisted RecordingSettings
+    // so a user who already toggled the auto-mode preference keeps it.
+    let high_fps_controller = Arc::new(HighFpsController::new(
+        meeting_detector.clone(),
+        config.hd_recording_default,
+        config.hd_recording_interval_ms,
+    ));
+
+    // Wire `meeting_ended` → controller.handle_meeting_ended so a
+    // meeting-bound session auto-stops when the call ends. Without this,
+    // the only safety net is the 4-hour hard cap.
+    {
+        let controller = high_fps_controller.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut sub =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            while let Some(event) = sub.next().await {
+                let meeting_id = event
+                    .data
+                    .get("meeting_id")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
+                if let Some(id) = meeting_id {
+                    controller.handle_meeting_ended(id);
+                }
+            }
+        });
+    }
+
+    // On every `meeting_started`:
+    //   1. Always upgrade any active PrewarmPending session to Meeting{id}
+    //      so the user gets full call coverage instead of the 1hr clip.
+    //      Safe regardless of default_mode — only PrewarmPending sessions
+    //      are upgraded; explicit timers and existing meeting bindings
+    //      are left alone.
+    //   2. If default_mode = Always AND no session is pending an upgrade,
+    //      auto-start a meeting-bound session.
+    //   Ask mode is handled by the desktop shell (it adds a "+ HD" action
+    //   to the existing notification).
+    {
+        let controller = high_fps_controller.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut sub =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+            while let Some(event) = sub.next().await {
+                let meeting_id = event
+                    .data
+                    .get("meeting_id")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
+                let Some(id) = meeting_id else { continue };
+
+                // Step 1: prewarm-pending upgrade is universal.
+                controller.try_upgrade_pending_to_meeting(id);
+
+                // Step 2: auto-start only for Always mode AND only if the
+                // upgrade above didn't already bind a session.
+                let snap = controller.snapshot();
+                if !matches!(
+                    snap.default_mode,
+                    screenpipe_engine::high_fps_controller::DefaultMode::Always
+                ) {
+                    continue;
+                }
+                let already_bound = matches!(
+                    snap.kind,
+                    Some(screenpipe_engine::high_fps_controller::SessionKind::Meeting { .. })
+                );
+                if !already_bound {
+                    controller.start_meeting_session(id);
+                }
+            }
+        });
+    }
+
     // Create VisionManager for event-driven capture on all monitors
     let (handle, capture_trigger_tx, linker_tx) = if !config.disable_vision {
         let vision_config =
@@ -956,7 +1018,8 @@ async fn main() -> anyhow::Result<()> {
         let vision_manager = Arc::new(
             VisionManager::new(vision_config, db_clone.clone(), vision_handle.clone())
                 .with_hot_frame_cache(hot_frame_cache.clone())
-                .with_power_profile(power_manager.subscribe()),
+                .with_power_profile(power_manager.subscribe())
+                .with_high_fps_controller(high_fps_controller.clone()),
         );
 
         // Get the broadcast trigger sender BEFORE moving the VisionManager into
@@ -1061,7 +1124,7 @@ async fn main() -> anyhow::Result<()> {
     // SCServer::cloud_token_handle after spawn.
     if let Ok(t) = std::env::var("SCREENPIPE_API_KEY") {
         if !t.is_empty() {
-            let _ = server.cloud_token.try_write().map(|mut g| *g = Some(t));
+            server.cloud_token.store(std::sync::Arc::new(Some(t)));
         }
     }
 
@@ -1253,7 +1316,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("failed to start pipe scheduler: {}", e);
     }
     let shared_pipe_manager = std::sync::Arc::new(tokio::sync::Mutex::new(pipe_manager));
-    let server = server.with_pipe_manager(shared_pipe_manager.clone());
+    let server = server
+        .with_pipe_manager(shared_pipe_manager.clone())
+        .with_high_fps_controller(high_fps_controller.clone());
 
     // Install pi agent in background
     tokio::spawn(async move {
@@ -1642,6 +1707,7 @@ async fn main() -> anyhow::Result<()> {
     if config.async_pii_redaction {
         use screenpipe_redact::{
             adapters::{
+                onnx::{OnnxConfig, OnnxRedactor},
                 opf::{OpfAdapter, OpfConfig},
                 tinfoil::TinfoilRedactor,
             },
@@ -1655,50 +1721,78 @@ async fn main() -> anyhow::Result<()> {
 
         // Pipeline: regex pre-pass + AI fallback. Regex catches
         // structural PII deterministically and on-device. AI step
-        // resolves to:
-        //   1. local opf-rs (candle, ~74 ms p50 on Mac CPU, 41 ms on
-        //      Metal). First run downloads ~2.8 GB from
-        //      huggingface.co/screenpipe/pii-text-redactor and verifies
-        //      SHA-256 before landing at ~/.screenpipe/models/opf-v6/.
-        //      Spawned off the boot path so a slow first-run pull
-        //      doesn't block the engine.
-        //   2. Tinfoil confidential-compute enclave when TINFOIL_*
-        //      env vars are set and local opf-rs is unavailable.
-        //   3. regex-only otherwise (still destructive — overwrites
+        // resolves to (preference order):
+        //   1. v45_phase3 ONNX (xlm-roberta-base fine-tune, INT8, ~278 MB,
+        //      9 ms p50 on CPU, CoreML on macOS / DirectML on Windows
+        //      via the redact-onnx-* CI feature). First run downloads
+        //      from huggingface.co/screenpipe/pii-redactor under
+        //      v45_phase3_onnx/. Same checkpoint the Tinfoil container
+        //      and the desktop app's own worker use, so outputs match
+        //      across surfaces.
+        //   2. Legacy opf-rs (candle, OPF v6, ~74 ms p50 on Mac CPU,
+        //      ~2.8 GB) if v45 ONNX isn't compiled in or the download
+        //      fails.
+        //   3. Tinfoil confidential-compute enclave when TINFOIL_*
+        //      env vars are set and both local adapters are unavailable.
+        //   4. Regex-only otherwise (still destructive — overwrites
         //      regex-redacted text into the source columns).
         let pool = db.pool.clone();
         tokio::spawn(async move {
             info!(
-                "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
-                 ~/.screenpipe/models/opf-v6/)"
+                "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
+                 cached at ~/.screenpipe/models/v45_phase3_onnx/)"
             );
-            let pipeline = match OpfAdapter::load_or_download(OpfConfig::default()).await {
+            let pipeline = match OnnxRedactor::load_or_download(OnnxConfig::default()).await {
                 Ok(adapter) => {
                     info!(
-                        "text-PII AI step: local opf-rs (candle) — lazy load on first \
-                         batch, idle-unload after 60s of no work"
+                        "text-PII AI step: local v45_phase3 ONNX — same checkpoint as the \
+                         desktop app + Tinfoil container, sub-10 ms p50 on CPU"
                     );
-                    // Wrap in Arc first so we can spawn the idle
-                    // unloader (which needs `Arc<Self>`) and still
-                    // hand the same Arc to the Pipeline.
-                    let adapter = Arc::new(adapter);
-                    let _unloader = Arc::clone(&adapter).spawn_idle_unloader();
-                    let ai: Arc<dyn Redactor> = adapter;
+                    let ai: Arc<dyn Redactor> = Arc::new(adapter);
                     Pipeline::regex_then_ai(ai, PipelineConfig::default())
                 }
-                Err(e) => {
-                    if std::env::var("TINFOIL_API_KEY").is_ok()
-                        || std::env::var("TINFOIL_BASE_URL").is_ok()
-                    {
-                        info!("text-PII AI step: tinfoil enclave (local opf-rs unavailable: {e})");
-                        let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
-                        Pipeline::regex_then_ai(ai, PipelineConfig::default())
-                    } else {
-                        tracing::warn!(
-                            "text-PII AI step disabled — local opf-rs unavailable ({e}) and no \
-                             TINFOIL_* env vars set. Worker will run regex-only."
-                        );
-                        Pipeline::regex_only()
+                Err(onnx_err) => {
+                    tracing::warn!(
+                        "couldn't load v45 phase 3 ONNX redactor ({onnx_err}); falling back \
+                         to OPF v6 candle"
+                    );
+                    info!(
+                        "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
+                         ~/.screenpipe/models/opf-v6/)"
+                    );
+                    match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                        Ok(adapter) => {
+                            info!(
+                                "text-PII AI step: local opf-rs (candle) fallback — lazy load \
+                                 on first batch, idle-unload after 60s of no work"
+                            );
+                            // Wrap in Arc first so we can spawn the idle
+                            // unloader (which needs `Arc<Self>`) and still
+                            // hand the same Arc to the Pipeline.
+                            let adapter = Arc::new(adapter);
+                            let _unloader = Arc::clone(&adapter).spawn_idle_unloader();
+                            let ai: Arc<dyn Redactor> = adapter;
+                            Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                        }
+                        Err(e) => {
+                            if std::env::var("TINFOIL_API_KEY").is_ok()
+                                || std::env::var("TINFOIL_BASE_URL").is_ok()
+                            {
+                                info!(
+                                    "text-PII AI step: tinfoil enclave (local adapters \
+                                     unavailable: opf-rs={e})"
+                                );
+                                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
+                                Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                            } else {
+                                tracing::warn!(
+                                    "text-PII AI step disabled — both v45 ONNX and opf-rs \
+                                     unavailable ({e}), and no TINFOIL_* env vars set. Worker \
+                                     will run regex-only."
+                                );
+                                Pipeline::regex_only()
+                            }
+                        }
                     }
                 }
             };

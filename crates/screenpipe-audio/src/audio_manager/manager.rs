@@ -261,6 +261,11 @@ impl AudioManager {
             options.macos_input_vpio_enabled,
         );
         *self.meeting_detector.write().await = options.meeting_detector.clone();
+
+        let user_disabled = self.user_disabled_devices.read().await.clone();
+        let mut options = options;
+        super::builder::ensure_system_default_device_types(&mut options, &user_disabled).await;
+
         *self.options.write().await = options;
         *self.engine.write().await = None;
         Ok(())

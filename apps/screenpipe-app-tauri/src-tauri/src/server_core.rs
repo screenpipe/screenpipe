@@ -12,9 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use screenpipe_audio::core::device::{
-    default_input_device, default_output_device, parse_audio_device,
-};
+use screenpipe_audio::core::device::resolve_audio_devices_for_capture;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -63,6 +61,13 @@ impl ServerCore {
         owned_browser: Option<
             std::sync::Arc<screenpipe_connect::connections::browser::OwnedBrowser>,
         >,
+        // App-scoped cloud-token handle. Outlives Server (which is recreated
+        // on every recording restart) so a token pushed via `set_cloud_token`
+        // survives capture toggles and is automatically picked up by the next
+        // Server + PiExecutor pair. Pre-existing per-Server cloud_token is
+        // replaced with this Arc so all three observers (cloud_proxy.rs,
+        // PiExecutor, the Tauri command writer) share one storage cell.
+        cloud_token_handle: std::sync::Arc<arc_swap::ArcSwap<Option<String>>>,
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
@@ -184,25 +189,17 @@ impl ServerCore {
         info!("Database initialized at {}", db_path);
 
         // --- Audio devices + manager (built but NOT started) ---
-        let mut audio_devices = Vec::new();
-        if !config.disable_audio {
-            if config.audio_devices.is_empty() {
-                if let Ok(input) = default_input_device() {
-                    audio_devices.push(input.to_string());
-                }
-                if let Ok(output) = default_output_device().await {
-                    audio_devices.push(output.to_string());
-                }
-            } else {
-                for d in &config.audio_devices {
-                    if let Ok(device) = parse_audio_device(d) {
-                        audio_devices.push(device.to_string());
-                    }
-                }
-            }
-            if audio_devices.is_empty() {
-                warn!("No audio devices available");
-            }
+        let audio_devices = if config.disable_audio {
+            Vec::new()
+        } else {
+            resolve_audio_devices_for_capture(
+                &config.audio_devices,
+                config.use_system_default_audio,
+            )
+            .await
+        };
+        if !config.disable_audio && audio_devices.is_empty() {
+            warn!("No audio devices available");
         }
 
         let openai_compatible_config =
@@ -313,10 +310,24 @@ impl ServerCore {
         // the Clerk JWT (despite the name — see line 96 where the same value
         // is used as the cloud transcription bearer). Pi's bash deliberately
         // can't see this token; the local proxy signs the upstream request.
+        //
+        // We replace the Server's per-instance cloud_token cell with the
+        // app-scoped Arc so writes from `set_cloud_token` (Tauri command,
+        // pushed on every sign-in/out from the webview) are visible to both
+        // cloud_proxy.rs AND the PiExecutor that shares this same Arc.
+        // Without this, a token captured at engine boot was permanent until
+        // restart — paying users who signed in after the sidecar started got
+        // anonymous-tier 403s on every Sonnet/Opus pipe.
+        server.cloud_token = cloud_token_handle.clone();
+        // Seed the shared cell from persisted settings, but ONLY when empty
+        // — if `set_cloud_token` has already pushed a fresher value (e.g. the
+        // user signed in between sidecar boots), don't clobber it with the
+        // stale `config.user_id` snapshot.
         if let Some(ref t) = config.user_id {
             if !t.is_empty() {
-                if let Ok(mut g) = server.cloud_token.try_write() {
-                    *g = Some(t.clone());
+                let existing = cloud_token_handle.load();
+                if existing.is_none() {
+                    cloud_token_handle.store(std::sync::Arc::new(Some(t.clone())));
                 }
             }
         }
@@ -406,10 +417,17 @@ impl ServerCore {
         let pipes_dir = config.data_dir.join("pipes");
         std::fs::create_dir_all(&pipes_dir).ok();
 
-        let user_token = config.user_id.clone();
+        // Share the cloud-token Arc between Server (for cloud_proxy.rs) and
+        // PiExecutor (for pi-agent provider auth). With one shared Arc the
+        // `set_cloud_token` Tauri command updates both readers in one shot,
+        // so a fresh sign-in or sign-out takes effect on the very next pipe
+        // run without restarting the engine.
+        let cloud_token_handle = server.cloud_token.clone();
         let pi_executor = Arc::new(
-            screenpipe_core::agents::pi::PiExecutor::new(user_token)
-                .with_api_auth_key(config.api_auth_key.clone()),
+            screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
+                cloud_token_handle.clone(),
+            )
+            .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<
             String,

@@ -226,6 +226,11 @@ pub fn start(app: AppHandle) {
                     "primary": true,
                 }));
             }
+            // Prewarm fires before the meeting row exists; the HD action
+            // uses a timer-bound fallback so it's still safe to click.
+            if let Some(hd) = build_hd_action(&prewarm_app, None) {
+                actions.push(hd);
+            }
 
             let minutes = ((data.seconds_until_start as f64) / 60.0).ceil() as i64;
             let header = if minutes <= 1 {
@@ -322,7 +327,7 @@ pub fn start(app: AppHandle) {
             // detector only fires `meeting_started` after UI/audio confirms
             // the user is already in the call, so a join button here is
             // misleading. The started toast always opens the live note.
-            let actions = vec![json!({
+            let mut actions = vec![json!({
                 "id": "open-live-notes",
                 "action": "open-live-notes",
                 "label": "open note",
@@ -330,6 +335,9 @@ pub fn start(app: AppHandle) {
                 "url": url.clone(),
                 "primary": true,
             })];
+            if let Some(hd) = build_hd_action(&app, Some(meeting_id)) {
+                actions.push(hd);
+            }
 
             client::send_typed_with_actions(
                 "meeting detected",
@@ -412,6 +420,55 @@ fn meeting_notifications_enabled(app: &AppHandle) -> bool {
         .and_then(|prefs| prefs.get("meetingLiveNotes"))
         .and_then(|enabled| enabled.as_bool())
         .unwrap_or(true)
+}
+
+/// Read the user's HD-recording default mode (`"ask" | "always" | "never"`).
+/// Drives whether the meeting-start notification carries a "+ HD" action:
+/// - `"ask"` (default) — yes, add the action.
+/// - `"always"` — no, the engine auto-starts the session itself; an action
+///   here would be a confusing no-op.
+/// - `"never"` — no, the user has opted out.
+fn hd_recording_default(app: &AppHandle) -> String {
+    let settings = match SettingsStore::get(app) {
+        Ok(Some(s)) => s,
+        _ => return "ask".to_string(),
+    };
+    settings
+        .extra
+        .get("hdRecordingDefault")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ask")
+        .to_string()
+}
+
+/// Build the "+ HD" notification action. Returns `None` when the user's
+/// preference suppresses it.
+///
+/// When `meeting_id` is known (the started notification), starts a
+/// meeting-bound session that auto-stops on `meeting_ended`.
+///
+/// When unknown (the prewarm notification fires *before* the meeting is
+/// in the DB), starts a `prewarm_pending` session. The engine's
+/// `meeting_started` subscriber then upgrades it to meeting-bound on the
+/// next event, preserving `started_at` so the user gets HD coverage for
+/// the whole call — not the previous 1-hour timer that clipped long calls.
+fn build_hd_action(app: &AppHandle, meeting_id: Option<i64>) -> Option<serde_json::Value> {
+    if hd_recording_default(app) != "ask" {
+        return None;
+    }
+    let body = match meeting_id {
+        Some(id) => json!({ "boundTo": "meeting", "meetingId": id }),
+        None => json!({ "boundTo": "prewarm_pending" }),
+    };
+    Some(json!({
+        "id": "record-hd",
+        "action": "record-hd",
+        "label": "+ HD",
+        "type": "api",
+        "url": "/capture/hd/start",
+        "method": "POST",
+        "body": body,
+    }))
 }
 
 async fn fetch_fresh_calendar_events(app: &AppHandle) -> Vec<CalendarEventSignal> {

@@ -31,6 +31,7 @@ import {
   MemoizedReactMarkdown,
   chatUrlTransform,
   openScreenpipeViewerLink,
+  rewriteLocalMarkdownLinksForChat,
 } from "@/components/markdown";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
@@ -584,7 +585,24 @@ function buildRateLimitMessage(errorStr: string): string {
     : "Rate limited — try again in a moment or switch to a different model.";
 }
 
-/** Extract the gateway-reported tier from an error string, if present. */
+/** How many times a single turn auto-retries on a 429 before giving up. */
+const PI_MAX_RATE_LIMIT_RETRIES = 3;
+
+/**
+ * Seconds to wait before retrying a rate-limited (429) request. Prefers the
+ * gateway's structured `reset_in` hint, falls back to the "wait N seconds"
+ * prose, then a safe default. Clamped to [1, 60].
+ */
+function parseRateLimitWaitSeconds(errorStr: string): number {
+  const DEFAULT_WAIT = 10;
+  const resetMatch = errorStr.match(/"reset_in"\s*:\s*(\d+)/i);
+  const waitMatch = errorStr.match(/wait (\d+) seconds/i);
+  const raw = resetMatch?.[1] ?? waitMatch?.[1];
+  const secs = raw ? parseInt(raw, 10) : DEFAULT_WAIT;
+  if (!Number.isFinite(secs) || secs <= 0) return DEFAULT_WAIT;
+  return Math.min(Math.max(secs, 1), 60);
+}
+
 // Helper to get timezone offset string (e.g., "+1" or "-5")
 function getTimezoneOffsetString(): string {
   const offsetMinutes = new Date().getTimezoneOffset();
@@ -760,6 +778,7 @@ interface Message {
   retryPrompt?: string; // when set, renders a retry CTA on error messages
   interruptedBySteer?: boolean;
   steeredResponse?: boolean;
+  workDurationMs?: number; // wall-clock work duration for coalesced pipe-run assistants
 }
 
 type QueuedDisplayPayload = {
@@ -2035,7 +2054,9 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
   // Assistant messages occasionally contain raw tool-call XML the model emitted
   // as text — rewrite it to a fenced code block so rehypeRaw doesn't collapse
   // the unknown tags and bleed the args into the prose. See sanitize-tool-call-xml.ts.
-  const renderText = isUser ? text : sanitizeToolCallXml(text);
+  const renderText = rewriteLocalMarkdownLinksForChat(
+    isUser ? text : sanitizeToolCallXml(text),
+  );
   return (
     <MemoizedReactMarkdown
       className={cn(
@@ -2207,7 +2228,11 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
 }
 
 function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: boolean): GroupedBlock[] {
-  if (!hideThinkingBlocks) return grouped;
+  // Run always: collapsing consecutive tool-groups into a single
+  // "Worked for X min" rail is useful regardless of the thinking-block
+  // visibility setting. `hideThinkingBlocks` only controls whether
+  // thinking blocks get absorbed into the work-group (true) or shown
+  // as separate pills (false).
 
   const out: GroupedBlock[] = [];
   let pendingToolCalls: ToolCall[] = [];
@@ -2250,8 +2275,15 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: b
     }
 
     if (group.type === "thinking") {
-      pendingDurationMs += group.durationMs ?? 0;
-      pendingKey ??= group.key;
+      if (hideThinkingBlocks) {
+        pendingDurationMs += group.durationMs ?? 0;
+        pendingKey ??= group.key;
+        continue;
+      }
+      // Show thinking pills inline — flush pending tool work first so
+      // ordering is preserved and the thinking pill renders separately.
+      flushPending();
+      out.push(group);
       continue;
     }
 
@@ -2454,12 +2486,17 @@ function MessageContent({
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
           }
           if (group.type === "work-group") {
+            // Fall back to message-level workDurationMs when the
+            // grouping pass collected no thinking-block duration (e.g.
+            // pipe runs whose agent emits no thinking deltas — the
+            // parser captures wall-clock time on the ChatMessage).
+            const durationMs = group.durationMs > 0 ? group.durationMs : (message.workDurationMs ?? 0);
             return (
               <ToolCallGroup
                 key={`work-${group.key}`}
                 toolCalls={group.toolCalls}
                 defaultExpanded={!hasText}
-                summaryOverride={formatWorkDuration(group.durationMs)}
+                summaryOverride={formatWorkDuration(durationMs)}
                 hideCount={hasText}
               />
             );
@@ -3229,6 +3266,8 @@ export function StandaloneChat({
   const sendDispatchInFlightRef = useRef(false);
   const forceQueueModeRef = useRef(false);
   const piFirstCallRetried = useRef(false);
+  // Per-turn 429 auto-retry budget; reset on each new user send + on success.
+  const piRateLimitRetries = useRef(0);
   const sessionActivityLastEmitAtRef = useRef<Record<string, number>>({});
   const sessionActivityLastSigRef = useRef<Record<string, string>>({});
   const piStoppedIntentionallyRef = useRef(false);
@@ -5526,6 +5565,7 @@ export function StandaloneChat({
             piThinkingStartRef.current = null;
             followUpFiredRef.current = false;
             forceQueueModeRef.current = false;
+            piRateLimitRetries.current = 0;
             setIsLoading(false);
             setIsStreaming(false);
             emitSessionActivity({ status: "idle" });
@@ -5550,6 +5590,46 @@ export function StandaloneChat({
                 commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null, null).catch(() => {});
               }
             }
+            return;
+          }
+          // Rate-limit (429) auto-retry — honor the gateway's reset_in hint and
+          // re-send the same prompt. The cloud LLM gateway caps free/logged-in
+          // tiers at a few dozen requests/minute; a single agentic run can trip
+          // it, after which a short wait clears the budget. Without this the turn
+          // dies silently (e.g. pipe creation stalls mid-skill).
+          if (
+            classifyQuotaError(errorStr) === "rate" &&
+            piRateLimitRetries.current < PI_MAX_RATE_LIMIT_RETRIES &&
+            piSessionIdRef.current &&
+            lastUserMessageRef.current
+          ) {
+            piRateLimitRetries.current += 1;
+            const attempt = piRateLimitRetries.current;
+            const waitSecs = parseRateLimitWaitSeconds(errorStr);
+            const retrySession = piSessionIdRef.current;
+            const retryPrompt = lastUserMessageRef.current;
+            console.warn(`[Pi] rate limited, auto-retry ${attempt}/${PI_MAX_RATE_LIMIT_RETRIES} in ${waitSecs}s:`, errorStr);
+            // Reset the in-flight buffers so the retried turn renders cleanly into
+            // the same bubble instead of appending onto any pre-429 partial output.
+            piStreamingTextRef.current = "";
+            piContentBlocksRef.current = [];
+            const retryTurnId = piMessageIdRef.current;
+            if (retryTurnId) {
+              setMessages((prev) =>
+                prev.map((m) => m.id === retryTurnId
+                  ? { ...m, content: `Rate limited — retrying in ${waitSecs}s… (attempt ${attempt}/${PI_MAX_RATE_LIMIT_RETRIES})`, contentBlocks: [] }
+                  : m)
+              );
+            }
+            setTimeout(() => {
+              // Guard the delayed re-send: bail if the user unmounted, switched
+              // sessions, or started a new turn during the wait, so we never
+              // inject a stale prompt into the wrong place.
+              if (!mountedRef.current) return;
+              if (piSessionIdRef.current !== retrySession) return;
+              if (piMessageIdRef.current && piMessageIdRef.current !== retryTurnId) return;
+              commands.piPrompt(retrySession, retryPrompt, null, null).catch(() => {});
+            }, waitSecs * 1000);
             return;
           }
           if (piMessageIdRef.current) {
@@ -6248,10 +6328,47 @@ export function StandaloneChat({
     if (inputRef.current) inputRef.current.style.height = "auto";
     if (hadPastedImages) setPastedImages([]);
 
+    // Issue #3636: same contract as sendPiMessage's send path — every
+    // turn carries the recent conversation history so the model has
+    // context even if Pi's internal session lost it (compaction,
+    // crash + auto-restart, kill that the termination handler missed).
+    // The queue path was previously a silent gap: when an earlier send
+    // was still in-flight, follow-ups routed here got the bare user
+    // message, and any Pi state divergence in between manifested as
+    // "chat suddenly forgot what we were talking about."
+    let queuedPrompt = userMessage;
+    if (messages.length > 0) {
+      const historyLines = messages
+        .slice(-40)
+        .map((m) => {
+          let text = m.content || "";
+          if (m.contentBlocks?.length) {
+            const blockTexts = m.contentBlocks
+              .map((b: any) => {
+                if (b.type === "text" && b.text) return b.text;
+                if (b.type === "tool" && b.toolCall) {
+                  const tc = b.toolCall;
+                  let s = `[tool: ${tc.toolName}](${JSON.stringify(tc.args)})`;
+                  if (tc.result) s += ` → ${tc.result.slice(0, 500)}`;
+                  return s;
+                }
+                return "";
+              })
+              .filter(Boolean)
+              .join("\n");
+            if (blockTexts && !text) text = blockTexts;
+            else if (blockTexts) text += "\n" + blockTexts;
+          }
+          return `${m.role}: ${text}`;
+        })
+        .join("\n");
+      queuedPrompt = `<conversation_history>\n${historyLines}\n</conversation_history>\n\n${userMessage}`;
+    }
+
     try {
       const result = await commands.piQueuePrompt(
         piSessionIdRef.current,
-        userMessage,
+        queuedPrompt,
         piImages.length > 0 ? piImages : null,
       );
       const queuedTurnIntentId = `queued-${result.status === "ok" ? result.data : Date.now()}`;
@@ -6409,6 +6526,7 @@ export function StandaloneChat({
     // Clear follow-ups for new message
     setFollowUpSuggestions([]);
     followUpFiredRef.current = false;
+    piRateLimitRetries.current = 0;
     if (followUpAbortRef.current) {
       followUpAbortRef.current.abort();
       followUpAbortRef.current = null;
@@ -6543,9 +6661,42 @@ export function StandaloneChat({
         { id: assistantMessageId, role: "assistant", content: "Processing...", timestamp: Date.now(), model: activePreset?.model, provider: activePreset?.provider },
       ]);
 
-      // If Pi's session is out of sync (restart, conversation load), inject history
+      // Always re-inject the recent conversation history into every prompt
+      // when the chat has prior turns (issue #3636).
+      //
+      // The previous contract gated injection on `piSessionSyncedRef.current`
+      // — a local boolean that tracked "we believe Pi has the conversation
+      // in its own in-memory session." The ref was reset on explicit Pi
+      // restarts (piStart paths), but Pi can also lose state silently —
+      // pi-agent runs context compaction by default (default settings:
+      // reserveTokens 16384, keepRecentTokens 20000), pi can crash and
+      // be auto-restarted before our termination handler observes the
+      // exit, and a queued / steer follow-up can race with a fresh
+      // sendPiMessage in ways the ref can't track. When the ref says
+      // "synced" but Pi has actually dropped everything, the next turn
+      // is sent as a bare user message — the model sees no prior context
+      // and answers as if the conversation just started. That's the
+      // user-visible symptom in issue #3636: "chat suddenly loses prior
+      // conversation context, but if I explicitly ask it to read the
+      // previous conversation, it can."
+      //
+      // The frontend's `messages` array is the durable source of truth
+      // (it's what gets persisted to disk on every save). Sending the
+      // last ~40 turns every time costs a small amount of tokens against
+      // the model's context window, but eliminates the entire class of
+      // "pi state silently diverged from messages" bugs. Pi appends the
+      // prompt verbatim to its own session; in the steady-state path the
+      // model sees a small amount of duplication between Pi's accumulated
+      // state and the injected block, which it handles fine. In the
+      // failure path (Pi just restarted, compacted, or never had this
+      // turn at all), the injected block IS the conversation and the
+      // model has what it needs.
+      //
+      // `piSessionSyncedRef` is kept around because other code paths
+      // (preset change, reauth, the conversation-load handler) still
+      // toggle it for diagnostics, but it no longer gates injection.
       let promptMessage = userMessage;
-      if (!piSessionSyncedRef.current && messages.length > 0) {
+      if (messages.length > 0) {
         const historyLines = messages
           .slice(-40)
           .map(m => {
@@ -6569,10 +6720,8 @@ export function StandaloneChat({
           })
           .join("\n");
         promptMessage = `<conversation_history>\n${historyLines}\n</conversation_history>\n\n${userMessage}`;
-        piSessionSyncedRef.current = true;
-      } else {
-        piSessionSyncedRef.current = true;
       }
+      piSessionSyncedRef.current = true;
 
       // Send prompt — abort/new_session now await completion, so no retry needed
       let result = await commands.piPrompt(
@@ -7190,6 +7339,7 @@ export function StandaloneChat({
 
     setFollowUpSuggestions([]);
     followUpFiredRef.current = false;
+    piRateLimitRetries.current = 0;
     if (followUpAbortRef.current) {
       followUpAbortRef.current.abort();
       followUpAbortRef.current = null;
@@ -8168,6 +8318,12 @@ export function StandaloneChat({
               const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
               const canShowMessageActions = !item.showActionsWhenExpandedBy ||
                 expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
+              const isActiveStreamingAssistantMessage =
+                message.role === "assistant" &&
+                (isLoading || isStreaming) &&
+                message.id === activeSourceFooterMessageId;
+              const shouldShowMessageActionBar =
+                canShowMessageActions && !isActiveStreamingAssistantMessage;
               const nextAssistant = visibleMessages
                 .slice(messageIndex + 1)
                 .find((candidate) => candidate.role === "assistant");
@@ -8325,7 +8481,7 @@ export function StandaloneChat({
                 )}
               </div>
               )}
-              {!hideSupersededSteerBody && canShowMessageActions ? (
+              {!hideSupersededSteerBody && shouldShowMessageActionBar ? (
                 <>
                 {/* Action buttons - appear on hover, outside the message box */}
                 {editingMessageId !== message.id && (

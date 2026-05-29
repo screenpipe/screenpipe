@@ -32,6 +32,7 @@ import {
   Mic,
   Monitor,
   Volume2,
+  VolumeX,
   Headphones,
   AppWindowMac,
   EyeOff,
@@ -1422,6 +1423,250 @@ function TranscriptionDictionary({
   );
 }
 
+type HdDefaultMode = "ask" | "always" | "never";
+
+interface HdState {
+  active: boolean;
+  intervalMs: number;
+  session: { kind: "meeting"; meeting_id: number } | { kind: "timer" } | null;
+  elapsedSecs: number | null;
+  remainingSecs: number | null;
+  defaultMode: HdDefaultMode;
+  meeting: boolean | null;
+}
+
+type PushOutcome =
+  | { kind: "ok"; state: HdState }
+  | { kind: "engine-down" }
+  | { kind: "engine-rejected"; status: number };
+
+function fmtRemaining(secs: number): string {
+  if (secs >= 3600) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  }
+  if (secs >= 60) return `${Math.ceil(secs / 60)}m`;
+  return `${Math.max(secs, 1)}s`;
+}
+
+function HighFpsCard({
+  settings,
+  onSettingsChange,
+}: {
+  settings: any;
+  onSettingsChange: (patch: Record<string, any>) => void;
+}) {
+  const [live, setLive] = React.useState<HdState | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [lastError, setLastError] = React.useState<string | null>(null);
+
+  const fetchState = React.useCallback(async () => {
+    try {
+      const res = await localFetch("/capture/hd");
+      if (res.ok) {
+        setLive(await res.json());
+        setLastError(null);
+      }
+    } catch {
+      /* engine may not be running yet — keep last known */
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchState();
+    const id = setInterval(fetchState, 2000);
+    return () => clearInterval(id);
+  }, [fetchState]);
+
+  const pushSettings = React.useCallback(
+    async (patch: Partial<{ defaultMode: HdDefaultMode; intervalMs: number }>): Promise<PushOutcome> => {
+      setBusy(true);
+      try {
+        const res = await localFetch("/capture/hd/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (res.ok) {
+          const state: HdState = await res.json();
+          setLive(state);
+          setLastError(null);
+          return { kind: "ok", state };
+        }
+        return { kind: "engine-rejected", status: res.status };
+      } catch {
+        return { kind: "engine-down" };
+      } finally {
+        setBusy(false);
+      }
+    },
+    []
+  );
+
+  const stopSession = React.useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await localFetch("/capture/hd/stop", { method: "POST" });
+      if (res.ok) setLive(await res.json());
+    } catch {
+      /* engine may be down */
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  // Persist preference to settings.bin AND push to running engine.
+  // Surfaces failures so a silent "saved" with no runtime effect can't
+  // confuse the user — that was the #1 bug in the previous design.
+  const persistAndPush = React.useCallback(
+    async (
+      patch: Record<string, any>,
+      runtimePatch: Partial<{ defaultMode: HdDefaultMode; intervalMs: number }>,
+      label: string,
+    ) => {
+      onSettingsChange(patch);
+      const outcome = await pushSettings(runtimePatch);
+      if (outcome.kind === "engine-down") {
+        setLastError(
+          `${label} saved — but the engine isn't reachable, so it'll only take effect on next start.`,
+        );
+      } else if (outcome.kind === "engine-rejected") {
+        setLastError(
+          `${label} saved — but the engine rejected the live update (HTTP ${outcome.status}). Restart to apply.`,
+        );
+      }
+    },
+    [onSettingsChange, pushSettings],
+  );
+
+  // Guard against intervalMs ever leaking through as 0 (engine clamps to
+  // 33, but a stale or older response shouldn't divide-by-zero the UI).
+  const intervalMs = Math.max(
+    live?.intervalMs ?? settings.hdRecordingIntervalMs ?? 100,
+    33,
+  );
+  const fps = Math.round(1000 / intervalMs);
+  const defaultMode: HdDefaultMode =
+    live?.defaultMode ?? settings.hdRecordingDefault ?? "ask";
+  const active = live?.active ?? false;
+  const sessionKind = live?.session?.kind ?? null;
+  const remaining = live?.remainingSecs ?? 0;
+
+  const statusBadge = active
+    ? sessionKind === "meeting"
+      ? `Recording at ~${fps} fps — stops when call ends`
+      : `Recording at ~${fps} fps — ${fmtRemaining(remaining)} left`
+    : "Idle";
+
+  return (
+    <Card className="border-border bg-card">
+      <CardContent className="px-3 py-2.5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-medium text-foreground">HD recording for meetings</h3>
+              <p className="text-xs text-muted-foreground">
+                Capture screen at higher rate during calls so you can rewatch
+                slides, demos, and shared docs. {statusBadge}.
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Start from the meeting-start notification, the tray menu, or{" "}
+                <code>POST /capture/hd/start</code>. Every session has a
+                natural end — no indefinite mode.
+              </p>
+            </div>
+          </div>
+          {active && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={stopSession}
+            >
+              Stop now
+            </Button>
+          )}
+        </div>
+
+        {lastError && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+            {lastError}
+          </div>
+        )}
+
+        <div className="pt-3 border-t border-border space-y-2.5">
+          <div>
+            <h4 className="text-xs font-medium text-foreground mb-1.5">
+              When a meeting starts
+            </h4>
+            <div className="flex flex-col gap-1">
+              {(
+                [
+                  { v: "ask" as const, label: "Ask me", hint: "Adds a “+ HD” action to the meeting-start notification (recommended)" },
+                  { v: "always" as const, label: "Always record at HD", hint: "Auto-start every detected meeting — more disk + CPU per call" },
+                  { v: "never" as const, label: "Never", hint: "No prompt; only the tray timer can start a session" },
+                ] satisfies Array<{ v: HdDefaultMode; label: string; hint: string }>
+              ).map(({ v, label, hint }) => (
+                <label key={v} className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="hdDefault"
+                    className="mt-1"
+                    checked={defaultMode === v}
+                    onChange={() =>
+                      persistAndPush(
+                        { hdRecordingDefault: v },
+                        { defaultMode: v },
+                        "Meeting default",
+                      )
+                    }
+                  />
+                  <span>
+                    <span className="text-xs text-foreground">{label}</span>
+                    <span className="block text-[11px] text-muted-foreground">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 pt-2 border-t border-border">
+            <div className="min-w-0">
+              <h4 className="text-xs font-medium text-foreground">Quality</h4>
+              <p className="text-[11px] text-muted-foreground">
+                Lower interval = smoother replay + more disk. ≥ 33 ms (30 fps).
+              </p>
+            </div>
+            <Select
+              value={String(intervalMs)}
+              onValueChange={(value) => {
+                const ms = Number(value);
+                persistAndPush(
+                  { hdRecordingIntervalMs: ms },
+                  { intervalMs: ms },
+                  "Capture interval",
+                );
+              }}
+            >
+              <SelectTrigger className="w-[200px] h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="200">200 ms — 5 fps (light)</SelectItem>
+                <SelectItem value="100">100 ms — 10 fps (default)</SelectItem>
+                <SelectItem value="67">67 ms — 15 fps</SelectItem>
+                <SelectItem value="33">33 ms — 30 fps (max)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function RecordingSettings() {
   const { settings, updateSettings, getDataDir, loadUser } = useSettings();
   const [openLanguages, setOpenLanguages] = React.useState(false);
@@ -1454,7 +1699,98 @@ export function RecordingSettings() {
       .catch(() => setCoreaudioTapAvailable(false));
   }, []);
 
+  type ExcludedApp = {
+    bundleId: string;
+    name: string | null;
+    icon: string | null;
+  };
+
+  // Per-app exclusions for the CoreAudio Process Tap. The list is owned by
+  // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
+  // read/write it through Tauri commands. Hot-reload happens engine-side
+  // on the existing 500ms tap-rebuild loop, so a write here propagates in
+  // ~1 tick subject to the 60s REBUILD_COOLDOWN.
+  const [audioExclusions, setAudioExclusions] = useState<ExcludedApp[]>([]);
+  const [pendingAudioExclusions, setPendingAudioExclusions] = useState<ExcludedApp[] | null>(null);
+  const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
+  const effectiveAudioExclusions = pendingAudioExclusions ?? audioExclusions;
+
   const { toast } = useToast();
+
+  const reloadAudioExclusions = useCallback(async () => {
+    try {
+      const apps = await invoke<ExcludedApp[]>("read_audio_exclusions");
+      setAudioExclusions(apps);
+    } catch (e) {
+      console.error("read_audio_exclusions failed", e);
+      toast({
+        title: "Couldn't load audio exclusions",
+        description: String(e),
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (!coreaudioTapAvailable) return;
+    reloadAudioExclusions();
+  }, [coreaudioTapAvailable, reloadAudioExclusions]);
+
+  const addAudioExclusion = useCallback(
+    (app: ExcludedApp) => {
+      const current = pendingAudioExclusions ?? audioExclusions;
+      if (!app.bundleId || current.some((a) => a.bundleId === app.bundleId)) return;
+      setPendingAudioExclusions([...current, app]);
+      setHasUnsavedChanges(true);
+    },
+    [pendingAudioExclusions, audioExclusions]
+  );
+
+  const removeAudioExclusion = useCallback(
+    (bundleId: string) => {
+      const current = pendingAudioExclusions ?? audioExclusions;
+      setPendingAudioExclusions(current.filter((a) => a.bundleId !== bundleId));
+      setSelectedBundleId((curr) => (curr === bundleId ? null : curr));
+      setHasUnsavedChanges(true);
+    },
+    [pendingAudioExclusions, audioExclusions]
+  );
+
+  const pickAppToExclude = useCallback(async () => {
+    const picked = await open({
+      filters: [{ name: "Application", extensions: ["app"] }],
+      defaultPath: "/Applications",
+      multiple: false,
+      directory: false,
+    });
+    if (!picked || typeof picked !== "string") return;
+    try {
+      const meta = await invoke<ExcludedApp>("read_app_bundle_metadata", { path: picked });
+      addAudioExclusion(meta);
+    } catch (e) {
+      toast({
+        title: "Couldn't read app bundle",
+        description: String(e),
+        variant: "destructive",
+      });
+    }
+  }, [addAudioExclusion, toast]);
+
+  useEffect(() => {
+    if (!selectedBundleId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeAudioExclusion(selectedBundleId);
+        setSelectedBundleId(null);
+      } else if (e.key === "Escape") {
+        setSelectedBundleId(null);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [selectedBundleId, removeAudioExclusion]);
+
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
   const isDisabled = health?.status_code === 500;
@@ -1783,6 +2119,16 @@ export function RecordingSettings() {
           Sentry.init({
             ...defaultOptions,
           });
+        }
+      }
+
+      if (pendingAudioExclusions !== null) {
+        try {
+          await invoke("write_audio_exclusions", { apps: pendingAudioExclusions });
+          setAudioExclusions(pendingAudioExclusions);
+          setPendingAudioExclusions(null);
+        } catch (e) {
+          throw new Error(`Failed to save audio exclusions: ${e}`);
         }
       }
 
@@ -2976,6 +3322,114 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
+        {/* Automatic meeting detection */}
+        {!settings.disableAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Automatic meeting detection
+                    <HelpTooltip text="Detects meeting apps (Zoom, Teams, Meet, Discord calls, etc.) to start/stop meetings and live notes. Turn off if it triggers spuriously and split meetings manually. CLI equivalent: --disable-meeting-detector." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Auto-start meetings when a call app is detected</p>
+                </div>
+              </div>
+              <ManagedSwitch
+                settingKey="disableMeetingDetector"
+                id="disableMeetingDetector"
+                checked={!settings.disableMeetingDetector}
+                onCheckedChange={(checked) => handleSettingsChange({ disableMeetingDetector: !checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Per-app exclusion list for the CoreAudio Process Tap. Only
+            meaningful when the tap is the active backend. */}
+        {!settings.disableAudio && coreaudioTapAvailable && settings.experimentalCoreaudioSystemAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5 space-y-2">
+            <div className="flex items-center space-x-2.5">
+              <VolumeX className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground">
+                  Exclude apps from system audio
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Audio from these apps will be filtered out of system-audio capture.
+                </p>
+              </div>
+            </div>
+            <div
+              className="flex flex-wrap gap-1.5 pl-6"
+              onClick={() => setSelectedBundleId(null)}
+            >
+              {effectiveAudioExclusions.map((app) => (
+                <Badge
+                  key={app.bundleId}
+                  variant={selectedBundleId === app.bundleId ? "default" : "secondary"}
+                  className="gap-1.5 pr-1 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedBundleId === app.bundleId}
+                  title={app.bundleId}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedBundleId(
+                      selectedBundleId === app.bundleId ? null : app.bundleId
+                    );
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedBundleId(
+                        selectedBundleId === app.bundleId ? null : app.bundleId
+                      );
+                    }
+                  }}
+                >
+                  {app.icon && (
+                    <img src={app.icon} alt="" className="h-4 w-4 rounded-sm" />
+                  )}
+                  <span className="text-xs">{app.name ?? app.bundleId}</span>
+                  <button
+                    type="button"
+                    className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    aria-label={`Remove ${app.name ?? app.bundleId} from audio exclusions`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeAudioExclusion(app.bundleId);
+                    }}
+                  >
+                    <XCircle className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  pickAppToExclude();
+                }}
+              >
+                + add app
+              </Button>
+              {effectiveAudioExclusions.length === 0 && (
+                <span className="text-xs text-muted-foreground italic self-center">
+                  No apps excluded. All system audio is captured.
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
       </div>
       </LockedSetting>
 
@@ -3049,6 +3503,18 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* HD recording — bound sessions only (meeting or timer; no
+            indefinite mode). The controller lives in the engine and is
+            HTTP-controlled so settings take effect immediately. Primary
+            UX is the meeting-start notification's "+ HD" action and the
+            tray timer submenu; this card exposes the persistent prefs. */}
+        {!settings.disableVision && (
+          <HighFpsCard
+            settings={settings}
+            onSettingsChange={(patch) => handleSettingsChange(patch, true)}
+          />
         )}
 
         {/* Monitor Selection */}

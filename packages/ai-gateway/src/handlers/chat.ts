@@ -7,8 +7,11 @@ import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 import { captureException } from '@sentry/cloudflare';
 
-// Auto model waterfall — ordered by quality/cost ratio (all free or near-free).
+// Auto model waterfall — quality first, then fall back to open-weight Vertex
+// MaaS picks (free for users, near-zero GCP burn) and a cheap Gemini safety
+// net at the tail.
 const AUTO_WATERFALL = [
+  'gemini-3.5-flash', // new flagship flash — beats pro tier on agent benchmarks
   'kimi-k2.5',
   'deepseek-v3.2',
   'glm-4.7',
@@ -17,6 +20,7 @@ const AUTO_WATERFALL = [
 
 // Vision-capable models for requests containing images
 const AUTO_WATERFALL_VISION = [
+  'gemini-3.5-flash', // multimodal, leads on agent/vision benchmarks
   'llama-4-maverick', // free (Vertex MaaS), 400B MoE, strong vision + reasoning
   'gemini-3-flash',   // near-free, good vision
   'llama-4-scout',    // free (Vertex MaaS), 109B MoE, decent vision fallback

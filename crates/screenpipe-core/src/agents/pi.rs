@@ -9,14 +9,61 @@
 
 use super::{AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
+use arc_swap::ArcSwap;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
 const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
 const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
+
+/// Bounded retries for provider rate limiting (HTTP 429) in streaming runs.
+const MAX_RATE_LIMIT_RETRIES: usize = 3;
+/// Fallback wait when the 429 payload carries no `reset_in` hint.
+const RATE_LIMIT_DEFAULT_WAIT_SECS: u64 = 10;
+/// Cap so an oversized `reset_in` can't stall a pipe run indefinitely.
+const RATE_LIMIT_MAX_WAIT_SECS: u64 = 60;
+
+/// Parse the rate-limit retry hint (in seconds) from a pi error payload.
+///
+/// The cloud gateway returns a 429 body containing `"reset_in":<secs>` plus a
+/// human-readable "Please wait N seconds". We prefer the structured `reset_in`
+/// field and fall back to the prose. Returns `None` when no hint is present.
+fn parse_rate_limit_reset_secs(text: &str) -> Option<u64> {
+    // Prefer the structured "reset_in" field.
+    if let Some(idx) = text.find("\"reset_in\"") {
+        let rest = &text[idx + "\"reset_in\"".len()..];
+        let rest = rest.trim_start_matches(|c: char| c == ':' || c.is_whitespace());
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(secs) = digits.parse::<u64>() {
+            return Some(secs);
+        }
+    }
+    // Fall back to the human-readable "wait N seconds".
+    let lower = text.to_lowercase();
+    if let Some(idx) = lower.find("wait ") {
+        let rest = &lower[idx + "wait ".len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(secs) = digits.parse::<u64>() {
+            return Some(secs);
+        }
+    }
+    None
+}
+
+/// Whether a pi failure was caused by provider rate limiting (HTTP 429).
+fn is_rate_limit_error(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("429")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("requests per minute")
+        || lower.contains("too many requests")
+        || lower.contains("\"reset_in\"")
+}
 
 /// Fetch the model catalog from the Cloudflare Worker gateway and convert
 /// it into the format Pi's `models.json` expects.
@@ -101,7 +148,15 @@ fn fallback_cloud_models() -> serde_json::Value {
 /// Pi agent executor.
 pub struct PiExecutor {
     /// Screenpipe cloud token (for LLM calls via screenpipe proxy).
-    pub user_token: Option<String>,
+    ///
+    /// Wrapped in `ArcSwap` so the desktop app can refresh it at
+    /// runtime via the `set_cloud_token` Tauri command — without this the
+    /// token captured at engine boot would be permanent for the lifetime of
+    /// the process. Users who sign in AFTER the engine started would stay on
+    /// the gateway's anonymous tier (allowed_models = haiku/gemini only)
+    /// until they fully quit and restart, because logout/login from the
+    /// webview doesn't restart the screenpipe sidecar.
+    pub user_token: Arc<ArcSwap<Option<String>>>,
     /// Screenpipe API base URL (default: `https://api.screenpipe.com/v1`).
     pub api_url: String,
     /// Bearer token for the *local* screenpipe-server API (localhost:3030).
@@ -115,10 +170,44 @@ pub struct PiExecutor {
 impl PiExecutor {
     pub fn new(user_token: Option<String>) -> Self {
         Self {
+            user_token: Arc::new(ArcSwap::new(Arc::new(user_token))),
+            api_url: SCREENPIPE_API_URL.to_string(),
+            api_auth_key: None,
+        }
+    }
+
+    /// Construct a PiExecutor that shares its cloud-token storage with an
+    /// external `Arc<ArcSwap>` — typically the same Arc held by the server's
+    /// `AppState.cloud_token`. A single update via `set_user_token` (or a
+    /// store through the shared Arc) is then visible to both the cloud
+    /// proxy and pi-agent on the next pipe run.
+    pub fn with_shared_user_token(user_token: Arc<ArcSwap<Option<String>>>) -> Self {
+        Self {
             user_token,
             api_url: SCREENPIPE_API_URL.to_string(),
             api_auth_key: None,
         }
+    }
+
+    /// Read the current cloud token. Returns an owned `Option<String>`.
+    pub fn current_user_token(&self) -> Option<String> {
+        let token = self.user_token.load();
+        (**token).clone().filter(|s| !s.is_empty())
+    }
+
+    /// Push a new cloud token. Called by the desktop app on login/logout so
+    /// the next pipe run picks up the fresh token instead of using whatever
+    /// was present at engine boot.
+    pub fn set_user_token(&self, token: Option<String>) {
+        self.user_token
+            .store(Arc::new(token.filter(|s| !s.is_empty())));
+    }
+
+    /// Expose the underlying `Arc` so it can be shared with other components
+    /// (the cloud_proxy.rs reader, Tauri-managed state) — write through any
+    /// of them is observed by all.
+    pub fn user_token_arc(&self) -> Arc<ArcSwap<Option<String>>> {
+        self.user_token.clone()
     }
 
     /// Attach the local server's api_auth_key so Pi's bash tool can include
@@ -794,7 +883,8 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
+        let cloud_token = self.current_user_token();
+        if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
@@ -819,7 +909,7 @@ impl PiExecutor {
                         cmd.env("GOOGLE_API_KEY", key);
                     }
                     // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
+                    "screenpipe" if cloud_token.is_none() => {
                         cmd.env("SCREENPIPE_API_KEY", key);
                     }
                     _ => {}
@@ -920,7 +1010,8 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
+        let cloud_token = self.current_user_token();
+        if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
@@ -943,7 +1034,7 @@ impl PiExecutor {
                         cmd.env("GOOGLE_API_KEY", key);
                     }
                     // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
+                    "screenpipe" if cloud_token.is_none() => {
                         cmd.env("SCREENPIPE_API_KEY", key);
                     }
                     _ => {}
@@ -1091,8 +1182,9 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
-            self.user_token.as_deref(),
+            cloud_token.as_deref(),
             &self.api_url,
             provider,
             Some(model),
@@ -1147,8 +1239,13 @@ impl AgentExecutor for PiExecutor {
                 "pi model not found, re-merging managed providers (stderr: {})",
                 output.stderr.trim()
             );
+            // Re-read the cloud token — it may have been refreshed via
+            // `set_user_token` since the run started (e.g. user signed in
+            // mid-pipe). Picking up the fresh value avoids re-running with
+            // the same stale token that triggered the not-found.
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
-                self.user_token.as_deref(),
+                cloud_token.as_deref(),
                 &self.api_url,
                 provider,
                 Some(&resolved_model),
@@ -1189,8 +1286,9 @@ impl AgentExecutor for PiExecutor {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let resolved_model = Self::resolve_model(model, &resolved_provider);
 
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
-            self.user_token.as_deref(),
+            cloud_token.as_deref(),
             &self.api_url,
             provider,
             Some(&resolved_model),
@@ -1215,7 +1313,7 @@ impl AgentExecutor for PiExecutor {
             resolved_provider, resolved_model
         );
 
-        let output = self
+        let mut output = self
             .spawn_pi_streaming(
                 &pi_path,
                 prompt,
@@ -1237,15 +1335,17 @@ impl AgentExecutor for PiExecutor {
                 "pi model not found, re-merging managed providers (stderr: {})",
                 output.stderr.trim()
             );
+            // Re-read cloud token (see comment in `run` above).
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
-                self.user_token.as_deref(),
+                cloud_token.as_deref(),
                 &self.api_url,
                 provider,
                 Some(&resolved_model),
                 provider_url,
             )
             .await?;
-            return self
+            output = self
                 .spawn_pi_streaming(
                     &pi_path,
                     prompt,
@@ -1254,11 +1354,58 @@ impl AgentExecutor for PiExecutor {
                     &resolved_provider,
                     provider_api_key,
                     None,
-                    line_tx,
+                    line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
                 )
-                .await;
+                .await?;
+        }
+
+        // Retry on provider rate limiting (HTTP 429). The cloud gateway caps
+        // requests per minute; concurrent scheduler pressure or a single busy
+        // run can trip it. pi exits 0 but surfaces the 429 as an assistant
+        // error, so `output.success` is false with the payload (including
+        // "reset_in") in stderr. Honor that hint, wait, and re-run instead of
+        // failing the whole pipe — which previously left automations silently
+        // doing nothing. (Runs that legitimately exceed the per-minute budget
+        // also need scheduler pacing, but a wait-and-retry still beats a hard
+        // stop.)
+        let mut rate_limit_retries = 0usize;
+        while !output.success
+            && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
+            && is_rate_limit_error(&output.stderr)
+        {
+            rate_limit_retries += 1;
+            let wait_secs = parse_rate_limit_reset_secs(&output.stderr)
+                .unwrap_or(RATE_LIMIT_DEFAULT_WAIT_SECS)
+                .clamp(1, RATE_LIMIT_MAX_WAIT_SECS);
+            warn!(
+                "pi rate limited (attempt {}/{}), waiting {}s before retry (stderr: {})",
+                rate_limit_retries,
+                MAX_RATE_LIMIT_RETRIES,
+                wait_secs,
+                output.stderr.trim()
+            );
+            // Surface the wait to any UI/log consumer draining line_tx.
+            let _ = line_tx.send(format!(
+                r#"{{"type":"status","kind":"rate_limit_retry","wait_secs":{},"attempt":{},"max_attempts":{}}}"#,
+                wait_secs, rate_limit_retries, MAX_RATE_LIMIT_RETRIES
+            ));
+            tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+            output = self
+                .spawn_pi_streaming(
+                    &pi_path,
+                    prompt,
+                    &resolved_model,
+                    working_dir,
+                    &resolved_provider,
+                    provider_api_key,
+                    None,
+                    line_tx.clone(),
+                    continue_session,
+                    pipe_system_prompt,
+                )
+                .await?;
         }
 
         Ok(output)
@@ -1323,8 +1470,8 @@ impl AgentExecutor for PiExecutor {
         "pi"
     }
 
-    fn user_token(&self) -> Option<&str> {
-        self.user_token.as_deref()
+    fn user_token(&self) -> Option<String> {
+        self.current_user_token()
     }
 }
 
@@ -2091,6 +2238,38 @@ mod tests {
         assert_eq!(lines[1], "OK");
     }
 
+    #[test]
+    fn test_parse_rate_limit_reset_secs() {
+        // Real gateway 429 payload: prefer the structured "reset_in" field.
+        let payload = r#"{"error":"You've exceeded 25 requests per minute. Please wait 12 seconds before retrying.","tier":"logged_in","reset_in":12}"#;
+        assert_eq!(parse_rate_limit_reset_secs(payload), Some(12));
+
+        // As surfaced through pi (prefixed "LLM error:") with whitespace
+        // around the colon.
+        let wrapped = r#"LLM error: {"reset_in" : 9, "tier":"logged_in"}"#;
+        assert_eq!(parse_rate_limit_reset_secs(wrapped), Some(9));
+
+        // No structured field — fall back to the prose hint.
+        assert_eq!(
+            parse_rate_limit_reset_secs("rate limited, please wait 8 seconds"),
+            Some(8)
+        );
+
+        // Unrelated error carries no hint.
+        assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
+    }
+
+    #[test]
+    fn test_is_rate_limit_error() {
+        assert!(is_rate_limit_error("HTTP 429 Too Many Requests"));
+        assert!(is_rate_limit_error(
+            "You've exceeded 25 requests per minute"
+        ));
+        assert!(is_rate_limit_error(r#"{"reset_in":12}"#));
+        assert!(!is_rate_limit_error("model not found"));
+        assert!(!is_rate_limit_error("credits_exhausted"));
+    }
+
     #[tokio::test]
     async fn test_ensure_pi_config_adds_ollama_provider() {
         // Call ensure_pi_config with ollama provider info
@@ -2124,5 +2303,61 @@ mod tests {
         let models = ollama.get("models").unwrap().as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].get("id").unwrap().as_str().unwrap(), "qwen3:8b");
+    }
+
+    /// Regression: the engine used to capture the cloud user token once at
+    /// boot via `PiExecutor::new(user_token)` and never refresh it. Users
+    /// who signed in AFTER the sidecar started stayed on tier=anonymous
+    /// until they fully quit + relaunched. The fix is `set_user_token` +
+    /// `with_shared_user_token` — verify both work end-to-end.
+    #[tokio::test]
+    async fn set_user_token_updates_subsequent_reads() {
+        let exec = PiExecutor::new(None);
+        assert_eq!(exec.current_user_token(), None);
+
+        exec.set_user_token(Some("token-v1".to_string()));
+        assert_eq!(exec.current_user_token(), Some("token-v1".to_string()));
+
+        exec.set_user_token(Some("token-v2".to_string()));
+        assert_eq!(exec.current_user_token(), Some("token-v2".to_string()));
+
+        // Empty strings normalize to None so downstream `is_some()` checks
+        // can't be tricked into sending an empty Bearer token.
+        exec.set_user_token(Some("".to_string()));
+        assert_eq!(exec.current_user_token(), None);
+
+        exec.set_user_token(None);
+        assert_eq!(exec.current_user_token(), None);
+    }
+
+    /// Confirms the design promise: a single shared `ArcSwap` written
+    /// from one place is observed by every PiExecutor that was constructed
+    /// with `with_shared_user_token` against that same Arc. This is what
+    /// lets the Tauri `set_cloud_token` command update the running
+    /// pi-agent's apiKey AND the cloud_proxy.rs forwarder in one write.
+    #[tokio::test]
+    async fn shared_arc_propagates_token_writes_across_executors() {
+        let shared = Arc::new(ArcSwap::new(Arc::new(None::<String>)));
+        let exec_a = PiExecutor::with_shared_user_token(shared.clone());
+        let exec_b = PiExecutor::with_shared_user_token(shared.clone());
+
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
+
+        // Write via executor A — both see it.
+        exec_a.set_user_token(Some("fresh-jwt".to_string()));
+        assert_eq!(exec_a.current_user_token(), Some("fresh-jwt".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("fresh-jwt".to_string()));
+
+        // Write directly through the Arc (simulates the Tauri command
+        // path which holds only the Arc, not the executor) — both see it.
+        shared.store(Arc::new(Some("from-tauri".to_string())));
+        assert_eq!(exec_a.current_user_token(), Some("from-tauri".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("from-tauri".to_string()));
+
+        // Sign-out path.
+        exec_b.set_user_token(None);
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
     }
 }

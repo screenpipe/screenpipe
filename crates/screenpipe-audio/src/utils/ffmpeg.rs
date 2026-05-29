@@ -29,9 +29,9 @@ fn encode_single_audio(
     let ffmpeg_path = find_ffmpeg_path()
         .ok_or_else(|| anyhow::anyhow!("ffmpeg not found in PATH or bundled binaries — install ffmpeg (e.g. `apt install ffmpeg` / `brew install ffmpeg`) and restart"))?;
 
-    let output_path_str = output_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("output path is not valid UTF-8: {}", output_path.display()))?;
+    let output_path_str = output_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!("output path is not valid UTF-8: {}", output_path.display())
+    })?;
 
     let mut command = screenpipe_core::ffmpeg_cmd(ffmpeg_path);
     command

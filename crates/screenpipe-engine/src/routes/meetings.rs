@@ -10,7 +10,7 @@ use axum::{
 use oasgen::{oasgen, OaSchema};
 
 use screenpipe_db::DatabaseManager;
-use screenpipe_db::{MeetingRecord, MeetingTranscriptSegment};
+use screenpipe_db::{MeetingRecord, MeetingTranscriptSegment, MEETING_END_REASON_EXPLICIT_STOP};
 
 use crate::meeting_telemetry::{capture_detection_decision, capture_detection_feedback};
 use crate::server::AppState;
@@ -91,6 +91,10 @@ pub struct ListMeetingsRequest {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
+    /// Case-insensitive substring match against title, attendees, and note.
+    /// Empty / whitespace-only values are ignored.
+    #[serde(default)]
+    pub q: Option<String>,
 }
 
 fn default_limit() -> u32 {
@@ -204,12 +208,18 @@ pub(crate) async fn list_meetings_handler(
 ) -> Result<JsonResponse<Vec<MeetingRecord>>, (StatusCode, JsonResponse<Value>)> {
     let start_time_str = request.start_time.map(|dt| dt.to_rfc3339());
     let end_time_str = request.end_time.map(|dt| dt.to_rfc3339());
+    let query_str = request
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     let meetings = state
         .db
         .list_meetings(
             start_time_str.as_deref(),
             end_time_str.as_deref(),
+            query_str,
             request.limit,
             request.offset,
         )
@@ -575,7 +585,12 @@ pub(crate) async fn stop_meeting_handler(
 
     state
         .db
-        .end_meeting_with_typed_text(id, &now, body.append_typed_text)
+        .end_meeting_with_typed_text(
+            id,
+            &now,
+            body.append_typed_text,
+            Some(MEETING_END_REASON_EXPLICIT_STOP),
+        )
         .await
         .map_err(|e| {
             (

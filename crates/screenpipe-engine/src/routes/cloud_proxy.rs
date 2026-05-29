@@ -26,8 +26,8 @@ pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
 ) -> Response {
-    let token = { state.cloud_token.read().await.clone() };
-    let Some(token) = token.filter(|t| !t.is_empty()) else {
+    let token = state.cloud_token.load();
+    let Some(token) = (**token).clone().filter(|t| !t.is_empty()) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             r#"{"error":"cloud_token_missing","message":"sign in to screenpipe to use cloud media analysis"}"#,

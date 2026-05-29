@@ -469,6 +469,7 @@ export function IntegrationIcon({
     financialsense: <img src="/images/financialsense.png" alt="Financial Sense" className="w-5 h-5 rounded" />,
     loops: <img src="/images/loops.svg" alt="Loops" className="w-5 h-5" />,
     resend: <img src="/images/resend.svg" alt="Resend" className="w-5 h-5 dark:invert" />,
+    readwise: <img src="/images/readwise.svg" alt="Readwise" className="w-5 h-5 dark:invert" />,
     supabase: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#3ECF8E" aria-hidden>
         <path d="M13.4 22.6c-.6.7-1.7.3-1.7-.6V14H6.3c-1.1 0-1.7-1.3-1-2.1L10.6 1.4c.6-.7 1.7-.3 1.7.6V10h5.4c1.1 0 1.7 1.3 1 2.1l-5.3 10.5z"/>
@@ -2281,6 +2282,9 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
+  const [googleDocsConnected, setGoogleDocsConnected] = useState(false);
+  const [googleSheetsConnected, setGoogleSheetsConnected] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
 
@@ -2298,6 +2302,15 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     }).catch(() => {});
     commands.oauthStatus("google-calendar", null).then(res => {
       setGoogleCalendarConnected(res.status === "ok" && res.data.connected);
+    }).catch(() => {});
+    commands.oauthStatus("google-docs", null).then(res => {
+      setGoogleDocsConnected(res.status === "ok" && res.data.connected);
+    }).catch(() => {});
+    commands.oauthStatus("google-sheets", null).then(res => {
+      setGoogleSheetsConnected(res.status === "ok" && res.data.connected);
+    }).catch(() => {});
+    commands.oauthStatus("gmail", null).then(res => {
+      setGmailConnected(res.status === "ok" && res.data.connected);
     }).catch(() => {});
     localFetch("/mcp-servers").then(async r => {
       if (!r.ok) { setCustomMcpConnected(false); return; }
@@ -2412,10 +2425,16 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       const api = integrations.find(i => i.id === h.id);
       if (api) h.connected = api.connected;
     }
-    // Google Calendar dot is driven by direct oauthStatus (not the cached API), so it stays
+    // Google OAuth dots are driven by direct oauthStatus (not the cached API), so they stay
     // in sync immediately after connect/disconnect without waiting for cache expiry.
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
+    const googleDocsTile = hardcoded.find(h => h.id === "google-docs");
+    if (googleDocsTile) googleDocsTile.connected = googleDocsConnected;
+    const googleSheetsTile = hardcoded.find(h => h.id === "google-sheets");
+    if (googleSheetsTile) googleSheetsTile.connected = googleSheetsConnected;
+    const gmailTile = hardcoded.find(h => h.id === "gmail");
+    if (gmailTile) gmailTile.connected = gmailConnected;
     // Custom MCP tile shows the dot when any user-registered MCP server is enabled.
     const customMcpTile = hardcoded.find(h => h.id === "custom-mcp");
     if (customMcpTile) customMcpTile.connected = customMcpConnected;
@@ -2423,7 +2442,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       ...tile,
       category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, customMcpConnected, inputMonitoringGranted]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, inputMonitoringGranted]);
 
   const categoryOptions = useMemo(() => {
     const categories = Array.from(

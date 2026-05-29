@@ -60,7 +60,7 @@ The app registry currently includes these connection IDs:
 | finance | Stripe, Brex, QuickBooks Online, Financial Sense |
 | meeting and voice | Granola, Fireflies.ai, Otter.ai, Limitless, Bee, Pocket, Lexi AI |
 | automation and notifications | n8n, Make, Zapier, Pushover, ntfy, Loops, Resend |
-| AI and knowledge | Perplexity, Glean |
+| AI and knowledge | Perplexity, Glean, Readwise |
 | AI assistant memory | Claude Code, Codex CLI |
 
 ## multi-account support
@@ -84,6 +84,7 @@ curl "http://localhost:3030/connections/google-calendar/proxy/users/me/calendarL
 curl "http://localhost:3030/connections/notion/proxy/v1/users/me"
 curl "http://localhost:3030/connections/hubspot/proxy/crm/v3/objects/contacts?limit=1"
 curl "http://localhost:3030/connections/linear/proxy/graphql"
+curl "http://localhost:3030/connections/readwise/proxy/api/v2/auth/"
 ```
 
 exact provider paths follow the provider API. if a request fails, reconnect the integration first, then check the provider's own permissions.
@@ -110,7 +111,7 @@ if OAuth fails:
 | --- | --- |
 | better speaker names | Google Calendar |
 | CRM follow-up after calls | HubSpot, Salesforce, Pipedrive, Notion |
-| daily notes | Obsidian, Logseq, Google Docs |
+| daily notes and highlights | Obsidian, Logseq, Google Docs, Readwise |
 | product analytics context | PostHog, Sentry, GitHub, Vercel |
 | finance or billing workflows | Stripe, Brex, QuickBooks |
 | meeting import | Zoom, Fireflies.ai, Granola, Otter.ai |

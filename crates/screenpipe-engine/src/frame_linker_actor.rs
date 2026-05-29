@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::frame_linker::{
-    CorrelationId, EventPersisted, FrameCaptured, FrameLinker, FrameLinkerConfig,
+    CorrelationId, DropReason, EventPersisted, FrameCaptured, FrameLinker, FrameLinkerConfig,
 };
 
 /// Cumulative counters published by the linker actor. Read via
@@ -36,11 +36,25 @@ pub struct LinkerMetrics {
     pub updates_failed: u64,
     /// Half-paired entries dropped because their TTL expired without a match.
     pub evicted_ttl: u64,
+    /// Triggers explicitly dropped by the capture loop, broken down by
+    /// reason. Reported via [`LinkerMessage::TriggerDropped`]; these
+    /// numbers should account for the bulk of NULL `frame_id` rows
+    /// once instrumentation is in place across every drop site.
+    pub dropped_drm: u64,
+    pub dropped_paused: u64,
+    pub dropped_lagged: u64,
+    pub dropped_capture_error: u64,
+    pub dropped_other: u64,
 }
 
 static PAIRS_EMITTED: AtomicU64 = AtomicU64::new(0);
 static UPDATES_FAILED: AtomicU64 = AtomicU64::new(0);
 static EVICTED_TTL: AtomicU64 = AtomicU64::new(0);
+static DROPPED_DRM: AtomicU64 = AtomicU64::new(0);
+static DROPPED_PAUSED: AtomicU64 = AtomicU64::new(0);
+static DROPPED_LAGGED: AtomicU64 = AtomicU64::new(0);
+static DROPPED_CAPTURE_ERROR: AtomicU64 = AtomicU64::new(0);
+static DROPPED_OTHER: AtomicU64 = AtomicU64::new(0);
 
 /// Read a point-in-time snapshot of the linker counters. Process-wide
 /// (the actor itself is a singleton inside `VisionManager`).
@@ -49,16 +63,36 @@ pub fn linker_metrics_snapshot() -> LinkerMetrics {
         pairs_emitted: PAIRS_EMITTED.load(Ordering::Relaxed),
         updates_failed: UPDATES_FAILED.load(Ordering::Relaxed),
         evicted_ttl: EVICTED_TTL.load(Ordering::Relaxed),
+        dropped_drm: DROPPED_DRM.load(Ordering::Relaxed),
+        dropped_paused: DROPPED_PAUSED.load(Ordering::Relaxed),
+        dropped_lagged: DROPPED_LAGGED.load(Ordering::Relaxed),
+        dropped_capture_error: DROPPED_CAPTURE_ERROR.load(Ordering::Relaxed),
+        dropped_other: DROPPED_OTHER.load(Ordering::Relaxed),
+    }
+}
+
+fn drop_reason_counter(reason: DropReason) -> &'static AtomicU64 {
+    match reason {
+        DropReason::Drm => &DROPPED_DRM,
+        DropReason::Paused => &DROPPED_PAUSED,
+        DropReason::Lagged => &DROPPED_LAGGED,
+        DropReason::CaptureError => &DROPPED_CAPTURE_ERROR,
+        DropReason::Other => &DROPPED_OTHER,
     }
 }
 
 /// Messages flowing into the linker actor. The recorder side sends
 /// `EventPersisted` after each batch flush; each capture loop sends
-/// `FrameCaptured` after each successful capture.
+/// `FrameCaptured` after each successful capture, or `TriggerDropped`
+/// when it decides not to capture (DRM, pause, capture error, etc.).
 #[derive(Debug)]
 pub enum LinkerMessage {
     EventPersisted(EventPersisted),
     FrameCaptured(FrameCaptured),
+    TriggerDropped {
+        correlation_ids: Vec<CorrelationId>,
+        reason: DropReason,
+    },
 }
 
 pub type LinkerSender = mpsc::Sender<LinkerMessage>;
@@ -162,6 +196,27 @@ pub fn spawn_frame_linker(
                                 apply_update(&db, update.row_id, update.frame_id).await;
                             }
                         }
+                        Some(LinkerMessage::TriggerDropped { correlation_ids, reason }) => {
+                            // Count-only by design. The trigger broadcast fans
+                            // out to N monitor capture loops; any per-monitor
+                            // drop site (Cold state, capture-error, debounce
+                            // without `last_frame_id`) reports the same
+                            // corr_id another monitor may still be in the
+                            // middle of capturing for. If we mutated state
+                            // here we'd race-cancel valid pairings. TTL
+                            // eviction (60s) handles the genuinely orphaned
+                            // ones; the per-reason counter surfaced in the
+                            // periodic WARN gives the diagnostic visibility
+                            // that motivated this message in the first place.
+                            let n_corr = correlation_ids.len();
+                            let bump = if n_corr == 0 { 1 } else { n_corr as u64 };
+                            drop_reason_counter(reason).fetch_add(bump, Ordering::Relaxed);
+                            debug!(
+                                ?reason,
+                                n_corr,
+                                "frame_linker: trigger(s) dropped by capture loop"
+                            );
+                        }
                     }
                 }
                 _ = tick.tick() => {
@@ -170,6 +225,11 @@ pub fn spawn_frame_linker(
                     let total_pairs = PAIRS_EMITTED.load(Ordering::Relaxed);
                     let total_evicted = EVICTED_TTL.load(Ordering::Relaxed) + evicted as u64;
                     let total_failed = UPDATES_FAILED.load(Ordering::Relaxed);
+                    let dropped_drm = DROPPED_DRM.load(Ordering::Relaxed);
+                    let dropped_paused = DROPPED_PAUSED.load(Ordering::Relaxed);
+                    let dropped_lagged = DROPPED_LAGGED.load(Ordering::Relaxed);
+                    let dropped_capture_error = DROPPED_CAPTURE_ERROR.load(Ordering::Relaxed);
+                    let dropped_other = DROPPED_OTHER.load(Ordering::Relaxed);
                     if evicted > 0 {
                         EVICTED_TTL.fetch_add(evicted as u64, Ordering::Relaxed);
                         warn!(
@@ -179,7 +239,12 @@ pub fn spawn_frame_linker(
                             total_pairs,
                             total_evicted,
                             total_failed,
-                            "frame_linker: stale entries expired without pairing (frame or event never arrived)"
+                            dropped_drm,
+                            dropped_paused,
+                            dropped_lagged,
+                            dropped_capture_error,
+                            dropped_other,
+                            "frame_linker: stale entries expired without pairing — these slipped past every instrumented drop site (DRM/paused/lagged/capture_error); investigate the residual"
                         );
                     } else {
                         debug!(
@@ -188,6 +253,11 @@ pub fn spawn_frame_linker(
                             total_pairs,
                             total_evicted,
                             total_failed,
+                            dropped_drm,
+                            dropped_paused,
+                            dropped_lagged,
+                            dropped_capture_error,
+                            dropped_other,
                             "frame_linker: tick"
                         );
                     }

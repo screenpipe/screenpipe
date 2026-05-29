@@ -8,6 +8,8 @@
     <string>This app requires screen capture access to record the screen.</string>
     <key>CGRequestScreenCaptureAccess</key>
     <string>This app requires screen capture access to record the screen.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>screenpipe captures system audio (via the CoreAudio Process Tap) for local transcription. Specific apps can be excluded by listing their bundle IDs in ~/.screenpipe/audio-exclusions.json.</string>
     <key>NSSystemExtensionUsageDescription</key>
     <string>This app requires system extension access to capture audio output.</string>
     <key>NSRemindersUsageDescription</key>

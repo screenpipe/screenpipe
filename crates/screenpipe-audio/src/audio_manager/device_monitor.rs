@@ -13,7 +13,9 @@ use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    core::device::{default_input_device, default_output_device, parse_audio_device, DeviceType},
+    core::device::{
+        default_input_device, default_output_device, parse_audio_device, AudioDevice, DeviceType,
+    },
     device::device_manager::DeviceManager,
 };
 
@@ -26,6 +28,37 @@ use crate::core::device::default_communications_output_device;
 #[cfg(target_os = "macos")]
 fn is_legacy_display_output(device_name: &str) -> bool {
     device_name.contains("Display") && device_name.contains("(output)")
+}
+
+/// True when the device has an open stream that has not latched `is_disconnected`.
+///
+/// `DeviceManager::is_running` flips true when the record pipeline attaches — before
+/// the first audio frame — so we also require a live stream handle. Streams that
+/// failed to open never get inserted; streams that died (timeout, zero-fill hijack)
+/// set `is_disconnected` and are treated as not running so recovery can retry.
+fn is_device_actively_streaming(device_manager: &DeviceManager, device: &AudioDevice) -> bool {
+    if !device_manager.is_running(device) {
+        return false;
+    }
+    device_manager
+        .stream(device)
+        .is_some_and(|stream| !stream.is_disconnected())
+}
+
+/// True when an enabled device of `device_type` is actively recording.
+/// `enabled_devices` alone is not enough — a failed startup leaves the name
+/// enrolled but no stream running, which previously blocked output recovery.
+fn is_device_type_running(
+    device_manager: &DeviceManager,
+    enabled: &HashSet<String>,
+    device_type: DeviceType,
+) -> bool {
+    enabled.iter().any(|name| {
+        parse_audio_device(name)
+            .ok()
+            .filter(|d| d.device_type == device_type)
+            .is_some_and(|d| is_device_actively_streaming(device_manager, &d))
+    })
 }
 
 use super::{AudioManager, AudioManagerStatus};
@@ -454,7 +487,9 @@ pub async fn start_device_monitor(
                         if let Ok(default_input) = default_input_device() {
                             let default_input_name = default_input.to_string();
                             let current = audio_manager.enabled_devices().await;
-                            let has_correct_input = current.contains(&default_input_name);
+                            let has_correct_input = parse_audio_device(&default_input_name)
+                                .ok()
+                                .is_some_and(|d| is_device_actively_streaming(&device_manager, &d));
 
                             if !has_correct_input {
                                 info!(
@@ -492,7 +527,9 @@ pub async fn start_device_monitor(
                         if let Ok(default_output) = default_output_device().await {
                             let default_output_name = default_output.to_string();
                             let current = audio_manager.enabled_devices().await;
-                            let has_correct_output = current.contains(&default_output_name);
+                            let has_correct_output = parse_audio_device(&default_output_name)
+                                .ok()
+                                .is_some_and(|d| is_device_actively_streaming(&device_manager, &d));
 
                             if !has_correct_output {
                                 info!(
@@ -728,11 +765,11 @@ pub async fn start_device_monitor(
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
                         let user_disabled = audio_manager.user_disabled_devices().await;
-                        let has_input = current_enabled.iter().any(|name| {
-                            parse_audio_device(name)
-                                .map(|d| d.device_type == DeviceType::Input)
-                                .unwrap_or(false)
-                        });
+                        let has_input = is_device_type_running(
+                            &device_manager,
+                            &current_enabled,
+                            DeviceType::Input,
+                        );
                         // Don't try to recover if user explicitly disabled all inputs
                         let all_inputs_user_disabled = !has_input && {
                             match default_input_device() {
@@ -807,11 +844,11 @@ pub async fn start_device_monitor(
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
                         let user_disabled = audio_manager.user_disabled_devices().await;
-                        let has_output = current_enabled.iter().any(|name| {
-                            parse_audio_device(name)
-                                .map(|d| d.device_type == DeviceType::Output)
-                                .unwrap_or(false)
-                        });
+                        let has_output = is_device_type_running(
+                            &device_manager,
+                            &current_enabled,
+                            DeviceType::Output,
+                        );
                         // Don't try to recover if user explicitly disabled output
                         let output_user_disabled = !has_output && {
                             match default_output_device().await {
