@@ -29,6 +29,7 @@ Automate releasing all components of the screenpipe monorepo.
 
 **App-only release** is fine when changes are only in:
 - `apps/screenpipe-app-tauri/` (UI/frontend changes)
+- If the release includes new or changed `#[tauri::command]` handlers: from `apps/screenpipe-app-tauri/`, run `bun run bindings:generate` and verify `bun run bindings:check` before tagging
 
 To check what changed since last CLI release:
 ```bash

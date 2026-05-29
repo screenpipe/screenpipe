@@ -29,3 +29,13 @@ add a few steps to test the pr in the most time efficient way.
 2. 
 3. 
 
+## desktop app checklist (if applicable)
+
+If this PR adds or changes `#[tauri::command]` handlers or Rust types exported to the frontend, from `apps/screenpipe-app-tauri/`:
+
+- [ ] `bun run bindings:generate` (if bindings changed)
+- [ ] `bun run bindings:check`
+- [ ] `bun run typecheck`
+
+Commands are auto-collected via the vendored `tauri-helper` crate — no manual handler list edits in `main.rs`.
+

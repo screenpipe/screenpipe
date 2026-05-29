@@ -6,19 +6,16 @@
 //!
 //! The command registry is built by [`crate::specta_builder`] (see `main.rs`).
 //!
-//! Export without launching the app:
-//! ```text
-//! cargo test -p screenpipe-app export_typescript_bindings -- --nocapture
-//! ```
+//! From `apps/screenpipe-app-tauri/`:
 //!
 //! Refresh the checked-in file:
 //! ```text
-//! UPDATE_TAURI_BINDINGS=1 cargo test -p screenpipe-app export_typescript_bindings -- --nocapture
+//! bun run bindings:generate
 //! ```
 //!
 //! Verify checked-in bindings match Rust:
 //! ```text
-//! cargo test -p screenpipe-app tauri_bindings_are_current
+//! bun run bindings:check
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -138,7 +135,7 @@ mod tests {
             checked_in_content, generated_content,
             "lib/utils/tauri.ts is out of date.\n\
              Regenerate with:\n\
-               UPDATE_TAURI_BINDINGS=1 cargo test -p screenpipe-app export_typescript_bindings -- --nocapture"
+               cd apps/screenpipe-app-tauri && bun run bindings:generate"
         );
     }
 }

@@ -29,6 +29,11 @@ Use `#` for Python, `//` for Rust/TS/JS/Swift. Keep it as the first comment in t
 ## Testing
 - `cargo test` for Rust
 - `bun test` for JS/TS
+- **Tauri TypeScript bindings** (from `apps/screenpipe-app-tauri/`):
+  - `bun run bindings:check` — fail if `lib/utils/tauri.ts` drifted from Rust surface
+  - `bun run bindings:generate` — regenerate `lib/utils/tauri.ts` after adding or changing commands
+  - Commands need **both** `#[tauri::command]` and `#[specta::specta]`; without the latter the command is silently excluded from `tauri.ts`
+  - Commands are auto-collected via the `tauri-helper` crate
 - **Regression checklist**: `TESTING.md` — must-read before changing window management, tray/dock, monitors, audio, or Apple Intelligence. Lists every edge case that has caused regressions with commit references.
 - regularly check ci/cd which runs automated tests to verify if we broke something or not
 
