@@ -1,0 +1,123 @@
+---
+title: "observability"
+description: "Send screenpipe operational telemetry to your own PostHog or OpenTelemetry collector."
+---
+
+screenpipe can mirror operational telemetry from the CLI/SDK runtime to backends that you control. This is opt-in and configured with environment variables; when none of these variables are set, behavior is unchanged.
+
+## privacy boundary
+
+Only operational signals are emitted. screenpipe does **not** include recorded content, transcripts, OCR text, screenshots, audio, clipboard content, or search results in telemetry payloads.
+
+Current event families include:
+
+- API usage counters
+- vision pipeline health, including frame counts, OCR counts, queue depth, latency, and drop counters
+- audio pipeline health, including chunk counts, transcription latency, queue depth, device count, and error counters
+- pipe scheduling/run lifecycle events
+- meeting detection decisions and feedback metadata
+- environment compatibility warnings, such as unsupported macOS versions
+
+## OpenTelemetry / OTLP
+
+Set an OTLP HTTP endpoint before starting screenpipe:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
+export OTEL_SERVICE_NAME="screenpipe"
+export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=prod,service.namespace=desktop-ai"
+screenpipe record
+```
+
+screenpipe sends events as OTLP log records to `${OTEL_EXPORTER_OTLP_ENDPOINT}/v1/logs`. You can also set `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` when your collector exposes a dedicated logs URL.
+
+Supported env vars:
+
+| env var | purpose |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP HTTP endpoint; screenpipe appends `/v1/logs`. |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Explicit OTLP logs endpoint; takes precedence over the base endpoint. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Comma-separated HTTP headers, for example `api-key=...`. |
+| `OTEL_SERVICE_NAME` | Service name resource attribute; defaults to `screenpipe`. |
+| `OTEL_RESOURCE_ATTRIBUTES` | Comma-separated resource attributes copied into every log record. |
+
+Custom attributes use the `screenpipe.*` namespace. For example, the `vision_pipeline_health` event includes attributes such as `screenpipe.frames_captured`, `screenpipe.ocr_queue_depth`, and `screenpipe.avg_ocr_latency_ms`.
+
+### Grafana / Tempo / Loki through the OpenTelemetry Collector
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp/loki:
+    endpoint: https://loki.example.com/otlp
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/loki]
+```
+
+### Datadog through the OpenTelemetry Collector
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  datadog:
+    api:
+      key: ${env:DD_API_KEY}
+      site: datadoghq.com
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [datadog]
+```
+
+### Honeycomb through the OpenTelemetry Collector
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp/honeycomb:
+    endpoint: https://api.honeycomb.io
+    headers:
+      x-honeycomb-team: ${env:HONEYCOMB_API_KEY}
+      x-honeycomb-dataset: screenpipe
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/honeycomb]
+```
+
+## Native PostHog mirror
+
+If you already have PostHog and do not run an OpenTelemetry collector yet, mirror operational events directly:
+
+```bash
+export SCREENPIPE_USER_POSTHOG_KEY="phc_your_project_key"
+export SCREENPIPE_USER_POSTHOG_HOST="https://us.i.posthog.com"
+screenpipe record
+```
+
+`SCREENPIPE_USER_POSTHOG_HOST` is optional and defaults to `https://us.i.posthog.com`.
+
+Screenpipe-owned product analytics still follow the existing analytics opt-in/out setting. User-configured sinks are independent so operators can disable product analytics while keeping their own operational visibility.
