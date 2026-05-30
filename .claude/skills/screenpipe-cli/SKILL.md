@@ -134,57 +134,16 @@ bun x screenpipe@latest connection set telegram bot_token=123456:ABC-DEF chat_id
 # Set up Slack webhook
 bun x screenpipe@latest connection set slack webhook_url=https://hooks.slack.com/services/...
 
-# Set up OpenClaw (local gateway, default port 18789)
-bun x screenpipe@latest connection set openclaw endpoint=http://127.0.0.1:18789 token=your-gateway-token
-
 # Verify it works
 bun x screenpipe@latest connection test telegram
-bun x screenpipe@latest connection test openclaw
 
 # Check what's connected
 bun x screenpipe@latest connection list
 ```
 
-Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `apple-intelligence`, `openclaw`
-
 Credentials are stored locally at `~/.screenpipe/connections.json`.
 
-### OpenClaw connection
-
-OpenClaw is a self-hosted AI agent gateway (default: `http://127.0.0.1:18789`). Credentials:
-- `endpoint`: Gateway URL (e.g. `http://127.0.0.1:18789` for local, or remote IP if deployed on VPS)
-- `token`: Gateway bearer token — find it in `~/.openclaw/openclaw.json` under `gateway.auth.token`, or the `OPENCLAW_GATEWAY_TOKEN` env var
-
-Once connected, a pipe can send events to the OpenClaw agent using these endpoints:
-
-| Use case | Endpoint | Body |
-|----------|----------|------|
-| Wake agent with a message | `POST {endpoint}/hooks/agent` | `{"message": "...", "wakeMode": "now"}` |
-| Fire-and-forget notification | `POST {endpoint}/hooks/wake` | `{"text": "...", "mode": "now"}` |
-| Inject into agent inbox | `POST {endpoint}/api/sessions/main/messages` | `{"text": "..."}` |
-
-All requests require `Authorization: Bearer {token}` header.
-
-**Example pipe that sends screenpipe activity to OpenClaw:**
-
-```markdown
----
-schedule: every 30m
-enabled: true
-preset: auto
----
-
-Query screenpipe for activity in the last 30 minutes using the search API.
-Summarize key events (apps used, topics discussed, tasks worked on).
-
-Then send a concise summary to OpenClaw via POST {openclaw.endpoint}/hooks/agent
-with header Authorization: Bearer {openclaw.token}
-and body: {"message": "<your summary>", "wakeMode": "now"}
-```
-
-**Example pipe that relays screenpipe events to OpenClaw via Telegram:**
-
-If you want OpenClaw to receive the update through Telegram (so OpenClaw's Telegram bot surfaces it), configure the `telegram` connection with the bot that OpenClaw is listening on, then send via Telegram — OpenClaw will pick it up through its Telegram channel integration.
+**Per-integration details**: don't guess API shapes from this skill. Run `connection list` or `connection get <id>` — each entry includes a self-describing `description` with credential fields, endpoints, and example bodies. Only fetch the integration you need.
 
 ## Publishing pipes to the store
 

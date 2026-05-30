@@ -310,7 +310,7 @@ export function IntegrationIcon({
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
-    openclaw: <img src="/images/openclaw.png" alt="OpenClaw" className="w-5 h-5" />,
+    openclaw: <img src="/openclaw-icon.svg" alt="OpenClaw" className="w-5 h-5" />,
     hermes: <img src="/images/hermes.png" alt="Hermes" className="w-5 h-5 rounded" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
     email: <Send className="h-5 w-5 text-muted-foreground" />,
