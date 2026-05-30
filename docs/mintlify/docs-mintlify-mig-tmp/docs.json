@@ -47,7 +47,7 @@
           },
           {
             "group": "deployment",
-            "pages": ["intune-deployment"]
+            "pages": ["intune-deployment", "observability"]
           },
 
           {
