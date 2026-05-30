@@ -3571,6 +3571,7 @@ export function StandaloneChat({
     setIsLoading,
     setIsStreaming,
     setPastedImages,
+    setAttachedDocs,
     settings,
     selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,
@@ -3604,12 +3605,18 @@ export function StandaloneChat({
     }
   }, [resizeImage]);
 
-  // Read a non-image file by path, extract its text, and append to attachedDocs
+  // Read a non-image file by path, extract its text, and append to attachedDocs.
+  // De-duplicates by filename so dropping the same file twice (or being in both
+  // the picker selection and a drag-drop event) only attaches it once.
   const loadDocFromPath = useCallback(async (filePath: string) => {
     const name = filePath.split(/[\\/]/).pop() || filePath;
     const ext = extFromName(name);
     if (!isSupportedDocExt(ext)) {
       toast({ title: "unsupported file", description: `can't read .${ext || "?"} files`, variant: "destructive" });
+      return;
+    }
+    if (attachedDocsRef.current.some((d) => d.name === name)) {
+      // already attached — silently skip rather than toast-spamming the user
       return;
     }
     try {
@@ -3619,7 +3626,8 @@ export function StandaloneChat({
         toast({ title: "no text found", description: `${name} looks empty or has no extractable text`, variant: "destructive" });
         return;
       }
-      setAttachedDocs((prev) => [...prev, doc]);
+      // Re-check at insert time in case two concurrent loads raced.
+      setAttachedDocs((prev) => prev.some((d) => d.name === name) ? prev : [...prev, doc]);
     } catch (err) {
       console.error("failed to read attached doc:", err);
       toast({ title: "couldn't read file", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
@@ -7015,6 +7023,7 @@ export function StandaloneChat({
     // the prompt, expandable to reveal the attached file text.
     let outgoingMessage = trimmed;
     let outgoingDisplay = displayLabel;
+    const snapshotDocs = queuedDocs.length > 0 ? [...queuedDocs] : [];
     if (queuedDocs.length > 0) {
       const docText = docsToPromptText(queuedDocs);
       outgoingMessage = [trimmed, docText].filter(Boolean).join("\n\n");
@@ -7022,17 +7031,32 @@ export function StandaloneChat({
       setAttachedDocs([]);
     }
 
+    // Restore the chips if the downstream send path threw. Mirrors the
+    // pastedImages restore-on-error contract in enqueuePiMessage/sendPiMessage:
+    // a failed dispatch must not silently swallow the user's attachments.
+    const restoreDocsOnError = (e: unknown) => {
+      if (snapshotDocs.length === 0) return;
+      setAttachedDocs((prev) => prev.length === 0 ? snapshotDocs : prev);
+      throw e;
+    };
+
     // Guard the tiny gap between submit and React's loading state update.
     // During this window, rapid Enter presses must queue (not start a second
     // normal turn), otherwise user bubbles can drift.
     if (forceQueueModeRef.current || sendDispatchInFlightRef.current || piMessageIdRef.current || isLoading || isStreaming) {
-      return enqueuePiMessage(outgoingMessage, outgoingDisplay);
+      try {
+        return await enqueuePiMessage(outgoingMessage, outgoingDisplay);
+      } catch (e) {
+        restoreDocsOnError(e);
+      }
     }
 
     sendDispatchInFlightRef.current = true;
     try {
       // All providers route through Pi agent
       return await sendPiMessage(outgoingMessage, outgoingDisplay);
+    } catch (e) {
+      restoreDocsOnError(e);
     } finally {
       sendDispatchInFlightRef.current = false;
     }
