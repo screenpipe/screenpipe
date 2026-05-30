@@ -183,6 +183,16 @@ function navigateHomeAndPrefill(data: ChatPrefillData): void {
   window.location.href = url.toString();
 }
 
+function buildForkPipeDisplayLabel(pipeTitle: string): string {
+  const title = pipeTitle.trim();
+  return title ? `Fork pipe: ${title}` : "Fork pipe";
+}
+
+function buildPublishPipeDisplayLabel(pipeName: string): string {
+  const name = pipeName.trim();
+  return name ? `Publish pipe: ${name}` : "Publish pipe";
+}
+
 
 
 function formatCount(n: number): string {
@@ -1109,6 +1119,7 @@ ${pipeSource}
 
 IMPORTANT: first read the screenpipe skill file to understand how pipes work, then ask the user how they want to customize/improve this pipe for their specific needs. do NOT auto-send or auto-create — have a conversation first to understand what they want to change.`,
                     prompt: `i want to fork the "${pipe.title}" pipe and adapt it to my needs. here is the original pipe.md:\n\n${pipeSource}`,
+                    displayLabel: buildForkPipeDisplayLabel(pipe.title),
                     autoSend: true,
                   });
                 }}
@@ -1511,6 +1522,7 @@ STEP 5: PUBLISH (only after user says yes)
 - include Authorization header with Bearer token from settings (read settings first to get user.token)
 - tell the user the result`,
       prompt: `help me publish my pipe "${pipeName}" to the store. make it generic and ready for anyone to use.`,
+      displayLabel: buildPublishPipeDisplayLabel(pipeName),
       autoSend: true,
     });
   };
