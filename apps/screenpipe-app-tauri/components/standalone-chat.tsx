@@ -50,6 +50,19 @@ import {
   DOC_PICKER_EXTENSIONS,
   type ExtractedDoc,
 } from "@/lib/pi/extract-document";
+
+// Per-message attachment metadata. We deliberately do NOT carry the
+// extracted text here — that lives inside `content` (it's already there
+// because sendMessage folds it in for the model). The renderer reads
+// this metadata to draw an attachment card above the user
+// bubble (icon + filename + char count), keeping the bubble itself
+// clean. See the ChatMessage user-bubble render path (`attachmentsRow`).
+export type ChatAttachment = {
+  name: string;
+  ext: string;
+  charCount: number;
+  truncated: boolean;
+};
 import { commands } from "@/lib/utils/tauri";
 import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
@@ -783,6 +796,7 @@ interface Message {
   intent?: "steer";
   turnIntentId?: string;
   images?: string[]; // base64 data URLs of attached images
+  attachments?: ChatAttachment[]; // non-image files extracted to text; rendered as cards above the bubble
   timestamp: number;
   contentBlocks?: ContentBlock[];
   sourceCitations?: SourceCitation[];
@@ -797,6 +811,7 @@ interface Message {
 type QueuedDisplayPayload = {
   preview: string;
   images: string[];
+  attachments?: ChatAttachment[];
   displayContent?: string;
   optimisticUserId?: string;
   turnIntentId?: string;
@@ -827,6 +842,7 @@ type PendingSteerBatchItem = {
   originalUserMessage: string;
   interruptedAssistantId?: string;
   images: string[];
+  attachments?: ChatAttachment[];
   displayContent?: string;
   optimisticUserId: string;
   createdAt: number;
@@ -2549,30 +2565,65 @@ function MessageContent({
     );
   }
 
-  // Render attached image thumbnails for user messages — larger, ChatGPT-style; click to open viewer
-  const imageThumbs = isUser && message.images && message.images.length > 0 ? (
-    <div className="flex gap-2 flex-wrap">
-      {message.images.map((img, i) => (
+  // Unified attachment row — docs (PDF/DOCX/…) + image thumbnails share
+  // ONE flex container so the strip reads as a single row regardless of
+  // attachment mix. The previous design rendered docs and images as two
+  // sibling <div>s, which produced a fragmented two-row strip whenever
+  // a user attached one of each kind. Both card types are 80px tall so
+  // the row baselines line up cleanly.
+  const hasDocs = isUser && (message.attachments?.length ?? 0) > 0;
+  const hasImages = isUser && (message.images?.length ?? 0) > 0;
+  const attachmentsRow = (hasDocs || hasImages) ? (
+    <div className="flex gap-2 flex-wrap items-stretch">
+      {hasDocs && message.attachments!.map((doc, i) => {
+        const badge = attachmentBadge(doc.ext);
+        return (
+          <div
+            key={`doc-${doc.name}-${i}`}
+            title={`${doc.name} — ${doc.charCount.toLocaleString()} chars${doc.truncated ? " (truncated)" : ""}`}
+            className="flex items-center gap-2.5 h-20 max-w-[260px] rounded-xl border border-border/50 bg-muted/40 px-3 shadow-sm"
+          >
+            <div className={`shrink-0 w-11 h-11 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
+              {badge.label}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
+              <div className="truncate text-[10px] text-muted-foreground">
+                {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {hasImages && message.images!.map((img, i) => (
         <button
-          key={i}
+          key={`img-${i}`}
           type="button"
           onClick={() => onImageClick?.(message.images ?? [], i)}
-          className="rounded-lg border border-border/50 shadow-sm overflow-hidden p-0 block text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-xl border border-border/50 shadow-sm overflow-hidden p-0 block text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={img} alt={`Attached ${i + 1}`} className="max-w-[200px] max-h-[160px] min-h-[80px] w-full object-cover cursor-pointer" />
+          <img src={img} alt={`Attached ${i + 1}`} className="h-20 w-20 min-h-20 min-w-20 object-cover cursor-pointer" />
         </button>
       ))}
     </div>
   ) : null;
 
   // Fallback: plain text message (user messages, non-Pi assistant messages)
-  // For user messages with a display label, show the short label with expand toggle
+  // For user messages with a display label, show the short label with expand toggle.
+  //
+  // When the message has document attachments, the "fullContent" we'd
+  // expand to contains the raw `<attached file: ...>` payload — that's
+  // a model-input artifact, not something the user wants to read. The
+  // attachment cards above already disclose what was attached, so we
+  // suppress the expansion chevron in that case (label-only bubble).
   if (isUser && message.displayContent) {
     return (
       <div className="space-y-2">
-        {imageThumbs}
-        <CollapsibleUserMessage label={message.displayContent} fullContent={message.content} />
+        {attachmentsRow}
+        {hasDocs
+          ? <div className="text-sm font-medium">{message.displayContent}</div>
+          : <CollapsibleUserMessage label={message.displayContent} fullContent={message.content} />}
       </div>
     );
   }
@@ -2583,13 +2634,27 @@ function MessageContent({
 
   return (
     <div className="space-y-2">
-      {imageThumbs}
+      {attachmentsRow}
       <MarkdownBlock text={displayText} isUser={isUser} />
       {sourceFooter}
       {retryCta}
     </div>
   );
 }
+
+// Per-extension presentation for attachment cards. Kept tiny on purpose —
+// the goal is recognition at a glance, not pixel-perfect filetype branding.
+function attachmentBadge(ext: string): { label: string; tint: string } {
+  const e = ext.toLowerCase();
+  if (e === "pdf") return { label: "PDF", tint: "bg-red-500/15 text-red-600 dark:text-red-400" };
+  if (e === "docx" || e === "doc") return { label: "DOC", tint: "bg-blue-500/15 text-blue-600 dark:text-blue-400" };
+  if (e === "xlsx" || e === "xls" || e === "csv" || e === "tsv") return { label: e.toUpperCase(), tint: "bg-green-500/15 text-green-600 dark:text-green-400" };
+  if (e === "md" || e === "markdown") return { label: "MD", tint: "bg-purple-500/15 text-purple-600 dark:text-purple-400" };
+  if (e === "json") return { label: "JSON", tint: "bg-amber-500/15 text-amber-600 dark:text-amber-400" };
+  return { label: (e || "FILE").toUpperCase().slice(0, 4), tint: "bg-muted text-muted-foreground" };
+}
+
+
 
 function getMessageIntentLabel(message: Message): string | null {
   if (message.role === "assistant" && (message.intent === "steer" || message.steeredResponse)) {
@@ -3298,6 +3363,21 @@ export function StandaloneChat({
   // ref mirror so send paths read the latest docs without widening their deps arrays
   const attachedDocsRef = useRef<ExtractedDoc[]>([]);
   useEffect(() => { attachedDocsRef.current = attachedDocs; }, [attachedDocs]);
+  // Single-shot stash of the attachment metadata for the NEXT user message
+  // about to be created by sendPiMessage / enqueuePiMessage. sendMessage
+  // populates this just before dispatching; the message-creation sites
+  // read-and-clear it. We don't carry attachments via the existing
+  // displayLabel string because that's already overloaded (it's the
+  // collapsed bubble label) and because each send path creates its own
+  // Message object — a ref keeps the surface area tiny vs. plumbing a
+  // new param through five call sites.
+  const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
+  function consumePendingAttachments(): ChatAttachment[] | undefined {
+    const list = pendingAttachmentsRef.current;
+    if (!list.length) return undefined;
+    pendingAttachmentsRef.current = [];
+    return list;
+  }
   const [imageViewer, setImageViewer] = useState<{ images: string[]; index: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const steerShortcutInFlightRef = useRef(false);
@@ -5436,6 +5516,7 @@ export function StandaloneChat({
               content: text,
               ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
               ...(queuedImages.length ? { images: [...queuedImages] } : {}),
+              ...(queuedDisplay?.attachments?.length ? { attachments: [...queuedDisplay.attachments] } : {}),
               ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
               ...(matchedTurnIntent ? { turnIntentId: matchedTurnIntent.id } : {}),
               timestamp: Date.now(),
@@ -6379,7 +6460,7 @@ export function StandaloneChat({
   }
 
   function shouldKeepQueuedDisplay(payload: QueuedDisplayPayload) {
-    return payload.images.length > 0 || !!payload.displayContent;
+    return payload.images.length > 0 || !!payload.displayContent || (payload.attachments?.length ?? 0) > 0;
   }
 
   function restoreQueuedDisplay(sessionId: string | null, promptId: string, payload: QueuedDisplayPayload | null) {
@@ -6432,6 +6513,9 @@ export function StandaloneChat({
     const queuedImageDataUrls = pastedImages.length > 0 ? [...pastedImages] : [];
     const prevInput = input;
     const hadPastedImages = pastedImages.length > 0;
+    // Snapshot whatever sendMessage stashed for us. Consumed here so it
+    // doesn't leak into a later turn if this enqueue races with another.
+    const queuedAttachments = consumePendingAttachments();
 
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
@@ -6501,6 +6585,7 @@ export function StandaloneChat({
       restoreQueuedDisplay(piSessionIdRef.current, result.data, {
         preview: queuedPreviewForText(userMessage),
         images: queuedImageDataUrls,
+        ...(queuedAttachments ? { attachments: queuedAttachments } : {}),
         ...(displayLabel ? { displayContent: displayLabel } : {}),
         turnIntentId: queuedTurnIntentId,
       });
@@ -6618,12 +6703,14 @@ export function StandaloneChat({
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
 
+    const consumedAttachments = consumePendingAttachments();
     const newUserMessage: Message = {
       id: Date.now().toString(),
       role: "user",
       content: userMessage,
       ...(displayLabel ? { displayContent: displayLabel } : {}),
       ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
+      ...(consumedAttachments ? { attachments: consumedAttachments } : {}),
       timestamp: Date.now(),
     };
 
@@ -7017,17 +7104,30 @@ export function StandaloneChat({
     const queuedDocs = attachedDocsRef.current;
     if (!trimmed && pastedImages.length === 0 && queuedDocs.length === 0) return;
 
-    // Fold any attached documents into the outgoing turn. The extracted text
-    // rides in `content` (what's sent to the model, kept for history/retries)
-    // while `displayContent` stays the clean user text — so the bubble shows
-    // the prompt, expandable to reveal the attached file text.
+    // Fold any attached documents into the outgoing turn. The extracted
+    // text rides in `content` (what the model sees, kept for
+    // history/retries) while the bubble renders `displayContent` (the
+    // clean prompt) plus an attachment row above it (icon + name).
+    // The raw `<attached file: ...>` payload never reaches the renderer:
+    // when attachments are present the bubble's expand-chevron is
+    // suppressed (see ChatMessage / CollapsibleUserMessage).
     let outgoingMessage = trimmed;
     let outgoingDisplay = displayLabel;
     const snapshotDocs = queuedDocs.length > 0 ? [...queuedDocs] : [];
     if (queuedDocs.length > 0) {
       const docText = docsToPromptText(queuedDocs);
       outgoingMessage = [trimmed, docText].filter(Boolean).join("\n\n");
-      outgoingDisplay = displayLabel ?? (trimmed || `📎 ${queuedDocs.map((d) => d.name).join(", ")}`);
+      // Always set a clean displayContent when docs are attached.
+      // Without it, the bubble would render `outgoingMessage` directly
+      // — dumping the extracted PDF prose into the chat.
+      const cleanLabel = trimmed || `📎 ${queuedDocs.map((d) => d.name).join(", ")}`;
+      outgoingDisplay = displayLabel ?? cleanLabel;
+      pendingAttachmentsRef.current = queuedDocs.map((d) => ({
+        name: d.name,
+        ext: d.ext,
+        charCount: d.charCount,
+        truncated: d.truncated,
+      }));
       setAttachedDocs([]);
     }
 
@@ -7296,6 +7396,7 @@ export function StandaloneChat({
     pendingNextPiUserDisplayRef.current = {
       preview,
       images: [...latest.images],
+      ...(latest.attachments?.length ? { attachments: [...latest.attachments] } : {}),
       ...(latest.displayContent ? { displayContent: latest.displayContent } : {}),
       optimisticUserId: latest.optimisticUserId,
       turnIntentId: latest.turnIntentId,
@@ -7490,12 +7591,14 @@ export function StandaloneChat({
     }
     lastUserMessageRef.current = trimmed;
     const turnIntentId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const steerAttachments = consumePendingAttachments();
     const optimisticUser: Message = {
       id: turnIntentId,
       role: "user",
       content: trimmed,
       ...(displayLabel ? { displayContent: displayLabel } : {}),
       ...(outgoingImages.length ? { images: [...outgoingImages] } : {}),
+      ...(steerAttachments ? { attachments: steerAttachments } : {}),
       intent: "steer",
       turnIntentId,
       timestamp: Date.now(),
@@ -7570,6 +7673,7 @@ export function StandaloneChat({
         originalUserMessage,
         interruptedAssistantId: activeAssistantId ?? undefined,
         images: [...outgoingImages],
+        ...(steerAttachments ? { attachments: [...steerAttachments] } : {}),
         ...(displayLabel ? { displayContent: displayLabel } : {}),
         optimisticUserId: optimisticUser.id,
         createdAt: Date.now(),
@@ -7602,6 +7706,7 @@ export function StandaloneChat({
       content: optimisticQueuedContent,
       ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
       ...(queuedDisplay?.images.length ? { images: [...queuedDisplay.images] } : {}),
+      ...(queuedDisplay?.attachments?.length ? { attachments: [...queuedDisplay.attachments] } : {}),
       intent: "steer",
       turnIntentId,
       timestamp: Date.now(),
@@ -8981,50 +9086,59 @@ export function StandaloneChat({
           )
         )}
 
-        {/* Attached documents — filename chips with remove */}
-        {attachedDocs.length > 0 && (
+        {/* Composer attachment strip — one row, docs + images side by side.
+            Both kinds share a 64px height so the row has a consistent
+            baseline (the previous design rendered them in two separate
+            <div> rows with different heights, producing a fragmented strip
+            when a user attached one of each). Mirrors the in-bubble
+            in-bubble attachment row order (docs first, images after). */}
+        {(attachedDocs.length > 0 || pastedImages.length > 0) && (
           <div className="px-5 sm:px-6 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
-            {attachedDocs.map((doc, i) => (
-              <div
-                key={`${doc.name}-${i}`}
-                className="relative group flex items-center gap-2 max-w-[220px] rounded-lg border border-border/50 bg-muted/40 px-2.5 py-1.5 shadow-sm"
-                title={`${doc.name}${doc.truncated ? " (truncated to fit)" : ""}`}
-              >
-                <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="truncate text-xs text-foreground">{doc.name}</span>
-                <button
-                  type="button"
-                  onClick={() => setAttachedDocs((prev) => prev.filter((_, idx) => idx !== i))}
-                  className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-destructive/90"
+            {attachedDocs.map((doc, i) => {
+              const badge = attachmentBadge(doc.ext);
+              return (
+                <div
+                  key={`doc-${doc.name}-${i}`}
+                  className="relative group flex items-center gap-2.5 h-16 max-w-[240px] rounded-xl border border-border/50 bg-muted/40 px-2.5 shadow-sm"
+                  title={`${doc.name} — ${doc.charCount.toLocaleString()} chars${doc.truncated ? " (truncated to fit)" : ""}`}
                 >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Attached images in the gap (above agent bar, like reference); click to open full-screen viewer */}
-        {pastedImages.length > 0 && (
-          <div className="px-5 sm:px-6 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
+                  <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
+                    {badge.label}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
+                    <div className="truncate text-[10px] text-muted-foreground">
+                      {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedDocs((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-destructive/90"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
             {pastedImages.map((img, i) => (
-              <div key={i} className="relative group shrink-0">
+              <div key={`img-${i}`} className="relative group shrink-0">
                 <button
                   type="button"
                   onClick={() => setImageViewer({ images: pastedImages, index: i })}
-                  className="block rounded-lg border border-border/50 shadow-sm overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="block rounded-xl border border-border/50 shadow-sm overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={img}
                     alt={`Attached ${i + 1}`}
-                    className="h-20 w-20 min-h-20 min-w-20 object-cover cursor-pointer"
+                    className="h-16 w-16 min-h-16 min-w-16 object-cover cursor-pointer"
                   />
                 </button>
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); setPastedImages(prev => prev.filter((_, idx) => idx !== i)); }}
-                  className="absolute -top-1.5 -right-1.5 w-6 h-6 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-destructive/90"
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-destructive/90"
                 >
                   <X className="w-3 h-3" />
                 </button>
