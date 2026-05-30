@@ -67,6 +67,13 @@ async function openNotificationLink(href: string) {
   await open(raw);
 }
 
+function buildNotificationDisplayLabel(title: string): string {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  if (!normalized) return "Ask AI about notification";
+  const compact = normalized.length > 60 ? `${normalized.slice(0, 57).trimEnd()}...` : normalized;
+  return `Ask AI about: ${compact}`;
+}
+
 export function NotificationBell() {
   const [history, setHistory] = useState<NotificationEntry[]>([]);
   const [open, setOpen] = useState(false);
@@ -313,6 +320,7 @@ export function NotificationBell() {
                           showChatWithPrefill({
                             context: `notification from ${entry.pipe_name || "screenpipe"}:\n\n**${entry.title}**\n${entry.body}`,
                             prompt: `tell me more about this: "${entry.title}"`,
+                            displayLabel: buildNotificationDisplayLabel(entry.title),
                             autoSend: true,
                             source: `notification-bell-${entry.id}`,
                           });
