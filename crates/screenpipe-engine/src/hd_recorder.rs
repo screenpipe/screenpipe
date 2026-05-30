@@ -10,19 +10,31 @@
 //! stay sparse: you cannot run OCR at 10-30fps.
 //!
 //! "HD mode" historically only lowered that loop's debounce *ceiling*, so on a
-//! static screen (a call, a video) almost nothing was captured. This recorder
-//! fixes that by running a SEPARATE high-fps screen-capture stream (a second
-//! ScreenCaptureKit stream via [`SafeMonitor::start_hd_capture`]) that encodes a
-//! real constant-frame-rate H.264 chunk with ffmpeg and writes ONLY sparse
-//! timeline scrub-markers — no OCR, no a11y. The two run side by side: smooth
-//! video for replay, the unchanged event-driven OCR for search.
+//! static screen almost nothing was captured. This recorder fixes that by
+//! running a SEPARATE high-fps screen-capture stream (a second ScreenCaptureKit
+//! stream via [`SafeMonitor::start_hd_capture`]) and encoding a real
+//! constant-frame-rate H.264 chunk with ffmpeg — no OCR, no a11y. The event-
+//! driven OCR keeps running for search.
+//!
+//! ## Two stages, two rates (why this is CFR)
+//! ScreenCaptureKit is change-driven (it emits a frame only when pixels change),
+//! and JPEG-encoding a frame is CPU-heavy (tens of ms release, hundreds debug).
+//! So we split the work:
+//! - an **encoder task** drains the SCK stream and JPEG-encodes the newest frame
+//!   on a blocking thread, publishing the latest encoded frame;
+//! - a **writer timer** emits exactly one frame per `1/fps` tick — the latest
+//!   encoded frame, repeating the previous one when nothing newer arrived.
+//!
+//! The writer's rate is therefore independent of both the capture-change rate
+//! and the encode cost, so the chunk is true CFR: smooth playback, and
+//! `offset_index / fps` equals real elapsed time on any machine / resolution.
 //!
 //! ## Read-path contract (so the existing timeline + export render it)
-//! - The .mp4 is encoded CFR at `fps`, so decode-frame `N` is at time `N/fps`.
+//! - The .mp4 is CFR at `fps`, so decode-frame `N` is at time `N/fps`.
 //! - `video_chunks.fps` is set to that same `fps`.
-//! - Each scrub-marker frame stores `offset_index = N` (the frame's 0-based
-//!   decode index) and `snapshot_path = NULL`, so export (`select=eq(n,N)`) and
-//!   the timeline (`offset_index/fps`) both resolve the right frame.
+//! - Each scrub-marker frame stores `offset_index = N` (0-based decode index)
+//!   and `snapshot_path = NULL`, so export (`select=eq(n,N)`) and the timeline
+//!   (`offset_index/fps`) both resolve the right frame.
 //!
 //! macOS only (ScreenCaptureKit). On other platforms the loop is a no-op until
 //! a WGC/PipeWire high-fps source exists.
@@ -104,6 +116,7 @@ mod macos {
     use std::path::Path;
     use std::process::Stdio;
     use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use anyhow::{Context, Result};
@@ -206,13 +219,21 @@ mod macos {
 
         // Open the dedicated high-fps stream. start_hd_capture blocks while SCK
         // starts the stream, so run it on a blocking thread.
-        let mut hd = {
+        let hd = {
             let m = monitor.clone();
             tokio::task::spawn_blocking(move || m.start_hd_capture(fps, &excluded))
                 .await
                 .context("hd capture spawn_blocking join")??
         };
         let actual_fps = hd.fps.max(1);
+        let (hd_w, hd_h) = (hd.width, hd.height);
+        // Split the handle: the encoder task owns the frame receiver; the stream
+        // handle stays here so dropping it at finalize stops the SCStream.
+        let screenpipe_screen::HdCapture {
+            stream,
+            frames: mut frames_rx,
+            ..
+        } = hd;
 
         // Chunk lives under the same data dir as snapshots:
         //   <base>/<YYYY-MM-DD>/hd_<device>_<ms>.mp4
@@ -234,10 +255,41 @@ mod macos {
             .context("insert hd video_chunk")?;
 
         info!(
-            "hd recording started: monitor {monitor_id} -> {file_str} ({}x{} @ {actual_fps}fps)",
-            hd.width, hd.height
+            "hd recording started: monitor {monitor_id} -> {file_str} ({hd_w}x{hd_h} @ {actual_fps}fps)"
         );
 
+        // Encoder task: drain the SCK stream to the newest frame and JPEG-encode
+        // it on a blocking thread, publishing the latest encoded frame. Runs at
+        // the capture-change rate (≤ fps); the writer below paces independently.
+        let latest: Arc<Mutex<Option<Arc<Vec<u8>>>>> = Arc::new(Mutex::new(None));
+        let enc_latest = latest.clone();
+        let encoder = tokio::spawn(async move {
+            loop {
+                let Some(mut frame) = frames_rx.recv().await else {
+                    break; // stream stopped (handle dropped)
+                };
+                // Coalesce: keep only the newest queued frame.
+                while let Ok(f) = frames_rx.try_recv() {
+                    frame = f;
+                }
+                match tokio::task::spawn_blocking(move || encode_jpeg(frame)).await {
+                    Ok(Ok(jpeg)) => {
+                        if let Ok(mut g) = enc_latest.lock() {
+                            *g = Some(Arc::new(jpeg));
+                        }
+                    }
+                    Ok(Err(e)) => debug!("hd recorder: jpeg encode failed: {e}"),
+                    Err(_) => break, // spawn_blocking join error (shutdown)
+                }
+            }
+        });
+
+        // Writer: emit exactly one frame per `1/fps` tick — the latest encoded
+        // frame, or a repeat of the previous one when nothing newer arrived. This
+        // is what makes the chunk true CFR regardless of capture/encode speed.
+        let tick = Duration::from_millis((1000 / actual_fps as u64).max(1));
+        let mut ticker = tokio::time::interval(tick);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let index_stride = (actual_fps as f64 * HD_INDEX_EVERY_SECS).round().max(1.0) as i64;
         let mut frame_idx: i64 = 0;
         let mut next_index_frame: i64 = 0;
@@ -245,6 +297,7 @@ mod macos {
         let mut write_failed = false;
 
         loop {
+            ticker.tick().await;
             if stop_signal.load(Ordering::Relaxed)
                 || !controller.snapshot().active
                 || capture_blocked()
@@ -252,23 +305,22 @@ mod macos {
             {
                 break;
             }
-            // Timeout so we re-check the end conditions even if frames stall.
-            let frame =
-                match tokio::time::timeout(Duration::from_millis(500), hd.frames.recv()).await {
-                    Ok(Some(f)) => f,
-                    Ok(None) => break, // stream closed
-                    Err(_) => continue,
-                };
 
-            let jpeg = encode_jpeg(frame)?;
-            if let Err(e) = stdin.write_all(&jpeg).await {
+            // Latest encoded frame (cheap Arc clone). None until the first frame
+            // has been captured + encoded — skip those early ticks.
+            let jpeg = latest.lock().ok().and_then(|g| g.clone());
+            let Some(jpeg) = jpeg else {
+                continue;
+            };
+
+            if let Err(e) = stdin.write_all(&jpeg[..]).await {
                 warn!("hd recorder: ffmpeg stdin write failed on monitor {monitor_id}: {e}");
                 write_failed = true;
                 break;
             }
 
             // Sparse scrub marker into the timeline (image-only — no OCR). The
-            // .mp4 itself holds every frame for smooth playback.
+            // .mp4 holds every frame for smooth playback; markers are scrub points.
             if frame_idx >= next_index_frame {
                 next_index_frame = frame_idx + index_stride;
                 let ts = chunk_start
@@ -285,12 +337,13 @@ mod macos {
             frame_idx += 1;
         }
 
-        // Finalize: flush + close stdin so ffmpeg writes the moov atom, wait for
-        // it, then drop the stream handle to stop the SCStream.
+        // Finalize: stop the encoder, flush + close stdin so ffmpeg writes the
+        // moov atom, wait for it, then drop the stream handle to stop the SCStream.
+        encoder.abort();
         let _ = stdin.shutdown().await;
         drop(stdin);
         let _ = tokio::time::timeout(Duration::from_secs(10), ffmpeg.wait()).await;
-        drop(hd);
+        drop(stream);
 
         info!(
             "hd recording finalized: monitor {monitor_id} ({frame_idx} frames @ {actual_fps}fps, write_failed={write_failed}) -> {file_str}"
@@ -308,7 +361,7 @@ mod macos {
             "-y",
             "-loglevel",
             "error",
-            // Input: JPEGs piped to stdin at the capture rate.
+            // Input: JPEGs piped to stdin at the writer's constant rate.
             "-f",
             "image2pipe",
             "-vcodec",
@@ -343,15 +396,13 @@ mod macos {
     }
 
     /// Encode one captured RGBA frame to JPEG bytes for the mjpeg pipe. JPEG has
-    /// no alpha (dropped); the pipe stays small vs raw RGBA.
+    /// no alpha (dropped); the pipe stays small vs raw RGBA. CPU-heavy — always
+    /// run on a blocking thread.
     fn encode_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>> {
         let rgb = image::DynamicImage::ImageRgba8(frame).to_rgb8();
         let mut buf = Vec::new();
         image::DynamicImage::ImageRgb8(rgb)
-            .write_to(
-                &mut std::io::Cursor::new(&mut buf),
-                image::ImageFormat::Jpeg,
-            )
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
             .context("jpeg encode")?;
         Ok(buf)
     }
