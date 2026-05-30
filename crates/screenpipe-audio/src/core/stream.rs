@@ -359,26 +359,75 @@ impl AudioStream {
                             let fb_channels = fallback.channels();
                             let fallback_cb = create_error_callback(
                                 device_name.clone(),
-                                is_running_weak,
-                                is_disconnected,
-                                stream_control_tx,
+                                is_running_weak.clone(),
+                                is_disconnected.clone(),
+                                stream_control_tx.clone(),
                             );
                             match build_input_stream(
                                 &device,
                                 &fallback,
                                 fb_channels,
-                                tx,
+                                tx.clone(),
                                 fallback_cb,
                                 windows_input_aec,
                                 macos_input_vpio,
                             ) {
                                 Ok(s) => Some(s),
                                 Err(fallback_err) => {
-                                    error!(
-                                        "default_input_config also rejected for {}: {} (primary: {})",
-                                        device_name, fallback_err, primary_err
-                                    );
-                                    None
+                                    // Last resort: disable Windows AEC and try again.
+                                    // Some USB mics (e.g. Logitech C922) reject AEC even
+                                    // at the shared-mode format — fall back to plain capture.
+                                    #[cfg(target_os = "windows")]
+                                    if windows_input_aec {
+                                        warn!(
+                                            "default_input_config + AEC still rejected for {} ({}); retrying without AEC",
+                                            device_name, fallback_err
+                                        );
+                                        let no_aec_cb = create_error_callback(
+                                            device_name.clone(),
+                                            is_running_weak,
+                                            is_disconnected,
+                                            stream_control_tx,
+                                        );
+                                        match build_input_stream(
+                                            &device,
+                                            &fallback,
+                                            fb_channels,
+                                            tx,
+                                            no_aec_cb,
+                                            false,
+                                            macos_input_vpio,
+                                        ) {
+                                            Ok(s) => {
+                                                warn!(
+                                                    "AEC disabled as last resort for {} — mic works but echo cancellation is off",
+                                                    device_name
+                                                );
+                                                Some(s)
+                                            }
+                                            Err(no_aec_err) => {
+                                                error!(
+                                                    "all fallbacks exhausted for {}: no_aec={} aec={} primary={}",
+                                                    device_name, no_aec_err, fallback_err, primary_err
+                                                );
+                                                None
+                                            }
+                                        }
+                                    } else {
+                                        error!(
+                                            "default_input_config also rejected for {}: {} (primary: {})",
+                                            device_name, fallback_err, primary_err
+                                        );
+                                        None
+                                    }
+                                    #[cfg(not(target_os = "windows"))]
+                                    {
+                                        error!(
+                                            "default_input_config also rejected for {}: {} (primary: {})",
+                                            device_name, fallback_err, primary_err
+                                        );
+                                        None
+                                    }
                                 }
                             }
                         }
@@ -683,6 +732,10 @@ fn is_wasapi_unsupported_format(err: &anyhow::Error) -> bool {
     s.contains("-2004287480")
         || s.contains("0x88890008")
         || s.to_lowercase().contains("unsupported format")
+        // WASAPI with AEC enabled rejects non-default configs with this message
+        // (seen on Logitech C922 and other USB mics). The existing fallback to
+        // default_input_config() already handles this correctly once we match it.
+        || s.to_lowercase().contains("not supported by the device")
 }
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
@@ -956,5 +1009,54 @@ mod from_wav_tests {
 
         // stop() must be a no-op clean shutdown for wav-backed streams.
         stream.stop().await.expect("stop");
+    }
+}
+
+#[cfg(all(test, not(all(target_os = "linux", feature = "pulseaudio"))))]
+mod wasapi_format_tests {
+    use super::is_wasapi_unsupported_format;
+
+    fn err(msg: &str) -> anyhow::Error {
+        anyhow::anyhow!("{}", msg)
+    }
+
+    // This is the exact error the Logitech C922 (and similar USB mics) produce
+    // on Windows when echo cancellation is enabled with a non-default config.
+    // Before the fix, this string was NOT caught and the fallback never fired.
+    #[test]
+    fn catches_c922_aec_error() {
+        let e = err("The requested stream configuration is not supported by the device.");
+        assert!(
+            is_wasapi_unsupported_format(&e),
+            "C922 AEC error must trigger the default_input_config fallback"
+        );
+    }
+
+    #[test]
+    fn catches_wasapi_hresult_numeric() {
+        assert!(is_wasapi_unsupported_format(&err(
+            "failed to initialize audio client: OS Error -2004287480 (FormatMessageW() returned error 317)"
+        )));
+    }
+
+    #[test]
+    fn catches_wasapi_hresult_hex() {
+        assert!(is_wasapi_unsupported_format(&err(
+            "WASAPI error 0x88890008"
+        )));
+    }
+
+    #[test]
+    fn catches_unsupported_format_text() {
+        assert!(is_wasapi_unsupported_format(&err(
+            "Unsupported Format for this device"
+        )));
+    }
+
+    #[test]
+    fn ignores_unrelated_errors() {
+        assert!(!is_wasapi_unsupported_format(&err("device disconnected")));
+        assert!(!is_wasapi_unsupported_format(&err("stream timeout")));
+        assert!(!is_wasapi_unsupported_format(&err("no audio received")));
     }
 }
