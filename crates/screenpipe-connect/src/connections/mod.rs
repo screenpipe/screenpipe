@@ -45,6 +45,7 @@ pub mod n8n;
 pub mod notion;
 pub mod ntfy;
 pub mod obsidian;
+pub mod openclaw;
 pub mod otter;
 pub mod perplexity;
 pub mod pipedrive;
@@ -318,6 +319,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(claude_code::ClaudeCode),
         Box::new(codex::Codex),
         Box::new(workflowy::Workflowy),
+        Box::new(openclaw::OpenClaw),
     ]
 }
 

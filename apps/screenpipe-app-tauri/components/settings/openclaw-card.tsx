@@ -34,6 +34,25 @@ export function OpenClawCard() {
         defaultRemotePath: "~/screenpipe-data",
         storageKeyPrefix: "openclaw",
       }}
+      connect={{
+        integrationId: "openclaw",
+        fields: [
+          {
+            key: "endpoint",
+            label: "Gateway URL",
+            secret: false,
+            placeholder: "http://127.0.0.1:18789",
+            helpUrl: "https://docs.openclaw.ai/gateway/configuration-reference",
+          },
+          {
+            key: "token",
+            label: "Gateway Token",
+            secret: true,
+            placeholder: "your-openclaw-gateway-token",
+            helpUrl: "https://docs.openclaw.ai/gateway/authentication",
+          },
+        ],
+      }}
     />
   );
 }

@@ -16,6 +16,8 @@ cd "$(mktemp -d)" && bun x screenpipe@latest <command>
 
 - **All platforms** → `bash` (on Windows, the bundled git-portable bash is used automatically)
 
+> **Note:** the bash tool truncates output around ~50 KB. Long listings (`connection list`, `pipe list`, etc.) are sorted with connected/enabled rows first, but if you need a specific row, pipe through `grep` or `head` rather than scanning the full output — e.g. `bun x screenpipe@latest connection list | grep -E 'browser|connected'`.
+
 ---
 
 ## Pipe Management
@@ -55,7 +57,27 @@ Your prompt instructions here. The AI agent executes this on schedule.
 3. Output summary / send notification
 ```
 
-**Schedule syntax**: `every 30m`, `every 1h`, `every day at 9am`, `every monday at 9am`, or cron: `*/30 * * * *`, `0 9 * * *`
+**Schedule syntax**:
+- Recurring: `every 30m`, `every 1h`, `every day at 9am`, `every monday at 9am`, or cron `*/30 * * * *`, `0 9 * * *`
+- One-off (fires once, then auto-disables): `at <RFC3339 timestamp>` — e.g. `at 2026-04-29T17:00:00-07:00`
+- Manual only: `manual` (run via `pipe run` or API trigger)
+
+**One-off scheduled tasks** (use this when the user says "in 2 days", "tomorrow at 5pm", "next Monday", "remind me to check X later", or any other future-time deferred action):
+
+```yaml
+---
+schedule: at 2026-04-29T17:00:00-07:00
+enabled: true
+preset: auto
+---
+
+Check Gmail for a reply from Mark about the HIPAA evidence pack.
+If found, summarize and send a notification. If not, note it.
+```
+
+Resolve "in 2 days" / "tomorrow 5pm" / "next Monday" against the user's local timezone (which is in the context header), format as RFC3339 with offset, and put it in the `at <iso>` schedule.
+
+When fired, the pipe auto-disables itself — `enabled: false` is set in the local-overrides file. The pipe.md stays on disk as history. Users see upcoming one-offs in the chat sidebar's "upcoming" section with a countdown ("in 2d 4h"). To cancel before fire time: `pipe disable <name>`. To re-run after firing: `pipe enable <name>` then `pipe run <name>` (or set a new `at <iso>`).
 
 **Config fields**: `schedule`, `enabled` (bool), `preset` (string or array — e.g. `"Oai"` or `["Primary", "Fallback"]`), `history` (bool — include previous output as context)
 
@@ -112,8 +134,12 @@ bun x screenpipe@latest connection set telegram bot_token=123456:ABC-DEF chat_id
 # Set up Slack webhook
 bun x screenpipe@latest connection set slack webhook_url=https://hooks.slack.com/services/...
 
+# Set up OpenClaw (local gateway, default port 18789)
+bun x screenpipe@latest connection set openclaw endpoint=http://127.0.0.1:18789 token=your-gateway-token
+
 # Verify it works
 bun x screenpipe@latest connection test telegram
+bun x screenpipe@latest connection test openclaw
 
 # Check what's connected
 bun x screenpipe@latest connection list
@@ -122,6 +148,43 @@ bun x screenpipe@latest connection list
 Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `apple-intelligence`, `openclaw`
 
 Credentials are stored locally at `~/.screenpipe/connections.json`.
+
+### OpenClaw connection
+
+OpenClaw is a self-hosted AI agent gateway (default: `http://127.0.0.1:18789`). Credentials:
+- `endpoint`: Gateway URL (e.g. `http://127.0.0.1:18789` for local, or remote IP if deployed on VPS)
+- `token`: Gateway bearer token — find it in `~/.openclaw/openclaw.json` under `gateway.auth.token`, or the `OPENCLAW_GATEWAY_TOKEN` env var
+
+Once connected, a pipe can send events to the OpenClaw agent using these endpoints:
+
+| Use case | Endpoint | Body |
+|----------|----------|------|
+| Wake agent with a message | `POST {endpoint}/hooks/agent` | `{"message": "...", "wakeMode": "now"}` |
+| Fire-and-forget notification | `POST {endpoint}/hooks/wake` | `{"text": "...", "mode": "now"}` |
+| Inject into agent inbox | `POST {endpoint}/api/sessions/main/messages` | `{"text": "..."}` |
+
+All requests require `Authorization: Bearer {token}` header.
+
+**Example pipe that sends screenpipe activity to OpenClaw:**
+
+```markdown
+---
+schedule: every 30m
+enabled: true
+preset: auto
+---
+
+Query screenpipe for activity in the last 30 minutes using the search API.
+Summarize key events (apps used, topics discussed, tasks worked on).
+
+Then send a concise summary to OpenClaw via POST {openclaw.endpoint}/hooks/agent
+with header Authorization: Bearer {openclaw.token}
+and body: {"message": "<your summary>", "wakeMode": "now"}
+```
+
+**Example pipe that relays screenpipe events to OpenClaw via Telegram:**
+
+If you want OpenClaw to receive the update through Telegram (so OpenClaw's Telegram bot surfaces it), configure the `telegram` connection with the bot that OpenClaw is listening on, then send via Telegram — OpenClaw will pick it up through its Telegram channel integration.
 
 ## Publishing pipes to the store
 

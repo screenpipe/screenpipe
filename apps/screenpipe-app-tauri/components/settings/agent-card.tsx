@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -21,6 +22,7 @@ import {
   Download,
   ExternalLink,
 } from "lucide-react";
+import { localFetch } from "@/lib/api";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
@@ -69,6 +71,14 @@ curl -s "http://localhost:3030/meetings?limit=20"
 // Shared types
 // ---------------------------------------------------------------------------
 
+export type ConnectField = {
+  key: string;
+  label: string;
+  secret: boolean;
+  placeholder: string;
+  helpUrl?: string;
+};
+
 export type AgentCardProps = {
   name: string;
   iconSrc: string;
@@ -86,6 +96,11 @@ export type AgentCardProps = {
     defaultRemotePath: string;
     /** Prefix used for localStorage keys + posthog event names. */
     storageKeyPrefix: string;
+  };
+  /** If set, renders a "Connect" tab for entering credentials that screenpipe pipes use to call this agent. */
+  connect?: {
+    integrationId: string;
+    fields: ConnectField[];
   };
 };
 
@@ -732,6 +747,126 @@ function RemoteSyncSection({
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ConnectSection — credential form for screenpipe pipes calling back to the agent
+// ---------------------------------------------------------------------------
+
+function ConnectSection({ integrationId, fields }: { integrationId: string; fields: ConnectField[] }) {
+  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [visible, setVisible] = useState<Record<string, boolean>>({});
+  const [status, setStatus] = useState<"idle" | "connecting" | "error" | "saved">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    localFetch(`/connections/${integrationId}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.credentials) {
+          const loaded: Record<string, string> = {};
+          for (const [k, v] of Object.entries(data.credentials)) {
+            if (typeof v === "string") loaded[k] = v;
+          }
+          setCreds(loaded);
+          setStatus("saved");
+        }
+      })
+      .catch(() => {});
+  }, [integrationId]);
+
+  const hasCredentials = Object.values(creds).some(v => !!v);
+
+  const handleConnect = async () => {
+    setStatus("connecting");
+    setError(null);
+    try {
+      const testRes = await localFetch(`/connections/${integrationId}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: creds }),
+      });
+      if (!testRes.ok) {
+        const err = await testRes.json().catch(() => ({}));
+        throw new Error(err.error || `test failed (${testRes.status})`);
+      }
+      await localFetch(`/connections/${integrationId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: creds }),
+      });
+      setStatus("saved");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus("error");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    await localFetch(`/connections/${integrationId}`, { method: "DELETE" }).catch(() => {});
+    setCreds({});
+    setStatus("idle");
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        Let screenpipe pipes call back to this agent. Enter the gateway credentials so pipes can send events and messages directly to it.
+      </p>
+      {fields.map((field) => (
+        <div key={field.key} className="space-y-1">
+          <Label className="text-xs">{field.label}</Label>
+          <div className="relative">
+            <Input
+              type={field.secret && !visible[field.key] ? "password" : "text"}
+              placeholder={field.placeholder}
+              value={creds[field.key] || ""}
+              onChange={(e) => { setCreds(prev => ({ ...prev, [field.key]: e.target.value })); if (status === "saved") setStatus("idle"); }}
+              className="h-8 text-xs pr-8"
+              readOnly={status === "saved"}
+            />
+            {field.secret && (
+              <button
+                type="button"
+                onClick={() => setVisible(prev => ({ ...prev, [field.key]: !prev[field.key] }))}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {visible[field.key] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex gap-2">
+        {status !== "saved" && (
+          <Button
+            onClick={handleConnect}
+            disabled={!hasCredentials || status === "connecting"}
+            size="sm"
+            variant={status === "error" ? "outline" : "default"}
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+          >
+            {status === "connecting" ? (
+              <><Loader2 className="h-3 w-3 animate-spin" />connecting…</>
+            ) : (
+              <><Check className="h-3 w-3" />connect</>
+            )}
+          </Button>
+        )}
+        {status === "saved" && (
+          <Button
+            onClick={handleDisconnect}
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
+          >
+            <X className="h-3 w-3" />disconnect
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // AgentCard — wraps the three sections behind a tab switcher
 // ---------------------------------------------------------------------------
 
@@ -743,6 +878,7 @@ export function AgentCard({
   mcp,
   skill,
   sync,
+  connect,
 }: AgentCardProps) {
   return (
     <Card className="border-border bg-card overflow-hidden">
@@ -771,10 +907,11 @@ export function AgentCard({
 
         <div className="px-4 pb-4">
           <Tabs defaultValue="mcp" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 h-8">
+            <TabsList className={`grid w-full h-8 ${connect ? "grid-cols-4" : "grid-cols-3"}`}>
               <TabsTrigger value="mcp" className="text-xs">MCP</TabsTrigger>
               <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
               <TabsTrigger value="sync" className="text-xs">Sync (remote)</TabsTrigger>
+              {connect && <TabsTrigger value="connect" className="text-xs">Connect</TabsTrigger>}
             </TabsList>
             <TabsContent value="mcp" className="mt-3">
               <McpSection name={name} mcp={mcp} />
@@ -785,6 +922,11 @@ export function AgentCard({
             <TabsContent value="sync" className="mt-3">
               <RemoteSyncSection agentName={name} sync={sync} />
             </TabsContent>
+            {connect && (
+              <TabsContent value="connect" className="mt-3">
+                <ConnectSection integrationId={connect.integrationId} fields={connect.fields} />
+              </TabsContent>
+            )}
           </Tabs>
         </div>
       </CardContent>
