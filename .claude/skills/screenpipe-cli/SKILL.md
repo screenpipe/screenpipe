@@ -16,8 +16,6 @@ cd "$(mktemp -d)" && bun x screenpipe@latest <command>
 
 - **All platforms** → `bash` (on Windows, the bundled git-portable bash is used automatically)
 
-> **Note:** the bash tool truncates output around ~50 KB. Long listings (`connection list`, `pipe list`, etc.) are sorted with connected/enabled rows first, but if you need a specific row, pipe through `grep` or `head` rather than scanning the full output — e.g. `bun x screenpipe@latest connection list | grep -E 'browser|connected'`.
-
 ---
 
 ## Pipe Management
@@ -57,27 +55,7 @@ Your prompt instructions here. The AI agent executes this on schedule.
 3. Output summary / send notification
 ```
 
-**Schedule syntax**:
-- Recurring: `every 30m`, `every 1h`, `every day at 9am`, `every monday at 9am`, or cron `*/30 * * * *`, `0 9 * * *`
-- One-off (fires once, then auto-disables): `at <RFC3339 timestamp>` — e.g. `at 2026-04-29T17:00:00-07:00`
-- Manual only: `manual` (run via `pipe run` or API trigger)
-
-**One-off scheduled tasks** (use this when the user says "in 2 days", "tomorrow at 5pm", "next Monday", "remind me to check X later", or any other future-time deferred action):
-
-```yaml
----
-schedule: at 2026-04-29T17:00:00-07:00
-enabled: true
-preset: auto
----
-
-Check Gmail for a reply from Mark about the HIPAA evidence pack.
-If found, summarize and send a notification. If not, note it.
-```
-
-Resolve "in 2 days" / "tomorrow 5pm" / "next Monday" against the user's local timezone (which is in the context header), format as RFC3339 with offset, and put it in the `at <iso>` schedule.
-
-When fired, the pipe auto-disables itself — `enabled: false` is set in the local-overrides file. The pipe.md stays on disk as history. Users see upcoming one-offs in the chat sidebar's "upcoming" section with a countdown ("in 2d 4h"). To cancel before fire time: `pipe disable <name>`. To re-run after firing: `pipe enable <name>` then `pipe run <name>` (or set a new `at <iso>`).
+**Schedule syntax**: `every 30m`, `every 1h`, `every day at 9am`, `every monday at 9am`, or cron: `*/30 * * * *`, `0 9 * * *`
 
 **Config fields**: `schedule`, `enabled` (bool), `preset` (string or array — e.g. `"Oai"` or `["Primary", "Fallback"]`), `history` (bool — include previous output as context)
 
@@ -140,6 +118,8 @@ bun x screenpipe@latest connection test telegram
 # Check what's connected
 bun x screenpipe@latest connection list
 ```
+
+Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `apple-intelligence`, `openclaw`
 
 Credentials are stored locally at `~/.screenpipe/connections.json`.
 
