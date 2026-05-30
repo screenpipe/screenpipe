@@ -877,6 +877,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -904,6 +905,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -943,6 +945,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
             config: std::collections::HashMap::new(),
         };

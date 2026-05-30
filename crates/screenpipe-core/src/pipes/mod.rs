@@ -61,6 +61,27 @@ pub struct TriggerConfig {
     pub custom: Vec<String>,
 }
 
+/// Declares a file that a pipe produces, surfaced in the Artifacts library.
+///
+/// Example frontmatter:
+/// ```yaml
+/// artifacts:
+///   - path: "output/profile.md"
+///     title: "Digital Clone Profile"
+///     kind: "markdown"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactDeclaration {
+    /// Path relative to the pipe directory (e.g. "output/profile.md").
+    pub path: String,
+    /// Human-readable title shown in the library (falls back to filename).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// File kind hint: "markdown", "json", "text", "image".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
 /// Parsed pipe configuration (from pipe.md front-matter).
 ///
 /// Only `schedule` and `enabled` are required in pipe.md.
@@ -163,6 +184,19 @@ pub struct PipeConfig {
     /// separately from the chat-side feature which is already live.
     #[serde(default, skip_serializing_if = "is_false")]
     pub privacy_filter: bool,
+
+    /// Output files this pipe produces, surfaced in the Artifacts library.
+    ///
+    /// Paths are relative to the pipe directory (`~/.screenpipe/pipes/<name>/`).
+    /// Example:
+    /// ```yaml
+    /// artifacts:
+    ///   - path: "output/profile.md"
+    ///     title: "Digital Clone Profile"
+    ///     kind: "markdown"
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactDeclaration>,
 
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
@@ -350,6 +384,23 @@ fn simple_hash(content: &str) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{:016x}", hash)
+}
+
+/// Normalize a path by resolving `.` and `..` components without touching
+/// the filesystem (works even if the path doesn't exist yet). Used to
+/// prevent artifact path traversal escaping the pipe directory.
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1650,6 +1701,47 @@ impl PipeManager {
                 status.consecutive_failures = state.consecutive_failures;
             }
             result.push(status);
+        }
+        result
+    }
+
+    /// Return all artifact declarations across pipes, with paths resolved to
+    /// absolute locations under `pipes_dir`. Paths that escape the pipe
+    /// directory (e.g. `../secret`) are silently dropped. Caller is
+    /// responsible for filesystem checks (existence, metadata).
+    pub async fn list_artifact_declarations(
+        &self,
+    ) -> Vec<(String, Vec<(ArtifactDeclaration, std::path::PathBuf)>)> {
+        let pipes = self.pipes.lock().await;
+        let mut result = Vec::new();
+        for (name, (config, _, _)) in pipes.iter() {
+            if config.artifacts.is_empty() {
+                continue;
+            }
+            let pipe_dir = self.pipes_dir.join(name);
+            let resolved: Vec<(ArtifactDeclaration, std::path::PathBuf)> = config
+                .artifacts
+                .iter()
+                .filter_map(|a| {
+                    let abs = pipe_dir.join(&a.path);
+                    // Canonicalizing may fail if the file doesn't exist yet,
+                    // so normalize manually: resolve `..` components and
+                    // verify the result stays inside pipe_dir.
+                    let normalized = normalize_path(&abs);
+                    if !normalized.starts_with(&pipe_dir) {
+                        tracing::warn!(
+                            "pipe '{}': artifact path '{}' escapes pipe directory, skipping",
+                            name,
+                            a.path,
+                        );
+                        return None;
+                    }
+                    Some((a.clone(), normalized))
+                })
+                .collect();
+            if !resolved.is_empty() {
+                result.push((name.clone(), resolved));
+            }
         }
         result
     }
@@ -4992,6 +5084,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let body = "Do something useful";
@@ -5398,6 +5491,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
@@ -5430,6 +5524,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let sys = render_pipe_system_prompt("hello", 3030, None, None, None);
@@ -5455,6 +5550,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let sys = render_pipe_system_prompt(
@@ -5488,6 +5584,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, None, None, None);
@@ -5590,6 +5687,7 @@ mod tests {
                 source_hash: None,
                 subagent: false,
                 privacy_filter: false,
+                artifacts: vec![],
                 trigger: None,
             },
             last_run: None,

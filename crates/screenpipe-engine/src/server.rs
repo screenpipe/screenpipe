@@ -787,8 +787,12 @@ impl SCServer {
                     "/install",
                     axum::routing::post(crate::pipes_api::install_pipe),
                 )
-                // Favorites — register before `/:id` so axum doesn't match
-                // "favorites" as a pipe id.
+                // Artifacts & favorites — register before `/:id` so axum
+                // doesn't match these as a pipe id.
+                .route(
+                    "/artifacts",
+                    axum::routing::get(crate::pipes_api::list_artifacts),
+                )
                 .route(
                     "/favorites",
                     axum::routing::get(crate::pipes_api::list_favorites),
