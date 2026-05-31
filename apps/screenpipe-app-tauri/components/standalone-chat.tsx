@@ -3560,6 +3560,16 @@ export function StandaloneChat({
     void refreshConnectionState();
   }, [conversationId, refreshConnectionState]);
 
+  // Drop any single-shot attachment metadata stashed for the previous
+  // chat's next-send when the user navigates away. Without this, a user
+  // who staged an attachment in chat A and switched to chat B before
+  // sending would have A's attachment metadata silently ride along on
+  // B's next message. Pairs with the composer-state clear inside
+  // loadConversation / startNewConversation.
+  useEffect(() => {
+    pendingAttachmentsRef.current = [];
+  }, [conversationId]);
+
   const cancelStreamingMessageRender = useCallback(() => {
     if (streamRenderTimerRef.current) {
       clearTimeout(streamRenderTimerRef.current);

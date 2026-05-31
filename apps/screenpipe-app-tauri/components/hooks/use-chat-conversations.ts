@@ -992,10 +992,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piContentBlocksRef.current = [];
     setIsLoading(false);
     setIsStreaming(false);
-    // Attached docs are scoped to the chat the user was composing in.
-    // Switching to another conversation should not carry them over
-    // (otherwise the next send into the new chat would silently inject
-    // PDFs the user thought belonged to the previous thread).
+    // Composer state (text, images, docs) is scoped to the chat the user
+    // was composing in. Switching to another conversation must not carry
+    // any of it over — otherwise the user can send a draft into the wrong
+    // thread (or silently inject a PDF/image they thought belonged to the
+    // previous chat). Mirrors startNewConversation, which already clears
+    // the full composer on "+ new chat".
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    setPastedImages([]);
     setAttachedDocs?.([]);
     setPendingDocs?.([]);
 
