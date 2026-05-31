@@ -3234,6 +3234,12 @@ export function StandaloneChat({
   };
 
   const [input, setInput] = useState("");
+  // Mirror `input` into a ref so the chat-switch logic in
+  // useChatConversations can snapshot the outgoing composer text
+  // without needing it as a dep (which would re-bind handlers every
+  // keystroke). Same pattern as attachedDocsRef / pendingDocsRef below.
+  const inputValueRef = useRef<string>("");
+  useEffect(() => { inputValueRef.current = input; }, [input]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
@@ -3356,6 +3362,9 @@ export function StandaloneChat({
   const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
   const [isPreparingPrefill, setIsPreparingPrefill] = useState(false);
   const [pastedImages, setPastedImages] = useState<string[]>([]); // Base64 data URLs
+  // Mirror for the per-conversation draft snapshot — see inputValueRef.
+  const pastedImagesRef = useRef<string[]>([]);
+  useEffect(() => { pastedImagesRef.current = pastedImages; }, [pastedImages]);
   const [attachedDocs, setAttachedDocs] = useState<ExtractedDoc[]>([]); // extracted text from non-image files
   // ref mirror so send paths read the latest docs without widening their deps arrays
   const attachedDocsRef = useRef<ExtractedDoc[]>([]);
@@ -3570,6 +3579,29 @@ export function StandaloneChat({
     pendingAttachmentsRef.current = [];
   }, [conversationId]);
 
+  // Phase 2: mirror the live composer into the chat store so the
+  // CURRENT chat always has an up-to-date draft snapshot. This covers
+  // the case where the user closes/hides the panel (or quits Pi without
+  // switching first) — the draft survives because it's in the store,
+  // not just in React state. It also handles the "draft cleared after
+  // send" case for free: when sendMessage calls setInput("") etc.,
+  // the next mirror tick writes an empty draft, which the store action
+  // treats as "drop draft entirely". Debounced so per-keystroke writes
+  // don't churn the store. Skip when conversationId is null (brand-new
+  // chat with no session record yet — setComposerDraft would no-op).
+  useEffect(() => {
+    if (!conversationId) return;
+    const t = setTimeout(() => {
+      useChatStore.getState().actions.setComposerDraft(conversationId, {
+        input,
+        pastedImages,
+        attachedDocs,
+        pendingDocs,
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [conversationId, input, pastedImages, attachedDocs, pendingDocs]);
+
   const cancelStreamingMessageRender = useCallback(() => {
     if (streamRenderTimerRef.current) {
       clearTimeout(streamRenderTimerRef.current);
@@ -3670,6 +3702,13 @@ export function StandaloneChat({
     setPastedImages,
     setAttachedDocs,
     setPendingDocs,
+    // Refs for the per-conversation draft snapshot/restore in Phase 2.
+    // Passing refs (not values) keeps the hook's deps stable so the
+    // event listeners inside don't churn on every keystroke.
+    inputValueRef,
+    pastedImagesRef,
+    attachedDocsRef,
+    pendingDocsRef,
     settings,
     selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,

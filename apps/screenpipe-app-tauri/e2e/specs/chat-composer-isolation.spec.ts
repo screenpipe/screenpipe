@@ -10,17 +10,18 @@
  * sitting in B's composer. A subsequent send would shoot the draft into
  * the wrong conversation.
  *
- * Phase-1 fix (this spec): switching to another chat clears the composer
- * (`input`, `pastedImages`, `attachedDocs`, `pendingDocs`,
- * `pendingAttachmentsRef`). Restoring per-conversation drafts is a future
- * phase — this spec asserts the "no leak" half only.
+ * What this spec asserts (Phase 1 + Phase 2):
+ *   - Phase 1 (no leak): switching to chat B shows an empty composer in B.
+ *   - Phase 2 (per-chat drafts): switching back to chat A restores A's
+ *     original draft text. Matches ChatGPT / Claude / Slack behavior.
  *
  * Strategy:
  *   1. Open chat A.
  *   2. Type a unique marker into the composer textarea.
  *   3. Emit `chat-load-conversation` for chat B.
- *   4. Read the textarea's `value` — must be empty.
- *   5. Switch back to A — composer must still be empty (Phase 1, not Phase 2).
+ *   4. Read the textarea's `value` — must be empty (Phase 1 — no leak).
+ *   5. Switch back to A — composer must contain A's original draft
+ *      (Phase 2 — per-conversation restore).
  *
  * Run with:
  *   bun run test:e2e -- --spec e2e/specs/chat-composer-isolation.spec.ts
@@ -109,15 +110,23 @@ describe("Chat composer isolation (no draft leak across chats)", function () {
       );
     }
 
-    // Step 5: switch back to chat A. Phase 1 = empty (we don't restore drafts yet).
+    // Step 5: switch back to chat A. Phase 2 = A's original draft is
+    // restored (snapshotted into the chat store on the A→B switch and
+    // restored on the B→A switch). Also continuously mirrored by the
+    // composer-mirror effect, so even if the snapshot path missed,
+    // there's a 250ms-debounced backup writing the draft to the store.
     await emitChatLoad(CHAT_A);
-    await browser.pause(t(600));
+    // Slightly longer pause: the panel needs to (1) snapshot B's
+    // (empty) draft, (2) clear the composer, (3) restore A's draft.
+    // The composer mirror effect debounces at 250ms, plus the
+    // setMessages/setConversationId render cycle.
+    await browser.pause(t(900));
 
     const aAgain = await readComposerValue();
-    if (aAgain !== "") {
-      const filepath = await saveScreenshot("composer-leak-on-A-after-return");
+    if (aAgain !== DRAFT_MARKER) {
+      const filepath = await saveScreenshot("composer-not-restored-on-A");
       throw new Error(
-        `BUG: composer not cleared on return to A. expected "" (Phase 1) got ${JSON.stringify(aAgain)} (screenshot=${filepath})`,
+        `BUG: composer not restored on return to A. expected ${JSON.stringify(DRAFT_MARKER)} (Phase 2) got ${JSON.stringify(aAgain)} (screenshot=${filepath})`,
       );
     }
 

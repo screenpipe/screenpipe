@@ -99,6 +99,16 @@ interface UseChatConversationsOpts {
   // but we clear the pending chips so the new chat's composer doesn't
   // momentarily render a spinner from the previous chat's drop.
   setPendingDocs?: Dispatch<SetStateAction<any[]>>;
+  // ── Per-conversation draft snapshot (Phase 2) ────────────────────
+  // Refs mirroring the live composer values so the hook can snapshot
+  // the OUTGOING chat's composer into the store before switching, and
+  // restore the INCOMING chat's saved draft after. Optional so other
+  // hook consumers don't have to wire them — if absent, falls back to
+  // Phase-1 behavior (clear on switch, no restore).
+  inputValueRef?: MutableRefObject<string>;
+  pastedImagesRef?: MutableRefObject<string[]>;
+  attachedDocsRef?: MutableRefObject<any[]>;
+  pendingDocsRef?: MutableRefObject<any[]>;
   settings: any;
   selectedPreset?: AIPreset | null;
   inlineHistoryEnabled?: boolean;
@@ -136,6 +146,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setPastedImages,
     setAttachedDocs,
     setPendingDocs,
+    inputValueRef,
+    pastedImagesRef,
+    attachedDocsRef,
+    pendingDocsRef,
     settings,
     selectedPreset,
     inlineHistoryEnabled = true,
@@ -984,6 +998,19 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           isLoading,
         });
       }
+      // (1b) Snapshot OUTGOING composer draft — what the user had
+      // typed + staged but not yet sent. Restored when they come back
+      // to this chat. Mirrors how messages/streamingText are stored.
+      // No-op when the caller didn't pass the value refs (other hook
+      // consumers fall through to Phase-1 clear-only behavior).
+      if (inputValueRef && pastedImagesRef) {
+        store.actions.setComposerDraft(outgoingSid, {
+          input: inputValueRef.current,
+          pastedImages: [...pastedImagesRef.current],
+          attachedDocs: attachedDocsRef ? [...attachedDocsRef.current] : [],
+          pendingDocs: pendingDocsRef ? [...pendingDocsRef.current] : [],
+        });
+      }
     }
 
     // (2) Reset panel flags — these are panel-local, not session-local.
@@ -997,7 +1024,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // any of it over — otherwise the user can send a draft into the wrong
     // thread (or silently inject a PDF/image they thought belonged to the
     // previous chat). Mirrors startNewConversation, which already clears
-    // the full composer on "+ new chat".
+    // the full composer on "+ new chat". Phase 2 (below) then restores
+    // the INCOMING chat's saved draft after switching — ChatGPT/Claude
+    // parity. The clear is intentional even with restore: if the
+    // incoming chat has no draft, we want a clean composer, not the
+    // outgoing chat's contents lingering for a frame.
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
     setPastedImages([]);
@@ -1164,6 +1195,28 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setConversationId(conv.id);
     setShowHistory(false);
     piSessionSyncedRef.current = false;
+
+    // (3) Restore INCOMING composer draft, if any. Reads from the
+    // store snapshot taken last time the user left this chat
+    // (or set live by the panel's mirror effect). Safe no-op when
+    // there's no saved draft — the composer was just cleared above,
+    // so we're either restoring a real draft or staying empty.
+    // Only runs when value refs were wired (Phase 2 callers).
+    const incomingDraft = store.sessions[conv.id]?.composerDraft;
+    if (incomingDraft && inputValueRef) {
+      if (incomingDraft.input) {
+        setInput(incomingDraft.input);
+      }
+      if ((incomingDraft.pastedImages?.length ?? 0) > 0) {
+        setPastedImages(incomingDraft.pastedImages as string[]);
+      }
+      if (setAttachedDocs && (incomingDraft.attachedDocs?.length ?? 0) > 0) {
+        setAttachedDocs(incomingDraft.attachedDocs as any[]);
+      }
+      if (setPendingDocs && (incomingDraft.pendingDocs?.length ?? 0) > 0) {
+        setPendingDocs(incomingDraft.pendingDocs as any[]);
+      }
+    }
 
     // Update activeConversationId in store
     try {
@@ -1351,6 +1404,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         isStreaming,
         isLoading,
       });
+      // Phase 2: snapshot the outgoing composer draft so coming back
+      // to this chat (via the sidebar) restores text + attachments.
+      // Same shape as the snapshot in loadConversation.
+      if (inputValueRef && pastedImagesRef) {
+        store.actions.setComposerDraft(outgoingSid, {
+          input: inputValueRef.current,
+          pastedImages: [...pastedImagesRef.current],
+          attachedDocs: attachedDocsRef ? [...attachedDocsRef.current] : [],
+          pendingDocs: pendingDocsRef ? [...pendingDocsRef.current] : [],
+        });
+      }
     }
 
     // Clear panel state
