@@ -3579,9 +3579,9 @@ export function StandaloneChat({
     pendingAttachmentsRef.current = [];
   }, [conversationId]);
 
-  // Phase 2: mirror the live composer into the chat store so the
-  // CURRENT chat always has an up-to-date draft snapshot. This covers
-  // the case where the user closes/hides the panel (or quits Pi without
+  // Mirror the live composer into the chat store so the CURRENT chat
+  // always has an up-to-date draft snapshot. This covers the case
+  // where the user closes/hides the panel (or quits Pi without
   // switching first) — the draft survives because it's in the store,
   // not just in React state. It also handles the "draft cleared after
   // send" case for free: when sendMessage calls setInput("") etc.,
@@ -3702,7 +3702,7 @@ export function StandaloneChat({
     setPastedImages,
     setAttachedDocs,
     setPendingDocs,
-    // Refs for the per-conversation draft snapshot/restore in Phase 2.
+    // Refs for the per-conversation composer draft snapshot/restore.
     // Passing refs (not values) keeps the hook's deps stable so the
     // event listeners inside don't churn on every keystroke.
     inputValueRef,

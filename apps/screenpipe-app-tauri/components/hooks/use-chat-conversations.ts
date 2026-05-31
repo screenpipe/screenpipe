@@ -99,12 +99,12 @@ interface UseChatConversationsOpts {
   // but we clear the pending chips so the new chat's composer doesn't
   // momentarily render a spinner from the previous chat's drop.
   setPendingDocs?: Dispatch<SetStateAction<any[]>>;
-  // ── Per-conversation draft snapshot (Phase 2) ────────────────────
+  // ── Per-conversation composer draft snapshot ─────────────────────
   // Refs mirroring the live composer values so the hook can snapshot
   // the OUTGOING chat's composer into the store before switching, and
   // restore the INCOMING chat's saved draft after. Optional so other
-  // hook consumers don't have to wire them — if absent, falls back to
-  // Phase-1 behavior (clear on switch, no restore).
+  // hook consumers don't have to wire them — if absent, the switch
+  // just clears the composer with no restore.
   inputValueRef?: MutableRefObject<string>;
   pastedImagesRef?: MutableRefObject<string[]>;
   attachedDocsRef?: MutableRefObject<any[]>;
@@ -1002,7 +1002,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // typed + staged but not yet sent. Restored when they come back
       // to this chat. Mirrors how messages/streamingText are stored.
       // No-op when the caller didn't pass the value refs (other hook
-      // consumers fall through to Phase-1 clear-only behavior).
+      // consumers just get the clear, no restore).
       if (inputValueRef && pastedImagesRef) {
         store.actions.setComposerDraft(outgoingSid, {
           input: inputValueRef.current,
@@ -1024,7 +1024,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // any of it over — otherwise the user can send a draft into the wrong
     // thread (or silently inject a PDF/image they thought belonged to the
     // previous chat). Mirrors startNewConversation, which already clears
-    // the full composer on "+ new chat". Phase 2 (below) then restores
+    // the full composer on "+ new chat". The block below then restores
     // the INCOMING chat's saved draft after switching — ChatGPT/Claude
     // parity. The clear is intentional even with restore: if the
     // incoming chat has no draft, we want a clean composer, not the
@@ -1201,7 +1201,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // (or set live by the panel's mirror effect). Safe no-op when
     // there's no saved draft — the composer was just cleared above,
     // so we're either restoring a real draft or staying empty.
-    // Only runs when value refs were wired (Phase 2 callers).
+    // Only runs when value refs were wired by the caller.
     const incomingDraft = store.sessions[conv.id]?.composerDraft;
     if (incomingDraft && inputValueRef) {
       if (incomingDraft.input) {
@@ -1404,9 +1404,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         isStreaming,
         isLoading,
       });
-      // Phase 2: snapshot the outgoing composer draft so coming back
-      // to this chat (via the sidebar) restores text + attachments.
-      // Same shape as the snapshot in loadConversation.
+      // Snapshot the outgoing composer draft so coming back to this
+      // chat (via the sidebar) restores text + attachments. Same
+      // shape as the snapshot in loadConversation.
       if (inputValueRef && pastedImagesRef) {
         store.actions.setComposerDraft(outgoingSid, {
           input: inputValueRef.current,
