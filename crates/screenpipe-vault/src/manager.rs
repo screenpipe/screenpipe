@@ -397,7 +397,10 @@ mod tests {
         }
 
         // Double lock should error
-        assert!(matches!(vault.lock("pw").await, Err(VaultError::AlreadyLocked)));
+        assert!(matches!(
+            vault.lock("pw").await,
+            Err(VaultError::AlreadyLocked)
+        ));
     }
 
     #[tokio::test]
