@@ -50,6 +50,10 @@ use crate::{
             list_memories_handler, list_memory_tags_handler, sync_external_memories_handler,
             update_memory_handler,
         },
+        outputs::{
+            delete_output_handler, get_output_handler, list_outputs_handler,
+            register_output_handler,
+        },
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         speakers::{
@@ -657,6 +661,10 @@ impl SCServer {
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
+            .post("/outputs/register", register_output_handler)
+            .get("/outputs", list_outputs_handler)
+            .get("/outputs/:id", get_output_handler)
+            .delete("/outputs/:id", delete_output_handler)
             .post("/experimental/frames/merge", merge_frames_handler)
             .get("/experimental/validate/media", validate_media_handler)
             .post("/audio/start", start_audio)

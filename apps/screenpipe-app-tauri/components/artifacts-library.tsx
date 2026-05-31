@@ -4,7 +4,9 @@
 "use client";
 
 import type { MouseEvent, KeyboardEvent } from "react";
+import { useCallback, useState } from "react";
 import { useArtifacts, type Artifact } from "@/lib/hooks/use-artifacts";
+import { useOutputs, type Output } from "@/lib/hooks/use-outputs";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -15,8 +17,103 @@ import {
   FolderOpen,
   RefreshCw,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+// ---------------------------------------------------------------------------
+// Unified display item
+// ---------------------------------------------------------------------------
+
+type DisplayItem =
+  | { type: "output"; data: Output }
+  | { type: "artifact"; data: Artifact };
+
+function itemKey(item: DisplayItem): string {
+  return item.type === "output"
+    ? `output:${item.data.id}`
+    : `artifact:${item.data.pipe_name}:${item.data.path}`;
+}
+
+function itemTitle(item: DisplayItem): string {
+  return item.type === "output" ? item.data.title : item.data.title;
+}
+
+function itemKind(item: DisplayItem): string {
+  return item.type === "output" ? item.data.kind : item.data.kind;
+}
+
+function itemSource(item: DisplayItem): string {
+  return item.type === "output" ? item.data.source : item.data.pipe_name;
+}
+
+function itemSourceType(item: DisplayItem): string | null {
+  return item.type === "output" ? item.data.source_type : null;
+}
+
+function itemPath(item: DisplayItem): string {
+  return item.type === "output" ? item.data.output_path : item.data.path;
+}
+
+function itemPreview(item: DisplayItem): string | null | undefined {
+  return item.type === "output" ? item.data.preview : item.data.preview;
+}
+
+function itemSize(item: DisplayItem): number | null | undefined {
+  return item.type === "output"
+    ? item.data.size_bytes
+    : item.data.size_bytes;
+}
+
+function itemDate(item: DisplayItem): string | null | undefined {
+  return item.type === "output"
+    ? item.data.updated_at
+    : item.data.modified_at;
+}
+
+// ---------------------------------------------------------------------------
+// Merge outputs + legacy artifacts, deduplicating and suppressing deleted paths
+// ---------------------------------------------------------------------------
+
+function mergeItems(
+  outputs: Output[],
+  artifacts: Artifact[],
+  deletedPaths: Set<string>
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
+
+  // Collect paths covered by registered outputs (both output_path and original_path)
+  const registeredPaths = new Set<string>();
+  for (const o of outputs) {
+    registeredPaths.add(o.output_path);
+    if (o.original_path) registeredPaths.add(o.original_path);
+  }
+
+  // Registered outputs first
+  for (const o of outputs) {
+    items.push({ type: "output", data: o });
+  }
+
+  // Legacy artifacts: skip if already covered by a registered output or deleted
+  for (const a of artifacts) {
+    if (registeredPaths.has(a.path)) continue;
+    if (deletedPaths.has(a.path)) continue;
+    items.push({ type: "artifact", data: a });
+  }
+
+  // Sort by date descending (most recent first)
+  items.sort((a, b) => {
+    const da = itemDate(a) ?? "";
+    const db = itemDate(b) ?? "";
+    return db.localeCompare(da);
+  });
+
+  return items;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function kindIcon(kind: string) {
   switch (kind) {
@@ -43,14 +140,33 @@ function timeAgo(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function ArtifactCard({ artifact }: { artifact: Artifact }) {
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// ---------------------------------------------------------------------------
+// Card
+// ---------------------------------------------------------------------------
+
+function ItemCard({
+  item,
+  onDelete,
+}: {
+  item: DisplayItem;
+  onDelete?: () => void;
+}) {
+  const path = itemPath(item);
+  const sourceType = itemSourceType(item);
+
   const openViewer = () => {
-    void commands.openViewerWindow(artifact.path);
+    void commands.openViewerWindow(path);
   };
 
   const revealInFinder = (e: MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    void invoke("reveal_in_default_browser", { path: artifact.path }).catch(
+    void invoke("reveal_in_default_browser", { path }).catch(
       (err: unknown) => console.error("reveal failed:", err)
     );
   };
@@ -59,11 +175,28 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
     if (e.key === "Enter" || e.key === " ") {
       e.stopPropagation();
       e.preventDefault();
-      void invoke("reveal_in_default_browser", {
-        path: artifact.path,
-      }).catch((err: unknown) => console.error("reveal failed:", err));
+      void invoke("reveal_in_default_browser", { path }).catch(
+        (err: unknown) => console.error("reveal failed:", err)
+      );
     }
   };
+
+  const handleDelete = (e: MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    onDelete?.();
+  };
+
+  const handleDeleteKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.stopPropagation();
+      e.preventDefault();
+      onDelete?.();
+    }
+  };
+
+  const preview = itemPreview(item);
+  const size = itemSize(item);
+  const date = itemDate(item);
 
   return (
     <div
@@ -84,69 +217,131 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 shrink-0">{kindIcon(artifact.kind)}</div>
+        <div className="mt-0.5 shrink-0">{kindIcon(itemKind(item))}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">
-              {artifact.title}
+              {itemTitle(item)}
             </span>
+            {sourceType && (
+              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                {sourceType}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 mt-0.5">
             <span className="text-xs text-muted-foreground truncate">
-              {artifact.pipe_name}
+              {itemSource(item)}
             </span>
-            {artifact.modified_at && (
+            {date && (
               <>
                 <span className="text-muted-foreground/40">·</span>
                 <span className="text-xs text-muted-foreground">
-                  {timeAgo(artifact.modified_at)}
+                  {timeAgo(date)}
                 </span>
               </>
             )}
-            {artifact.size_bytes != null && (
+            {size != null && (
               <>
                 <span className="text-muted-foreground/40">·</span>
                 <span className="text-xs text-muted-foreground">
-                  {formatBytes(artifact.size_bytes)}
+                  {formatBytes(size)}
                 </span>
               </>
             )}
           </div>
-          {artifact.preview && (
+          {preview && (
             <p className="text-xs text-muted-foreground/70 mt-1.5 line-clamp-2 leading-relaxed">
-              {artifact.preview}
+              {preview}
             </p>
           )}
         </div>
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={revealInFinder}
-          onKeyDown={revealOnKey}
-          title="reveal in finder"
-          className={cn(
-            "shrink-0 p-1.5 rounded-md transition-colors",
-            "opacity-0 group-hover:opacity-100",
-            "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+        <div className="shrink-0 flex items-center gap-1">
+          {onDelete && (
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={handleDelete}
+              onKeyDown={handleDeleteKey}
+              title="delete"
+              className={cn(
+                "p-1.5 rounded-md transition-colors",
+                "opacity-0 group-hover:opacity-100",
+                "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+              )}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </div>
           )}
-        >
-          <FolderOpen className="h-3.5 w-3.5" />
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={revealInFinder}
+            onKeyDown={revealOnKey}
+            title="reveal in finder"
+            className={cn(
+              "p-1.5 rounded-md transition-colors",
+              "opacity-0 group-hover:opacity-100",
+              "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export function ArtifactsLibrary() {
-  const { artifacts, isLoading, error, refresh } = useArtifacts();
+  const {
+    outputs,
+    isLoading: outputsLoading,
+    error: outputsError,
+    refresh: refreshOutputs,
+    deleteOutput,
+  } = useOutputs();
+  const {
+    artifacts,
+    isLoading: artifactsLoading,
+    error: artifactsError,
+    refresh: refreshArtifacts,
+  } = useArtifacts();
 
-  if (isLoading && artifacts.length === 0) {
+  // Track paths of deleted outputs so matching legacy artifacts don't resurface
+  const [deletedPaths, setDeletedPaths] = useState<Set<string>>(new Set());
+
+  const isLoading = outputsLoading || artifactsLoading;
+  const error = outputsError || artifactsError;
+
+  const items = mergeItems(outputs, artifacts, deletedPaths);
+
+  const refresh = useCallback(() => {
+    // Clear deleted paths on explicit refresh — re-registration may have happened
+    setDeletedPaths(new Set());
+    refreshOutputs();
+    refreshArtifacts();
+  }, [refreshOutputs, refreshArtifacts]);
+
+  const handleDelete = useCallback(
+    async (output: Output) => {
+      // Record both output_path and original_path to suppress legacy artifact
+      setDeletedPaths((prev) => {
+        const next = new Set(prev);
+        next.add(output.output_path);
+        if (output.original_path) next.add(output.original_path);
+        return next;
+      });
+      await deleteOutput(output.id);
+    },
+    [deleteOutput]
+  );
+
+  if (isLoading && items.length === 0) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />
@@ -154,7 +349,7 @@ export function ArtifactsLibrary() {
     );
   }
 
-  if (error && artifacts.length === 0) {
+  if (error && items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-muted-foreground gap-2">
         <p className="text-sm">failed to load artifacts</p>
@@ -183,7 +378,7 @@ export function ArtifactsLibrary() {
         </button>
       </div>
 
-      {artifacts.length === 0 ? (
+      {items.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
           <File className="h-8 w-8 opacity-30 mb-3" />
           <p className="text-sm">No artifacts yet</p>
@@ -194,8 +389,16 @@ export function ArtifactsLibrary() {
         </div>
       ) : (
         <div className="space-y-2">
-          {artifacts.map((a) => (
-            <ArtifactCard key={`${a.pipe_name}:${a.path}`} artifact={a} />
+          {items.map((item) => (
+            <ItemCard
+              key={itemKey(item)}
+              item={item}
+              onDelete={
+                item.type === "output"
+                  ? () => void handleDelete(item.data)
+                  : undefined
+              }
+            />
           ))}
         </div>
       )}
