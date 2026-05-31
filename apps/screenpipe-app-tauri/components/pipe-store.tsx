@@ -1117,7 +1117,9 @@ here is the original pipe content (pipe.md):
 ${pipeSource}
 \`\`\`
 
-IMPORTANT: first read the screenpipe skill file to understand how pipes work, then ask the user how they want to customize/improve this pipe for their specific needs. do NOT auto-send or auto-create — have a conversation first to understand what they want to change.`,
+IMPORTANT: first read the screenpipe skill file to understand how pipes work, then ask the user how they want to customize/improve this pipe for their specific needs. do NOT auto-send or auto-create — have a conversation first to understand what they want to change.
+
+if the original or customized pipe creates a user-facing output file, make sure the forked pipe.md includes an \`artifacts:\` block in frontmatter declaring the output path under \`./output/\`, and instruct the prompt to write results to that exact path. if the pipe doesn't create files, omit \`artifacts:\`.`,
                     prompt: `i want to fork the "${pipe.title}" pipe and adapt it to my needs. here is the original pipe.md:\n\n${pipeSource}`,
                     displayLabel: buildForkPipeDisplayLabel(pipe.title),
                     autoSend: true,
