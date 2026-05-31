@@ -77,7 +77,7 @@ async function typeIntoComposer(text: string): Promise<void> {
   await el.setValue(text);
 }
 
-describe("Chat composer isolation (no draft leak across chats)", function () {
+describe("Chat composer drafts are scoped per conversation", function () {
   this.timeout(60_000);
 
   before(async () => {
@@ -85,48 +85,39 @@ describe("Chat composer isolation (no draft leak across chats)", function () {
     await openHomeWindow();
   });
 
-  it("clears the composer when switching to a different chat", async () => {
-    // Step 1: open chat A.
+  it("keeps each chat's draft isolated and restores it on return", async () => {
+    // Open chat A and type a unique draft — do not send.
     await emitChatLoad(CHAT_A);
     await browser.pause(t(500));
-
-    // Step 2: type a draft into A's composer.
     await typeIntoComposer(DRAFT_MARKER);
     await browser.pause(t(200));
+    expect(await readComposerValue()).toBe(DRAFT_MARKER);
 
-    const aDraft = await readComposerValue();
-    expect(aDraft).toBe(DRAFT_MARKER);
-
-    // Step 3: switch to chat B.
+    // Switch to chat B — composer must NOT show A's draft.
     await emitChatLoad(CHAT_B);
     await browser.pause(t(600));
-
-    // Step 4: composer must be empty in chat B.
     const bDraft = await readComposerValue();
     if (bDraft !== "") {
       const filepath = await saveScreenshot("composer-leak-on-B");
       throw new Error(
-        `BUG: composer leaked into chat B. expected "" got ${JSON.stringify(bDraft)} (screenshot=${filepath})`,
+        `BUG: A's draft leaked into chat B. expected "" got ${JSON.stringify(bDraft)} (screenshot=${filepath})`,
       );
     }
 
-    // Step 5: switch back to chat A. A's original draft should be
-    // restored — snapshotted into the chat store on the A→B switch
-    // and restored on the B→A switch. Also continuously mirrored by
-    // the composer-mirror effect, so even if the snapshot path missed,
-    // there's a 250ms-debounced backup writing the draft to the store.
+    // Switch back to chat A — A's original draft should be restored.
+    // The panel snapshots the outgoing draft into the chat store on
+    // switch and restores the incoming draft after. A 250ms-debounced
+    // mirror effect backs this up for the unswitched-close case.
     await emitChatLoad(CHAT_A);
-    // Slightly longer pause: the panel needs to (1) snapshot B's
-    // (empty) draft, (2) clear the composer, (3) restore A's draft.
-    // The composer mirror effect debounces at 250ms, plus the
-    // setMessages/setConversationId render cycle.
+    // Slightly longer pause: the panel needs to snapshot B's empty
+    // draft, clear the composer, and restore A's draft — plus the
+    // mirror's 250ms debounce window.
     await browser.pause(t(900));
-
     const aAgain = await readComposerValue();
     if (aAgain !== DRAFT_MARKER) {
       const filepath = await saveScreenshot("composer-not-restored-on-A");
       throw new Error(
-        `BUG: composer not restored on return to A. expected ${JSON.stringify(DRAFT_MARKER)} got ${JSON.stringify(aAgain)} (screenshot=${filepath})`,
+        `BUG: A's draft not restored on return. expected ${JSON.stringify(DRAFT_MARKER)} got ${JSON.stringify(aAgain)} (screenshot=${filepath})`,
       );
     }
 
