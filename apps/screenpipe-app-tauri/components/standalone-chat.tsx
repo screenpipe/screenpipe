@@ -4660,6 +4660,8 @@ export function StandaloneChat({
         void Promise.resolve(steerMessage(input.trim())).finally(() => {
           steerShortcutInFlightRef.current = false;
         });
+      } else if (!input.trim() && pastedImages.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
+        steerQueuedPrompt(queuedPrompts[0]);
       }
       return;
     }
@@ -4711,12 +4713,14 @@ export function StandaloneChat({
         void Promise.resolve(steerMessage(input.trim())).finally(() => {
           steerShortcutInFlightRef.current = false;
         });
+      } else if (!input.trim() && pastedImages.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
+        steerQueuedPrompt(queuedPrompts[0]);
       }
     };
 
     window.addEventListener("keydown", handleComposerSteerShortcut, true);
     return () => window.removeEventListener("keydown", handleComposerSteerShortcut, true);
-  }, [input, isComposing, isMac, pastedImages, showMentionDropdown]);
+  }, [input, isComposing, isMac, pastedImages, showMentionDropdown, queuedPrompts]);
 
   useEffect(() => {
     // Don't resolve preset until settings are loaded from the store —
