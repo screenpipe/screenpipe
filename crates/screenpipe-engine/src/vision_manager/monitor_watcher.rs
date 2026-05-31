@@ -183,8 +183,23 @@ pub async fn start_monitor_watcher(
             }
 
             // ── Normal monitor polling ──────────────────────────────────────
-            // If stopped (e.g. no monitors after undock/wake), retry start()
+            // If stopped (e.g. no monitors after undock/wake), retry start().
             if vision_manager.status().await != VisionManagerStatus::Running {
+                #[cfg(target_os = "macos")]
+                {
+                    let unlock = crate::sleep_monitor::screen_unlock_notify();
+                    // Drain any permit buffered while we were Running so we don't
+                    // wake instantly on a stale signal.
+                    let _ = tokio::time::timeout(Duration::from_millis(0), unlock.notified()).await;
+                    // Race unlock against the 5s backstop.
+                    if tokio::time::timeout(Duration::from_secs(5), unlock.notified())
+                        .await
+                        .is_ok()
+                    {
+                        info!("screen unlocked — retrying VisionManager start immediately");
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 match vision_manager.start().await {
                     Ok(()) => {

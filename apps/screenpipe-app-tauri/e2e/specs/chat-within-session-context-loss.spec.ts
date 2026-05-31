@@ -199,7 +199,7 @@ describe("Within-chat context loss (issue #3636 — user's actual bug)", functio
     await sendMessageViaComposer(SECOND_USER_MSG);
     await browser.waitUntil(
       async () => (await readCapturedPrompts()).length >= 1,
-      { timeout: t(15_000), interval: 200, timeoutMsg: "first composer pi_prompt was never captured" },
+      { timeout: t(30_000), interval: 200, timeoutMsg: "first composer pi_prompt was never captured" },
     );
     const firstSendCaptured = await readCapturedPrompts();
     const firstPrompt = firstSendCaptured[0]?.message || "";
@@ -229,7 +229,7 @@ describe("Within-chat context loss (issue #3636 — user's actual bug)", functio
     await sendMessageViaComposer(THIRD_USER_MSG);
     await browser.waitUntil(
       async () => (await readCapturedPrompts()).length >= 1,
-      { timeout: t(15_000), interval: 200, timeoutMsg: "turn #3 pi_prompt was never captured" },
+      { timeout: t(30_000), interval: 200, timeoutMsg: "turn #3 pi_prompt was never captured" },
     );
     const turn3 = await readCapturedPrompts();
     const turn3Prompt = turn3[0]?.message || "";

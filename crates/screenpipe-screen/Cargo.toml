@@ -25,7 +25,7 @@ tokio = { workspace = true }
 image = { workspace = true }
 
 # OCR
-rusty-tesseract = { git = "https://github.com/screenpipe/rusty-tesseract.git", branch = "main" }
+rusty-tesseract = { git = "https://github.com/screenpipe/rusty-tesseract.git", rev = "08346c1de08d122c7121425abc79081c30dbf778" }
 
 anyhow = "1.0.86"
 
@@ -77,11 +77,11 @@ harness = false
 
 # macOS: sck-rs for 12.3+ (ScreenCaptureKit), xcap as fallback for older versions
 [target.'cfg(target_os = "macos")'.dependencies]
-sck-rs = { git = "https://github.com/screenpipe/sck-rs" }
+sck-rs = { git = "https://github.com/screenpipe/sck-rs" , rev = "b7f48a1236b2339350baa1375a805c7ce32f88df"}
 xcap = "0.9"
 libc = "0.2.168"
-cidre = { git = "https://github.com/yury/cidre.git", features = ["vn", "cv", "cg", "app"] }
-accessibility-sys = { git = "https://github.com/eiz/accessibility.git", branch = "master" }
+cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a", features = ["vn", "cv", "cg", "app"] }
+accessibility-sys = { git = "https://github.com/eiz/accessibility.git", rev = "173e898d4a52ee0afe0224ecb458d324057856e7" }
 core-foundation = "0.10"
 core-graphics = "0.24"
 

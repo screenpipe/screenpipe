@@ -10,7 +10,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.350"
+version = "0.3.351"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -20,7 +20,7 @@ edition = "2021"
 [workspace.dependencies]
 # AI
 tokenizers = "0.21.0"
-hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", default-features = false, features = [
+hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", rev = "437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760", default-features = false, features = [
     "native-tls",
     "tokio",
     "ureq",
@@ -51,7 +51,7 @@ reqwest-middleware = "0.4.1"
 
 [patch.crates-io]
 # enables chinese mirror (hf is banned in china) and rustls-tls
-hf-hub = { git = "https://github.com/neo773/hf-hub" }
+hf-hub = { git = "https://github.com/neo773/hf-hub", rev = "437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760" }
 
 [profile.release]
 codegen-units = 1

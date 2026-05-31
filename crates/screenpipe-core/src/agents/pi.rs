@@ -1568,39 +1568,60 @@ fn seed_pi_package_json(install_dir: &Path) {
         }
     });
     if pkg_path.exists() {
-        if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
-            if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
-                let mut changed = false;
-                if let Some(obj) = pkg.as_object_mut() {
-                    if obj.get("overrides") != Some(&expected_overrides) {
-                        obj.insert("overrides".to_string(), expected_overrides.clone());
-                        changed = true;
-                    }
-                    if let Some(deps_obj) =
-                        obj.get_mut("dependencies").and_then(|d| d.as_object_mut())
-                    {
-                        let legacy: Vec<String> = deps_obj
-                            .keys()
-                            .filter(|k| k.starts_with("@mariozechner/"))
-                            .cloned()
-                            .collect();
-                        for k in &legacy {
-                            deps_obj.remove(k);
-                            changed = true;
-                        }
-                    }
+        let read_result = std::fs::read_to_string(&pkg_path);
+        let parse_result = read_result
+            .as_ref()
+            .ok()
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok());
+        // Detect corruption: a partial bun-install write can leave NUL bytes
+        // in package.json (SCREENPIPE-APP-AR — bun then errors at SyntaxError).
+        // Read failures and parse failures land here too. Wipe and re-seed
+        // rather than silently exiting and letting the next `bun install`
+        // re-fail on the same garbled file.
+        let corrupted = parse_result.is_none()
+            || read_result
+                .as_ref()
+                .map(|c| c.contains('\0'))
+                .unwrap_or(true);
+        if corrupted {
+            warn!(
+                "pi-agent package.json at {} is unreadable or corrupted — re-seeding",
+                pkg_path.display()
+            );
+            let _ = std::fs::remove_file(&pkg_path);
+            let _ = std::fs::remove_file(install_dir.join("bun.lock"));
+            let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
+            // Fall through to the fresh-seed path below.
+        } else if let Some(mut pkg) = parse_result {
+            let mut changed = false;
+            if let Some(obj) = pkg.as_object_mut() {
+                if obj.get("overrides") != Some(&expected_overrides) {
+                    obj.insert("overrides".to_string(), expected_overrides.clone());
+                    changed = true;
                 }
-                if changed {
-                    if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
-                        let _ = std::fs::write(&pkg_path, new_contents);
-                        let _ = std::fs::remove_file(install_dir.join("bun.lock"));
-                        let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
-                        info!("Patched pi-agent package.json (overrides + legacy dep cleanup)");
+                if let Some(deps_obj) = obj.get_mut("dependencies").and_then(|d| d.as_object_mut())
+                {
+                    let legacy: Vec<String> = deps_obj
+                        .keys()
+                        .filter(|k| k.starts_with("@mariozechner/"))
+                        .cloned()
+                        .collect();
+                    for k in &legacy {
+                        deps_obj.remove(k);
+                        changed = true;
                     }
                 }
             }
+            if changed {
+                if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
+                    let _ = std::fs::write(&pkg_path, new_contents);
+                    let _ = std::fs::remove_file(install_dir.join("bun.lock"));
+                    let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
+                    info!("Patched pi-agent package.json (overrides + legacy dep cleanup)");
+                }
+            }
+            return;
         }
-        return;
     }
     let pkg_json = json!({
         "overrides": {
@@ -2359,5 +2380,43 @@ mod tests {
         exec_b.set_user_token(None);
         assert_eq!(exec_a.current_user_token(), None);
         assert_eq!(exec_b.current_user_token(), None);
+    }
+
+    /// Regression guard for SCREENPIPE-APP-AR: a corrupted package.json
+    /// (NUL bytes from a partial bun-install write) used to silently exit
+    /// `seed_pi_package_json` and leave bun looping on the same broken file.
+    #[test]
+    fn seed_pi_package_json_recovers_from_nul_byte_corruption() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_path = dir.path().join("package.json");
+        let lock_path = dir.path().join("bun.lock");
+
+        // Simulate the observed corruption: garbled package name + NUL padding
+        // (matches the actual bytes from `Pi background install failed`).
+        std::fs::write(
+            &pkg_path,
+            b"{\n  \"dependencies\": {\n    \"@mariozech\0\0\0\0\0\0\0\0\0\0\0\0",
+        )
+        .expect("write corrupt pkg");
+        std::fs::write(&lock_path, b"stale-lock").expect("write stale lock");
+
+        seed_pi_package_json(dir.path());
+
+        let contents = std::fs::read_to_string(&pkg_path).expect("re-seeded pkg readable");
+        assert!(
+            !contents.contains('\0'),
+            "re-seeded package.json must not contain NUL bytes; got: {:?}",
+            contents
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&contents).expect("re-seeded pkg must parse");
+        assert!(
+            parsed.get("overrides").is_some(),
+            "re-seeded pkg must include the lru-cache overrides"
+        );
+        assert!(
+            !lock_path.exists(),
+            "stale bun.lock must be cleared so bun re-resolves from the fresh manifest"
+        );
     }
 }

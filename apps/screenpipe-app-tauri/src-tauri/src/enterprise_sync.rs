@@ -496,10 +496,8 @@ mod imp {
         // recording server hasn't finished booting and the key is
         // usually `None`. ScreenpipeLocalClient re-reads it from
         // RecordingState on every request via the app handle.
-        let local: Arc<dyn LocalApiClient> = Arc::new(ScreenpipeLocalClient::new(
-            api_url_base,
-            app.clone(),
-        ));
+        let local: Arc<dyn LocalApiClient> =
+            Arc::new(ScreenpipeLocalClient::new(api_url_base, app.clone()));
 
         let (tx, rx) = tokio::sync::watch::channel(false);
         tauri::async_runtime::spawn(async move {

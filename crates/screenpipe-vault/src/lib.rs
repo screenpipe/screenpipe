@@ -14,7 +14,7 @@
 //! # async fn example() -> anyhow::Result<()> {
 //! let vault = VaultManager::new(screenpipe_core::paths::default_screenpipe_data_dir());
 //! vault.setup("my-password").await?;
-//! vault.lock().await?;
+//! vault.lock("my-password").await?;
 //! vault.unlock("my-password").await?;
 //! # Ok(())
 //! # }

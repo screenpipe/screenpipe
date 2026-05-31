@@ -789,9 +789,7 @@ mod tests {
         // Queue two commands
         let h1 = {
             let h = handle.clone();
-            tokio::spawn(
-                async move { h.send(json!({"type": "prompt"}), WaitMode::Prompt).await },
-            )
+            tokio::spawn(async move { h.send(json!({"type": "prompt"}), WaitMode::Prompt).await })
         };
         let h2 = {
             let h = handle.clone();

@@ -20,7 +20,6 @@ import {
   Loader2,
   ExternalLink,
   Check,
-  Users,
   MoreHorizontal,
   Plus,
   Search,
@@ -74,7 +73,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
-import { useTeam } from "@/lib/hooks/use-team";
 import { useToast } from "@/components/ui/use-toast";
 import { useQueryState } from "nuqs";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
@@ -747,19 +745,10 @@ export function PipesSection() {
   // Track in-flight config saves so runPipe can await them
   const pendingConfigSaves = useRef<Record<string, Promise<void>>>({});
   const { settings, updateSettings } = useSettings();
-  const team = useTeam();
   const { toast } = useToast();
   const [, setSection] = useQueryState("section");
-  const isTeamAdmin = !!team.team && team.role === "admin";
-  const [sharingPipe, setSharingPipe] = useState<string | null>(null);
   const [sharingPublic, setSharingPublic] = useState<string | null>(null);
   const [publishPipeName, setPublishPipeName] = useState<string | null>(null);
-  const [pipeFilter, setPipeFilter] = useState<"all" | "personal" | "team">(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("pipes-pipe-filter") as "all" | "personal" | "team") || "all";
-    }
-    return "all";
-  });
   const [searchQuery, setSearchQuery] = useState("");
   const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual">("scheduled");
   // Favorites — per-machine preference persisted via /pipes/favorites.
@@ -778,16 +767,6 @@ export function PipesSection() {
   // Live streaming output for running executions: key = "pipeName:executionId"
   const [liveOutput, setLiveOutput] = useState<Record<string, string[]>>({});
   const liveOutputRef = useRef<Record<string, string[]>>({});
-  const sharedPipeNames = React.useMemo(
-    () =>
-      new Set(
-        team.configs
-          .filter((c) => c.config_type === "pipe" && c.scope === "team")
-          .map((c) => c.key)
-      ),
-    [team.configs]
-  );
-
   const isTriggeredPipe = (p: PipeStatus) =>
     !!(p.config.trigger?.events?.length) ||
     !!(p.config.trigger?.custom?.length);
@@ -800,9 +779,6 @@ export function PipesSection() {
     () =>
       pipes
         .filter((p) => {
-          if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
-          if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
-
           if (searchQuery) {
             const q = searchQuery.toLowerCase();
             if (!p.config.name.toLowerCase().includes(q)) return false;
@@ -835,44 +811,18 @@ export function PipesSection() {
           return 0;
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pipes, pipeFilter, searchQuery, pipeTypeFilter, pipeFavorites.showOnly, pipeFavorites.isFavorite, pipeExecutions, sharedPipeNames]
+    [pipes, searchQuery, pipeTypeFilter, pipeFavorites.showOnly, pipeFavorites.isFavorite, pipeExecutions]
   );
 
   // Counts for sub-tab badges — memoized so the filter doesn't re-run on every render
   const tabCounts = React.useMemo(() => {
-    const base = pipes.filter((p) => {
-      if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
-      if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
-      return true;
-    });
     return {
-      scheduled: base.filter(isScheduledPipe).length,
-      triggered: base.filter(isTriggeredPipe).length,
-      manual: base.filter(isManualPipe).length,
+      scheduled: pipes.filter(isScheduledPipe).length,
+      triggered: pipes.filter(isTriggeredPipe).length,
+      manual: pipes.filter(isManualPipe).length,
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipes, pipeFilter, sharedPipeNames]);
-
-  // Counts for filter chips
-
-  const sharePipeToTeam = async (pipe: PipeStatus) => {
-    setSharingPipe(pipe.config.name);
-    try {
-      await team.pushConfig("pipe", pipe.config.name, {
-        name: pipe.config.name,
-        raw_content: pipe.raw_content,
-        config: pipe.config,
-      });
-      posthog.capture("team_config_pushed", { config_type: "pipe", pipe_name: pipe.config.name });
-      toast({
-        title: sharedPipeNames.has(pipe.config.name) ? "updated team pipe" : "shared to team",
-      });
-    } catch (err: any) {
-      toast({ title: "failed to share to team", description: err.message, variant: "destructive" });
-    } finally {
-      setSharingPipe(null);
-    }
-  };
+  }, [pipes]);
 
   const sharePipePublic = async (pipe: PipeStatus) => {
     setSharingPublic(pipe.config.name);
@@ -1498,32 +1448,6 @@ export function PipesSection() {
         </Button>
       </div>
 
-      {/* Team filter — only when there are actually team-shared pipes */}
-      {team.team && sharedPipeNames.size > 0 && (
-        <div className="flex items-center gap-4 border-b border-border">
-          {(["all", "personal", "team"] as const).map((tab) => {
-            const label = tab === "all" ? "all" : tab === "personal" ? "personal" : "shared with team";
-            const count = tab === "all" ? pipes.length : tab === "team"
-              ? pipes.filter((p) => sharedPipeNames.has(p.config.name)).length
-              : pipes.filter((p) => !sharedPipeNames.has(p.config.name)).length;
-            return (
-              <button
-                key={tab}
-                onClick={() => { setPipeFilter(tab); localStorage.setItem("pipes-pipe-filter", tab); }}
-                className={cn(
-                  "pb-2 text-sm transition-colors duration-150 border-b-2 -mb-px",
-                  pipeFilter === tab
-                    ? "border-foreground text-foreground font-medium"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {label} ({count})
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       {loading ? (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
@@ -1578,7 +1502,7 @@ export function PipesSection() {
                   {" "}in their frontmatter
                 </p>
               </>
-            ) : pipeFilter === "all" ? (
+            ) : (
               <div className="space-y-4">
                 <div>
                   <p className="text-foreground font-medium text-base">no pipes installed yet</p>
@@ -1611,10 +1535,6 @@ export function PipesSection() {
                   browse the pipe store →
                 </button>
               </div>
-            ) : pipeFilter === "team" ? (
-              <p>no pipes shared with team yet</p>
-            ) : (
-              <p>no personal-only pipes</p>
             )}
           </CardContent>
         </Card>
@@ -1861,21 +1781,6 @@ export function PipesSection() {
                         )}
                         copy share link
                       </DropdownMenuItem>
-                      {isTeamAdmin && (
-                        <>
-                          <DropdownMenuItem
-                            disabled={sharingPipe === pipe.config.name}
-                            onClick={() => sharePipeToTeam(pipe)}
-                          >
-                            {sharedPipeNames.has(pipe.config.name) ? (
-                              <Check className="h-3.5 w-3.5 mr-2" />
-                            ) : (
-                              <Users className="h-3.5 w-3.5 mr-2" />
-                            )}
-                            {sharedPipeNames.has(pipe.config.name) ? "update team copy" : "share to team"}
-                          </DropdownMenuItem>
-                        </>
-                      )}
                       {(pipe.source_slug || (pipe.config as any).config?.source_slug) && (
                         <DropdownMenuItem
                           onClick={() => {

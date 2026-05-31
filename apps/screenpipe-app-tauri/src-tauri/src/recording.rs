@@ -296,7 +296,12 @@ async fn remember_active_meeting_for_capture_restart(state: &RecordingState) {
     let manual_id = *server.manual_meeting.read().await;
     let meeting = match manual_id {
         Some(id) => server.db.get_active_meeting_by_id(id).await.ok().flatten(),
-        None => server.db.get_most_recent_active_meeting().await.ok().flatten(),
+        None => server
+            .db
+            .get_most_recent_active_meeting()
+            .await
+            .ok()
+            .flatten(),
     };
 
     let Some(meeting) = meeting else {

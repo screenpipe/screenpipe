@@ -793,8 +793,7 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
         "view-source:",
         "chrome:",
     ];
-    let has_scheme =
-        raw.contains("://") || HOSTLESS_SCHEMES.iter().any(|s| raw.starts_with(s));
+    let has_scheme = raw.contains("://") || HOSTLESS_SCHEMES.iter().any(|s| raw.starts_with(s));
     let candidate = if has_scheme {
         raw.to_owned()
     } else if raw.starts_with("//") {
@@ -921,7 +920,8 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
     if cookies.is_empty() {
         #[cfg(target_os = "windows")]
         {
-            if let Some(block) = crate::owned_browser_cookies::v20_cookie_block_for_host(host).await {
+            if let Some(block) = crate::owned_browser_cookies::v20_cookie_block_for_host(host).await
+            {
                 // App-bound encrypted (v20) cookies — try extension first.
                 match extension_cookies_for_host(app, host).await {
                     Ok(extension_cookies) if !extension_cookies.is_empty() => {

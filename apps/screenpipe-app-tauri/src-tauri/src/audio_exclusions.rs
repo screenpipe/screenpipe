@@ -49,14 +49,8 @@ fn exclusions_path() -> PathBuf {
 
 fn parse_excluded_app(entry: &serde_json::Value) -> Option<ExcludedApp> {
     let bundle_id = entry.get("bundle_id")?.as_str()?.to_string();
-    let name = entry
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let icon = entry
-        .get("icon")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let name = entry.get("name").and_then(|v| v.as_str()).map(String::from);
+    let icon = entry.get("icon").and_then(|v| v.as_str()).map(String::from);
     Some(ExcludedApp {
         bundle_id,
         name,
@@ -102,8 +96,7 @@ pub fn read_audio_exclusions() -> Result<Vec<ExcludedApp>, String> {
 pub async fn write_audio_exclusions(apps: Vec<ExcludedApp>) -> Result<(), String> {
     let path = exclusions_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     let excluded_apps: Vec<serde_json::Value> = apps
         .iter()
@@ -129,20 +122,14 @@ pub async fn write_audio_exclusions(apps: Vec<ExcludedApp>) -> Result<(), String
 
     let tmp = path.with_extension("json.tmp");
     {
-        let mut file =
-            File::create(&tmp).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        let mut file = File::create(&tmp).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         file.write_all(body.as_bytes())
             .map_err(|e| format!("write {}: {e}", tmp.display()))?;
         file.sync_all()
             .map_err(|e| format!("fsync {}: {e}", tmp.display()))?;
     }
-    std::fs::rename(&tmp, &path).map_err(|e| {
-        format!(
-            "rename {} -> {}: {e}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;
     Ok(())
 }
 
@@ -212,8 +199,8 @@ fn icon_data_url_for_app(app_path: &str) -> Option<String> {
 fn read_app_bundle_metadata_impl(path: &str) -> Result<ExcludedApp, String> {
     let app_path = PathBuf::from(path);
     let plist_path = app_path.join("Contents/Info.plist");
-    let plist: plist::Value = plist::from_file(&plist_path)
-        .map_err(|e| format!("read {}: {e}", plist_path.display()))?;
+    let plist: plist::Value =
+        plist::from_file(&plist_path).map_err(|e| format!("read {}: {e}", plist_path.display()))?;
 
     let bundle_id = plist
         .as_dictionary()
@@ -265,9 +252,12 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn read_returns_empty_when_missing() {
-        with_env("/nonexistent/screenpipe-audio-exclusion-cmd-test.json", || {
-            assert_eq!(read_audio_exclusions().unwrap(), Vec::<ExcludedApp>::new());
-        });
+        with_env(
+            "/nonexistent/screenpipe-audio-exclusion-cmd-test.json",
+            || {
+                assert_eq!(read_audio_exclusions().unwrap(), Vec::<ExcludedApp>::new());
+            },
+        );
     }
 
     #[test]

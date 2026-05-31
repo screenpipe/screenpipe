@@ -37,17 +37,20 @@ pub async fn resolve_api_auth_key(data_dir: &Path, settings_key: Option<&str>) -
     // can read the secrets table but the keychain ACL denies the decrypt
     // for `screenpi.pe`. Result: rotation, mismatched in-memory caches,
     // 401 storms — observed for chris@lovephoenixhomes.com 2026-05-06.
+    let mut stored_unreadable = false;
     let stored_key: Option<String> = if let Some(ref s) = store {
         match s.get("api_auth_key").await {
             Ok(Some(bytes)) => String::from_utf8(bytes).ok().filter(|k| !k.is_empty()),
             Ok(None) => None,
             Err(e) => {
+                stored_unreadable = true;
                 tracing::error!(
                     "api auth: failed to read api_auth_key from secret store — \
-                     resolver will fall through to auto-generate, rotating the \
-                     key out from under cached consumers. Likely cause: keychain \
-                     ACL mismatch (dev↔prod bundle id, recent encryption toggle, \
-                     or revoked keychain item). Error: {}",
+                     keeping the encrypted blob intact and minting a one-shot \
+                     ephemeral key for this process to avoid overwriting the \
+                     user's persisted key. Likely cause: keychain ACL mismatch \
+                     (dev↔prod bundle id, recent encryption toggle, or revoked \
+                     keychain item). Error: {}",
                     e
                 );
                 None
@@ -72,8 +75,15 @@ pub async fn resolve_api_auth_key(data_dir: &Path, settings_key: Option<&str>) -
     // reader (running server, MCP, `screenpipe auth token` CLI) agrees on
     // the same value regardless of which source it originally came from.
     // Skip the write if the stored value already matches.
+    //
+    // SAFETY: never persist when the existing row was unreadable. Writing
+    // would clobber the encrypted blob with a fresh plaintext key, silently
+    // rotating the user's API key (SCREENPIPE-APP-9Z: 25 events / 18 users,
+    // including the Pattern.com whitelabel build). The in-memory key still
+    // works for this process; the user can recover by clearing the secrets
+    // table or restoring the keychain item.
     if let Some(s) = store {
-        if stored_key.as_deref() != Some(key.as_str()) {
+        if !stored_unreadable && stored_key.as_deref() != Some(key.as_str()) {
             if let Err(e) = s.set("api_auth_key", key.as_bytes()).await {
                 tracing::warn!("failed to persist api auth key: {}", e);
             }

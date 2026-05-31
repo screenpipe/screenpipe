@@ -78,7 +78,6 @@ import {
   useSettings,
   Settings,
 } from "@/lib/hooks/use-settings";
-import { useTeam } from "@/lib/hooks/use-team";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
@@ -1801,10 +1800,6 @@ export function RecordingSettings() {
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
   const { checkLogin } = useLoginDialog();
-  const team = useTeam();
-  const isTeamAdmin = !!team.team && team.role === "admin";
-  const [pushingFilter, setPushingFilter] = useState<string | null>(null);
-  const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const overlayData = useOverlayData();
   const [hwCapability, setHwCapability] = useState<HardwareCapability | null>(null);
 
@@ -1845,37 +1840,6 @@ export function RecordingSettings() {
       settings.user?.token,
     ]
   );
-
-  const handlePushFilterToTeam = async (configType: string, key: string, filters: string[]) => {
-    setPushingFilter(key);
-    try {
-      await team.pushConfig(configType, key, { filters });
-      toast({ title: "pushed to team" });
-    } catch (err: any) {
-      toast({ title: "failed to push to team", description: err.message, variant: "destructive" });
-    } finally {
-      setPushingFilter(null);
-    }
-  };
-
-  const handleRemoveTeamFilter = async (configType: string, key: string, filterToRemove: string) => {
-    const config = team.configs?.find(
-      (c) => c.config_type === configType && c.key === key && c.scope === "team"
-    );
-    if (!config) return;
-    const currentFilters = (config.value as { filters?: string[] })?.filters || [];
-    const updated = currentFilters.filter((f) => f !== filterToRemove);
-    try {
-      if (updated.length === 0) {
-        await team.deleteConfig(config.id);
-      } else {
-        await team.pushConfig(configType, key, { filters: updated });
-      }
-      toast({ title: "filter removed from team" });
-    } catch (err: any) {
-      toast({ title: "failed to remove filter", description: err.message, variant: "destructive" });
-    }
-  };
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);

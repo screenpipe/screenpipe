@@ -1,4 +1,7 @@
 
+<img width="1500" height="500" alt="image" src="https://github.com/user-attachments/assets/058a44b8-fcad-4a37-92d8-830167dbd400" />
+
+
 <p align="center">
    <a href ="https://screenpi.pe">
       <img src="https://github.com/user-attachments/assets/d3b1de26-c3c0-4c84-b9c4-b03213b97a30" alt="logo" width="200">
@@ -8,9 +11,17 @@
 <h1 align="center">[ screenpipe | YC S26 ]</h1>
 
 
-<p align="center">Give AI the ability to live your experience.</p>
+
+
+<p align="center">AI that knows what you've seen, said, or heard.</p>
 <p align="center">Records everything you do, say, hear 24/7, local, private, secure</p>
 
+
+
+
+<p align="center">
+<a align="center" href="https://trendshift.io/repositories/20386" target="_blank"><img align="center" src="https://trendshift.io/api/badge/repositories/20386" alt="screenpipe%2Fscreenpipe | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</p>
 
 <p align="center">
   <a href="https://screenpi.pe/onboarding" target="_blank">
@@ -39,6 +50,13 @@
 
 
 ---
+
+## news
+
+- 05/29 - **we released an [alpha version of our AI PII model](https://screenpipe.github.io/screenleak/) outperforming Google, Microsoft, and OpenAI models** on computer recording data and running at 9ms on consumer device
+- 05/14 - **we joined YC S26** 
+
+
 
 ## what is this?
 

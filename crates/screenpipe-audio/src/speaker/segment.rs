@@ -170,6 +170,10 @@ pub struct SegmentIterator {
     samples: Vec<f32>,
     sample_rate: u32,
     session: ort::session::Session,
+    // Output node name of the segmentation model, resolved once at load time.
+    // Canonical exports name it "output"; older exports name it "y" — see
+    // `super::resolve_output_name`.
+    output_name: String,
     embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
     embedding_manager: Arc<Mutex<EmbeddingManager>>,
     current_position: usize,
@@ -193,6 +197,8 @@ impl SegmentIterator {
         embedding_manager: Arc<Mutex<EmbeddingManager>>,
     ) -> Result<Self> {
         let session = super::create_session(model_path.as_ref())?;
+        let output_name =
+            super::resolve_output_name(&super::session_output_names(&session), "output")?;
         let window_size = (sample_rate * 10) as usize;
 
         let padded_samples = {
@@ -205,6 +211,7 @@ impl SegmentIterator {
             samples,
             sample_rate,
             session,
+            output_name,
             embedding_extractor,
             embedding_manager,
             current_position: 0,
@@ -257,7 +264,9 @@ impl SegmentIterator {
             .session
             .run(inputs)
             .context("Failed to run the session")?;
-        let ort_out = ort_outs.get("output").context("Output tensor not found")?;
+        let ort_out = ort_outs
+            .get(&self.output_name)
+            .context("Output tensor not found")?;
 
         let ort_out = ort_out
             .try_extract_array::<f32>()

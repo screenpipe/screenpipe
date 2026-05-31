@@ -166,7 +166,7 @@ function ReferralSection() {
 
 function SettingsContent() {
   const router = useRouter();
-  const { isSectionHidden } = useEnterprisePolicy();
+  const { isSectionHidden, isEnterprise } = useEnterprisePolicy();
   const { isTranslucent } = useSidebarContext();
 
   const [section, setSection] = useQueryState<SettingsSection>("section", {
@@ -213,7 +213,13 @@ function SettingsContent() {
     {
       label: "Account",
       items: [
-        { id: "team" as const, label: "Team", icon: <Users className="h-4 w-4" /> },
+        // Hide "Team" on enterprise builds — those installs are already
+        // org-managed; the desktop has nothing to manage. Admins use the
+        // /enterprise dashboard on the web. On consumer builds we still
+        // surface Team as a marketing entry point to /team.
+        ...(isEnterprise
+          ? []
+          : [{ id: "team" as const, label: "Team", icon: <Users className="h-4 w-4" /> }]),
         { id: "account" as const, label: "Account", icon: <User className="h-4 w-4" /> },
         { id: "referral" as const, label: "Get free month", icon: <Gift className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),

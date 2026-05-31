@@ -77,8 +77,7 @@ pub(super) fn handle(_app: &AppHandle, _name: &str, data: &Value) {
         ),
         ("FullPause", Some("os_low_power")) => (
             "low power mode on — capture paused",
-            "macos low power mode is on. plug in or turn off low power mode to resume."
-                .to_string(),
+            "macos low power mode is on. plug in or turn off low power mode to resume.".to_string(),
         ),
         ("FullPause", _) => (
             "battery critical — capture paused",

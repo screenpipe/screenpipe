@@ -136,9 +136,7 @@ fn into_calendar_event_item(event: GoogleCalendarEventDto) -> CalendarEventItem 
         attendees: event.attendees,
         location: event.location,
         meeting_url: event.meeting_url,
-        calendar_name: event
-            .calendar_name
-            .unwrap_or_else(|| "primary".to_string()),
+        calendar_name: event.calendar_name.unwrap_or_else(|| "primary".to_string()),
         is_all_day: event.is_all_day,
         source: "google".to_string(),
     }
@@ -146,10 +144,18 @@ fn into_calendar_event_item(event: GoogleCalendarEventDto) -> CalendarEventItem 
 
 fn format_display(start: &str, end: &str) -> (String, String) {
     let s = chrono::DateTime::parse_from_rfc3339(start)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%-I:%M %p").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%-I:%M %p")
+                .to_string()
+        })
         .unwrap_or_default();
     let e = chrono::DateTime::parse_from_rfc3339(end)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%-I:%M %p").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%-I:%M %p")
+                .to_string()
+        })
         .unwrap_or_default();
     (s, e)
 }

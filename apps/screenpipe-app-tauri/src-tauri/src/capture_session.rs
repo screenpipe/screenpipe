@@ -96,17 +96,16 @@ impl CaptureSession {
                 None
             };
 
-            // Await VisionManager::start inline so its Err can propagate back to
-            // start_capture. Previously this was inside a detached `tokio::spawn`,
-            // which returned the outer `Ok(Self)` before the spawn even ran — so
-            // a silent failure (e.g. stale allowlist matching zero monitors) left
-            // a "dead" CaptureSession parked in RecordingState.capture and every
-            // subsequent tray click short-circuited on is_some().
-            vision_manager.start().await.map_err(|e| {
-                error!("Failed to start VisionManager: {:?}", e);
-                format!("Failed to start VisionManager: {e}")
-            })?;
-            info!("VisionManager started successfully");
+            // A failed initial start() (e.g. 0 monitors while screen is locked at boot)
+            // is recoverable — the monitor watcher below retries on unlock/topology change.
+            // Don't propagate the error; keep the session alive so the watcher can run.
+            match vision_manager.start().await {
+                Ok(()) => info!("VisionManager started successfully"),
+                Err(e) => {
+                    warn!("VisionManager initial start failed ({e}); monitor watcher will retry");
+                    crate::health::set_recording_status(crate::health::RecordingStatus::Starting);
+                }
+            }
 
             // Long-running parts (monitor watcher + shutdown handler) stay in the
             // spawn — they're fire-and-forget by design.
@@ -327,11 +326,8 @@ async fn reconfigure_audio_manager(
     let audio_devices = if config.disable_audio {
         Vec::new()
     } else {
-        resolve_audio_devices_for_capture(
-            &config.audio_devices,
-            config.use_system_default_audio,
-        )
-        .await
+        resolve_audio_devices_for_capture(&config.audio_devices, config.use_system_default_audio)
+            .await
     };
 
     let mut audio_manager_builder = config

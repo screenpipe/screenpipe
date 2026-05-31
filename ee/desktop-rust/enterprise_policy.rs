@@ -195,10 +195,7 @@ pub fn set_sync_streams(
 /// poisoned — fail-open here mirrors the centralized-data master-switch
 /// behavior: the ingest endpoint will still enforce policy server-side.
 pub fn current_sync_streams() -> SyncStreams {
-    SYNC_STREAMS
-        .read()
-        .map(|guard| *guard)
-        .unwrap_or_default()
+    SYNC_STREAMS.read().map(|guard| *guard).unwrap_or_default()
 }
 
 /// Check if a section is hidden by enterprise policy.

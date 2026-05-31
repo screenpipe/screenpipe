@@ -21,7 +21,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
 tracing = "0.1"
-cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
+cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "01b68e60c80a59bbc1cac3629e725cf3bb2e4901" }
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }

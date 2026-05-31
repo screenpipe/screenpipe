@@ -19,7 +19,7 @@ oasgen = { workspace = true }
 
 # Cross-platform audio capture. Tracks screenpipe/cpal main, which carries
 # the Windows WASAPI AEC and macOS VoiceProcessingIO patches.
-cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
+cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "99f7c0f175217b5e47e4e454acbc02089d1fdd29" }
 
 # Wav encoding
 hound = "3.5"
@@ -36,7 +36,7 @@ chrono = { version = "0.4.31", features = ["serde"] }
 # Local Embeddings + STT
 # Using fork of vad-rs with Silero VAD v5/v6 support
 # v5/v6: 3x faster, 6000+ languages, better accuracy
-vad-rs = { git = "https://github.com/divanshu-go/vad-rs-1.git", branch="main", default-features = false }
+vad-rs = { git = "https://github.com/divanshu-go/vad-rs-1.git", rev = "b14b26ec7093f5398ef6658020259cd7c130ea6c", default-features = false }
 anyhow = "1.0.86"
 hf-hub = { workspace = true }
 # https://github.com/pdeljanov/Symphonia/tree/master?tab=readme-ov-file#optimizations
@@ -82,7 +82,7 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray
 ort-sys = { version = "=2.0.0-rc.10", default-features = false }
 knf-rs = "0.3.2"
 futures = "0.3.31"
-audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", branch = "main", default-features = false, features = ["qwen3-asr-antirez-blas", "parakeet"], optional = true }
+audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", rev = "2fd5c360651157a5df504394066e509ad4d1bdc9", default-features = false, features = ["qwen3-asr-antirez-blas", "parakeet"], optional = true }
 mlx-rs = { version = "0.25", optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
@@ -122,7 +122,7 @@ samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { git = "https://github.com/yury/cidre.git" }
+cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a" }
 once_cell = "1.17.1"
 objc = "0.2.7"
 ort = { version = "=2.0.0-rc.10", features = ["download-binaries"] }

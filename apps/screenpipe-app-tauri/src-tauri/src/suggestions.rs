@@ -623,9 +623,7 @@ fn browsing_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec
     let top_pages: Vec<String> = browser_windows
         .iter()
         .take(3)
-        .map(|w| {
-            truncate_string(&w.window_name, 35)
-        })
+        .map(|w| truncate_string(&w.window_name, 35))
         .collect();
 
     let mut suggestions = vec![Suggestion {
@@ -689,9 +687,7 @@ fn meeting_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<
         .find(|w| {
             MEETING_APPS.iter().any(|m| *m == w.app_name.to_lowercase()) && w.window_name.len() > 3
         })
-        .map(|w| {
-            truncate_string(&w.window_name, 40)
-        });
+        .map(|w| truncate_string(&w.window_name, 40));
 
     let preview = if meeting_mins > 0 {
         if let Some(title) = &meeting_title {

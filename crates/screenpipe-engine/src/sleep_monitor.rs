@@ -26,7 +26,6 @@ use tracing::{debug, error, info, warn};
 use crate::analytics::capture_event_nonblocking;
 #[cfg(target_os = "macos")]
 use serde_json::json;
-#[cfg(target_os = "macos")]
 use tokio::sync::Notify;
 
 /// Tracks whether the system is currently in a "post-wake" state
@@ -49,6 +48,15 @@ static SCREEN_IS_LOCKED: AtomicBool = AtomicBool::new(false);
 /// assumption at the call sites.
 #[cfg(target_os = "macos")]
 static DISPLAY_RECONFIG_NOTIFY: Notify = Notify::const_new();
+
+/// Fired on every locked → unlocked transition. Lets the monitor watcher retry
+/// start() immediately rather than waiting for the next poll tick.
+/// Same notify_one single-consumer semantics as DISPLAY_RECONFIG_NOTIFY.
+static SCREEN_UNLOCK_NOTIFY: Notify = Notify::const_new();
+
+pub fn screen_unlock_notify() -> &'static Notify {
+    &SCREEN_UNLOCK_NOTIFY
+}
 
 /// Set to `true` once `CGDisplayRegisterReconfigurationCallback` has been
 /// registered successfully. If registration fails (rare CG error path),
@@ -280,6 +288,7 @@ pub fn start_sleep_monitor() {
                 // the capture loop recreates them with fresh frames.
                 #[cfg(target_os = "macos")]
                 screenpipe_screen::stream_invalidation::request();
+                SCREEN_UNLOCK_NOTIFY.notify_one();
             }
         }
 
@@ -341,6 +350,7 @@ pub fn start_sleep_monitor() {
                 info!("Screen unlocked (CGSession safety-net poll)");
                 #[cfg(target_os = "macos")]
                 screenpipe_screen::stream_invalidation::request();
+                SCREEN_UNLOCK_NOTIFY.notify_one();
             }
         }
     });
@@ -523,6 +533,7 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
             info!("Screen unlocked after wake (CGSession safety-net cleared SCREEN_IS_LOCKED)");
             #[cfg(target_os = "macos")]
             screenpipe_screen::stream_invalidation::request();
+            SCREEN_UNLOCK_NOTIFY.notify_one();
         }
 
         // Resume DB write queue now that the system is stable.
@@ -714,6 +725,44 @@ mod tests {
             .await
             .expect("parked waiter should be woken by notify_one")
             .expect("waiter task should not panic");
+    }
+
+    #[tokio::test]
+    async fn test_screen_unlock_notify_wakes_waiter() {
+        // buffered permit resolves immediately
+        screen_unlock_notify().notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            screen_unlock_notify().notified(),
+        )
+        .await
+        .expect("buffered permit should resolve immediately");
+
+        // parked waiter woken by subsequent notify
+        let waiter = tokio::spawn(async { screen_unlock_notify().notified().await });
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        screen_unlock_notify().notify_one();
+        tokio::time::timeout(std::time::Duration::from_millis(50), waiter)
+            .await
+            .expect("parked waiter should wake")
+            .expect("waiter task should not panic");
+    }
+
+    #[tokio::test]
+    async fn test_stale_permit_drain_then_block() {
+        let notify = std::sync::Arc::new(Notify::const_new());
+        notify.notify_one();
+
+        // timeout(0) drains the buffered permit without blocking
+        let drained =
+            tokio::time::timeout(std::time::Duration::from_millis(0), notify.notified()).await;
+        assert!(drained.is_ok(), "should consume the buffered permit");
+
+        // no permit left — next wait must block
+        let fresh =
+            tokio::time::timeout(std::time::Duration::from_millis(30), notify.notified()).await;
+        assert!(fresh.is_err(), "should block after drain");
     }
 
     #[cfg(target_os = "macos")]

@@ -163,8 +163,7 @@ impl EnterpriseSyncConfig {
     /// → uploads start" flow possible without any env-var setup on the
     /// customer's machine.
     pub async fn resolve_upload_mode(&mut self) {
-        let resolved =
-            EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await;
+        let resolved = EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await;
         self.upload_mode = resolved;
     }
 }
@@ -454,8 +453,7 @@ pub fn build_jsonl(
     memories: &[MemoryRow],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(
-        (frames.len() + audio.len() + ui.len() + memories.len()) * 256
-            + snapshots.len() * 50_000,
+        (frames.len() + audio.len() + ui.len() + memories.len()) * 256 + snapshots.len() * 50_000,
     );
     for f in frames {
         let rec = TelemetryRecord::Frame {

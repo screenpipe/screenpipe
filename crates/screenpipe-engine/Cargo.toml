@@ -90,7 +90,7 @@ reqwest = { workspace = true }
 # (see src/privacy_filter.rs). Without this, a MITM or compromised CA could
 # observe unredacted text on its way to the enclave.
 # Upstream tinfoilsh/tinfoil-rs main, post-#21 (the ring-backend fix).
-tinfoil = { git = "https://github.com/tinfoilsh/tinfoil-rs" }
+tinfoil = { git = "https://github.com/tinfoilsh/tinfoil-rs", rev = "82143d767b540195dea265df0b01c4b4fc93c424" }
 
 # Concurrency
 crossbeam = { workspace = true }
@@ -214,7 +214,7 @@ windows = { version = "0.58", features = [
 socket2 = "0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { git = "https://github.com/yury/cidre.git", features = ["ax", "ns", "av", "blocks"] }
+cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a", features = ["ax", "ns", "av", "blocks"] }
 tracing-oslog = { workspace = true }
 
 [package.metadata.cargo-machete]

@@ -245,9 +245,7 @@ fn get_effective_recording_status() -> RecordingStatus {
             if *status == RecordingStatus::Starting
                 && matches!(
                     real,
-                    RecordingStatus::Error
-                        | RecordingStatus::Paused
-                        | RecordingStatus::Stopped
+                    RecordingStatus::Error | RecordingStatus::Paused | RecordingStatus::Stopped
                 )
             {
                 *opt = None;
@@ -733,9 +731,8 @@ fn create_dynamic_menu(
                 Some(f) => format!("Stop HD recording (~{} fps, {} {})", f, remaining, why),
                 None => format!("Stop HD recording ({} {})", remaining, why),
             };
-            menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id("stop_hd_recording", label).build(app)?,
-            );
+            menu_builder = menu_builder
+                .item(&MenuItemBuilder::with_id("stop_hd_recording", label).build(app)?);
             // "Just realized I want to keep recording" path. +30 min is
             // the most common "one more demo / one more topic" extension;
             // bigger bumps go via the API or restart timer from scratch.

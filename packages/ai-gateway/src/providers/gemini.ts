@@ -650,7 +650,15 @@ export class GeminiProvider implements AIProvider {
 		const converted: any = { type: rawType.toUpperCase() };
 
 		if (params.description) converted.description = params.description;
-		if (params.enum) converted.enum = params.enum;
+		// Gemini requires enum values to be TYPE_STRING regardless of the
+		// declared property type — upstream tools with integer/boolean enums
+		// (e.g. `enum: [4, 5, 6, 7]`) 400 with "Invalid value at … (TYPE_STRING)".
+		// Coerce every entry to string so the request survives. SCREENPIPE-AI-PROXY-8.
+		if (Array.isArray(params.enum)) {
+			converted.enum = params.enum.map((v: unknown) =>
+				typeof v === 'string' ? v : String(v)
+			);
+		}
 
 		if (rawType === 'object' || params.properties) {
 			converted.type = 'OBJECT';

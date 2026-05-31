@@ -32,7 +32,7 @@ thiserror = "1"
 # redaction service. See adapters/tinfoil.rs for the threat model
 # (without this a compromised CA can still observe unredacted text in
 # transit even though the enclave itself is honest).
-tinfoil = { git = "https://github.com/tinfoilsh/tinfoil-rs" }
+tinfoil = { git = "https://github.com/tinfoilsh/tinfoil-rs", rev = "82143d767b540195dea265df0b01c4b4fc93c424" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

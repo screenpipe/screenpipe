@@ -35,17 +35,26 @@ pub async fn vault_status(State(state): State<Arc<AppState>>) -> JsonResponse<Va
     }))
 }
 
+#[derive(Deserialize, OaSchema)]
+pub struct LockRequest {
+    pub password: String,
+}
+
 /// POST /vault/lock
 #[oasgen]
 pub async fn vault_lock(
     State(state): State<Arc<AppState>>,
+    JsonResponse(body): JsonResponse<LockRequest>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    match state.vault.lock().await {
+    match state.vault.lock(&body.password).await {
         Ok(_progress_rx) => Ok(JsonResponse(json!({ "success": true }))),
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            JsonResponse(json!({ "error": e.to_string() })),
-        )),
+        Err(e) => {
+            let status = match &e {
+                screenpipe_vault::VaultError::WrongPassword => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            Err((status, JsonResponse(json!({ "error": e.to_string() }))))
+        }
     }
 }
 

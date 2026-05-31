@@ -44,7 +44,7 @@ screenpipe-db = { path = "../screenpipe-db" }
 # the engine. Without this, `TranscriptionEngine::new` returns
 # `Disabled` while audiopipe's background download thread runs and the
 # eval silently emits empty hypotheses.
-audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", branch = "main", default-features = false, features = ["parakeet"] }
+audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", rev = "2fd5c360651157a5df504394066e509ad4d1bdc9", default-features = false, features = ["parakeet"] }
 
 [dev-dependencies]
 tempfile = "3.3.0"

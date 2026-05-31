@@ -89,6 +89,10 @@ interface UseChatConversationsOpts {
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
   setPastedImages: Dispatch<SetStateAction<string[]>>;
+  // Optional so existing call-sites (other than StandaloneChat) don't have
+  // to provide it; if absent, attached-doc chips simply aren't cleared on
+  // new-chat / load-conversation (same behavior as before this feature).
+  setAttachedDocs?: Dispatch<SetStateAction<any[]>>;
   settings: any;
   selectedPreset?: AIPreset | null;
   inlineHistoryEnabled?: boolean;
@@ -124,6 +128,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setIsLoading,
     setIsStreaming,
     setPastedImages,
+    setAttachedDocs,
     settings,
     selectedPreset,
     inlineHistoryEnabled = true,
@@ -662,6 +667,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
+          ...((m as any).attachments?.length ? { attachments: (m as any).attachments } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
           ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
@@ -979,6 +985,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piContentBlocksRef.current = [];
     setIsLoading(false);
     setIsStreaming(false);
+    // Attached docs are scoped to the chat the user was composing in.
+    // Switching to another conversation should not carry them over
+    // (otherwise the next send into the new chat would silently inject
+    // PDFs the user thought belonged to the previous thread).
+    setAttachedDocs?.([]);
 
     // Switch to this conversation's session. Pair the panel's ref
     // switch with `setCurrent` on the store so the router's
@@ -1226,6 +1237,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
+          ...((m as any).attachments?.length ? { attachments: (m as any).attachments } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
           ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
@@ -1340,6 +1352,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (inputRef.current) inputRef.current.style.height = "auto";
     setShowHistory(false);
     setPastedImages([]);
+    // Clear any in-progress doc attachments — they belong to the chat the
+    // user was on, not to the new one we're switching to.
+    setAttachedDocs?.([]);
 
     // New session ID — Pi will be started fresh when the first message is sent.
     // Pair with setCurrent so the router immediately knows the new id is

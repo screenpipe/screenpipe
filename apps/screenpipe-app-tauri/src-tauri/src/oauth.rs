@@ -467,12 +467,8 @@ pub async fn oauth_status(
     // not a user-initiated disconnect. Surface that distinction so the UI can
     // show "needs attention" instead of pushing the user to reconnect blindly.
     let needs_attention = !connected
-        && oauth::oauth_instance_token_exists(
-            store.as_ref(),
-            &integration_id,
-            instance.as_deref(),
-        )
-        .await;
+        && oauth::oauth_instance_token_exists(store.as_ref(), &integration_id, instance.as_deref())
+            .await;
 
     Ok(OAuthStatus {
         connected,

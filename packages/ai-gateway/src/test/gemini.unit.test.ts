@@ -142,6 +142,29 @@ describe('GeminiProvider tool schema conversion (Sentry SCREENPIPE-AI-PROXY-9)',
 		expect(out.properties.status.enum).toEqual(['ok', 'error']);
 	});
 
+	it('coerces non-string enum values to strings (SCREENPIPE-AI-PROXY-8)', () => {
+		// Gemini requires TYPE_STRING enum entries — upstream tools with
+		// numeric/boolean enums (e.g. priority levels [1,2,3,4]) 400 otherwise.
+		const out = convert({
+			type: 'object',
+			properties: {
+				priority: { type: 'integer', enum: [1, 2, 3, 4] },
+				active: { type: 'boolean', enum: [true, false] },
+			},
+		});
+		expect(out.properties.priority.enum).toEqual(['1', '2', '3', '4']);
+		expect(out.properties.active.enum).toEqual(['true', 'false']);
+	});
+
+	it('drops enum when params.enum is not an array', () => {
+		const out = convert({
+			type: 'string',
+			// malformed upstream schema — `enum` should be array but came as object
+			enum: { invalid: 'shape' } as any,
+		});
+		expect(out.enum).toBeUndefined();
+	});
+
 	it('preserves required arrays at every depth', () => {
 		const out = convert({
 			type: 'object',

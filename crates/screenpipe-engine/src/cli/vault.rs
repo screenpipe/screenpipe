@@ -40,8 +40,24 @@ pub async fn handle_vault_command(command: &VaultCommand) -> anyhow::Result<()> 
             println!("vault set up successfully");
         }
 
-        VaultCommand::Lock { .. } => {
-            let _progress_rx = vault.lock().await?;
+        VaultCommand::Lock { port } => {
+            // Locking encrypts db.sqlite (+ WAL/SHM) and every file under data/
+            // in place. A running daemon still holds the DB pool open and keeps
+            // writing frames/audio, so encrypting underneath it silently drops
+            // those writes and can corrupt in-flight media. Nothing here can stop
+            // the daemon's capture loop and close its pool cleanly today, so
+            // refuse to lock while a daemon is detected rather than risk the DB.
+            // (unlock is symmetric — it assumes the server is not running.)
+            if daemon_running(*port).await {
+                anyhow::bail!(
+                    "screenpipe is running on port {port} — stop it first (quit the app, \
+                     or kill the `screenpipe` process), then run `screenpipe vault lock` \
+                     again. pass --port if the daemon listens on a non-default port."
+                );
+            }
+
+            let password = read_password("vault password: ")?;
+            let _progress_rx = vault.lock(&password).await?;
             // Wait for encryption to complete
             loop {
                 let state = vault.state().await;
@@ -86,4 +102,14 @@ fn read_password(prompt: &str) -> anyhow::Result<String> {
     eprint!("{}", prompt);
     let password = rpassword::read_password()?;
     Ok(password)
+}
+
+/// True if something is listening on `127.0.0.1:<port>` — used to detect a
+/// running screenpipe daemon so we refuse to lock the vault underneath it.
+/// Fails closed: a port squatter reads as "running" and blocks the lock, which
+/// is the safe direction for a destructive in-place encryption.
+async fn daemon_running(port: u16) -> bool {
+    tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .is_ok()
 }

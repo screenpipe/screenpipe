@@ -119,7 +119,11 @@ impl VaultManager {
     ///
     /// The caller MUST stop recording and close the DB pool BEFORE calling this.
     /// Returns a progress receiver for UI display.
-    pub async fn lock(&self) -> VaultResult<watch::Receiver<MigrationProgress>> {
+    ///
+    /// `password` is only consulted when the master key is not already in
+    /// memory (e.g. lock invoked from a separate CLI process). If the key is
+    /// loaded, the password argument is ignored.
+    pub async fn lock(&self, password: &str) -> VaultResult<watch::Receiver<MigrationProgress>> {
         let state = self.state.read().await.clone();
         match state {
             VaultState::None => return Err(VaultError::NotSetUp),
@@ -130,15 +134,30 @@ impl VaultManager {
             VaultState::Unlocked => {}
         }
 
-        // Take the key out of the lock — this zeroizes it from the shared state immediately
+        // Derive master key from password (handles the case where the key isn't
+        // already in memory, e.g. separate CLI invocation)
         let key = {
             let mut guard = self.master_key.write().await;
-            guard
-                .take()
-                .ok_or(VaultError::Other("master key not in memory".into()))?
+            match guard.take() {
+                Some(k) => k,
+                None => {
+                    let meta_path = self.screenpipe_dir.join("vault.meta");
+                    let meta_json = std::fs::read_to_string(&meta_path)?;
+                    let meta: VaultMeta = serde_json::from_str(&meta_json)
+                        .map_err(|e| VaultError::Other(format!("corrupt vault.meta: {}", e)))?;
+                    let password_key = crypto::derive_key(password, &meta.salt)?;
+                    let master_key_bytes =
+                        crypto::decrypt_small(&meta.encrypted_master_key, &password_key)
+                            .map_err(|_| VaultError::WrongPassword)?;
+                    if master_key_bytes.len() != KEY_SIZE {
+                        return Err(VaultError::Crypto("invalid master key length".into()));
+                    }
+                    let mut mk = Zeroizing::new([0u8; KEY_SIZE]);
+                    mk.copy_from_slice(&master_key_bytes);
+                    mk
+                }
+            }
         };
-        // Copy key bytes for the encryption task. The Zeroizing wrapper on `key`
-        // will zeroize its copy when dropped at the end of this scope.
         let key_bytes: [u8; KEY_SIZE] = *key;
 
         let (progress_tx, progress_rx) = watch::channel(MigrationProgress {
@@ -315,7 +334,7 @@ mod tests {
         assert!(vault.master_key().await.is_some());
 
         // Lock
-        let _rx = vault.lock().await.unwrap();
+        let _rx = vault.lock("test-password").await.unwrap();
         // Wait for lock to complete
         loop {
             if vault.state().await == VaultState::Locked {
@@ -369,7 +388,7 @@ mod tests {
         let vault = VaultManager::new(dir.path().to_path_buf());
         vault.setup("pw").await.unwrap();
 
-        let _rx = vault.lock().await.unwrap();
+        let _rx = vault.lock("pw").await.unwrap();
         loop {
             if vault.state().await == VaultState::Locked {
                 break;
@@ -378,13 +397,59 @@ mod tests {
         }
 
         // Double lock should error
-        assert!(matches!(vault.lock().await, Err(VaultError::AlreadyLocked)));
+        assert!(matches!(vault.lock("pw").await, Err(VaultError::AlreadyLocked)));
     }
 
     #[tokio::test]
     async fn test_lock_without_setup_errors() {
         let dir = tempfile::tempdir().unwrap();
         let vault = VaultManager::new(dir.path().to_path_buf());
-        assert!(matches!(vault.lock().await, Err(VaultError::NotSetUp)));
+        assert!(matches!(vault.lock("pw").await, Err(VaultError::NotSetUp)));
+    }
+
+    // Regression test for the bug fixed in PR #3585: `vault lock` failed with
+    // "master key not in memory" when invoked as a separate CLI process,
+    // because that process built a fresh VaultManager with no key loaded.
+    // Pre-fix this scenario errored out; post-fix it derives the key from the
+    // supplied password.
+    #[tokio::test]
+    async fn test_lock_derives_key_from_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join("test.jpg"), b"fake jpeg data").unwrap();
+        std::fs::write(dir.path().join("db.sqlite"), b"fake sqlite data").unwrap();
+
+        // First manager: set up the vault, then drop it so the in-memory key
+        // is gone.
+        let vault = VaultManager::new(dir.path().to_path_buf());
+        vault.setup("correct-password").await.unwrap();
+        drop(vault);
+
+        // Second manager: simulates a separate CLI invocation. vault.meta
+        // exists, no sentinel, db.sqlite is not encrypted -> state is Unlocked
+        // but master_key is None. This is the exact pre-fix failure mode.
+        let vault = VaultManager::new(dir.path().to_path_buf());
+        assert_eq!(vault.state().await, VaultState::Unlocked);
+        assert!(vault.master_key().await.is_none());
+
+        // Wrong password -> WrongPassword, state unchanged.
+        assert!(matches!(
+            vault.lock("wrong-password").await,
+            Err(VaultError::WrongPassword)
+        ));
+        assert_eq!(vault.state().await, VaultState::Unlocked);
+
+        // Correct password -> lock succeeds.
+        let _rx = vault.lock("correct-password").await.unwrap();
+        loop {
+            if vault.state().await == VaultState::Locked {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+        assert!(dir.path().join(".vault_locked").exists());
+        assert!(crypto::is_encrypted_file(&dir.path().join("db.sqlite")).unwrap());
+        assert!(crypto::is_encrypted_file(&data_dir.join("test.jpg")).unwrap());
     }
 }

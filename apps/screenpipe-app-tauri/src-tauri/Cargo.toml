@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.4.297"
+version = "2.4.300"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -93,7 +93,7 @@ arboard = "3.4"
 sysinfo = "=0.29.0"
 
 # hakc
-fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 
 # server
 axum = "0.6.0" # or your current version
@@ -191,7 +191,7 @@ objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
 # bunch of hack for permissions
 core-graphics-helmer-fork = "0.24.0"
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b" }
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "18ffb9a201fbf6fedfaa382fd4b92315ea30ab1a" }
 # Owned-browser cookie inheritance (see src/owned_browser_cookies.rs):
 # read Arc/Chrome's `Cookies` SQLite, pull the AES-128 key from the
 # macOS Keychain (`Arc Safe Storage`), AES-CBC decrypt each
@@ -210,7 +210,7 @@ sha1 = "0.10"
 winreg = "0.52.0"
 lazy_static = "1.5.0"
 image = "0.25.5"
-windows-icons = { git = "https://github.com/tribhuwan-kumar/windows-icons.git" }
+windows-icons = { git = "https://github.com/tribhuwan-kumar/windows-icons.git", rev = "4dcd086b36bed286181cb87636ad6eb058ab7684" }
 base64 = "0.22.1"
 aes-gcm = "0.10"
 rusqlite = { version = "0.29.0", features = ["bundled"] }

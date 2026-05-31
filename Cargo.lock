@@ -27,7 +27,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "accessibility"
 version = "0.3.0"
-source = "git+https://github.com/eiz/accessibility.git?branch=master#173e898d4a52ee0afe0224ecb458d324057856e7"
+source = "git+https://github.com/eiz/accessibility.git?rev=173e898d4a52ee0afe0224ecb458d324057856e7#173e898d4a52ee0afe0224ecb458d324057856e7"
 dependencies = [
  "accessibility-sys",
  "cocoa",
@@ -40,7 +40,7 @@ dependencies = [
 [[package]]
 name = "accessibility-sys"
 version = "0.2.0"
-source = "git+https://github.com/eiz/accessibility.git?branch=master#173e898d4a52ee0afe0224ecb458d324057856e7"
+source = "git+https://github.com/eiz/accessibility.git?rev=173e898d4a52ee0afe0224ecb458d324057856e7#173e898d4a52ee0afe0224ecb458d324057856e7"
 dependencies = [
  "core-foundation-sys",
 ]
@@ -277,7 +277,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/divanshu-go/audiopipe.git?branch=main#2fd5c360651157a5df504394066e509ad4d1bdc9"
+source = "git+https://github.com/divanshu-go/audiopipe.git?rev=2fd5c360651157a5df504394066e509ad4d1bdc9#2fd5c360651157a5df504394066e509ad4d1bdc9"
 dependencies = [
  "cc",
 ]
@@ -644,7 +644,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/divanshu-go/audiopipe.git?branch=main#2fd5c360651157a5df504394066e509ad4d1bdc9"
+source = "git+https://github.com/divanshu-go/audiopipe.git?rev=2fd5c360651157a5df504394066e509ad4d1bdc9#2fd5c360651157a5df504394066e509ad4d1bdc9"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -1429,6 +1429,18 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.1"
+source = "git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a#8481f3f0dc7dd39bb5be80d9424bfac0cad3801a"
+dependencies = [
+ "cc",
+ "cidre-macros 0.5.0",
+ "half",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "cidre"
+version = "0.15.1"
 source = "git+https://github.com/yury/cidre.git#8481f3f0dc7dd39bb5be80d9424bfac0cad3801a"
 dependencies = [
  "cc",
@@ -1795,10 +1807,10 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/screenpipe/cpal.git?branch=main#99f7c0f175217b5e47e4e454acbc02089d1fdd29"
+source = "git+https://github.com/screenpipe/cpal.git?rev=99f7c0f175217b5e47e4e454acbc02089d1fdd29#99f7c0f175217b5e47e4e454acbc02089d1fdd29"
 dependencies = [
  "alsa",
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "core-foundation-sys",
  "coreaudio-rs",
  "dasp_sample",
@@ -2997,7 +3009,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-sidecar"
 version = "2.5.0"
-source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?branch=main#b0f48a514235d1278d860f4a0af66aa9d6e1618d"
+source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?rev=b0f48a514235d1278d860f4a0af66aa9d6e1618d#b0f48a514235d1278d860f4a0af66aa9d6e1618d"
 dependencies = [
  "anyhow",
  "tar",
@@ -3823,7 +3835,7 @@ checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 [[package]]
 name = "hf-hub"
 version = "0.3.2"
-source = "git+https://github.com/neo773/hf-hub#437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760"
+source = "git+https://github.com/neo773/hf-hub?rev=437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760#437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760"
 dependencies = [
  "dirs 5.0.1",
  "futures",
@@ -7042,7 +7054,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/divanshu-go/audiopipe.git?branch=main#2fd5c360651157a5df504394066e509ad4d1bdc9"
+source = "git+https://github.com/divanshu-go/audiopipe.git?rev=2fd5c360651157a5df504394066e509ad4d1bdc9#2fd5c360651157a5df504394066e509ad4d1bdc9"
 dependencies = [
  "cc",
  "cmake",
@@ -7884,7 +7896,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 [[package]]
 name = "rusty-tesseract"
 version = "1.1.10"
-source = "git+https://github.com/screenpipe/rusty-tesseract.git?branch=main#08346c1de08d122c7121425abc79081c30dbf778"
+source = "git+https://github.com/screenpipe/rusty-tesseract.git?rev=08346c1de08d122c7121425abc79081c30dbf778#08346c1de08d122c7121425abc79081c30dbf778"
 dependencies = [
  "dirs 5.0.1",
  "image",
@@ -7991,9 +8003,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs#b7f48a1236b2339350baa1375a805c7ce32f88df"
+source = "git+https://github.com/screenpipe/sck-rs?rev=b7f48a1236b2339350baa1375a805c7ce32f88df#b7f48a1236b2339350baa1375a805c7ce32f88df"
 dependencies = [
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image",
  "once_cell",
  "thiserror 1.0.69",
@@ -8065,7 +8077,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "chrono",
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
  "clap",
  "cpal",
  "criterion",
@@ -8295,7 +8307,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "chrono",
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
  "clap",
  "colored",
  "console-subscriber",
@@ -8442,7 +8454,7 @@ dependencies = [
  "atspi-proxies",
  "base64 0.22.1",
  "chrono",
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
  "core-foundation 0.10.1",
  "core-graphics",
  "criterion",
@@ -10022,7 +10034,7 @@ dependencies = [
 [[package]]
 name = "tinfoil"
 version = "0.1.0"
-source = "git+https://github.com/tinfoilsh/tinfoil-rs#82143d767b540195dea265df0b01c4b4fc93c424"
+source = "git+https://github.com/tinfoilsh/tinfoil-rs?rev=82143d767b540195dea265df0b01c4b4fc93c424#82143d767b540195dea265df0b01c4b4fc93c424"
 dependencies = [
  "async-openai",
  "async-stream",
@@ -10906,7 +10918,7 @@ dependencies = [
 [[package]]
 name = "vad-rs"
 version = "0.2.0"
-source = "git+https://github.com/divanshu-go/vad-rs-1.git?branch=main#b14b26ec7093f5398ef6658020259cd7c130ea6c"
+source = "git+https://github.com/divanshu-go/vad-rs-1.git?rev=b14b26ec7093f5398ef6658020259cd7c130ea6c#b14b26ec7093f5398ef6658020259cd7c130ea6c"
 dependencies = [
  "eyre",
  "ndarray",

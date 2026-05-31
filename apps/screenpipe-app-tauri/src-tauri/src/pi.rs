@@ -561,8 +561,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
                         }
                         removed_legacy = legacy_keys.len();
                         if deps_obj.get("@anthropic-ai/sdk") != Some(&expected_sdk) {
-                            deps_obj
-                                .insert("@anthropic-ai/sdk".to_string(), expected_sdk.clone());
+                            deps_obj.insert("@anthropic-ai/sdk".to_string(), expected_sdk.clone());
                             changed = true;
                         }
                         if deps_obj.get("@earendil-works/pi-coding-agent")
@@ -574,9 +573,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
                             );
                             changed = true;
                         }
-                        if deps_obj.get("@earendil-works/pi-ai")
-                            != Some(&expected_pi_ai_version)
-                        {
+                        if deps_obj.get("@earendil-works/pi-ai") != Some(&expected_pi_ai_version) {
                             deps_obj.insert(
                                 "@earendil-works/pi-ai".to_string(),
                                 expected_pi_ai_version.clone(),
@@ -2562,10 +2559,7 @@ pub fn ensure_pi_installed_background() {
                                 }
                                 Err(e) => {
                                     error!("Pi upgrade/fix: bun error: {}", e);
-                                    set_pi_install_error(format!(
-                                        "could not spawn bun: {}",
-                                        e
-                                    ));
+                                    set_pi_install_error(format!("could not spawn bun: {}", e));
                                 }
                             }
                             PI_INSTALL_DONE.store(true, Ordering::SeqCst);

@@ -123,6 +123,20 @@ describe('OpenAI API accounting and routing', () => {
 		expect(isZeroCostModel('gpt-5.4-nano')).toBe(false);
 	});
 
+	it('does not crash when model is undefined / null / empty (SCREENPIPE-AI-PROXY-1D)', () => {
+		// Request bodies without a model field used to crash findPricing at
+		// `model.toLowerCase()` — propagated through isZeroCostModel and
+		// killed the request handler.
+		expect(() => isZeroCostModel(undefined as any)).not.toThrow();
+		expect(() => isZeroCostModel(null as any)).not.toThrow();
+		expect(() => isZeroCostModel('')).not.toThrow();
+		expect(isZeroCostModel(undefined as any)).toBe(false);
+		expect(inferProvider(undefined as any)).toBe('unknown');
+		expect(inferProvider(null as any)).toBe('unknown');
+		// getModelCost returns the conservative fallback when pricing is null
+		expect(getModelCost(undefined as any, null, null)).toBe(0.01);
+	});
+
 	it('assigns quota weights for expensive and cheap OpenAI models', () => {
 		expect(getModelWeight('gpt-5.5-pro')).toBe(36);
 		expect(getModelWeight('gpt-5.5')).toBe(6);

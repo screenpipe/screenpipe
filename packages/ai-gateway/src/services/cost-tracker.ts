@@ -77,7 +77,10 @@ const DEFAULT_OUTPUT_TOKENS = 500;
  * Fuzzy-match a model string to a pricing entry.
  * E.g. "claude-haiku-4-5-20251001" → "claude-haiku-4-5"
  */
-function findPricing(model: string): ModelPricing | null {
+function findPricing(model: string | null | undefined): ModelPricing | null {
+  // Callers (isZeroCostModel, getModelCost, inferProvider) are reached from
+  // request-parsing paths that don't enforce a model field. SCREENPIPE-AI-PROXY-1D.
+  if (typeof model !== 'string' || model.length === 0) return null;
   const lower = model.toLowerCase();
   // Exact match first
   if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
@@ -96,7 +99,7 @@ function findPricing(model: string): ModelPricing | null {
  * When tokens are unknown (streaming without usage tracking), estimates based
  * on average request size and the model's actual pricing — NOT a flat fallback.
  */
-export function getModelCost(model: string, inputTokens: number | null, outputTokens: number | null): number {
+export function getModelCost(model: string | null | undefined, inputTokens: number | null, outputTokens: number | null): number {
   const pricing = findPricing(model);
   if (!pricing) {
     // Unknown model — use a conservative estimate
@@ -153,7 +156,8 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
 /**
  * Determine provider from model name.
  */
-export function inferProvider(model: string): string {
+export function inferProvider(model: string | null | undefined): string {
+  if (typeof model !== 'string' || model.length === 0) return 'unknown';
   const lower = model.toLowerCase();
   if (lower.includes('claude')) return 'anthropic';
   if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3') || lower.includes('o4')) return 'openai';
@@ -166,7 +170,7 @@ export function inferProvider(model: string): string {
 }
 
 /** Returns true for models that cost us $0 (free on OpenRouter, free Gemini tier, etc.) */
-export function isZeroCostModel(model: string): boolean {
+export function isZeroCostModel(model: string | null | undefined): boolean {
   const pricing = findPricing(model);
   return pricing !== null && pricing.input === 0 && pricing.output === 0;
 }

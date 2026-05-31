@@ -96,6 +96,16 @@ export interface ChatMessage {
 	 *  or what's sent to the model. */
 	displayContent?: string;
 	images?: any[];
+	/** Non-image attachments (PDF/DOCX/XLSX/text) extracted to text. Only
+	 *  metadata is stored here — the actual extracted text already lives
+	 *  inside `content` (folded in at send time so the model sees it).
+	 *  The renderer reads this to draw attachment cards above the bubble. */
+	attachments?: Array<{
+		name: string;
+		ext: string;
+		charCount: number;
+		truncated: boolean;
+	}>;
 	interruptedBySteer?: boolean;
 	steeredResponse?: boolean;
 	/** Wall-clock work duration for coalesced assistant messages (pipe

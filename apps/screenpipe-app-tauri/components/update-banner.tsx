@@ -73,6 +73,25 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
     const os = platform();
 
     try {
+      // #3622: gate restart on boot-ready. Windows downloadAndInstall calls
+      // process::exit internally, and relaunch() does the same on macOS —
+      // both race onnxruntime teardown against still-initializing native
+      // sessions if startup hasn't finished. Backend waits up to 60s and
+      // returns one of "proceed" | "errored" | "pending".
+      const gate = await invoke<string>("await_safe_restart", { timeoutSecs: 60 });
+      if (gate !== "proceed") {
+        setIsInstalling(false);
+        toast({
+          title: "screenpipe is still starting up",
+          description:
+            gate === "errored"
+              ? "startup error — open settings to see details before restarting"
+              : "finish startup first, then click update again",
+          variant: "destructive",
+        });
+        return;
+      }
+
       // On Windows, the update is not pre-downloaded by the backend (unlike macOS/Linux)
       // We need to check for update, download, and install it before relaunching
       if (os === "windows") {

@@ -11,7 +11,6 @@ import {
   Globe,
   Shield,
   Monitor,
-  Users,
   Loader2,
   AlertCircle,
   RefreshCw,
@@ -27,13 +26,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { WindowPicker } from "./window-picker";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
-import { useTeam } from "@/lib/hooks/use-team";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { useToast } from "@/components/ui/use-toast";
@@ -253,16 +250,12 @@ function EncryptDataCard({
 
 export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
-  const team = useTeam();
-  const isTeamAdmin = !!team.team && team.role === "admin";
   const isEnterprise = useIsEnterpriseBuild();
   const { toast } = useToast();
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-  const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
-  const [pushingFilter, setPushingFilter] = useState<string | null>(null);
   const [picker, setPicker] = useState<"ignored" | "included" | null>(null);
 
   const [liveApiKey, setLiveApiKey] = useState<string | null>(null);
@@ -519,49 +512,6 @@ export function PrivacySection() {
 
   const handleAnalyticsToggle = (checked: boolean) => {
     handleSettingsChange({ analyticsEnabled: checked }, true);
-  };
-
-  const handlePushFilterToTeam = async (
-    configType: string,
-    key: string,
-    filters: string[]
-  ) => {
-    setPushingFilter(key);
-    try {
-      await team.pushConfig(configType, key, { filters });
-      toast({ title: "pushed to team" });
-    } catch (err: any) {
-      toast({
-        title: "failed to push to team",
-        description: err.message,
-        variant: "destructive",
-      });
-    } finally {
-      setPushingFilter(null);
-    }
-  };
-
-  const handleRemoveTeamFilter = async (
-    configType: string,
-    key: string,
-    filterToRemove: string
-  ) => {
-    const config = team.configs?.find(
-      (c) => c.config_type === configType && c.key === key && c.scope === "team"
-    );
-    if (!config) return;
-    const currentFilters: string[] = (config.value as any)?.filters ?? [];
-    const newFilters = currentFilters.filter((f) => f !== filterToRemove);
-    try {
-      await team.pushConfig(configType, key, { filters: newFilters });
-      toast({ title: "team filter removed" });
-    } catch (err: any) {
-      toast({
-        title: "failed to remove team filter",
-        description: err.message,
-        variant: "destructive",
-      });
-    }
   };
 
   // Add one pattern from the WindowPicker. Reuses the MultiSelect change
@@ -1191,544 +1141,108 @@ export function PrivacySection() {
           Content filters
         </h2>
 
-        {/* All | Personal | Shared with team tabs */}
-        {team.team &&
-          (() => {
-            const teamIgnored = new Set(
-              settings.teamFilters?.ignoredWindows ?? []
-            );
-            const teamIncluded = new Set(
-              settings.teamFilters?.includedWindows ?? []
-            );
-            const teamUrls = new Set(
-              settings.teamFilters?.ignoredUrls ?? []
-            );
-            const personalOnlyCount =
-              settings.ignoredWindows.filter((w) => !teamIgnored.has(w))
-                .length +
-              settings.includedWindows.filter((w) => !teamIncluded.has(w))
-                .length +
-              (settings.ignoredUrls || []).filter((u) => !teamUrls.has(u))
-                .length;
-            const teamOnlyCount =
-              teamIgnored.size + teamIncluded.size + teamUrls.size;
-            const allCount = personalOnlyCount + teamOnlyCount;
-            return (
-              <div className="flex items-center gap-4 border-b border-border">
-                {(["all", "personal", "team"] as const).map((tab) => {
-                  const count =
-                    tab === "all"
-                      ? allCount
-                      : tab === "personal"
-                        ? personalOnlyCount
-                        : teamOnlyCount;
-                  const label =
-                    tab === "all"
-                      ? "All"
-                      : tab === "personal"
-                        ? "Personal"
-                        : "Shared with team";
-                  return (
-                    <button
-                      key={tab}
-                      onClick={() => setFilterView(tab)}
-                      className={cn(
-                        "pb-2 text-sm transition-colors duration-150 border-b-2 -mb-px",
-                        filterView === tab
-                          ? "border-foreground text-foreground font-medium"
-                          : "border-transparent text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {label} ({count})
-                    </button>
-                  );
-                })}
-              </div>
-            );
-          })()}
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center space-x-2.5 mb-2">
+              <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                Ignored Apps
+                <HelpTooltip text="Skip captures for these patterns. Plain text (e.g. '1Password') matches the app or any window title that contains it. Use 'App::Title' to scope to one window of an app (e.g. 'Slack::#hr' blocks only #hr in Slack)." />
+              </h3>
+            </div>
+            <div className="ml-[26px]">
+              <MultiSelect
+                options={createWindowOptions(
+                  windowItems || [],
+                  settings.ignoredWindows
+                )}
+                defaultValue={settings.ignoredWindows}
+                value={settings.ignoredWindows}
+                onValueChange={handleIgnoredWindowsChange}
+                placeholder="Select apps to ignore..."
+                allowCustomValues
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] mt-1.5 gap-1.5"
+                onClick={() => setPicker("ignored")}
+              >
+                <FolderTree className="h-3 w-3" /> browse apps & windows
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-        {/* Personal filters (shown in "all" and "personal" views) */}
-        {filterView !== "team" && (
-          <>
-            <Card className="border-border bg-card">
-              <CardContent className="px-3 py-2.5">
-                <div className="flex items-center space-x-2.5 mb-2">
-                  <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Ignored Apps
-                      <HelpTooltip text="Skip captures for these patterns. Plain text (e.g. '1Password') matches the app or any window title that contains it. Use 'App::Title' to scope to one window of an app (e.g. 'Slack::#hr' blocks only #hr in Slack)." />
-                    </h3>
-                    {isTeamAdmin && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 text-[10px] ml-auto cursor-pointer"
-                        disabled={pushingFilter === "ignored_windows"}
-                        onClick={() =>
-                          handlePushFilterToTeam(
-                            "window_filter",
-                            "ignored_windows",
-                            settings.ignoredWindows
-                          )
-                        }
-                      >
-                        {pushingFilter === "ignored_windows" ? (
-                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                        ) : (
-                          <Users className="h-3 w-3 mr-1" />
-                        )}
-                        push to team
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="ml-[26px]">
-                  <MultiSelect
-                    options={createWindowOptions(
-                      windowItems || [],
-                      settings.ignoredWindows
-                    )}
-                    defaultValue={settings.ignoredWindows}
-                    value={settings.ignoredWindows}
-                    onValueChange={handleIgnoredWindowsChange}
-                    placeholder="Select apps to ignore..."
-                    allowCustomValues
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-[11px] mt-1.5 gap-1.5"
-                    onClick={() => setPicker("ignored")}
-                  >
-                    <FolderTree className="h-3 w-3" /> browse apps & windows
-                  </Button>
-                  {filterView === "all" &&
-                    (settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {settings.teamFilters!.ignoredWindows.map((w) => (
-                          <Badge
-                            key={w}
-                            variant="outline"
-                            className="text-[10px] h-5 gap-0.5"
-                          >
-                            <Users className="h-2.5 w-2.5 mr-0.5" />
-                            {w}
-                            {isTeamAdmin && (
-                              <button
-                                onClick={() =>
-                                  handleRemoveTeamFilter(
-                                    "window_filter",
-                                    "ignored_windows",
-                                    w
-                                  )
-                                }
-                                className="ml-0.5 hover:text-destructive"
-                              >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  width="10"
-                                  height="10"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                >
-                                  <path d="M18 6 6 18" />
-                                  <path d="m6 6 12 12" />
-                                </svg>
-                              </button>
-                            )}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                </div>
-              </CardContent>
-            </Card>
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center space-x-2.5 mb-2">
+              <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                Included Apps
+                <HelpTooltip text="When set, only matching windows are captured. Plain text is a global include (e.g. 'Slack' = only Slack). 'App::Title' creates a per-app whitelist (e.g. 'Slack::#engineering' keeps only that channel in Slack; other apps stay unaffected)." />
+              </h3>
+            </div>
+            <div className="ml-[26px]">
+              <MultiSelect
+                options={createWindowOptions(
+                  windowItems || [],
+                  settings.includedWindows
+                )}
+                defaultValue={settings.includedWindows}
+                value={settings.includedWindows}
+                onValueChange={handleIncludedWindowsChange}
+                placeholder="Only capture these apps (optional)..."
+                allowCustomValues
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] mt-1.5 gap-1.5"
+                onClick={() => setPicker("included")}
+              >
+                <FolderTree className="h-3 w-3" /> browse apps & windows
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-            <Card className="border-border bg-card">
-              <CardContent className="px-3 py-2.5">
-                <div className="flex items-center space-x-2.5 mb-2">
-                  <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Included Apps
-                      <HelpTooltip text="When set, only matching windows are captured. Plain text is a global include (e.g. 'Slack' = only Slack). 'App::Title' creates a per-app whitelist (e.g. 'Slack::#engineering' keeps only that channel in Slack; other apps stay unaffected)." />
-                    </h3>
-                    {isTeamAdmin && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 text-[10px] ml-auto cursor-pointer"
-                        disabled={pushingFilter === "included_windows"}
-                        onClick={() =>
-                          handlePushFilterToTeam(
-                            "window_filter",
-                            "included_windows",
-                            settings.includedWindows
-                          )
-                        }
-                      >
-                        {pushingFilter === "included_windows" ? (
-                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                        ) : (
-                          <Users className="h-3 w-3 mr-1" />
-                        )}
-                        push to team
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="ml-[26px]">
-                  <MultiSelect
-                    options={createWindowOptions(
-                      windowItems || [],
-                      settings.includedWindows
-                    )}
-                    defaultValue={settings.includedWindows}
-                    value={settings.includedWindows}
-                    onValueChange={handleIncludedWindowsChange}
-                    placeholder="Only capture these apps (optional)..."
-                    allowCustomValues
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-[11px] mt-1.5 gap-1.5"
-                    onClick={() => setPicker("included")}
-                  >
-                    <FolderTree className="h-3 w-3" /> browse apps & windows
-                  </Button>
-                  {filterView === "all" &&
-                    (settings.teamFilters?.includedWindows?.length ?? 0) >
-                      0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {settings.teamFilters!.includedWindows.map((w) => (
-                          <Badge
-                            key={w}
-                            variant="outline"
-                            className="text-[10px] h-5 gap-0.5"
-                          >
-                            <Users className="h-2.5 w-2.5 mr-0.5" />
-                            {w}
-                            {isTeamAdmin && (
-                              <button
-                                onClick={() =>
-                                  handleRemoveTeamFilter(
-                                    "window_filter",
-                                    "included_windows",
-                                    w
-                                  )
-                                }
-                                className="ml-0.5 hover:text-destructive"
-                              >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  width="10"
-                                  height="10"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                >
-                                  <path d="M18 6 6 18" />
-                                  <path d="m6 6 12 12" />
-                                </svg>
-                              </button>
-                            )}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card">
-              <CardContent className="px-3 py-2.5">
-                <div className="flex items-center space-x-2.5 mb-2">
-                  <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Ignored URLs
-                      <HelpTooltip text="Browser URLs matching these patterns will not be captured. Use for privacy — e.g. add 'bank.com' to skip banking sites." />
-                    </h3>
-                    {isTeamAdmin && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 text-[10px] ml-auto cursor-pointer"
-                        disabled={pushingFilter === "ignored_urls"}
-                        onClick={() =>
-                          handlePushFilterToTeam(
-                            "url_filter",
-                            "ignored_urls",
-                            settings.ignoredUrls || []
-                          )
-                        }
-                      >
-                        {pushingFilter === "ignored_urls" ? (
-                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                        ) : (
-                          <Users className="h-3 w-3 mr-1" />
-                        )}
-                        push to team
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="ml-[26px]">
-                  <MultiSelect
-                    options={createUrlOptions(
-                      urlItems || [],
-                      settings.ignoredUrls || []
-                    )}
-                    defaultValue={settings.ignoredUrls || []}
-                    value={settings.ignoredUrls || []}
-                    onValueChange={handleIgnoredUrlsChange}
-                    placeholder="e.g. wellsfargo.com, chase.com..."
-                    allowCustomValues={true}
-                  />
-                  {(settings.ignoredUrls || []).some(
-                    (url) =>
-                      url.length < 5 ||
-                      ["bank", "pay", "money", "finance"].includes(
-                        url.toLowerCase()
-                      )
-                  ) && (
-                    <p className="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1 mt-1">
-                      <AlertCircle className="h-3 w-3" />
-                      Short patterns may over-match. Use specific domains.
-                    </p>
-                  )}
-                  {filterView === "all" &&
-                    (settings.teamFilters?.ignoredUrls?.length ?? 0) > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {settings.teamFilters!.ignoredUrls.map((u) => (
-                          <Badge
-                            key={u}
-                            variant="outline"
-                            className="text-[10px] h-5 gap-0.5"
-                          >
-                            <Users className="h-2.5 w-2.5 mr-0.5" />
-                            {u}
-                            {isTeamAdmin && (
-                              <button
-                                onClick={() =>
-                                  handleRemoveTeamFilter(
-                                    "url_filter",
-                                    "ignored_urls",
-                                    u
-                                  )
-                                }
-                                className="ml-0.5 hover:text-destructive"
-                              >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  width="10"
-                                  height="10"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                >
-                                  <path d="M18 6 6 18" />
-                                  <path d="m6 6 12 12" />
-                                </svg>
-                              </button>
-                            )}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                </div>
-              </CardContent>
-            </Card>
-          </>
-        )}
-
-        {/* Team-only view */}
-        {filterView === "team" && (
-          <>
-            {(settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
-              <Card className="border-border bg-card">
-                <CardContent className="px-3 py-2.5">
-                  <div className="flex items-center space-x-2.5 mb-2">
-                    <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <h3 className="text-sm font-medium text-foreground">
-                      Ignored Apps
-                    </h3>
-                  </div>
-                  <div className="flex flex-wrap gap-1 ml-[26px]">
-                    {settings.teamFilters!.ignoredWindows.map((w) => (
-                      <Badge
-                        key={w}
-                        variant="outline"
-                        className="text-[10px] h-5 gap-0.5"
-                      >
-                        <Users className="h-2.5 w-2.5 mr-0.5" />
-                        {w}
-                        {isTeamAdmin && (
-                          <button
-                            onClick={() =>
-                              handleRemoveTeamFilter(
-                                "window_filter",
-                                "ignored_windows",
-                                w
-                              )
-                            }
-                            className="ml-0.5 hover:text-destructive"
-                          >
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              width="10"
-                              height="10"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M18 6 6 18" />
-                              <path d="m6 6 12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </Badge>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {(settings.teamFilters?.includedWindows?.length ?? 0) > 0 && (
-              <Card className="border-border bg-card">
-                <CardContent className="px-3 py-2.5">
-                  <div className="flex items-center space-x-2.5 mb-2">
-                    <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <h3 className="text-sm font-medium text-foreground">
-                      Included Apps
-                    </h3>
-                  </div>
-                  <div className="flex flex-wrap gap-1 ml-[26px]">
-                    {settings.teamFilters!.includedWindows.map((w) => (
-                      <Badge
-                        key={w}
-                        variant="outline"
-                        className="text-[10px] h-5 gap-0.5"
-                      >
-                        <Users className="h-2.5 w-2.5 mr-0.5" />
-                        {w}
-                        {isTeamAdmin && (
-                          <button
-                            onClick={() =>
-                              handleRemoveTeamFilter(
-                                "window_filter",
-                                "included_windows",
-                                w
-                              )
-                            }
-                            className="ml-0.5 hover:text-destructive"
-                          >
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              width="10"
-                              height="10"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M18 6 6 18" />
-                              <path d="m6 6 12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </Badge>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {(settings.teamFilters?.ignoredUrls?.length ?? 0) > 0 && (
-              <Card className="border-border bg-card">
-                <CardContent className="px-3 py-2.5">
-                  <div className="flex items-center space-x-2.5 mb-2">
-                    <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <h3 className="text-sm font-medium text-foreground">
-                      Ignored URLs
-                    </h3>
-                  </div>
-                  <div className="flex flex-wrap gap-1 ml-[26px]">
-                    {settings.teamFilters!.ignoredUrls.map((u) => (
-                      <Badge
-                        key={u}
-                        variant="outline"
-                        className="text-[10px] h-5 gap-0.5"
-                      >
-                        <Users className="h-2.5 w-2.5 mr-0.5" />
-                        {u}
-                        {isTeamAdmin && (
-                          <button
-                            onClick={() =>
-                              handleRemoveTeamFilter(
-                                "url_filter",
-                                "ignored_urls",
-                                u
-                              )
-                            }
-                            className="ml-0.5 hover:text-destructive"
-                          >
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              width="10"
-                              height="10"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M18 6 6 18" />
-                              <path d="m6 6 12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </Badge>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {(settings.teamFilters?.ignoredWindows?.length ?? 0) === 0 &&
-              (settings.teamFilters?.includedWindows?.length ?? 0) === 0 &&
-              (settings.teamFilters?.ignoredUrls?.length ?? 0) === 0 && (
-                <Card className="border-border bg-card">
-                  <CardContent className="py-8 text-center text-muted-foreground">
-                    <p>no team filters shared yet</p>
-                    {isTeamAdmin && (
-                      <p className="text-sm mt-2">
-                        use &quot;push to team&quot; to share your filters
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center space-x-2.5 mb-2">
+              <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                Ignored URLs
+                <HelpTooltip text="Browser URLs matching these patterns will not be captured. Use for privacy — e.g. add 'bank.com' to skip banking sites." />
+              </h3>
+            </div>
+            <div className="ml-[26px]">
+              <MultiSelect
+                options={createUrlOptions(
+                  urlItems || [],
+                  settings.ignoredUrls || []
+                )}
+                defaultValue={settings.ignoredUrls || []}
+                value={settings.ignoredUrls || []}
+                onValueChange={handleIgnoredUrlsChange}
+                placeholder="e.g. wellsfargo.com, chase.com..."
+                allowCustomValues={true}
+              />
+              {(settings.ignoredUrls || []).some(
+                (url) =>
+                  url.length < 5 ||
+                  ["bank", "pay", "money", "finance"].includes(
+                    url.toLowerCase()
+                  )
+              ) && (
+                <p className="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1 mt-1">
+                  <AlertCircle className="h-3 w-3" />
+                  Short patterns may over-match. Use specific domains.
+                </p>
               )}
-          </>
-        )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Telemetry */}

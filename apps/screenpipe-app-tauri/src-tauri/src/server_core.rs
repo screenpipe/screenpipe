@@ -403,11 +403,7 @@ impl ServerCore {
                     let memory_sync = Arc::new(
                         screenpipe_engine::external_memory_sync::ExternalMemorySyncScheduler::new(),
                     );
-                    memory_sync.start(
-                        db.clone(),
-                        Some(store_arc.clone()),
-                        local_data_dir.clone(),
-                    );
+                    memory_sync.start(db.clone(), Some(store_arc.clone()), local_data_dir.clone());
                     server.external_memory_sync = Some(memory_sync);
 
                     server.secret_store = Some(store_arc);
@@ -630,10 +626,7 @@ impl ServerCore {
         // authenticates redactor requests. Without this the worker logs
         // "no api key — requests will be un-authenticated" on every
         // restart even when the user is signed in.
-        let tinfoil_api_key = config
-            .user_id
-            .clone()
-            .filter(|s| !s.is_empty());
+        let tinfoil_api_key = config.user_id.clone().filter(|s| !s.is_empty());
 
         // One shutdown signal, shared across both worker spawn paths and
         // stored on Self for `shutdown()` to fire on app quit.
@@ -706,8 +699,7 @@ impl ServerCore {
                         "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
                          cached at ~/.screenpipe/models/v45_phase3_onnx/)"
                     );
-                    let onnx_result =
-                        OnnxRedactor::load_or_download(OnnxConfig::default()).await;
+                    let onnx_result = OnnxRedactor::load_or_download(OnnxConfig::default()).await;
                     let pipeline = match onnx_result {
                         Ok(adapter) => {
                             info!(
@@ -780,12 +772,11 @@ impl ServerCore {
                     has_api_key = tinfoil_api_key.is_some(),
                     "starting async image-PII worker (backend=tinfoil)"
                 );
-                let detector =
-                    Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
-                        api_key: tinfoil_api_key.clone(),
-                        labels: pii_labels.clone(),
-                        ..Default::default()
-                    })) as Arc<dyn ImageRedactor>;
+                let detector = Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
+                    api_key: tinfoil_api_key.clone(),
+                    labels: pii_labels.clone(),
+                    ..Default::default()
+                })) as Arc<dyn ImageRedactor>;
                 let _ = ImageWorker::new(
                     pool,
                     detector,

@@ -500,6 +500,9 @@ async fn main() -> anyhow::Result<()> {
                             r"no such table: main\.speaker_embeddings",
                             // Concurrent DB access / user ran CLI while app was running
                             r"database is locked",
+                            // Port conflict — another screenpipe instance is already bound
+                            // (CLI-2J: 659 events / 649 users — user environment, not a bug)
+                            r"you're likely already running screenpipe instance",
                             // Broken Homebrew install — external dylib missing
                             r"Library not loaded.*libx265\.",
                             // Linux system library missing — distro-local, not our bug
