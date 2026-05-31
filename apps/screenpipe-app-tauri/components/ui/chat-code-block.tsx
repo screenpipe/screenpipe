@@ -37,9 +37,9 @@ export function ChatCodeBlock({
           "absolute right-0 top-0 z-10 inline-flex items-center gap-1 rounded-md",
           "border border-white/10 bg-neutral-900/90 px-2 py-1 text-[10px] font-mono uppercase tracking-wide",
           "!cursor-pointer text-neutral-300 shadow-sm transition-opacity [&_*]:!cursor-pointer",
-          "invisible opacity-0 group-hover:visible group-hover:opacity-100",
-          "group-focus-within:visible group-focus-within:opacity-100",
-          "hover:text-white focus-visible:visible focus-visible:opacity-100"
+          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
+          "group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+          "hover:text-white focus-visible:pointer-events-auto focus-visible:opacity-100"
         )}
         aria-label={copied ? "Copied code" : "Copy code"}
         title={copied ? "Copied" : "Copy"}
