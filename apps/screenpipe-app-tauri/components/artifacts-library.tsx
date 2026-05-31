@@ -44,7 +44,10 @@ function itemKind(item: DisplayItem): string {
 }
 
 function itemSource(item: DisplayItem): string {
-  return item.type === "output" ? item.data.source : item.data.pipe_name;
+  if (item.type === "output") {
+    return item.data.source_type === "chat" ? "chat" : item.data.source;
+  }
+  return item.data.pipe_name;
 }
 
 function itemSourceType(item: DisplayItem): string | null {

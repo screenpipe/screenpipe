@@ -735,6 +735,10 @@ Never fabricate frame IDs or timestamps.
 - Collapsible: \`<details><summary>label</summary>content</details>\` for optional / secondary info
 Don't reach for these on short answers.
 
+# Creating deliverables
+
+When creating a final file the user will want to keep — a note, report, summary, todo list, export, or any finished document — use the save_artifact tool. This saves the file to the user's Artifacts library where they can find, open, and manage it. Use writeFile for scratch files, helper scripts, config edits, and intermediate work that doesn't need to persist as an artifact.
+
 Current time: ${now.toISOString()}
 User's timezone: ${timezone} (UTC${offsetStr})
 User's local time: ${now.toLocaleString()}`;
