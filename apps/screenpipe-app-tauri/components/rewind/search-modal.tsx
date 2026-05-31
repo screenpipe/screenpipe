@@ -9,7 +9,6 @@ import { useKeywordSearchStore, SearchMatch, UiEventResult } from "@/lib/hooks/u
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSearchFocus } from "./hooks/use-search-focus";
 import { listen, emit } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import {
   CHAT_HISTORY_INITIAL_LIMIT,
   listConversations,
@@ -1337,7 +1336,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   useEffect(() => {
     if (!standalone || !isOpen) return;
-    invoke("resize_search_window", { width: 680, height: standaloneTargetH }).catch(() => {});
+    commands.resizeSearchWindow(680, standaloneTargetH).catch(() => {});
   }, [standalone, isOpen, standaloneTargetH]);
 
   if (!isOpen) return null;

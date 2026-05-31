@@ -29,6 +29,7 @@ import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Users, ExternalLink } from "lucide-react";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 
 const TEAM_MARKETING_URL = "https://screenpi.pe/team";
 
@@ -56,7 +57,7 @@ export function TeamSection() {
           </p>
 
           <Button
-            onClick={() => window.open(TEAM_MARKETING_URL, "_blank")}
+            onClick={() => openUrl(TEAM_MARKETING_URL)}
             className="gap-2"
           >
             Open team on the web

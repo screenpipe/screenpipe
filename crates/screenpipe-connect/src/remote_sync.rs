@@ -28,6 +28,8 @@ const FILE_UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// Configuration for remote sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[cfg_attr(feature = "specta", specta(rename = "RemoteSyncConfig"))]
 pub struct SyncConfig {
     pub host: String,
     pub port: u16,
@@ -40,6 +42,8 @@ pub struct SyncConfig {
 
 /// Result of a sync operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[cfg_attr(feature = "specta", specta(rename = "RemoteSyncResult"))]
 pub struct SyncResult {
     pub ok: bool,
     pub files_transferred: u64,
@@ -49,6 +53,7 @@ pub struct SyncResult {
 
 /// An SSH host discovered from ~/.ssh/config or ~/.ssh/known_hosts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct DiscoveredHost {
     pub host: String,
     pub port: u16,

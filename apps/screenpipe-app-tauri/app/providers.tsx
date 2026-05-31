@@ -13,7 +13,7 @@ import { PermissionMonitorProvider } from "@/lib/hooks/use-permission-monitor";
 import { AuthGuard } from "@/lib/auth-guard";
 import { forwardRef } from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { useUpdateListener } from "@/components/update-banner";
 
 /// Global mount point for the updater event listener. Lives here (not in
@@ -65,7 +65,7 @@ export const Providers = forwardRef<
       if (buffer.length === 0) return;
       const entries = buffer;
       buffer = [];
-      invoke("write_browser_logs", { entries }).catch(() => {});
+      commands.writeBrowserLogs(entries).catch(() => {});
     }
 
     function enqueue(level: string, args: unknown[]) {

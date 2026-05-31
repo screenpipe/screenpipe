@@ -6,6 +6,15 @@
 
 export const commands = {
 /**
+ * Frontend-callable gate. The banner awaits this before calling
+ * `downloadAndInstall` (Windows: triggers process::exit internally) or
+ * `relaunch`. Returns one of `"proceed"`, `"errored"`, or `"pending"`
+ * — frontend toasts on the latter two.
+ */
+async awaitSafeRestart(timeoutSecs: number | null) : Promise<string> {
+    return await TAURI_INVOKE("await_safe_restart", { timeoutSecs });
+},
+/**
  * Locate the bundled bun binary so the frontend can write absolute-path
  * MCP configs (e.g. `{ command: <bun>, args: ["x", "screenpipe-mcp@latest"] }`)
  * instead of `npx -y screenpipe-mcp`. npx requires a global Node install
@@ -382,6 +391,21 @@ async ensureWebviewFocus() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Export a recording to `output_path` (an .mp4).
+ *
+ * Pass `meeting_id` to export a meeting (its window is resolved from the DB),
+ * or `start`/`end` for an arbitrary range (`end` defaults to now). Times accept
+ * ISO 8601 or relative (`"2h ago"`, `"now"`). Returns a summary on success.
+ */
+async exportRecording(meetingId: number | null, start: string | null, end: string | null, outputPath: string) : Promise<Result<MeetingExportSummary, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_recording", { meetingId, start, end, outputPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Force-regenerate suggestions immediately, bypassing the scheduler's
  * CPU/power guards. Returns the fresh suggestions and updates the cache.
  */
@@ -568,6 +592,21 @@ async getOnboardingStatus() : Promise<Result<OnboardingStore, string>> {
 }
 },
 /**
+ * Hydrate the frontend banner state on mount. The `update-available` event
+ * is broadcast once when the download completes — if the React app isn't
+ * mounted yet (boot race) or the listener lives on a route the user hasn't
+ * visited yet, that event is lost. The banner calls this command on mount
+ * to pick up state it may have missed.
+ */
+async getPendingUpdate() : Promise<Result<PendingUpdateSnapshot | null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_pending_update") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Get sync configuration.
  */
 async getSyncConfig() : Promise<Result<SyncConfig, string>> {
@@ -684,6 +723,88 @@ async isServerRunning() : Promise<Result<boolean, string>> {
 async listCacheFiles() : Promise<Result<CacheFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_cache_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextAnalyze(imagePath: string, frameId: string, x: number, y: number, w: number, h: number) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_analyze", { imagePath, frameId, x, y, w, h }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextClearHighlights() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_clear_highlights") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextHide() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_hide") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextHighlight(terms: string[]) : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextInit(windowLabel: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_init", { windowLabel }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextIsAvailable() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_is_available") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Prefetch VisionKit analysis for adjacent frames in the background.
+ * Fire-and-forget — results are cached in Swift for instant hits later.
+ */
+async livetextPrefetch(paths: string[]) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_prefetch", { paths }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Place a transparent click guard above the Live Text overlay in the given
+ * rectangle (web/CSS coordinates: origin top-left). Each guard is identified
+ * by a string key (e.g. "navbar", "filters", "scrubber"). This prevents
+ * VisionKit's text-selection hit regions from intercepting clicks on UI controls.
+ */
+async livetextSetGuardRect(key: string, x: number, y: number, w: number, h: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_set_guard_rect", { key, x, y, w, h }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async livetextUpdatePosition(frameId: string, x: number, y: number, w: number, h: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("livetext_update_position", { frameId, x, y, w, h }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -833,6 +954,53 @@ async openViewerWindow(path: string) : Promise<Result<null, string>> {
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Hide the embedded webview without destroying it. Equivalent to calling
+ * `set_bounds` with zero dimensions, but more explicit at the call site.
+ */
+async ownedBrowserHide() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_hide") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Navigate the embedded webview to `url`. Used by the agent (via
+ * `POST /connections/browsers/owned-default/eval`) and by the sidebar
+ * when restoring per-chat state.
+ */
+async ownedBrowserNavigate(url: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async ownedBrowserResolveSessionAccess(requestId: string, allow: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_resolve_session_access", { requestId, allow }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Position and size the embedded child webview. The frontend sends
+ * viewport-relative coords from the same window that hosts the child, so
+ * they can be applied as parent-local bounds. Call with width/height = 0
+ * to hide.
+ */
+async ownedBrowserSetBounds(parent: string, x: number, y: number, width: number, height: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_set_bounds", { parent, x, y, width, height }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1144,6 +1312,63 @@ async regenerateApiAuthKey() : Promise<Result<string, string>> {
 async registerWindowShortcuts() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("register_window_shortcuts") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async remoteSyncDiscoverHosts() : Promise<Result<DiscoveredHost[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_discover_hosts") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async remoteSyncNow(config: RemoteSyncConfig, dataDir: string | null) : Promise<Result<RemoteSyncResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_now", { config, dataDir }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Get the scheduler status (last sync time, last error, is running).
+ */
+async remoteSyncSchedulerStatus() : Promise<Result<SchedulerStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_scheduler_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start the background sync scheduler. Runs sync on an interval regardless of UI state.
+ */
+async remoteSyncStartScheduler(config: RemoteSyncConfig, dataDir: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_start_scheduler", { config, dataDir }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stop the background sync scheduler.
+ */
+async remoteSyncStopScheduler() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_stop_scheduler") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async remoteSyncTest(config: RemoteSyncConfig) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_test", { config }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1603,6 +1828,20 @@ async triggerSync() : Promise<Result<null, string>> {
 }
 },
 /**
+ * User-initiated update check from Settings → General. Returns:
+ * - `Ok(true)`  when an update was found (banner will appear after download).
+ * - `Ok(false)` when already up to date or the build can't auto-update.
+ * - `Err(String)` when the check itself failed (network, server, etc.).
+ */
+async triggerUpdateCheck() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("trigger_update_check") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Unregister window-specific shortcuts when main window is hidden.
  * Only unregisters Escape and arrow keys. Global shortcuts (search, show, chat)
  * are NOT touched here — they must persist across window show/hide cycles.
@@ -1772,6 +2011,15 @@ source?: string }
 export type CalendarStatus = { available: boolean; authorized: boolean; authorizationStatus: string; calendarCount: number }
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
+/**
+ * An SSH host discovered from ~/.ssh/config or ~/.ssh/known_hosts.
+ */
+export type DiscoveredHost = { host: string; port: number; user: string | null; key_path: string | null; source: string;
+/**
+ * Human-friendly alias from SSH config `Host` directive (e.g. "my-server").
+ * Only set when `HostName` resolves to an IP different from the alias.
+ */
+alias?: string | null }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
@@ -1781,6 +2029,7 @@ export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+export type MeetingExportSummary = { output_path: string; frame_count: number; audio_chunk_count: number; duration_secs: number; file_size_bytes: number }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null;
@@ -1800,6 +2049,20 @@ export type OnboardingStore = { isCompleted: boolean; completedAt: string | null
  * Used to resume after app restart (e.g., after granting permissions)
  */
 currentStep?: string | null }
+/**
+ * Snapshot of a pending update, exposed to the frontend via
+ * `get_pending_update`. The banner queries this on mount so it can hydrate
+ * state even when the `update-available` event fires before React mounts.
+ */
+export type PendingUpdateSnapshot = { version: string; body: string;
+/**
+ * True once the bundle is downloaded and the app is ready to restart.
+ */
+downloaded: boolean;
+/**
+ * True when download failed with 401/403 — user must sign in.
+ */
+auth_required: boolean }
 export type PiCheckResult = { available: boolean; path: string | null }
 /**
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
@@ -1858,6 +2121,14 @@ preview: string;
 queuedAtMs: number }
 export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
 /**
+ * Configuration for remote sync.
+ */
+export type RemoteSyncConfig = { host: string; port: number; user: string; key_path: string; remote_path: string; interval_minutes: number; enabled: boolean }
+/**
+ * Result of a sync operation.
+ */
+export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
+/**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
 export type ScheduleRule = {
@@ -1877,6 +2148,7 @@ endTime: string;
  * What to record: "all", "audio_only", "screen_only"
  */
 recordMode: string }
+export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
 export type SettingsStore =
 /**
  * All recording/capture config lives here. Flattened so the JSON shape

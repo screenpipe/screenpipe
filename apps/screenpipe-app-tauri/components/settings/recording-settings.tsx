@@ -95,7 +95,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ToastAction } from "@/components/ui/toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { getMediaFile } from "@/lib/actions/video-actions";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
@@ -1153,9 +1152,11 @@ const getAudioDeviceIcon = (name: string) => {
 
 // ─── Transcription Dictionary ────────────────────────────────────────────────
 
-const VOCAB_LIMIT = 1000;
 const DEEPGRAM_LIMIT = 100;
 const WHISPER_CHAR_LIMIT = 800;
+// Cap stored terms at the strictest real engine limit (Deepgram cloud).
+// Whisper's offline limit is on total chars, not term count, and is surfaced separately below.
+const VOCAB_LIMIT = DEEPGRAM_LIMIT;
 
 function parseTerms(raw: string): string[] {
   // Auto-detect delimiter: if there are newlines, split by newlines; otherwise commas; otherwise semicolons; otherwise tabs
@@ -1693,7 +1694,7 @@ export function RecordingSettings() {
   // `screenpipe_audio::core::process_tap::is_process_tap_available()`.
   const [coreaudioTapAvailable, setCoreaudioTapAvailable] = useState<boolean | null>(null);
   useEffect(() => {
-    invoke<boolean>("check_coreaudio_process_tap_available")
+    commands.checkCoreaudioProcessTapAvailable()
       .then(setCoreaudioTapAvailable)
       .catch(() => setCoreaudioTapAvailable(false));
   }, []);
@@ -1718,7 +1719,9 @@ export function RecordingSettings() {
 
   const reloadAudioExclusions = useCallback(async () => {
     try {
-      const apps = await invoke<ExcludedApp[]>("read_audio_exclusions");
+      const resExcl = await commands.readAudioExclusions();
+      if (resExcl.status === "error") throw new Error(resExcl.error);
+      const apps = resExcl.data;
       setAudioExclusions(apps);
     } catch (e) {
       console.error("read_audio_exclusions failed", e);
@@ -1764,7 +1767,9 @@ export function RecordingSettings() {
     });
     if (!picked || typeof picked !== "string") return;
     try {
-      const meta = await invoke<ExcludedApp>("read_app_bundle_metadata", { path: picked });
+      const resMeta = await commands.readAppBundleMetadata(picked);
+      if (resMeta.status === "error") throw new Error(resMeta.error);
+      const meta = resMeta.data;
       addAudioExclusion(meta);
     } catch (e) {
       toast({
@@ -2088,7 +2093,8 @@ export function RecordingSettings() {
 
       if (pendingAudioExclusions !== null) {
         try {
-          await invoke("write_audio_exclusions", { apps: pendingAudioExclusions });
+          const resWriteExcl = await commands.writeAudioExclusions(pendingAudioExclusions);
+    if (resWriteExcl.status === "error") throw new Error(resWriteExcl.error);
           setAudioExclusions(pendingAudioExclusions);
           setPendingAudioExclusions(null);
         } catch (e) {

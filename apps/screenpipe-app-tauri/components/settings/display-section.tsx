@@ -5,6 +5,7 @@
 
 import React from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +16,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { open } from "@tauri-apps/plugin-shell";
-import { invoke } from "@tauri-apps/api/core";
 
 export function DisplaySection() {
   const { settings, updateSettings } = useSettings();
@@ -114,8 +114,7 @@ export function DisplaySection() {
                       onClick={async () => {
                         handleSettingsChange({ overlayMode: option.value });
                         try {
-                          const { invoke } = await import("@tauri-apps/api/core");
-                          await invoke("reset_main_window");
+                          await commands.resetMainWindow();
                         } catch (_) {}
                         toast({
                           title: "overlay mode updated",
@@ -201,9 +200,7 @@ export function DisplaySection() {
                 checked={settings?.showOverlayInScreenRecording ?? false}
                 onCheckedChange={(checked) => {
                   handleSettingsChange({ showOverlayInScreenRecording: checked });
-                  import("@tauri-apps/api/core").then(({ invoke }) => {
-                    invoke("reset_main_window").catch(() => {});
-                  });
+                  commands.resetMainWindow().catch(() => {});
                   toast({
                     title: checked ? "overlay visible to screen recorders" : "overlay hidden from screen recorders",
                     description: "press the shortcut to open the overlay with the new setting.",
@@ -259,9 +256,9 @@ export function DisplaySection() {
                   handleSettingsChange({ showShortcutOverlay: checked });
                   try {
                     if (checked) {
-                      await invoke("show_shortcut_reminder", { shortcut: settings.showScreenpipeShortcut });
+                      await commands.showShortcutReminder(settings.showScreenpipeShortcut);
                     } else {
-                      await invoke("hide_shortcut_reminder");
+                      await commands.hideShortcutReminder();
                     }
                   } catch (e) {}
                 }}
@@ -294,10 +291,10 @@ export function DisplaySection() {
                         onClick={async () => {
                           handleSettingsChange({ shortcutOverlaySize: option.value });
                           try {
-                            await invoke("hide_shortcut_reminder");
+                            await commands.hideShortcutReminder();
                             // Wait for store.bin to flush to disk before re-showing
                             await new Promise(r => setTimeout(r, 500));
-                            await invoke("show_shortcut_reminder", { shortcut: settings.showScreenpipeShortcut });
+                            await commands.showShortcutReminder(settings.showScreenpipeShortcut);
                           } catch {}
                         }}
                         type="button"

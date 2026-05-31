@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { type ColorTheme } from "@/lib/constants/colors";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface ThemeProviderProps {
@@ -119,7 +119,7 @@ export function ThemeProvider({
       } catch {}
       setThemeState(newTheme);
       updateSettings({ uiTheme: newTheme });
-      invoke("set_native_theme", { theme: newTheme }).catch(() => {});
+      commands.setNativeTheme(newTheme).catch(() => {});
 
       // If switching to "system" mode, immediately apply the current system theme from Tauri
       if (newTheme === "system") {
@@ -146,7 +146,7 @@ export function ThemeProvider({
       } catch {}
       setThemeState(newTheme);
       updateSettings({ uiTheme: newTheme });
-      invoke("set_native_theme", { theme: newTheme }).catch(() => {});
+      commands.setNativeTheme(newTheme).catch(() => {});
     },
   };
 

@@ -269,9 +269,8 @@ export function PrivacySection() {
 
   const loadLiveApiKey = useCallback(async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const config = await invoke<{ key: string | null }>("get_local_api_config");
-      setLiveApiKey(config.key ?? null);
+      const res = await (commands.getLocalApiConfig() as Promise<{ key: string | null }>);
+      setLiveApiKey(res.key ?? null);
     } catch {
       setLiveApiKey(null);
     }
@@ -334,8 +333,8 @@ export function PrivacySection() {
       pendingSettingsRef.current = {};
 
       if (pendingApiKey) {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("set_api_auth_key", { key: pendingApiKey });
+        const res = await commands.setApiAuthKey(pendingApiKey);
+        if (res.status === "error") throw new Error(res.error);
         setPendingApiKey(null);
       }
 
@@ -391,8 +390,8 @@ export function PrivacySection() {
     async (checked: boolean) => {
       handleSettingsChange({ cloudMediaAnalysisEnabled: checked }, true);
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("set_cloud_media_analysis_skill", { enabled: checked });
+        const res = await commands.setCloudMediaAnalysisSkill(checked);
+        if (res.status === "error") throw new Error(res.error);
       } catch (e) {
         console.error("failed to sync cloud media analysis skill:", e);
         // Don't block on the file mutation — setting still persisted in
@@ -412,11 +411,9 @@ export function PrivacySection() {
     let cancelled = false;
     (async () => {
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
         if (!cancelled) {
-          await invoke("set_cloud_media_analysis_skill", {
-            enabled: cloudMediaAnalysisEnabled,
-          });
+          const res = await commands.setCloudMediaAnalysisSkill(cloudMediaAnalysisEnabled);
+          if (res.status === "error") throw new Error(res.error);
         }
       } catch (e) {
         console.error("cloud media analysis skill sync on hydrate failed:", e);
@@ -773,8 +770,9 @@ export function PrivacySection() {
                     if (!confirmed) return;
                     setRegeneratingKey(true);
                     try {
-                      const { invoke } = await import("@tauri-apps/api/core");
-                      const newKey = await invoke<string>("regenerate_api_auth_key");
+                      const res = await commands.regenerateApiAuthKey();
+                      if (res.status === "error") throw new Error(res.error);
+                      const newKey = res.data;
                       setLiveApiKey(newKey);
                       setRevealApiKey(true);
                       setHasUnsavedChanges(true);

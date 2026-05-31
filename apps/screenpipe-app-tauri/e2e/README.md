@@ -35,6 +35,21 @@ to keep vision capture off while leaving the audio settings visible with
 Screenpipe Cloud saved and no logged-in user. It asserts the Recording fallback
 alert and the persisted `/notifications` entry.
 
+**Run the macOS HD recording pipeline spec**
+
+```bash
+bun run test:e2e:hd:macos
+```
+
+Opt-in spec for the high-fps "HD recording" pipeline. Uses
+`SCREENPIPE_E2E_SEED=onboarding` (vision ON) so it needs a host with **Screen
+Recording granted and a real display**. It drives `POST /capture/hd/start`,
+then asserts (1) the controller flips active, (2) a non-empty `hd_*.mp4` chunk
+is written to disk, and (3) OCR rows keep landing via `/search` *during* the HD
+window — i.e. high-fps capture and normal indexing run concurrently (#3699 /
+#3707). Self-skips under the default `no-recording` seed or when the HD
+controller is unavailable, so it never fails the default CI lane.
+
 **Or combined (build + test):**
 
 ```bash
@@ -140,6 +155,7 @@ Saves to `e2e/videos/`.
 |---|---|
 | `home-window.spec.ts` | Opens Home window; clicks through Home, Pipes, Timeline, Help, Settings nav items |
 | `timeline.spec.ts` | Navigates to Timeline; seeds a capture event; verifies at least one frame renders |
+| `hd-recording-pipeline.spec.ts` | macOS opt-in. Starts an HD timer session via `/capture/hd/start`; asserts the controller goes active, a non-empty `hd_*.mp4` chunk is written, and OCR keeps indexing during HD (high-fps + indexing decouple, #3699/#3707) |
 | `settings-sections.spec.ts` | Navigates General → Recording → AI → Speakers settings; verifies content and no crash |
 | `audio-fallback.spec.ts` | macOS opt-in spec for the Screenpipe Cloud → local Whisper fallback alert and `/notify` history |
 | `window-lifecycle.spec.ts` | Exercises `show_window` / `close_window` routing for Home, Search, and completed onboarding |

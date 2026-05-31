@@ -38,7 +38,6 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import SplashScreen from "@/components/splash-screen";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { hasCachedData } from "@/lib/hooks/use-timeline-cache";
-import { invoke } from "@tauri-apps/api/core";
 
 function TimelineErrorFallback({
   error,
@@ -242,7 +241,7 @@ export default function OverlayPage() {
       if (!password) return;
 
       try {
-        await invoke("init_sync", { password });
+        await commands.initSync(password);
         console.log("cloud sync auto-initialized from saved password");
       } catch (e) {
         console.log("cloud sync auto-init failed:", e);

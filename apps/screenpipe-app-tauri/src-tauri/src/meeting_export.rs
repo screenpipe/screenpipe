@@ -18,18 +18,28 @@
 use std::path::PathBuf;
 
 use screenpipe_engine::meeting_export::{
-    export_meeting_to_mp4, export_range_to_mp4, MeetingExportSummary,
+    export_meeting_to_mp4, export_range_to_mp4, MeetingExportSummary as EngineMeetingExportSummary,
 };
 use screenpipe_engine::routes::time::parse_flexible_datetime;
 use tauri::Manager;
 
 use crate::recording::RecordingState;
 
+#[derive(serde::Serialize, specta::Type)]
+pub struct MeetingExportSummary {
+    pub output_path: String,
+    pub frame_count: usize,
+    pub audio_chunk_count: usize,
+    pub duration_secs: f64,
+    pub file_size_bytes: u64,
+}
+
 /// Export a recording to `output_path` (an .mp4).
 ///
 /// Pass `meeting_id` to export a meeting (its window is resolved from the DB),
 /// or `start`/`end` for an arbitrary range (`end` defaults to now). Times accept
 /// ISO 8601 or relative (`"2h ago"`, `"now"`). Returns a summary on success.
+#[specta::specta]
 #[tauri::command]
 pub async fn export_recording(
     app: tauri::AppHandle,
@@ -78,5 +88,11 @@ pub async fn export_recording(
         }
     };
 
-    Ok(summary)
+    Ok(MeetingExportSummary {
+        output_path: summary.output_path,
+        frame_count: summary.frame_count,
+        audio_chunk_count: summary.audio_chunk_count,
+        duration_secs: summary.duration_secs,
+        file_size_bytes: summary.file_size_bytes,
+    })
 }

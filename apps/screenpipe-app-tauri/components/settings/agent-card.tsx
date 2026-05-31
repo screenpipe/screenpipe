@@ -23,7 +23,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { localFetch } from "@/lib/api";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { downloadDir, join } from "@tauri-apps/api/path";
@@ -407,7 +407,9 @@ function RemoteSyncSection({
 
   const pollSchedulerStatus = useCallback(async () => {
     try {
-      const status = await invoke<SchedulerStatus>("remote_sync_scheduler_status");
+      const res = await commands.remoteSyncSchedulerStatus();
+      if (res.status === "error") throw new Error(res.error);
+      const status = res.data;
       if (status.last_sync) {
         setLastSync(status.last_sync);
         try { localStorage?.setItem(lastSyncKey, status.last_sync); } catch {}
@@ -423,8 +425,12 @@ function RemoteSyncSection({
       const ts = localStorage?.getItem(lastSyncKey);
       if (ts) setLastSync(ts);
     } catch {}
-    invoke<DiscoveredHost[]>("remote_sync_discover_hosts")
-      .then(setDiscoveredHosts)
+    commands.remoteSyncDiscoverHosts()
+      .then((res) => {
+        if (res.status === "ok") {
+          setDiscoveredHosts(res.data);
+        }
+      })
       .catch(() => {});
     pollSchedulerStatus();
     return () => {
@@ -450,7 +456,8 @@ function RemoteSyncSection({
     setIsTesting(true);
     setTestResult(null);
     try {
-      await invoke("remote_sync_test", { config: toRustConfig(config) });
+      const res = await commands.remoteSyncTest(toRustConfig(config));
+      if (res.status === "error") throw new Error(res.error);
       setTestResult({ ok: true });
       posthog.capture(`${eventPrefix}_ssh_test`, { success: true });
     } catch (e) {
@@ -467,10 +474,9 @@ function RemoteSyncSection({
     setSyncError(null);
     try {
       const dataDir = await getDataDir();
-      const result = await invoke<SyncResult>("remote_sync_now", {
-        config: toRustConfig(config),
-        dataDir,
-      });
+      const res = await commands.remoteSyncNow(toRustConfig(config), dataDir);
+      if (res.status === "error") throw new Error(res.error);
+      const result = res.data;
       if (syncCancelledRef.current) return;
       if (result.ok) {
         const now = new Date().toLocaleString();
@@ -500,10 +506,8 @@ function RemoteSyncSection({
       if (config.enabled && config.host && config.user) {
         try {
           const dataDir = await getDataDir();
-          await invoke("remote_sync_start_scheduler", {
-            config: toRustConfig(config),
-            dataDir,
-          });
+          const res = await commands.remoteSyncStartScheduler(toRustConfig(config), dataDir);
+          if (res.status === "error") throw new Error(res.error);
           posthog.capture(`${eventPrefix}_sync_enabled`, { interval: config.intervalMinutes });
           if (statusPollRef.current) clearInterval(statusPollRef.current);
           statusPollRef.current = setInterval(pollSchedulerStatus, 30_000);
@@ -511,7 +515,10 @@ function RemoteSyncSection({
           setSyncError(String(e));
         }
       } else {
-        try { await invoke("remote_sync_stop_scheduler"); } catch {}
+        try {
+          const res = await commands.remoteSyncStopScheduler();
+          if (res.status === "error") throw new Error(res.error);
+        } catch {}
         if (statusPollRef.current) {
           clearInterval(statusPollRef.current);
           statusPollRef.current = null;

@@ -93,6 +93,12 @@ interface UseChatConversationsOpts {
   // to provide it; if absent, attached-doc chips simply aren't cleared on
   // new-chat / load-conversation (same behavior as before this feature).
   setAttachedDocs?: Dispatch<SetStateAction<any[]>>;
+  // Same contract as setAttachedDocs for the pending-extraction chips.
+  // A switch mid-extraction still resolves into the now-background
+  // attachedDocs (harmless — the next foreground render won't see it),
+  // but we clear the pending chips so the new chat's composer doesn't
+  // momentarily render a spinner from the previous chat's drop.
+  setPendingDocs?: Dispatch<SetStateAction<any[]>>;
   settings: any;
   selectedPreset?: AIPreset | null;
   inlineHistoryEnabled?: boolean;
@@ -129,6 +135,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setIsStreaming,
     setPastedImages,
     setAttachedDocs,
+    setPendingDocs,
     settings,
     selectedPreset,
     inlineHistoryEnabled = true,
@@ -990,6 +997,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // (otherwise the next send into the new chat would silently inject
     // PDFs the user thought belonged to the previous thread).
     setAttachedDocs?.([]);
+    setPendingDocs?.([]);
 
     // Switch to this conversation's session. Pair the panel's ref
     // switch with `setCurrent` on the store so the router's
@@ -1355,6 +1363,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Clear any in-progress doc attachments — they belong to the chat the
     // user was on, not to the new one we're switching to.
     setAttachedDocs?.([]);
+    setPendingDocs?.([]);
 
     // New session ID — Pi will be started fresh when the first message is sent.
     // Pair with setCurrent so the router immediately knows the new id is

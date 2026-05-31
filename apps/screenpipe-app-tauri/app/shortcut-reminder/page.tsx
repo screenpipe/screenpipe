@@ -7,7 +7,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
 import { localFetch } from "@/lib/api";
 import { exists, readTextFile } from "@tauri-apps/plugin-fs";
 import { homeDir } from "@tauri-apps/api/path";
@@ -224,7 +223,7 @@ export default function ShortcutReminderPage() {
       await saveAndEncrypt(store);
       posthog.capture("shortcut_reminder_dismissed");
       // Use Tauri command instead of getCurrentWindow().hide() for better panel support
-      await invoke("hide_shortcut_reminder");
+      await commands.hideShortcutReminder();
     } catch (e) {
       console.error("Failed to hide shortcut reminder:", e);
       // Fallback to direct window hide

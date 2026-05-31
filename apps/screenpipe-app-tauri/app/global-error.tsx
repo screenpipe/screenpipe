@@ -5,7 +5,8 @@
 "use client";
 
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 
 export default function GlobalError({
   error,
@@ -30,14 +31,12 @@ export default function GlobalError({
       // eslint-disable-next-line no-console
       console.error("global-error boundary caught:", serialized);
     } catch {}
-    invoke("write_browser_logs", {
-      entries: [
-        {
-          level: "error",
-          message: `global-error boundary: ${JSON.stringify(serialized)}`,
-        },
-      ],
-    }).catch(() => {});
+    commands.writeBrowserLogs([
+      {
+        level: "error",
+        message: `global-error boundary: ${JSON.stringify(serialized)}`,
+      },
+    ]).catch(() => {});
   }, [error]);
 
   return (
@@ -82,13 +81,9 @@ export default function GlobalError({
                 onClick={() => {
                   // App is fully crashed — React providers are down.
                   // Open Discord in default browser so user can report with the error message.
-                  try {
-                    (window as any).__TAURI_INTERNALS__?.invoke("plugin:shell|open", {
-                      path: "https://discord.com/invite/screenpipe",
-                    }).catch(() => window.open("https://discord.com/invite/screenpipe", "_blank"));
-                  } catch {
+                  openUrl("https://discord.com/invite/screenpipe").catch(() => {
                     window.open("https://discord.com/invite/screenpipe", "_blank");
-                  }
+                  });
                 }}
                 style={{
                   padding: "0.5rem 1rem",

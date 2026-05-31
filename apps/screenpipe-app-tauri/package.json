@@ -16,6 +16,7 @@
     "test:e2e": "bun run wdio run e2e/wdio.conf.ts",
     "test:e2e:audio-fallback:macos": "SCREENPIPE_E2E_SEED=onboarding,no-recording,cloud-audio-fallback bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/audio-fallback.spec.ts",
     "test:e2e:onboarding-redirect": "SCREENPIPE_E2E_SEED=no-recording bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-redirect.spec.ts",
+    "test:e2e:hd:macos": "SCREENPIPE_E2E_SEED=onboarding bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/hd-recording-pipeline.spec.ts",
     "typecheck": "bunx tsc --noEmit",
     "bindings:check": "cargo test -p screenpipe-app tauri_bindings_are_current --manifest-path src-tauri/Cargo.toml -- --nocapture",
     "bindings:generate": "UPDATE_TAURI_BINDINGS=1 cargo test -p screenpipe-app export_typescript_bindings --manifest-path src-tauri/Cargo.toml -- --nocapture",

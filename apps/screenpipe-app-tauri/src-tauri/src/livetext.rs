@@ -130,6 +130,7 @@ fn get_analyze_worker() -> &'static std::sync::mpsc::SyncSender<AnalyzeRequest> 
 
 // ---------- Tauri commands ----------
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_is_available() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
@@ -148,6 +149,7 @@ pub async fn livetext_is_available() -> Result<bool, String> {
     }
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -196,6 +198,7 @@ pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Resul
     }
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_analyze(
     image_path: String,
@@ -243,6 +246,7 @@ pub async fn livetext_analyze(
 
 /// Prefetch VisionKit analysis for adjacent frames in the background.
 /// Fire-and-forget — results are cached in Swift for instant hits later.
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_prefetch(paths: Vec<String>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -263,6 +267,7 @@ pub async fn livetext_prefetch(paths: Vec<String>) -> Result<(), String> {
     }
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_update_position(
     frame_id: String,
@@ -289,6 +294,7 @@ pub async fn livetext_update_position(
     }
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_highlight(terms: Vec<String>) -> Result<i32, String> {
     #[cfg(target_os = "macos")]
@@ -307,6 +313,7 @@ pub async fn livetext_highlight(terms: Vec<String>) -> Result<i32, String> {
     }
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_clear_highlights() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -318,6 +325,7 @@ pub async fn livetext_clear_highlights() -> Result<(), String> {
     Ok(())
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_hide() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -333,6 +341,7 @@ pub async fn livetext_hide() -> Result<(), String> {
 /// rectangle (web/CSS coordinates: origin top-left). Each guard is identified
 /// by a string key (e.g. "navbar", "filters", "scrubber"). This prevents
 /// VisionKit's text-selection hit regions from intercepting clicks on UI controls.
+#[specta::specta]
 #[tauri::command]
 pub async fn livetext_set_guard_rect(
     key: String,

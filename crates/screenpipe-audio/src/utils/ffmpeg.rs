@@ -132,11 +132,16 @@ pub fn get_new_file_path_with_timestamp(
 pub fn read_audio_from_file(path: &Path) -> Result<(Vec<f32>, u32)> {
     let sample_rate: u32 = 16000;
 
-    let mut command = screenpipe_core::ffmpeg_cmd(find_ffmpeg_path().unwrap());
+    let ffmpeg_path = find_ffmpeg_path()
+        .ok_or_else(|| anyhow::anyhow!("ffmpeg not found in PATH or bundled binaries"))?;
+    let path_str = path.to_str()
+        .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {}", path.display()))?;
+
+    let mut command = screenpipe_core::ffmpeg_cmd(ffmpeg_path);
     command
         .args([
             "-i",
-            path.to_str().unwrap(),
+            path_str,
             "-f",
             "f32le",
             "-ar",

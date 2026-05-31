@@ -78,9 +78,9 @@ function installLocalFetchInterceptor(): void {
 
 async function readLocalApiConfig(maxRetries: number): Promise<LocalApiConfig | null> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
+    const { commands } = await import("@/lib/utils/tauri");
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const config = await invoke<LocalApiConfig>("get_local_api_config");
+      const config = await (commands.getLocalApiConfig() as Promise<LocalApiConfig>);
       applyApiConfig(config);
       if (config.key || !config.auth_enabled) {
         return config;

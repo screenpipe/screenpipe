@@ -25,7 +25,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -193,7 +193,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     // Native child webviews sit above HTML — never position/show while the
     // session-access card is visible (ResizeObserver races with hide()).
     if (sessionAccessActiveRef.current) {
-      await invoke("owned_browser_hide").catch(() => {});
+      await commands.ownedBrowserHide().catch(() => {});
       return;
     }
     // offsetParent === null when any ancestor is display:none. That's how
@@ -205,18 +205,18 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     const hidden = el.offsetParent === null;
     const r = el.getBoundingClientRect();
     if (hidden || r.width <= 0 || r.height <= 0) {
-      await invoke("owned_browser_hide").catch(() => {});
+      await commands.ownedBrowserHide().catch(() => {});
       return;
     }
     try {
       const w = getCurrentWindow();
-      await invoke("owned_browser_set_bounds", {
-        parent: w.label,
-        x: r.left,
-        y: r.top,
-        width: r.width,
-        height: r.height,
-      });
+      await commands.ownedBrowserSetBounds(
+        w.label,
+        r.left,
+        r.top,
+        r.width,
+        r.height,
+      );
     } catch (e) {
       console.error("owned_browser_set_bounds failed", e);
     }
@@ -310,7 +310,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setCurrentTitle(null);
         setLoading(true);
         persistState({ url: request.url, collapsed: false });
-        invoke("owned_browser_hide").catch(() => {});
+        commands.ownedBrowserHide().catch(() => {});
       },
     );
     return () => {
@@ -341,7 +341,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setCurrentTitle(null);
         setLoading(false);
         persistState({ url: block.url, collapsed: false });
-        invoke("owned_browser_hide").catch(() => {});
+        commands.ownedBrowserHide().catch(() => {});
       },
     );
     return () => {
@@ -353,7 +353,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     sessionAccessActiveRef.current =
       sessionAccessRequest !== null || v20CookieBlock !== null;
     if (sessionAccessRequest || v20CookieBlock) {
-      invoke("owned_browser_hide").catch(() => {});
+      commands.ownedBrowserHide().catch(() => {});
     } else if (panelOpen) {
       schedulePushBounds();
     }
@@ -380,7 +380,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
             // Extension is now connected — retry the navigation, which will
             // go through the extension cookie path.
             setV20CookieBlock(null);
-            invoke("owned_browser_navigate", { url: retryUrl }).catch(() => {});
+            commands.ownedBrowserNavigate(retryUrl).catch(() => {});
           }
         } else {
           setExtensionConnected(false);
@@ -439,7 +439,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       setSessionAccessAnswer(null);
       setV20CookieBlock(null);
       setRequestedWidth(DEFAULT_WIDTH);
-      invoke("owned_browser_hide").catch(() => {});
+      commands.ownedBrowserHide().catch(() => {});
       return () => {
         cancelled = true;
       };
@@ -467,7 +467,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         // browser silently fails to restore. Retry once when Rust emits
         // `owned-browser:ready` so the saved state survives app quit.
         const tryNavigate = () =>
-          invoke("owned_browser_navigate", { url }).catch((e) => {
+          commands.ownedBrowserNavigate(url).catch((e) => {
             const msg = typeof e === "string" ? e : String(e);
             return msg.includes("not initialized") ? "retry" : null;
           });
@@ -479,7 +479,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         }
         // If collapsed, hide the webview right away — pushBounds wouldn't
         // run because the placeholder isn't mounted.
-        if (wasCollapsed) invoke("owned_browser_hide").catch(() => {});
+        if (wasCollapsed) commands.ownedBrowserHide().catch(() => {});
       } else {
         setVisible(false);
         setCollapsed(false);
@@ -487,7 +487,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setCurrentTitle(null);
         setLoading(false);
         setV20CookieBlock(null);
-        invoke("owned_browser_hide").catch(() => {});
+        commands.ownedBrowserHide().catch(() => {});
       }
     })();
     return () => {
@@ -505,7 +505,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
 
   useEffect(() => {
     if (!panelOpen) {
-      invoke("owned_browser_hide").catch(() => {});
+      commands.ownedBrowserHide().catch(() => {});
       return;
     }
     const el = placeholderRef.current;
@@ -579,7 +579,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     if (!currentUrl) return;
     try {
       setLoading(true);
-      await invoke("owned_browser_navigate", { url: currentUrl });
+      await commands.ownedBrowserNavigate(currentUrl);
     } catch (e) {
       console.error("reload failed", e);
     }
@@ -589,7 +589,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     setCollapsed(true);
     setLoading(false);
     persistState({ collapsed: true });
-    invoke("owned_browser_hide").catch(() => {});
+    commands.ownedBrowserHide().catch(() => {});
   }, [persistState]);
 
   const expand = useCallback(() => {
@@ -603,10 +603,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       if (!request || sessionAccessAnswer) return;
       setSessionAccessAnswer(allow ? "allow" : "deny");
       try {
-        await invoke("owned_browser_resolve_session_access", {
-          requestId: request.requestId,
+        await commands.ownedBrowserResolveSessionAccess(
+          request.requestId,
           allow,
-        });
+        );
         setSessionAccessRequest((current) =>
           current?.requestId === request.requestId ? null : current,
         );

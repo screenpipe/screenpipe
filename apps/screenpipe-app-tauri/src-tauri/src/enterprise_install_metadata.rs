@@ -7,6 +7,6 @@
 // into the app's module tree.
 
 #[path = "../../../../ee/desktop-rust/enterprise_install_metadata.rs"]
-mod inner;
+pub mod inner;
 
 pub use inner::*;

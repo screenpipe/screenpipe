@@ -4,7 +4,7 @@
 
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+
 import { commands } from "@/lib/utils/tauri";
 import { getFrameAppName } from "@/components/rewind/timeline/timeline";
 import { toast } from "@/components/ui/use-toast";
@@ -153,9 +153,7 @@ export function useTimelineKeyboard(opts: {
 			if (!frameId) return;
 
 			e.preventDefault();
-			invoke("copy_frame_to_clipboard", {
-				frameId: parseInt(String(frameId), 10),
-			})
+			commands.copyFrameToClipboard(parseInt(String(frameId), 10))
 				.then(() =>
 					toast({
 						title: "copied image",

@@ -100,7 +100,8 @@ pub async fn start_ffmpeg_process(
 
     info!("Starting FFmpeg process for file: {}", output_file);
     let fps_str = fps.to_string();
-    let mut command = crate::ffmpeg_cmd_async(find_ffmpeg_path().unwrap());
+    let ffmpeg_path = find_ffmpeg_path().ok_or_else(|| anyhow::anyhow!("ffmpeg not found"))?;
+    let mut command = crate::ffmpeg_cmd_async(ffmpeg_path);
     let mut args = vec![
         "-f",
         "image2pipe",

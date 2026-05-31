@@ -11136,6 +11136,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "specta",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -13439,7 +13440,7 @@ dependencies = [
 [[package]]
 name = "tauri-helper"
 version = "0.2.1"
-source = "git+https://github.com/divanshu-go/tauri-helper?rev=17f463d#17f463dc4f00fa9270161c524c28ec1e89b150dd"
+source = "git+https://github.com/divanshu-go/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
 dependencies = [
  "rayon",
  "serde",
@@ -13973,7 +13974,7 @@ dependencies = [
 [[package]]
 name = "tauri_helper_core"
 version = "0.2.1"
-source = "git+https://github.com/divanshu-go/tauri-helper?rev=17f463d#17f463dc4f00fa9270161c524c28ec1e89b150dd"
+source = "git+https://github.com/divanshu-go/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
 dependencies = [
  "serde",
  "toml 0.9.12+spec-1.1.0",
@@ -13982,7 +13983,7 @@ dependencies = [
 [[package]]
 name = "tauri_helper_macros"
 version = "0.1.4"
-source = "git+https://github.com/divanshu-go/tauri-helper?rev=17f463d#17f463dc4f00fa9270161c524c28ec1e89b150dd"
+source = "git+https://github.com/divanshu-go/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",

@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { platform, arch } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
@@ -78,7 +78,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       // both race onnxruntime teardown against still-initializing native
       // sessions if startup hasn't finished. Backend waits up to 60s and
       // returns one of "proceed" | "errored" | "pending".
-      const gate = await invoke<string>("await_safe_restart", { timeoutSecs: 60 });
+      const gate = await commands.awaitSafeRestart(60);
       if (gate !== "proceed") {
         setIsInstalling(false);
         toast({
@@ -103,7 +103,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
 
         // Stop screenpipe before update on Windows
         try {
-          await invoke("stop_screenpipe");
+          await commands.stopScreenpipe();
         } catch (e) {
           console.warn("failed to stop screenpipe:", e);
         }
@@ -337,7 +337,8 @@ export function useUpdateListener() {
 
       // Hydrate from Rust in case the event fired before we mounted.
       try {
-        const pending = await invoke<PendingUpdateSnapshot | null>("get_pending_update");
+        const resPending = await commands.getPendingUpdate();
+  const pending = resPending.status === "ok" ? resPending.data : null;
         if (pending) {
           if (pending.auth_required) {
             showAuthIfNotDismissed({ version: pending.version, message: "sign in to get the latest update" });

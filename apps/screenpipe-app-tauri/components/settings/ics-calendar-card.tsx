@@ -17,7 +17,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 
 interface IcsCalendarEntry {
@@ -50,7 +50,7 @@ export function IcsCalendarCard() {
 
   // Load entries from backend
   useEffect(() => {
-    invoke<IcsCalendarEntry[]>("ics_calendar_get_entries")
+    commands.icsCalendarGetEntries().then(res => res.status === "ok" ? res.data : [])
       .then(setEntries)
       .catch(() => {});
   }, []);
@@ -58,7 +58,8 @@ export function IcsCalendarCard() {
   const saveEntries = async (updated: IcsCalendarEntry[]) => {
     setEntries(updated);
     try {
-      await invoke("ics_calendar_save_entries", { entries: updated });
+      const saveRes = await commands.icsCalendarSaveEntries(updated);
+    if (saveRes.status === "error") throw new Error(saveRes.error);
     } catch (e) {
       console.error("failed to save ics entries:", e);
     }
@@ -72,7 +73,9 @@ export function IcsCalendarCard() {
     setTestError(null);
 
     try {
-      const count = await invoke<number>("ics_calendar_test_url", { url });
+      const testRes = await commands.icsCalendarTestUrl(url);
+    if (testRes.status === "error") throw new Error(testRes.error);
+    const count = testRes.data;
       const name =
         newName.trim() ||
         new URL(url.replace("webcal://", "https://")).hostname;
@@ -111,9 +114,9 @@ export function IcsCalendarCard() {
   const fetchEvents = useCallback(async () => {
     setIsLoadingEvents(true);
     try {
-      const events = await invoke<CalendarEventItem[]>(
-        "ics_calendar_get_upcoming"
-      );
+      const upcomingRes = await commands.icsCalendarGetUpcoming();
+      if (upcomingRes.status === "error") throw new Error(upcomingRes.error);
+      const events = upcomingRes.data;
       setUpcomingEvents(events.filter((e) => !e.isAllDay).slice(0, 5));
     } catch {
       setUpcomingEvents([]);

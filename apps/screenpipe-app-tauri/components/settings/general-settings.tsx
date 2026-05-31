@@ -16,7 +16,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import { commands } from "@/lib/utils/tauri";
 import { UpdateBanner } from "@/components/update-banner";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
@@ -37,7 +36,9 @@ export default function GeneralSettings() {
   const handleCheckForUpdates = async () => {
     setIsCheckingForUpdate(true);
     try {
-      const updateFound = await invoke<boolean>("trigger_update_check");
+      const res = await commands.triggerUpdateCheck();
+      if (res.status === "error") throw new Error(res.error);
+      const updateFound = res.data;
       toast({
         title: updateFound ? "update found" : "you're up to date",
         description: updateFound

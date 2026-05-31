@@ -7,6 +7,6 @@
 // This file re-exports it into the app's module tree.
 
 #[path = "../../../../ee/desktop-rust/enterprise_policy.rs"]
-mod inner;
+pub mod inner;
 
 pub use inner::*;

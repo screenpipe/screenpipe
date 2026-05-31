@@ -11,6 +11,7 @@ fn default_screenpipe_dir() -> PathBuf {
     screenpipe_core::paths::default_screenpipe_data_dir()
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_test(config: SyncConfig) -> Result<(), String> {
     remote_sync::test_connection(&config)
@@ -18,6 +19,7 @@ pub async fn remote_sync_test(config: SyncConfig) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_now(
     config: SyncConfig,
@@ -30,12 +32,14 @@ pub async fn remote_sync_now(
     Ok(remote_sync::sync_to_remote(&config, &dir).await)
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_discover_hosts() -> Result<Vec<DiscoveredHost>, String> {
     Ok(remote_sync::discover_ssh_hosts().await)
 }
 
 /// Start the background sync scheduler. Runs sync on an interval regardless of UI state.
+#[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_start_scheduler(
     scheduler: State<'_, SyncScheduler>,
@@ -51,6 +55,7 @@ pub async fn remote_sync_start_scheduler(
 }
 
 /// Stop the background sync scheduler.
+#[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_stop_scheduler(scheduler: State<'_, SyncScheduler>) -> Result<(), String> {
     scheduler.stop();
@@ -58,6 +63,7 @@ pub async fn remote_sync_stop_scheduler(scheduler: State<'_, SyncScheduler>) -> 
 }
 
 /// Get the scheduler status (last sync time, last error, is running).
+#[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_scheduler_status(
     scheduler: State<'_, SyncScheduler>,
@@ -69,7 +75,7 @@ pub async fn remote_sync_scheduler_status(
     })
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub struct SchedulerStatus {
     pub running: bool,
     pub last_sync: Option<String>,

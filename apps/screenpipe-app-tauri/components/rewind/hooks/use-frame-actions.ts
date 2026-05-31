@@ -5,7 +5,7 @@
 import { useCallback } from "react";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 
@@ -29,9 +29,7 @@ export function useFrameActions(opts: {
 	const copyImage = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;
 		try {
-			await invoke("copy_frame_to_clipboard", {
-				frameId: parseInt(debouncedFrame.frameId, 10),
-			});
+			await commands.copyFrameToClipboard(parseInt(debouncedFrame.frameId, 10));
 			toast({ title: "copied image", description: "frame copied to clipboard" });
 		} catch (err) {
 			console.warn("Copy image failed:", err);
@@ -65,9 +63,7 @@ export function useFrameActions(opts: {
 	const copyDeeplinkAction = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;
 		try {
-			await invoke("copy_deeplink_to_clipboard", {
-				frameId: parseInt(debouncedFrame.frameId, 10),
-			});
+			await commands.copyDeeplinkToClipboard(parseInt(debouncedFrame.frameId, 10));
 			toast({ title: "copied deeplink", description: "frame link copied to clipboard" });
 		} catch (err) {
 			console.warn("Copy deeplink failed:", err);

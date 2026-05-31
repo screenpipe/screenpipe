@@ -7,7 +7,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Check, Upload, Loader, Calendar } from "lucide-react";
 import { Button } from "../ui/button";
-import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
@@ -118,7 +117,7 @@ export default function EngineStartup({
   // an earlier grant doesn't carry over (each bundle id has its own TCC row).
   const [bundleId, setBundleId] = useState<string | null>(null);
   useEffect(() => {
-    invoke<string>("get_app_identifier")
+    commands.getAppIdentifier()
       .then(setBundleId)
       .catch(() => setBundleId(null));
   }, []);
@@ -183,7 +182,7 @@ export default function EngineStartup({
           return;
         }
 
-        await invoke("spawn_screenpipe");
+        await commands.spawnScreenpipe(null);
       } catch (err) {
         const message =
           typeof err === "string"
@@ -252,8 +251,8 @@ export default function EngineStartup({
     let cancelled = false;
     const poll = async () => {
       try {
-        const phase = await invoke<BootPhaseSnapshot>("get_boot_phase");
-        if (!cancelled) setBootPhase(phase);
+        const phase = await commands.getBootPhase();
+        if (!cancelled) setBootPhase(phase as any);
       } catch {
         // command not available (shouldn't happen in a shipped build) — ignore
       }

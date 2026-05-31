@@ -4,7 +4,7 @@
 
 import { homeDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
@@ -632,7 +632,7 @@ export const getStore = async () => {
 /** Save the store and re-encrypt store.bin on disk (keychain encryption). */
 export const saveAndEncrypt = async (store: Store) => {
 	await store.save();
-	await invoke("reencrypt_store").catch(() => {});
+	await commands.reencryptStore().catch(() => {});
 };
 
 // Store utilities similar to Cap's implementation
@@ -979,7 +979,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				// cloud_proxy.rs stop sending the now-revoked token on the
 				// next pipe run.
 				try {
-					await invoke("set_cloud_token", { token: null });
+					await commands.setCloudToken(null);
 				} catch (e) {
 					console.warn("failed to clear cloud token in sidecar:", e);
 				}
@@ -1207,7 +1207,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			// the engine keeps whatever token it captured at boot (often
 			// `null`), and every Sonnet/Opus pipe 403s on tier=anonymous.
 			try {
-				await invoke("set_cloud_token", { token });
+				await commands.setCloudToken(token);
 			} catch (e) {
 				console.warn("failed to push cloud token to sidecar:", e);
 			}

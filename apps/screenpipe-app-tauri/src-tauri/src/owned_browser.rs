@@ -181,6 +181,7 @@ async fn remember_session_access_allow(host: &str) {
         .insert(session_host_key(host));
 }
 
+#[specta::specta]
 #[tauri::command]
 pub async fn owned_browser_resolve_session_access(
     request_id: String,
@@ -741,6 +742,7 @@ async fn wait_for_active_child(
 /// viewport-relative coords from the same window that hosts the child, so
 /// they can be applied as parent-local bounds. Call with width/height = 0
 /// to hide.
+#[specta::specta]
 #[tauri::command]
 pub async fn owned_browser_set_bounds(
     app: AppHandle,
@@ -856,6 +858,7 @@ mod normalize_url_tests {
 /// Navigate the embedded webview to `url`. Used by the agent (via
 /// `POST /connections/browsers/owned-default/eval`) and by the sidebar
 /// when restoring per-chat state.
+#[specta::specta]
 #[tauri::command]
 pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
     let state = browser_state();
@@ -876,6 +879,7 @@ pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), S
 
 /// Hide the embedded webview without destroying it. Equivalent to calling
 /// `set_bounds` with zero dimensions, but more explicit at the call site.
+#[specta::specta]
 #[tauri::command]
 pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
     let _ = app;

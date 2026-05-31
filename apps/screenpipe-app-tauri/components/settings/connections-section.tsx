@@ -28,7 +28,6 @@ import { exists, writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
-import { invoke } from "@tauri-apps/api/core";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
@@ -106,7 +105,7 @@ async function findClaudeExeOnWindows(): Promise<string | null> {
 }
 
 async function openWindowsShellTarget(target: string): Promise<void> {
-  await invoke("open_windows_shell_target", { target });
+  await commands.openWindowsShellTarget(target);
 }
 
 import {
@@ -137,7 +136,7 @@ type McpCommand = { command: string; args: string[]; env?: Record<string, string
  * never updates.
  */
 async function buildMcpConfig(opts?: { forceNpx?: boolean }): Promise<McpCommand> {
-  const apiKey = await invoke<{ key: string | null }>("get_local_api_config")
+  const apiKey = await (commands.getLocalApiConfig() as Promise<{ key: string | null }>)
     .then(r => r.key ?? undefined)
     .catch(() => undefined);
 

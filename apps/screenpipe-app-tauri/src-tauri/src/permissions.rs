@@ -146,6 +146,13 @@ fn request_av_permission(app: tauri::AppHandle, media_type: nokhwa_bindings_maco
 
 /// Stop and restart capture so `capture_session::start` re-queries TCC and
 /// repopulates audio devices. Matches the settings-toggle path.
+///
+/// When the user grants the mic permission immediately on first launch, the
+/// AVCaptureDevice completion callback can fire before the backend
+/// `ServerCore` has been constructed — `start_capture` then errors with
+/// "Server not running" and capture stays dead until the user manually toggles
+/// it. Wait up to ~10s with short backoff so we ride out backend boot before
+/// giving up.
 #[cfg(target_os = "macos")]
 pub(crate) async fn restart_capture_on_mic_grant(app: tauri::AppHandle) {
     use tauri::Manager;
@@ -161,10 +168,43 @@ pub(crate) async fn restart_capture_on_mic_grant(app: tauri::AppHandle) {
             warn!("stop_capture before mic-grant audio reinit: {}", e);
         }
     }
-    let state = app.state::<crate::recording::RecordingState>();
-    if let Err(e) = crate::recording::start_capture(state, app.clone()).await {
-        warn!("start_capture after mic grant: {}", e);
+
+    // Retry start_capture with backoff while the backend is still booting.
+    // "Server not running" / "Server not responding" are the two transient
+    // errors emitted before `ServerCore` is wired into RecordingState.
+    const MAX_ATTEMPTS: u32 = 20;
+    const BACKOFF_MS: u64 = 500;
+    let mut last_err: Option<String> = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let state = app.state::<crate::recording::RecordingState>();
+        match crate::recording::start_capture(state, app.clone()).await {
+            Ok(()) => {
+                if attempt > 1 {
+                    info!(
+                        "start_capture after mic grant: succeeded on attempt {}/{}",
+                        attempt, MAX_ATTEMPTS
+                    );
+                }
+                return;
+            }
+            Err(e) => {
+                let transient = e.contains("Server not running")
+                    || e.contains("Server not responding");
+                if !transient {
+                    warn!("start_capture after mic grant: {}", e);
+                    return;
+                }
+                last_err = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(BACKOFF_MS)).await;
+            }
+        }
     }
+    warn!(
+        "start_capture after mic grant: gave up after {} attempts ({}s): {}",
+        MAX_ATTEMPTS,
+        (MAX_ATTEMPTS as u64 * BACKOFF_MS) / 1000,
+        last_err.unwrap_or_else(|| "unknown error".to_string())
+    );
 }
 
 // Accessibility permission APIs using ApplicationServices framework

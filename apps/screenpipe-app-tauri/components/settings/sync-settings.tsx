@@ -36,7 +36,8 @@ import {
 } from "lucide-react";
 import { localFetch } from "@/lib/api";
 import { toast } from "@/components/ui/use-toast";
-import { invoke } from "@tauri-apps/api/core";
+
+import { commands } from "@/lib/utils/tauri";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -97,6 +98,22 @@ interface SubscriptionStatus {
   tier: string | null;
   status: string | null;
 }
+
+const getSyncStatus = async () => {
+  const res = await commands.getSyncStatus();
+  if (res.status === "error") throw new Error(res.error);
+  return res.data as unknown as SyncStatus;
+};
+const getSyncConfig = async () => {
+  const res = await commands.getSyncConfig();
+  if (res.status === "error") throw new Error(res.error);
+  return res.data as unknown as SyncConfig;
+};
+const getSyncDevices = async () => {
+  const res = await commands.getSyncDevices();
+  if (res.status === "error") throw new Error(res.error);
+  return res.data as unknown as SyncDevice[];
+};
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -764,7 +781,8 @@ export function SyncSettings() {
         const serverData = await serverStatus.json();
         console.log("[sync] step 1 - server status:", serverData);
         if (serverData.enabled) {
-          await invoke("set_sync_enabled", { enabled: true });
+          const res = await commands.setSyncEnabled(true);
+          if (res.status === "error") throw new Error(res.error);
           return true;
         }
       }
@@ -778,7 +796,8 @@ export function SyncSettings() {
       const savedPassword = await store.get<string>("sync_password");
       console.log("[sync] step 2 - store.bin password exists:", !!savedPassword);
       if (savedPassword) {
-        await invoke<boolean>("init_sync", { password: savedPassword });
+        const res = await commands.initSync(savedPassword);
+        if (res.status === "error") throw new Error(res.error);
         console.log("[sync] step 2 - init_sync with stored password succeeded");
         // Migrate: clean up old localStorage entry if present
         localStorage.removeItem("sync_password");
@@ -794,7 +813,8 @@ export function SyncSettings() {
       if (legacyPassword) {
         const password = atob(legacyPassword);
         console.log("[sync] step 2b - migrating localStorage password to store.bin");
-        await invoke<boolean>("init_sync", { password });
+        const res = await commands.initSync(password);
+        if (res.status === "error") throw new Error(res.error);
         // Migration: save to store.bin, remove from localStorage
         const store = await getStore();
         await store.set("sync_password", password);
@@ -823,7 +843,8 @@ export function SyncSettings() {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
       console.log("[sync] step 3 - trying legacy deterministic password migration");
-      await invoke<boolean>("init_sync", { password: legacyDerived });
+      const res = await commands.initSync(legacyDerived);
+      if (res.status === "error") throw new Error(res.error);
       console.log("[sync] step 3 - legacy password worked, saving to store.bin");
       const store = await getStore();
       await store.set("sync_password", legacyDerived);
@@ -837,7 +858,8 @@ export function SyncSettings() {
     console.log("[sync] step 4 - generating random password for new setup");
     const randomPassword = generateRandomSyncPassword();
     try {
-      await invoke<boolean>("init_sync", { password: randomPassword });
+      const res = await commands.initSync(randomPassword);
+      if (res.status === "error") throw new Error(res.error);
       console.log("[sync] step 4 - init_sync with random password succeeded");
       const store = await getStore();
       await store.set("sync_password", randomPassword);
@@ -870,9 +892,9 @@ export function SyncSettings() {
     console.log("[sync] initSyncBackend called");
     try {
       const [statusResult, configResult, devicesResult] = await Promise.all([
-        invoke<SyncStatus>("get_sync_status"),
-        invoke<SyncConfig>("get_sync_config"),
-        invoke<SyncDevice[]>("get_sync_devices"),
+        getSyncStatus(),
+        getSyncConfig(),
+        getSyncDevices(),
       ]);
       setStatus(statusResult);
       setConfig(configResult);
@@ -885,9 +907,9 @@ export function SyncSettings() {
         const autoInited = await tryAutoInitSync();
         if (autoInited) {
           const [newStatus, newConfig, newDevices] = await Promise.all([
-            invoke<SyncStatus>("get_sync_status"),
-            invoke<SyncConfig>("get_sync_config"),
-            invoke<SyncDevice[]>("get_sync_devices"),
+            getSyncStatus(),
+            getSyncConfig(),
+            getSyncDevices(),
           ]);
           setStatus(newStatus);
           setConfig(newConfig);
@@ -906,9 +928,9 @@ export function SyncSettings() {
       if (autoInited) {
         try {
           const [newStatus, newConfig, newDevices] = await Promise.all([
-            invoke<SyncStatus>("get_sync_status"),
-            invoke<SyncConfig>("get_sync_config"),
-            invoke<SyncDevice[]>("get_sync_devices"),
+            getSyncStatus(),
+            getSyncConfig(),
+            getSyncDevices(),
           ]);
           setStatus(newStatus);
           setConfig(newConfig);
@@ -1089,7 +1111,8 @@ export function SyncSettings() {
   const handlePasswordSubmit = async (password: string) => {
     try {
       setIsLoading(true);
-      await invoke<boolean>("init_sync", { password });
+      const res = await commands.initSync(password);
+      if (res.status === "error") throw new Error(res.error);
 
       // Save password to store.bin (persistent, not accessible via web)
       try {
@@ -1122,7 +1145,8 @@ export function SyncSettings() {
 
   const handleToggleSync = async (enabled: boolean) => {
     try {
-      await invoke("set_sync_enabled", { enabled });
+      const res = await commands.setSyncEnabled(enabled);
+      if (res.status === "error") throw new Error(res.error);
       setStatus((prev) => (prev ? { ...prev, enabled } : null));
       toast({
         title: enabled ? "sync enabled" : "sync disabled",
@@ -1142,14 +1166,15 @@ export function SyncSettings() {
   const handleTriggerSync = async () => {
     try {
       setIsSyncing(true);
-      await invoke("trigger_sync");
+      const res = await commands.triggerSync();
+      if (res.status === "error") throw new Error(res.error);
       toast({
         title: "sync started",
         description: "syncing your data to the cloud",
       });
 
       const checkSync = async () => {
-        const newStatus = await invoke<SyncStatus>("get_sync_status");
+        const newStatus = await getSyncStatus();
         setStatus(newStatus);
         if (newStatus.isSyncing) {
           setTimeout(checkSync, 1000);
@@ -1177,7 +1202,8 @@ export function SyncSettings() {
 
     const newConfig = { ...config, ...updates };
     try {
-      await invoke("update_sync_config", { config: newConfig });
+      const res = await commands.updateSyncConfig(newConfig as any);
+      if (res.status === "error") throw new Error(res.error);
       setConfig(newConfig);
     } catch (error) {
       toast({
@@ -1190,7 +1216,8 @@ export function SyncSettings() {
 
   const handleRemoveDevice = async (deviceId: string) => {
     try {
-      await invoke("remove_sync_device", { deviceId });
+      const res = await commands.removeSyncDevice(deviceId);
+      if (res.status === "error") throw new Error(res.error);
       setDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
       toast({
         title: "device removed",
@@ -1207,7 +1234,9 @@ export function SyncSettings() {
 
   const handleDeleteDeviceLocalData = async (deviceId: string) => {
     try {
-      const result = await invoke("delete_device_local_data", { machineId: deviceId });
+      const res = await commands.deleteDeviceLocalData(deviceId);
+      if (res.status === "error") throw new Error(res.error);
+      const result = res.data;
       const parsed = typeof result === "string" ? JSON.parse(result) : result;
       const total = (parsed.frames_deleted || 0) + (parsed.ocr_deleted || 0) + (parsed.audio_transcriptions_deleted || 0) + (parsed.ui_events_deleted || 0);
       toast({
@@ -1225,7 +1254,8 @@ export function SyncSettings() {
 
   const handleDeleteCloudData = async () => {
     try {
-      await invoke("delete_cloud_data");
+      const res = await commands.deleteCloudData();
+      if (res.status === "error") throw new Error(res.error);
       localStorage.removeItem("sync_password");
       toast({
         title: "cloud data deleted",
@@ -1242,7 +1272,8 @@ export function SyncSettings() {
   };
 
   const handleLockSync = async () => {
-    await invoke("lock_sync");
+    const res = await commands.lockSync();
+    if (res.status === "error") throw new Error(res.error);
     try {
       const store = await getStore();
       await store.delete("sync_password");

@@ -6,7 +6,6 @@ import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { Pencil, X } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
-import { invoke } from "@tauri-apps/api/core";
 import hotkeys from "hotkeys-js";
 
 interface ShortcutRowProps {
@@ -38,7 +37,7 @@ const ShortcutRow = ({
 
     // Suspend all global shortcuts so they don't fire while recording
     // (e.g., pressing Ctrl+Cmd+K to assign it shouldn't open the overlay)
-    invoke("suspend_global_shortcuts").catch(() => {});
+    commands.suspendGlobalShortcuts().catch(() => {});
 
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
@@ -91,7 +90,7 @@ const ShortcutRow = ({
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
       // Re-register all global shortcuts after recording
-      invoke("resume_global_shortcuts").catch(() => {});
+      commands.resumeGlobalShortcuts().catch(() => {});
       hotkeys.unbind("*");
       hotkeys.filter = (event) => {
         const target = (event.target || event.srcElement) as any;
@@ -197,7 +196,7 @@ const ShortcutRow = ({
           // Update the shortcut reminder overlay if either show shortcut changed
           if (shortcut === "showScreenpipeShortcut" || shortcut === "showChatShortcut") {
             try {
-              await invoke("show_shortcut_reminder", { shortcut: updatedShortcuts.showScreenpipeShortcut });
+              await commands.showShortcutReminder(updatedShortcuts.showScreenpipeShortcut);
             } catch (e) {
               // Window may not exist, that's ok
             }

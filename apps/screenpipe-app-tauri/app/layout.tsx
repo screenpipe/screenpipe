@@ -18,6 +18,7 @@ import { FeedbackDialog } from "@/components/feedback-dialog";
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
 import { usePathname, useSearchParams } from "next/navigation";
+import { commands } from "@/lib/utils/tauri";
 import {
   clearSearchOpenedFromChatSurface,
   markSearchOpenedFromChatSurface,
@@ -110,7 +111,7 @@ export default function RootLayout({
       // Call the Rust-side ensure_webview_focus to re-assert WKWebView
       // as first responder via makeFirstResponder + dispatch_async
       try {
-        (window as any).__TAURI_INTERNALS__?.invoke("ensure_webview_focus").catch(() => {});
+        commands.ensureWebviewFocus().catch(() => {});
       } catch {}
     };
 
@@ -170,26 +171,22 @@ export default function RootLayout({
     // bypasses the buffer so the stack lands in ~/.screenpipe/screenpipe-app
     // immediately. Wired in layout.tsx specifically because it mounts before
     // providers.tsx finishes its first effect.
-    const directInvoke = (level: string, message: string) => {
-      try {
-        const i = (window as any).__TAURI_INTERNALS__?.invoke;
-        if (typeof i === "function") {
-          i("write_browser_logs", { entries: [{ level, message }] }).catch(() => {});
-        }
-      } catch {}
-    };
     const handleWindowError = (e: ErrorEvent) => {
-      directInvoke(
-        "error",
-        `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno} :: stack=${e.error?.stack ?? "(no stack)"}`,
-      );
+      commands.writeBrowserLogs([
+        {
+          level: "error",
+          message: `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno} :: stack=${e.error?.stack ?? "(no stack)"}`,
+        },
+      ]).catch(() => {});
     };
     const handleUnhandled = (e: PromiseRejectionEvent) => {
       const reason: any = e.reason;
-      directInvoke(
-        "error",
-        `unhandledrejection: ${reason?.message ?? String(reason)} :: stack=${reason?.stack ?? "(no stack)"}`,
-      );
+      commands.writeBrowserLogs([
+        {
+          level: "error",
+          message: `unhandledrejection: ${reason?.message ?? String(reason)} :: stack=${reason?.stack ?? "(no stack)"}`,
+        },
+      ]).catch(() => {});
     };
     window.addEventListener("error", handleWindowError);
     window.addEventListener("unhandledrejection", handleUnhandled);

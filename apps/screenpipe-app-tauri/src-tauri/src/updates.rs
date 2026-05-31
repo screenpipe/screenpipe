@@ -154,7 +154,7 @@ fn enterprise_updates_managed_locally(app: &tauri::AppHandle) -> bool {
 /// Snapshot of a pending update, exposed to the frontend via
 /// `get_pending_update`. The banner queries this on mount so it can hydrate
 /// state even when the `update-available` event fires before React mounts.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, specta::Type)]
 pub struct PendingUpdateSnapshot {
     pub version: String,
     pub body: String,
@@ -955,6 +955,7 @@ fn check_whats_new(app: &tauri::AppHandle) {
 /// mounted yet (boot race) or the listener lives on a route the user hasn't
 /// visited yet, that event is lost. The banner calls this command on mount
 /// to pick up state it may have missed.
+#[specta::specta]
 #[tauri::command]
 pub async fn get_pending_update(
     state: tauri::State<'_, Arc<UpdatesManager>>,
@@ -966,6 +967,7 @@ pub async fn get_pending_update(
 /// - `Ok(true)`  when an update was found (banner will appear after download).
 /// - `Ok(false)` when already up to date or the build can't auto-update.
 /// - `Err(String)` when the check itself failed (network, server, etc.).
+#[specta::specta]
 #[tauri::command]
 pub async fn trigger_update_check(
     state: tauri::State<'_, Arc<UpdatesManager>>,

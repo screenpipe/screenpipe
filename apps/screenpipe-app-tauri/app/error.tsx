@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 
 export default function GlobalError({
@@ -33,14 +33,12 @@ export default function GlobalError({
     // unmounts Providers before the 2s flush timer (which is what was happening
     // for the enterprise #185 crash on MBP — error.tsx logged but the entry
     // never reached ~/.screenpipe/screenpipe-app.<date>.log).
-    invoke("write_browser_logs", {
-      entries: [
-        {
-          level: "error",
-          message: `error boundary: ${JSON.stringify(serialized)}`,
-        },
-      ],
-    }).catch(() => {});
+    commands.writeBrowserLogs([
+      {
+        level: "error",
+        message: `error boundary: ${JSON.stringify(serialized)}`,
+      },
+    ]).catch(() => {});
   }, [error]);
 
   return (

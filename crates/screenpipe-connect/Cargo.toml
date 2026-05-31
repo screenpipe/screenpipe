@@ -13,6 +13,7 @@ edition = { workspace = true }
 ignored = ["libsqlite3-sys"]
 
 [dependencies]
+specta = { version = "=2.0.0-rc.20", features = ["derive"], optional = true }
 image = { workspace = true }
 reqwest = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
@@ -47,6 +48,10 @@ libsqlite3-sys = { version = "0.26", features = ["bundled"] }
 [dev-dependencies]
 wiremock = "0.6"
 tempfile = "3"
+
+[features]
+default = []
+specta = ["dep:specta"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 eventkit-rs = "0.1"

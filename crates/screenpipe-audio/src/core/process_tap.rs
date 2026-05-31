@@ -425,7 +425,7 @@ extern "C" fn tap_io_proc(
 /// Owns all CoreAudio resources for a Process Tap capture session.
 /// Drop order: _started (stops IO) → _tap (destroys tap) → _ctx_ptr (frees memory).
 struct ProcessTapCapture {
-    _started: cidre::core_audio::hardware::StartedDevice<ca::AggregateDevice>,
+    _started: Option<cidre::core_audio::hardware::StartedDevice<ca::AggregateDevice>>,
     _tap: ca::hardware_tapping::TapGuard,
     _ctx_ptr: *mut TapCallbackCtx,
 }
@@ -435,6 +435,10 @@ unsafe impl Send for ProcessTapCapture {}
 impl Drop for ProcessTapCapture {
     fn drop(&mut self) {
         info!("Process Tap capture stopping");
+        // Drop started device first to stop CoreAudio thread synchronously before freeing context
+        if let Some(started) = self._started.take() {
+            std::mem::drop(started);
+        }
         if !self._ctx_ptr.is_null() {
             unsafe {
                 let _ = Box::from_raw(self._ctx_ptr);
@@ -555,7 +559,7 @@ fn build_capture(
 
     let ctx_ptr = Box::into_raw(ctx);
     let capture = ProcessTapCapture {
-        _started: started,
+        _started: Some(started),
         _tap: tap,
         _ctx_ptr: ctx_ptr,
     };

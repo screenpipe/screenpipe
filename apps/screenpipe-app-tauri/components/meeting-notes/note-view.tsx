@@ -28,7 +28,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -576,16 +576,9 @@ export function NoteView({
       // dependency) — the in-app twin of the `screenpipe export` CLI. Reuses
       // the running server core's DB handle. Rejects with the engine's error
       // string on failure.
-      const summary = await invoke<{
-        output_path: string;
-        frame_count: number;
-        audio_chunk_count: number;
-        duration_secs: number;
-        file_size_bytes: number;
-      }>("export_recording", {
-        meetingId: meeting.id,
-        outputPath: target,
-      });
+      const res = await commands.exportRecording(meeting.id, null, null, target);
+      if (res.status === "error") throw new Error(res.error);
+      const summary = res.data;
 
       const sizeMb = summary?.file_size_bytes
         ? (summary.file_size_bytes / (1024 * 1024)).toFixed(1)

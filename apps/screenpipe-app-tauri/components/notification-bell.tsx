@@ -10,7 +10,7 @@ import ReactMarkdown from "react-markdown";
 import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/lib/utils/tauri";
 import {
   Popover,
   PopoverContent,
@@ -52,7 +52,7 @@ async function openNotificationLink(href: string) {
   // Prefer opening markdown files in Obsidian if installed.
   if (localPath && localPath.toLowerCase().endsWith(".md")) {
     try {
-      await invoke("open_note_path", { path: localPath });
+      await commands.openNotePath(localPath);
       return;
     } catch {
       // Fallback to default system file opener below.
@@ -60,7 +60,7 @@ async function openNotificationLink(href: string) {
   }
 
   if (localPath) {
-    await invoke("open_note_path", { path: localPath });
+    await commands.openNotePath(localPath);
     return;
   }
 
