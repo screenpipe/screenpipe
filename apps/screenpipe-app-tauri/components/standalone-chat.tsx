@@ -3363,6 +3363,16 @@ export function StandaloneChat({
   // ref mirror so send paths read the latest docs without widening their deps arrays
   const attachedDocsRef = useRef<ExtractedDoc[]>([]);
   useEffect(() => { attachedDocsRef.current = attachedDocs; }, [attachedDocs]);
+  // Docs that are currently being extracted. Rendered in the composer
+  // chip row with a spinner badge, and the send button is disabled while
+  // any are pending — otherwise a user who hits send during the gap
+  // between drop and extraction-complete sends the message without the
+  // file attached. Name/ext are known up-front (from filename) so we can
+  // show a real label, not a generic "loading…".
+  type PendingDoc = { id: string; name: string; ext: string };
+  const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
+  const pendingDocsRef = useRef<PendingDoc[]>([]);
+  useEffect(() => { pendingDocsRef.current = pendingDocs; }, [pendingDocs]);
   // Single-shot stash of the attachment metadata for the NEXT user message
   // about to be created by sendPiMessage / enqueuePiMessage. sendMessage
   // populates this just before dispatching; the message-creation sites
@@ -3652,6 +3662,7 @@ export function StandaloneChat({
     setIsStreaming,
     setPastedImages,
     setAttachedDocs,
+    setPendingDocs,
     settings,
     selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,
@@ -3685,34 +3696,64 @@ export function StandaloneChat({
     }
   }, [resizeImage]);
 
-  // Read a non-image file by path, extract its text, and append to attachedDocs.
-  // De-duplicates by filename so dropping the same file twice (or being in both
-  // the picker selection and a drag-drop event) only attaches it once.
-  const loadDocFromPath = useCallback(async (filePath: string) => {
-    const name = filePath.split(/[\\/]/).pop() || filePath;
+  // Shared extraction lifecycle: register a pending chip immediately,
+  // run the (potentially multi-second) parser, then swap the pending
+  // chip for a resolved one in attachedDocs (or remove it on error /
+  // empty-result). Bytes-loader is a thunk so the caller can choose
+  // how to source the bytes (path read vs. File.arrayBuffer for paste).
+  const extractAndAttach = useCallback(async (
+    name: string,
+    loadBytes: () => Promise<Uint8Array>,
+  ) => {
     const ext = extFromName(name);
     if (!isSupportedDocExt(ext)) {
       toast({ title: "unsupported file", description: `can't read .${ext || "?"} files`, variant: "destructive" });
       return;
     }
-    if (attachedDocsRef.current.some((d) => d.name === name)) {
-      // already attached — silently skip rather than toast-spamming the user
+    // Dedupe across both resolved and in-flight attachments. Without
+    // the pending check, double-drop of a slow PDF would queue two
+    // extractions and produce a duplicate chip.
+    if (
+      attachedDocsRef.current.some((d) => d.name === name) ||
+      pendingDocsRef.current.some((d) => d.name === name)
+    ) {
       return;
     }
+
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setPendingDocs((prev) => [...prev, { id: pendingId, name, ext }]);
+
     try {
-      const bytes = await readFile(filePath);
+      const bytes = await loadBytes();
       const doc = await extractDocument(name, bytes);
       if (!doc.text.trim()) {
         toast({ title: "no text found", description: `${name} looks empty or has no extractable text`, variant: "destructive" });
         return;
       }
-      // Re-check at insert time in case two concurrent loads raced.
+      // Insert under setPendingDocs's removal so the chip transitions
+      // in-place from "loading" to "loaded" inside a single render.
       setAttachedDocs((prev) => prev.some((d) => d.name === name) ? prev : [...prev, doc]);
     } catch (err) {
-      console.error("failed to read attached doc:", err);
+      console.error("failed to extract attached doc:", err);
       toast({ title: "couldn't read file", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } finally {
+      setPendingDocs((prev) => prev.filter((p) => p.id !== pendingId));
     }
   }, []);
+
+  // Path-based loader (drag-drop / file picker), bytes via tauri fs.
+  const loadDocFromPath = useCallback(async (filePath: string) => {
+    const name = filePath.split(/[\\/]/).pop() || filePath;
+    await extractAndAttach(name, () => readFile(filePath));
+  }, [extractAndAttach]);
+
+  // File-object loader (clipboard paste), bytes via File.arrayBuffer.
+  // Browsers expose pasted Finder/Explorer files as File objects with
+  // no underlying path, so we can't reuse the tauri-fs readFile path.
+  const processDocFile = useCallback(async (file: File) => {
+    const name = file.name || "pasted file";
+    await extractAndAttach(name, async () => new Uint8Array(await file.arrayBuffer()));
+  }, [extractAndAttach]);
 
   // Handle file picker — images and documents
   const handleFilePicker = useCallback(async () => {
@@ -3777,33 +3818,45 @@ export function StandaloneChat({
     const items = e.clipboardData?.items;
     const files = e.clipboardData?.files;
 
-    // Try items first (works in most browsers)
+    // Walk both surfaces (`items` for the common path, `files` as a
+    // fallback for browsers that don't expose Finder/Explorer pastes
+    // through items). Images take the existing fast path; documents
+    // route through processDocFile, which mirrors the drag-drop flow
+    // including pending-chip rendering. Non-file clipboard content
+    // (plain text, html) is ignored — the default paste handles it.
+    const handled = new Set<File>();
+    const tryDispatch = (file: File | null | undefined) => {
+      if (!file || handled.has(file)) return false;
+      const fileTypeIsImage = file.type.startsWith("image/");
+      const ext = extFromName(file.name || "");
+      if (fileTypeIsImage) {
+        handled.add(file);
+        processImageFile(file);
+        return true;
+      }
+      if (isSupportedDocExt(ext)) {
+        handled.add(file);
+        void processDocFile(file);
+        return true;
+      }
+      return false;
+    };
+
+    let didDispatch = false;
     if (items) {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        if (item.type.startsWith("image/")) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            processImageFile(file);
-          }
-          return;
-        }
+        if (item.kind !== "file") continue;
+        if (tryDispatch(item.getAsFile())) didDispatch = true;
       }
     }
-
-    // Fallback: try files array (some browsers put images here)
     if (files && files.length > 0) {
       for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (file.type.startsWith("image/")) {
-          e.preventDefault();
-          processImageFile(file);
-          return;
-        }
+        if (tryDispatch(files[i])) didDispatch = true;
       }
     }
-  }, [processImageFile]);
+    if (didDispatch) e.preventDefault();
+  }, [processImageFile, processDocFile]);
 
   // Signal that this chat window is ready to receive prefill events.
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
@@ -4618,6 +4671,10 @@ export function StandaloneChat({
     // to native steering so the correction applies to the current answer.
     if (e.key === "Enter" && !e.shiftKey && !showMentionDropdown) {
       e.preventDefault();
+      // Don't send while a document extraction is still in flight —
+      // otherwise the user's prompt ships without the file attached,
+      // which is the exact silent-drop bug the pending-chips fix.
+      if (pendingDocsRef.current.length > 0) return;
       if (input.trim() || pastedImages.length > 0 || attachedDocsRef.current.length > 0) {
         sendMessage(input.trim());
       }
@@ -7905,6 +7962,7 @@ export function StandaloneChat({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pendingDocsRef.current.length > 0) return; // wait for extraction to finish
     if (!input.trim() && pastedImages.length === 0 && attachedDocsRef.current.length === 0) return;
     sendMessage(input.trim());
   };
@@ -9115,9 +9173,30 @@ export function StandaloneChat({
             baseline (the previous design rendered them in two separate
             <div> rows with different heights, producing a fragmented strip
             when a user attached one of each). Mirrors the in-bubble
-            in-bubble attachment row order (docs first, images after). */}
-        {(attachedDocs.length > 0 || pastedImages.length > 0) && (
+            in-bubble attachment row order (pending first so the user sees
+            the spinner promote in-place to a resolved chip, then resolved
+            docs, then images). */}
+        {(attachedDocs.length > 0 || pendingDocs.length > 0 || pastedImages.length > 0) && (
           <div className="px-5 sm:px-6 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
+            {pendingDocs.map((doc) => {
+              const badge = attachmentBadge(doc.ext);
+              return (
+                <div
+                  key={`pending-${doc.id}`}
+                  className="flex items-center gap-2.5 h-16 max-w-[240px] rounded-xl border border-border/50 bg-muted/40 px-2.5 shadow-sm opacity-80"
+                  title={`${doc.name} — extracting…`}
+                  aria-busy="true"
+                >
+                  <div className={`relative shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
+                    <div className="truncate text-[10px] text-muted-foreground">extracting…</div>
+                  </div>
+                </div>
+              );
+            })}
             {attachedDocs.map((doc, i) => {
               const badge = attachmentBadge(doc.ext);
               return (
@@ -9452,12 +9531,17 @@ export function StandaloneChat({
                 const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
                 const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
                 const isStopMode = primaryAction === "stop";
+                // Pending doc extraction blocks send (but not stop). The
+                // button stays visible but disabled — the spinning chip
+                // upstream is the affordance that explains why.
+                const hasPendingDocs = pendingDocs.length > 0;
+                const sendDisabled = (!hasInput && !isStopMode) || !canChat || (!isStopMode && hasPendingDocs);
                 return (
                   <>
                     <Button
                       type={isStopMode ? "button" : "submit"}
                       size="icon"
-                      disabled={(!hasInput && !isStopMode) || !canChat}
+                      disabled={sendDisabled}
                       onClick={isStopMode ? handleStop : undefined}
                       className={cn(
                         "h-8 w-8 transition-all duration-200 relative",
@@ -9466,16 +9550,22 @@ export function StandaloneChat({
                       title={
                         isStopMode
                           ? "stop"
-                          : "send"
+                          : hasPendingDocs
+                            ? "waiting for attachment to finish extracting"
+                            : "send"
                       }
                       aria-label={
                         isStopMode
                           ? "stop reply"
-                          : "send message"
+                          : hasPendingDocs
+                            ? "send disabled while attachment is extracting"
+                            : "send message"
                       }
                     >
                       {isStopMode ? (
                         <Square className="h-4 w-4" />
+                      ) : hasPendingDocs ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
                         <Send className="h-4 w-4" />
                       )}
