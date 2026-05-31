@@ -188,11 +188,8 @@ export function ArtifactsLibrary() {
           <File className="h-8 w-8 opacity-30 mb-3" />
           <p className="text-sm">No artifacts yet</p>
           <p className="text-xs mt-1 max-w-xs text-center">
-            Pipes that create files will show them here. Add an{" "}
-            <code className="px-1 py-0.5 bg-muted rounded text-[10px]">
-              artifacts
-            </code>{" "}
-            section to a pipe&apos;s frontmatter to declare its output files.
+            When your pipes create files like notes, reports, summaries, or todo
+            lists, you&apos;ll find them here.
           </p>
         </div>
       ) : (
