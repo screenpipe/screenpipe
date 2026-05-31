@@ -33,6 +33,7 @@ import {
   openScreenpipeViewerLink,
   rewriteLocalMarkdownLinksForChat,
 } from "@/components/markdown";
+import { ChatCodeBlock } from "@/components/ui/chat-code-block";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
@@ -2190,7 +2191,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
         },
         code({ className, children, ...props }) {
           const content = String(children).replace(/\n$/, "");
-          const match = /language-(\w+)/.exec(className || "");
+          const match = /language-([^\s]+)/.exec(className || "");
           const language = match?.[1] || "";
           const isCodeBlock = className?.includes("language-");
 
@@ -2203,11 +2204,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
           }
 
           if (isCodeBlock) {
-            return (
-              <code className="font-mono text-xs block whitespace-pre-wrap break-all text-neutral-200" {...props}>
-                {content}
-              </code>
-            );
+            return <ChatCodeBlock language={language} value={content} />;
           }
 
           return (
