@@ -213,7 +213,13 @@ fn setup_logging(
             // SCREENPIPE_LOG=ort=info.
             .add_directive("ort=warn".parse().unwrap());
 
-        #[cfg(target_os = "windows")]
+        // xcap probes stale monitor / window IDs on every refresh and emits
+        // ERROR-level lines for IDs that don't exist (e.g. ImplMonitor::new(8)
+        // failed after a display was unplugged). Hundreds per session, all
+        // benign, and they crowd out real errors in user feedback logs.
+        // Silence on every platform — was previously windows-only, but the
+        // same spam happens on macOS (Core Graphics display IDs persist after
+        // disconnect) and on Linux X11.
         let filter = filter
             .add_directive("xcap::platform::impl_window=off".parse().unwrap())
             .add_directive("xcap::platform::impl_monitor=off".parse().unwrap())

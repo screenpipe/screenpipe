@@ -981,15 +981,20 @@ async fn main() {
                 .build(log_dir)?;
 
             // Create a custom layer for file logging
+            // xcap probes stale monitor / window IDs every refresh and logs
+            // ERROR for IDs that don't exist (e.g. after a display unplug).
+            // Benign noise that swamps real errors in user feedback logs.
+            const LOG_FILTER: &str = "info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn,ort=warn,xcap::platform::impl_window=off,xcap::platform::impl_monitor=off,xcap::platform::utils=off";
+
             let file_layer = tracing_subscriber::fmt::layer()
                 .with_writer(file_appender)
                 .with_ansi(false)
-                .with_filter(EnvFilter::new("info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn,ort=warn"));
+                .with_filter(EnvFilter::new(LOG_FILTER));
 
             // Create a custom layer for console logging
             let console_layer = tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
-                .with_filter(EnvFilter::new("info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn,ort=warn"));
+                .with_filter(EnvFilter::new(LOG_FILTER));
 
             // Initialize the tracing subscriber with both layers + optional Sentry layer
             // The Sentry layer captures error!() and warn!() events (not just panics)
