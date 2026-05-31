@@ -1709,24 +1709,23 @@ impl PipeManager {
     /// absolute locations under `pipes_dir`. Paths that escape the pipe
     /// directory (e.g. `../secret`) are silently dropped. Caller is
     /// responsible for filesystem checks (existence, metadata).
+    ///
+    /// Two exclusive modes per pipe:
+    /// - If the pipe declares `artifacts:` in frontmatter, use only those.
+    /// - Otherwise, fall back to scanning `<pipe_dir>/output/` for files.
     pub async fn list_artifact_declarations(
         &self,
     ) -> Vec<(String, Vec<(ArtifactDeclaration, std::path::PathBuf)>)> {
         let pipes = self.pipes.lock().await;
         let mut result = Vec::new();
         for (name, (config, _, _)) in pipes.iter() {
-            if config.artifacts.is_empty() {
-                continue;
-            }
             let pipe_dir = self.pipes_dir.join(name);
-            let resolved: Vec<(ArtifactDeclaration, std::path::PathBuf)> = config
-                .artifacts
-                .iter()
-                .filter_map(|a| {
+            let mut resolved: Vec<(ArtifactDeclaration, std::path::PathBuf)> = Vec::new();
+
+            if !config.artifacts.is_empty() {
+                // Explicit frontmatter declarations — use only these
+                for a in &config.artifacts {
                     let abs = pipe_dir.join(&a.path);
-                    // Canonicalizing may fail if the file doesn't exist yet,
-                    // so normalize manually: resolve `..` components and
-                    // verify the result stays inside pipe_dir.
                     let normalized = normalize_path(&abs);
                     if !normalized.starts_with(&pipe_dir) {
                         tracing::warn!(
@@ -1734,11 +1733,35 @@ impl PipeManager {
                             name,
                             a.path,
                         );
-                        return None;
+                        continue;
                     }
-                    Some((a.clone(), normalized))
-                })
-                .collect();
+                    resolved.push((a.clone(), normalized));
+                }
+            } else {
+                // Fallback: no declarations → scan <pipe_dir>/output/
+                let output_dir = pipe_dir.join("output");
+                if let Ok(mut entries) = tokio::fs::read_dir(&output_dir).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let kind = match path.extension().and_then(|e| e.to_str()) {
+                            Some("md") => "markdown",
+                            Some("json") => "json",
+                            Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
+                            _ => "text",
+                        };
+                        let decl = ArtifactDeclaration {
+                            path: format!("output/{}", entry.file_name().to_string_lossy()),
+                            title: None,
+                            kind: Some(kind.to_string()),
+                        };
+                        resolved.push((decl, normalize_path(&path)));
+                    }
+                }
+            }
+
             if !resolved.is_empty() {
                 result.push((name.clone(), resolved));
             }
