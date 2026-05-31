@@ -1153,9 +1153,11 @@ const getAudioDeviceIcon = (name: string) => {
 
 // ─── Transcription Dictionary ────────────────────────────────────────────────
 
-const VOCAB_LIMIT = 1000;
 const DEEPGRAM_LIMIT = 100;
 const WHISPER_CHAR_LIMIT = 800;
+// Cap stored terms at the strictest real engine limit (Deepgram cloud).
+// Whisper's offline limit is on total chars, not term count, and is surfaced separately below.
+const VOCAB_LIMIT = DEEPGRAM_LIMIT;
 
 function parseTerms(raw: string): string[] {
   // Auto-detect delimiter: if there are newlines, split by newlines; otherwise commas; otherwise semicolons; otherwise tabs
