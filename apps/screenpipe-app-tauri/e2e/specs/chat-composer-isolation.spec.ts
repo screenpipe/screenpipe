@@ -30,6 +30,42 @@
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 
+// Seed a session record in the chat store before driving the panel.
+// The composer-draft contract is gated on the session already existing
+// in the store (the store's setComposerDraft no-ops for unknown ids,
+// the same way snapshot/restore in loadConversation do). In real usage
+// this is always true — every switchable chat came from disk or from
+// the sidebar's "+ new chat" path, both of which upsert. The e2e
+// harness skips that registration because it uses synthetic ids, so
+// we seed via the existing __e2eSeedUserMessage hook which upserts
+// internally.
+async function seedChat(sessionId: string, marker: string): Promise<void> {
+  await browser.execute(
+    (sid: string, text: string) => {
+      const fn = (window as any).__e2eSeedUserMessage as
+        | ((s: string, t: string) => void)
+        | undefined;
+      if (fn) fn(sid, text);
+    },
+    sessionId,
+    marker,
+  );
+}
+
+async function waitForChatSeedHook(): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        () => typeof (window as any).__e2eSeedUserMessage === "function",
+      )) as boolean,
+    {
+      timeout: t(10_000),
+      interval: 100,
+      timeoutMsg: "E2E chat seed hook did not mount",
+    },
+  );
+}
+
 const CHAT_A = "33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const CHAT_B = "44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const DRAFT_MARKER = "(e2e) yayhooray-COMPOSER-LEAK-PROBE";
@@ -83,6 +119,13 @@ describe("Chat composer drafts are scoped per conversation", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    await waitForChatSeedHook();
+    // Register both chats in the store so the draft snapshot/restore
+    // and mirror writes have a session record to attach to. Real
+    // production flows do this via disk-load or "+ new chat"; the e2e
+    // harness uses synthetic ids that aren't on disk, so we seed.
+    await seedChat(CHAT_A, "e2e seed A");
+    await seedChat(CHAT_B, "e2e seed B");
   });
 
   it("keeps each chat's draft isolated and restores it on return", async () => {
