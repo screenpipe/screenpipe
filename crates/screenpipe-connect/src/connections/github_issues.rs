@@ -41,12 +41,26 @@ impl Integration for GithubIssues {
     }
 
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
+        // GitHub's REST API edge rejects requests with a missing or empty
+        // User-Agent before they ever hit auth, returning 403 with body:
+        //   "Request forbidden by administrative rules. Please make sure
+        //    your request has a User-Agent header."
+        // reqwest 0.13's default Client sends no User-Agent at all, so the
+        // proxy MUST inject one for every outbound call. Accept + version
+        // headers follow GitHub's documented REST conventions and pin the
+        // API version so server-side changes don't surprise pipes.
+        // Refs: https://docs.github.com/en/rest/overview/resources-in-the-rest-api#user-agent-required
+        //       https://docs.github.com/en/rest/overview/api-versions
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.github.com",
             auth: ProxyAuth::Bearer {
                 credential_key: "api_key",
             },
-            extra_headers: &[],
+            extra_headers: &[
+                ("User-Agent", "screenpipe"),
+                ("Accept", "application/vnd.github+json"),
+                ("X-GitHub-Api-Version", "2022-11-28"),
+            ],
         };
         Some(&CFG)
     }
