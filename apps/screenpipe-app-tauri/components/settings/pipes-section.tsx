@@ -824,6 +824,14 @@ export function PipesSection() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipes]);
 
+  const starredEmptyTitle = React.useMemo(() => {
+    if (!pipeFavorites.showOnly) return null;
+
+    if (pipeTypeFilter === "triggered") return "no starred triggered pipes";
+    if (pipeTypeFilter === "manual") return "no starred manual pipes";
+    return "no starred scheduled pipes";
+  }, [pipeFavorites.showOnly, pipeTypeFilter]);
+
   const sharePipePublic = async (pipe: PipeStatus) => {
     setSharingPublic(pipe.config.name);
     try {
@@ -1480,6 +1488,28 @@ export function PipesSection() {
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
               <p>no pipes match your search</p>
+            ) : pipeFavorites.showOnly && tabCounts[pipeTypeFilter] > 0 ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-foreground font-medium text-base">
+                    {starredEmptyTitle}
+                  </p>
+                  <p className="text-sm mt-1">
+                    {pipeFavorites.favorites.size === 0
+                      ? "star any pipe to keep your favorites here"
+                      : "none of your starred pipes match this filter right now"}
+                  </p>
+                </div>
+                <div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => pipeFavorites.setShowOnly(false)}
+                  >
+                    show all pipes
+                  </Button>
+                </div>
+              </div>
             ) : pipeTypeFilter === "triggered" ? (
               <>
                 <p>no triggered pipes installed</p>
