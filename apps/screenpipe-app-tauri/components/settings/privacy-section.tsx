@@ -376,8 +376,47 @@ export function PrivacySection() {
     }
   };
 
+  // ── PII removal: one user-facing toggle, three internal flags ─────
+  //
+  // The UI exposes a single "PII Removal" section with two modes —
+  // Basic (regex on the hot path) and Smart (regex + AI background
+  // worker, also covers images). Underneath we still drive the three
+  // historically-independent backend flags:
+  //
+  //   usePiiRemoval            → hot-path regex (screenpipe-core)
+  //   asyncPiiRedaction        → text reconciliation worker (screenpipe-redact)
+  //   asyncImagePiiRedaction   → image redactor worker (rfdetr_v8)
+  //
+  // Smart implies Basic — there's no reason to disable the cheap
+  // deterministic safety net while running the expensive ML pass, and
+  // keeping them coupled means a single source of truth for "is the
+  // user opted into PII removal at all?" downstream.
+  type PiiMode = "off" | "basic" | "smart";
+  const piiMode: PiiMode = (() => {
+    const aiOn =
+      Boolean(settings.asyncPiiRedaction ?? false) ||
+      Boolean(settings.asyncImagePiiRedaction ?? false);
+    if (aiOn) return "smart";
+    if (settings.usePiiRemoval) return "basic";
+    return "off";
+  })();
+
+  const handlePiiModeChange = (next: PiiMode) => {
+    handleSettingsChange(
+      {
+        usePiiRemoval: next !== "off",
+        asyncPiiRedaction: next === "smart",
+        asyncImagePiiRedaction: next === "smart",
+      },
+      true,
+    );
+  };
+
+  // Kept for the ManagedSwitch path (enterprise lock on usePiiRemoval).
+  // Falls back to a Basic-mode flip; enterprise admins who pinned the
+  // legacy flag still get exactly what they pinned.
   const handlePiiRemovalChange = (checked: boolean) => {
-    handleSettingsChange({ usePiiRemoval: checked }, true);
+    handlePiiModeChange(checked ? "basic" : "off");
   };
 
   // Cloud media analysis (Gemma 4 E4B inside our Tinfoil enclave) —
@@ -428,23 +467,7 @@ export function PrivacySection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // "AI PII removal" — single user-facing toggle that flips both the
-  // text reconciliation worker AND the image redactor (rfdetr_v8) on
-  // or off together. The technical knobs (destructive vs sibling,
-  // text-only vs image-only) stay CLI-only so the UI stays simple.
-  const aiPiiRemovalEnabled =
-    Boolean(settings.asyncPiiRedaction ?? false) ||
-    Boolean(settings.asyncImagePiiRedaction ?? false);
-
-  const handleAiPiiRemovalChange = (checked: boolean) => {
-    handleSettingsChange(
-      {
-        asyncPiiRedaction: checked,
-        asyncImagePiiRedaction: checked,
-      },
-      true,
-    );
-  };
+  const aiPiiRemovalEnabled = piiMode === "smart";
 
   // Where the AI workers run — one switch covers both modalities.
   const piiBackend = (settings.piiBackend as "local" | "tinfoil" | undefined) ?? "local";
@@ -972,6 +995,11 @@ export function PrivacySection() {
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
           Data protection
         </h2>
+        {/* One PII Removal section with two modes — Basic (regex on the
+            hot path) and Smart (regex + AI background worker, also
+            covers images). Smart progressively discloses backend +
+            field selection. See piiMode comment above for the
+            three-flag mapping. */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -980,48 +1008,71 @@ export function PrivacySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     PII Removal
-                    <HelpTooltip text="Automatically redacts personally identifiable information (emails, phone numbers, etc.) from captured text before storing." />
+                    <HelpTooltip text="Redacts emails, phones, secrets, and more from captures. Smart mode adds names, addresses, and image redaction." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    Redact emails, phones, SSNs, credit cards
+                    {piiMode === "off"
+                      ? "Off — captures store raw text and pixels."
+                      : piiMode === "basic"
+                      ? "Basic — regex on capture. Emails, phones, SSNs, cards, API keys."
+                      : "Smart — AI background worker. Adds names, addresses, image redaction."}
                   </p>
                 </div>
               </div>
               <ManagedSwitch
                 settingKey="usePiiRemoval"
                 id="usePiiRemoval"
-                checked={settings.usePiiRemoval}
-                onCheckedChange={handlePiiRemovalChange}
+                checked={piiMode !== "off"}
+                onCheckedChange={(checked) =>
+                  handlePiiModeChange(checked ? "basic" : "off")
+                }
               />
             </div>
-          </CardContent>
-        </Card>
-
-        {/* AI PII removal — covers text + images via the async worker */}
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    AI PII removal
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                      Experimental
+            {piiMode !== "off" && (
+              <div className="mt-3 ml-6 space-y-3 border-l-2 border-border pl-3">
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-foreground">Mode</p>
+                  <label className="flex cursor-pointer items-start gap-2 text-xs">
+                    <input
+                      type="radio"
+                      name="piiMode"
+                      className="mt-0.5"
+                      checked={piiMode === "basic"}
+                      onChange={() => handlePiiModeChange("basic")}
+                    />
+                    <span>
+                      <span className="font-medium text-foreground">Basic</span>
+                      <span className="text-muted-foreground">
+                        {" "}— regex on capture. Free, instant, deterministic.
+                        Catches emails, phones, SSNs, cards, JWTs, API keys,
+                        private keys, connection strings.
+                      </span>
                     </span>
-                    <HelpTooltip text="Uses an on-device AI model to detect and remove PII from both screen frames and captured text (names, emails, addresses, secrets, URLs). Downloads a ~100 MB model on first run and uses extra CPU/GPU while it processes captures in the background." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Removes PII from text and images. Uses extra resources.
-                  </p>
+                  </label>
+                  <label className="flex cursor-pointer items-start gap-2 text-xs">
+                    <input
+                      type="radio"
+                      name="piiMode"
+                      className="mt-0.5"
+                      checked={piiMode === "smart"}
+                      onChange={() => handlePiiModeChange("smart")}
+                    />
+                    <span>
+                      <span className="font-medium text-foreground">Smart</span>
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
+                        Experimental
+                      </span>
+                      <span className="text-muted-foreground">
+                        {" "}— includes Basic, plus an AI background worker
+                        for semantic PII (names, addresses, sensitive context)
+                        and image redaction on screen frames. Downloads a
+                        ~100 MB model on first run.
+                      </span>
+                    </span>
+                  </label>
                 </div>
               </div>
-              <Switch
-                id="aiPiiRemoval"
-                checked={aiPiiRemovalEnabled}
-                onCheckedChange={handleAiPiiRemovalChange}
-              />
-            </div>
+            )}
             {aiPiiRemovalEnabled && (
               <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
                 <p className="text-xs font-medium text-foreground">Where it runs</p>
@@ -1097,7 +1148,7 @@ export function PrivacySection() {
                 })}
                 <p className="text-[11px] text-muted-foreground pt-0.5">
                   Unselected types stay visible so your timeline remains
-                  searchable. Secrets are always removed.
+                  searchable. Secrets are always removed in both modes.
                 </p>
               </div>
             )}
