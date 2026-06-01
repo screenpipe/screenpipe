@@ -4660,8 +4660,11 @@ export function StandaloneChat({
         void Promise.resolve(steerMessage(input.trim())).finally(() => {
           steerShortcutInFlightRef.current = false;
         });
-      } else if (!input.trim() && pastedImages.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
-        steerQueuedPrompt(queuedPrompts[0]);
+      } else if (!input.trim() && pastedImages.length === 0 && pendingDocsRef.current.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
       return;
     }
@@ -4713,8 +4716,11 @@ export function StandaloneChat({
         void Promise.resolve(steerMessage(input.trim())).finally(() => {
           steerShortcutInFlightRef.current = false;
         });
-      } else if (!input.trim() && pastedImages.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
-        steerQueuedPrompt(queuedPrompts[0]);
+      } else if (!input.trim() && pastedImages.length === 0 && pendingDocsRef.current.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
     };
 
