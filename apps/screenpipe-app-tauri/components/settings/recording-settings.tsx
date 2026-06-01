@@ -230,6 +230,9 @@ const SERVER_RESTART_SETTINGS = new Set<keyof SettingsStore>([
   "piiBackend",
   "useChineseMirror",
   "enableWorkflowEvents",
+  // Timeline gating (hot-cache warm-up + frame/audio buffering) is wired at
+  // server startup, so it needs a full server restart, not just capture.
+  "disableTimeline",
 ]);
 
 type AudioPipelineSnapshot = {
@@ -3420,6 +3423,28 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
               </div>
               <ManagedSwitch settingKey="disableVision" id="disableVision" checked={!settings.disableVision} onCheckedChange={(checked) => handleSettingsChange({ disableVision: !checked }, true)} />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Disable Timeline / rewind. Gates timeline-only backend work
+            (hot-cache warm-up + frame/audio buffering) and the native macOS
+            Live Text overlay. Uses handleSettingsChange(..., true) so it joins
+            the "Apply & Restart" flow like the other recording toggles. */}
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Disable timeline
+                    <HelpTooltip text="Turn off the timeline / rewind feature. Skips the in-memory hot frame cache (warm-up + per-frame/audio buffering) that only the timeline uses, and disables the native macOS Live Text overlay that can otherwise leak a selection layer over other windows (e.g. the chat input) and block typing." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Hide rewind and skip its background work</p>
+                </div>
+              </div>
+              <ManagedSwitch settingKey="disableTimeline" id="disableTimeline" checked={settings.disableTimeline ?? false} onCheckedChange={(checked) => handleSettingsChange({ disableTimeline: checked }, true)} />
             </div>
           </CardContent>
         </Card>

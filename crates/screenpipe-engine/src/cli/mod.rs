@@ -813,6 +813,9 @@ impl RecordArgs {
             port: self.port,
             disable_audio: self.disable_audio,
             disable_vision: self.disable_vision,
+            // CLI has no --disable-timeline flag; the desktop app drives this
+            // toggle. Default to enabled (timeline on) for the engine binary.
+            disable_timeline: false,
             use_pii_removal: self.use_pii_removal,
             async_pii_redaction: self.async_pii_redaction,
             async_image_pii_redaction: self.async_image_pii_redaction,

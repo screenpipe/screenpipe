@@ -2270,6 +2270,13 @@ vocabularyWords?: VocabEntry[];
  */
 disableVision: boolean;
 /**
+ * Disable the timeline / rewind feature. When true, the engine skips
+ * timeline-only work: warming the hot frame cache from the DB at startup
+ * and buffering captured frames/audio into the in-memory hot cache that
+ * only the timeline streaming endpoint reads.
+ */
+disableTimeline?: boolean;
+/**
  * Specific monitor IDs to capture.
  */
 monitorIds: string[];
@@ -2617,13 +2624,6 @@ overlayMode?: string;
  * Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
  */
 showOverlayInScreenRecording?: boolean;
-/**
- * When true, the timeline / rewind feature is disabled entirely. This also
- * disables the native macOS Live Text overlay used by the timeline, which
- * can otherwise leak a native VisionKit selection view over other windows
- * (e.g. the chat input) and silently block keyboard input.
- */
-disableTimeline?: boolean;
 /**
  * When true, the chat window stays above all other windows (default: true).
  */

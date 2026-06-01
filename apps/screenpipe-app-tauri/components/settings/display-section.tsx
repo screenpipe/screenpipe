@@ -9,7 +9,7 @@ import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2 } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
@@ -134,37 +134,6 @@ export function DisplaySection() {
                   );
                 })}
               </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Disable Timeline
-                    <HelpTooltip text="Turn off the timeline / rewind feature entirely. This also disables the native macOS Live Text overlay, which can otherwise leak a selection layer over other windows (e.g. the chat input) and block typing." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">Hide rewind and disable the Live Text overlay</p>
-                </div>
-              </div>
-              <Switch
-                checked={settings?.disableTimeline ?? false}
-                onCheckedChange={(checked) => {
-                  handleSettingsChange({ disableTimeline: checked });
-                  commands.resetMainWindow().catch(() => {});
-                  toast({
-                    title: checked ? "timeline disabled" : "timeline enabled",
-                    description: checked
-                      ? "the timeline and live text overlay are now off."
-                      : "the timeline is back on.",
-                  });
-                }}
-                className="ml-4"
-              />
             </div>
           </CardContent>
         </Card>

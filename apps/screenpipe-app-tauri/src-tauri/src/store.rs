@@ -664,12 +664,10 @@ pub struct SettingsStore {
     #[serde(rename = "showOverlayInScreenRecording", default)]
     pub show_overlay_in_screen_recording: bool,
 
-    /// When true, the timeline / rewind feature is disabled entirely. This also
-    /// disables the native macOS Live Text overlay used by the timeline, which
-    /// can otherwise leak a native VisionKit selection view over other windows
-    /// (e.g. the chat input) and silently block keyboard input.
-    #[serde(rename = "disableTimeline", default)]
-    pub disable_timeline: bool,
+    // NOTE: `disableTimeline` lives on the flattened `recording`
+    // (`RecordingSettings::disable_timeline`) so the engine can read it too. The
+    // frontend JSON key stays `disableTimeline` at the top level via serde
+    // flatten — do not add a second field here or serde will conflict.
 
     /// When true, the chat window stays above all other windows (default: true).
     #[serde(rename = "chatAlwaysOnTop", default = "default_true")]
@@ -1044,7 +1042,6 @@ Rules:
             #[cfg(not(target_os = "macos"))]
             overlay_mode: "window".to_string(),
             show_overlay_in_screen_recording: false,
-            disable_timeline: false,
             chat_always_on_top: true,
             show_restart_notifications: false,
             #[cfg(target_os = "macos")]

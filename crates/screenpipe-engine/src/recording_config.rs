@@ -30,6 +30,10 @@ pub struct RecordingConfig {
     // Feature toggles
     pub disable_audio: bool,
     pub disable_vision: bool,
+    /// Disable the timeline / rewind feature. Skips timeline-only backend work
+    /// (hot frame cache warm-up + per-frame/audio buffering into the hot cache
+    /// that only the timeline streaming endpoint consumes).
+    pub disable_timeline: bool,
     pub use_pii_removal: bool,
     /// Async text PII redaction: runs the background reconciliation
     /// worker over OCR / transcripts / accessibility / ui_events and
@@ -229,6 +233,7 @@ impl RecordingConfig {
             data_dir,
             disable_audio: settings.disable_audio,
             disable_vision: settings.disable_vision,
+            disable_timeline: settings.disable_timeline,
             use_pii_removal: settings.use_pii_removal,
             async_pii_redaction: settings.async_pii_redaction,
             async_image_pii_redaction: settings.async_image_pii_redaction,
