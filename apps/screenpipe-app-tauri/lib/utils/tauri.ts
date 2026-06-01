@@ -522,9 +522,6 @@ async getE2eSeedFlags() : Promise<string[]> {
 async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
     return await TAURI_INVOKE("get_enterprise_install_metadata");
 },
-async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
-    return await TAURI_INVOKE("get_enterprise_install_metadata");
-},
 /**
  * Read the enterprise license key from `enterprise.json`.
  * Checks in order:
@@ -1663,9 +1660,6 @@ async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
 /**
  * Called by the frontend after fetching the enterprise policy.
  */
-async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
-    await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
-},
 async setNativeTheme(theme: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_native_theme", { theme }) };
@@ -1706,9 +1700,6 @@ async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memorie
  * `/api/enterprise/policy`. Flat booleans rather than a struct so the
  * specta-generated TS binding stays trivial.
  */
-async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean) : Promise<void> {
-    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots });
-},
 async setTrayHealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_health_icon");
 },
