@@ -1711,12 +1711,26 @@ pub async fn pi_start_inner(
                         // mid-stream `response` ACK doesn't unblock the
                         // queue early.
                         qs.mark_agent_active();
+                        // If a steer was in flight, it has now started its
+                        // agent turn. The drain loop can rely on agent_active
+                        // from here on.
+                        qs.clear_steer_in_flight();
                     }
                     Some("agent_end") => {
                         qs.mark_agent_idle();
                         qs.signal_done();
                     }
-                    Some("message_start") => {}
+                    Some("message_start") => {
+                        // Native steer may not emit agent_start — it goes
+                        // straight from message_start to text deltas. If a
+                        // steer is in flight, treat message_start as the
+                        // start of the steered turn so the drain loop
+                        // stays blocked via agent_active until agent_end.
+                        if qs.is_steer_in_flight() {
+                            qs.mark_agent_active();
+                            qs.clear_steer_in_flight();
+                        }
+                    }
                     Some("response") => {
                         // Only meaningful for new_session/abort — those don't
                         // fire agent_start/agent_end. Suppress while a prompt

@@ -7768,14 +7768,134 @@ export function StandaloneChat({
       },
     ];
     if (hadActiveReply) {
-      // Request interruption at the next safe boundary event.
-      steerAbortAtBoundaryRef.current = true;
-      void maybeInterruptForPendingSteer("steer_message");
+      const sid = piSessionIdRef.current;
+      if (sid) {
+        // Extract and clear the batch for this session.
+        const batch = pendingSteerBatchRef.current.filter(
+          (item) => item.sessionId === sid,
+        );
+        pendingSteerBatchRef.current =
+          pendingSteerBatchRef.current.filter(
+            (item) => item.sessionId !== sid,
+          );
+        const latest = batch[batch.length - 1];
+        if (!latest) return;
+
+        const prompt = buildSteerPrompt(batch);
+        const preview = queuedPreviewForText(latest.content);
+        const combinedImages = imageDataUrlsToPiImages(
+          batch.flatMap((item) => item.images),
+        );
+
+        // Remove earlier batch items' turn intents (only latest survives).
+        batch
+          .slice(0, -1)
+          .forEach((item) => removeTurnIntent(item.turnIntentId));
+
+        // Set intent refs so the message_start handler recognises the
+        // steer echo and creates the assistant placeholder.
+        pendingNextPiUserIntentRef.current = "steer";
+        pendingNextPiUserDisplayRef.current = {
+          preview,
+          images: [...latest.images],
+          ...(latest.attachments?.length
+            ? { attachments: [...latest.attachments] }
+            : {}),
+          ...(latest.displayContent
+            ? { displayContent: latest.displayContent }
+            : {}),
+          optimisticUserId: latest.optimisticUserId,
+          turnIntentId: latest.turnIntentId,
+        };
+        optimisticSteerRef.current = {
+          id: latest.optimisticUserId,
+          content: prompt,
+          turnIntentId: latest.turnIntentId,
+        };
+        registerTurnIntent({
+          id: latest.turnIntentId,
+          sessionId: sid,
+          kind: "steer",
+          content: prompt,
+          preview,
+          displayedUserId: latest.optimisticUserId,
+          createdAt: latest.createdAt,
+        });
+
+        piActiveStopRequestedRef.current = true;
+
+        const interruptedAssistantId =
+          latest.interruptedAssistantId ?? null;
+
+        // Send steer directly — no abort needed.
+        // send_immediate sets steer_in_flight in Rust, holding the
+        // drain loop until the steer turn's agent_start fires.
+        void commands
+          .piSteer(
+            sid,
+            prompt,
+            combinedImages.length > 0 ? combinedImages : null,
+          )
+          .then((result) => {
+            if (result.status !== "ok") {
+              console.warn("[steer] piSteer returned non-ok:", result);
+              revertFailedComposerSteer(
+                batch,
+                latest,
+                interruptedAssistantId,
+                result.error ?? "steer command rejected",
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            console.warn("[steer] piSteer failed, reverting", err);
+            revertFailedComposerSteer(
+              batch,
+              latest,
+              interruptedAssistantId,
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+      }
       return;
     }
     if (!piMessageIdRef.current) {
       void flushPendingSteerBatch();
     }
+  }
+
+  /** Undo all side-effects of a failed composer steer. */
+  function revertFailedComposerSteer(
+    batch: typeof pendingSteerBatchRef.current,
+    latest: (typeof pendingSteerBatchRef.current)[number],
+    interruptedAssistantId: string | null,
+    errorDescription: string,
+  ) {
+    // Clear intent refs so message_start handler ignores the steer.
+    pendingNextPiUserIntentRef.current = null;
+    pendingNextPiUserDisplayRef.current = null;
+    optimisticSteerRef.current = null;
+    piActiveStopRequestedRef.current = false;
+    removeTurnIntent(latest.turnIntentId);
+
+    // Un-mark the assistant that was marked interrupted.
+    setAssistantInterruptedState(interruptedAssistantId, false);
+
+    // Remove the optimistic user message inserted by steerMessage.
+    const optimisticId = latest.optimisticUserId;
+    setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+
+    // Put the batch back so a retry or future steer can use it.
+    pendingSteerBatchRef.current = [
+      ...batch,
+      ...pendingSteerBatchRef.current,
+    ];
+
+    toast({
+      title: "failed to send steered message",
+      description: errorDescription,
+      variant: "destructive",
+    });
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
