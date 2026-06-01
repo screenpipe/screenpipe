@@ -19,6 +19,7 @@ import { getStartDate } from "@/lib/actions/get-start-date";
 import { useTimelineData } from "@/lib/hooks/use-timeline-data";
 import { useCurrentFrame } from "@/lib/hooks/use-current-frame";
 import { TimelineSlider } from "@/components/rewind/timeline/timeline";
+import { SearchResultStrip } from "@/components/rewind/search-result-strip";
 import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
@@ -86,65 +87,6 @@ export interface TimeRange {
 const easeOutCubic = (x: number): number => {
 	return 1 - Math.pow(1 - x, 3);
 };
-
-// Tiny dot-strip showing all search-result positions; click to jump.
-// Each result is a small bar; the active one is bright yellow with a glow.
-// Renders nothing for ≤1 result (the counter alone is sufficient).
-function SearchResultStrip({
-	resultsLength,
-	activeIndex,
-	onJump,
-}: {
-	resultsLength: number;
-	activeIndex: number;
-	onJump: (index: number) => void;
-}) {
-	if (resultsLength <= 1) return null;
-	const stripWidth = 110;
-	const stripHeight = 14;
-	const denom = Math.max(1, resultsLength - 1);
-	return (
-		<div
-			className="relative shrink-0"
-			style={{ width: stripWidth, height: stripHeight }}
-			role="slider"
-			aria-label="Search result position"
-			aria-valuemin={1}
-			aria-valuemax={resultsLength}
-			aria-valuenow={activeIndex + 1}
-		>
-			<div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-px bg-white/15" />
-			{Array.from({ length: resultsLength }).map((_, i) => {
-				const isActive = i === activeIndex;
-				const x = (i / denom) * stripWidth;
-				return (
-					<button
-						key={i}
-						type="button"
-						onClick={() => onJump(i)}
-						className="absolute top-1/2 cursor-pointer focus:outline-none"
-						style={{
-							left: x - (isActive ? 2 : 1),
-							width: isActive ? 4 : 2,
-							height: isActive ? 10 : 5,
-							transform: "translateY(-50%)",
-							borderRadius: 1.5,
-							backgroundColor: isActive
-								? "rgb(250, 204, 21)"
-								: "rgba(255, 255, 255, 0.45)",
-							boxShadow: isActive
-								? "0 0 5px rgba(250, 204, 21, 0.7)"
-								: "none",
-							transition: "all 120ms ease-out",
-							zIndex: isActive ? 2 : 1,
-						}}
-						title={`Match ${i + 1}`}
-					/>
-				);
-			})}
-		</div>
-	);
-}
 
 export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const { isMac } = usePlatform();

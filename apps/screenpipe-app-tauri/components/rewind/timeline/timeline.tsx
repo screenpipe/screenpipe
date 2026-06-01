@@ -1664,6 +1664,8 @@ export const TimelineSlider = ({
 										<motion.div
 											key={`${frame.timestamp}-${frameIdx}`}
 											data-timestamp={frame.timestamp}
+											data-frame-id={frameId || undefined}
+											data-current={isCurrent ? "true" : undefined}
 											data-selected={isSelected || isInRange ? "true" : undefined}
 											className={cn(
 												"flex-shrink-0 cursor-ew-resize rounded-t relative hover:z-50 transition-all duration-200",

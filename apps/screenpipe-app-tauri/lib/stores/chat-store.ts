@@ -24,6 +24,11 @@ import { create } from "zustand";
 import type { ConversationKind, PipeContext } from "@/lib/hooks/use-settings";
 import type { ConversationMeta } from "@/lib/chat-storage";
 import type { ChatTitleSource } from "@/lib/utils/chat-title";
+import {
+  CONVERSATION_DEDUP_WINDOW_MS,
+  conversationDedupKey,
+  messagesHaveCompletedReply,
+} from "@/lib/chat-dedup";
 
 export type SessionStatus =
   | "idle" // not currently producing output
@@ -50,6 +55,11 @@ export interface SessionRecord {
   title: string;
   /** Who currently owns the title. User titles always win over AI/fallback. */
   titleSource?: ChatTitleSource;
+  /** Normalized first user message — the cross-window duplicate key. Set for
+   *  rows hydrated/synced from disk (which carry no `messages`), so the sidebar
+   *  dedup can still match them; foreground rows that DO hold `messages` derive
+   *  the key live instead. Never persisted. */
+  dedupKey?: string;
   /** Partial AI title being streamed — displayed in sidebar/header while
    *  generation is in progress. Cleared on completion or failure.
    *  Never persisted to disk. */
@@ -577,6 +587,7 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     lastUserMessageAt: m.lastUserMessageAt,
     kind: m.kind,
     pipeContext: m.pipeContext,
+    dedupKey: m.dedupKey,
   };
 }
 
@@ -654,8 +665,86 @@ function compareForSidebar(a: SessionRecord, b: SessionRecord): number {
   return tier(a) - tier(b) || sortKey(b) - sortKey(a);
 }
 
+// ---------------------------------------------------------------------------
+// Read-time duplicate collapsing for the in-memory sidebar.
+//
+// `listConversations` dedups on-disk rows (dedupeConversationMetas) so the
+// History list never shows a cross-window twin twice — but the sidebar RECENTS
+// and the recent-switcher render straight from THIS store via the selectors
+// below, which that disk dedup never touches. A twin upserted into the store
+// (e.g. via chat-sidebar's `chat-conversation-saved` → syncConversationFromDisk)
+// would otherwise show as a second row for one conversation. Mirror the disk
+// dedup here: same key (normalized first user message), same 30-min window,
+// pipe runs exempt. Shared primitives live in `@/lib/chat-dedup`.
+// ---------------------------------------------------------------------------
+
+/** First-user-message dedup key for a store session. Prefer the key derived
+ *  from in-store `messages` (foreground / hydrated rows); fall back to the
+ *  `dedupKey` carried from disk meta (metadata-only rows — a boot-hydrated row
+ *  or a cross-window twin). Null exempts the row (pipe runs, or a chat with no
+ *  user message yet). */
+function sessionDedupKey(s: SessionRecord): string | null {
+  if (s.kind === "pipe-watch" || s.kind === "pipe-run") return null;
+  return conversationDedupKey({ kind: s.kind, messages: s.messages }) ?? s.dedupKey ?? null;
+}
+
+/** Which of two same-conversation rows to keep: the copy the user should see.
+ *  Prefer a visible (non-archived) row, then pinned, then a row with a real
+ *  (non-"Processing…") reply, then more messages, then most-recent activity.
+ *  Mirrors dedupCandidateIsBetter in chat-storage, plus visible-wins / pinned-
+ *  wins guards the disk side doesn't need — on disk, hidden and visible rows
+ *  are filtered into separate candidate sets BEFORE dedup, but the store holds
+ *  both at once, so a visible twin must never lose to a hidden one (that would
+ *  drop the conversation from the sidebar entirely). */
+function sessionIsBetterDuplicate(a: SessionRecord, b: SessionRecord): boolean {
+  if (!!a.hidden !== !!b.hidden) return !a.hidden;
+  if (a.pinned !== b.pinned) return a.pinned;
+  const aReply = messagesHaveCompletedReply(a.messages);
+  const bReply = messagesHaveCompletedReply(b.messages);
+  if (aReply !== bReply) return aReply;
+  if (a.messageCount !== b.messageCount) return a.messageCount > b.messageCount;
+  return (a.lastUserMessageAt ?? a.updatedAt) > (b.lastUserMessageAt ?? b.updatedAt);
+}
+
+/** Collapse store sessions that are the same conversation persisted under two
+ *  ids (cross-window save race). Order-preserving; keeps the more complete
+ *  copy. Pure — unit-testable in isolation. */
+export function dedupeSessionRecords(records: SessionRecord[]): SessionRecord[] {
+  const kept: SessionRecord[] = [];
+  const indicesByKey = new Map<string, number[]>();
+  for (const rec of records) {
+    const key = sessionDedupKey(rec);
+    if (!key) {
+      kept.push(rec);
+      continue;
+    }
+    const indices = indicesByKey.get(key);
+    let mergeIndex = -1;
+    if (indices) {
+      for (const index of indices) {
+        const a = rec.createdAt;
+        const b = kept[index].createdAt;
+        // Only merge when both timestamps are real and close together.
+        if (a && b && Math.abs(a - b) <= CONVERSATION_DEDUP_WINDOW_MS) {
+          mergeIndex = index;
+          break;
+        }
+      }
+    }
+    if (mergeIndex >= 0) {
+      if (sessionIsBetterDuplicate(rec, kept[mergeIndex])) kept[mergeIndex] = rec;
+      continue;
+    }
+    kept.push(rec);
+    const bucket = indicesByKey.get(key);
+    if (bucket) bucket.push(kept.length - 1);
+    else indicesByKey.set(key, [kept.length - 1]);
+  }
+  return kept;
+}
+
 export function selectOrderedSessions(state: ChatSessionsState): SessionRecord[] {
-  const all = Object.values(state.sessions);
+  const all = dedupeSessionRecords(Object.values(state.sessions));
   const pinned = all.filter((s) => s.pinned).sort(compareForSidebar);
   const recents = all.filter((s) => !s.pinned).sort(compareForSidebar);
   return [...pinned, ...recents];
@@ -682,10 +771,8 @@ export function selectRecentSwitcherSessions(state: ChatSessionsState): SessionR
 import { useMemo } from "react";
 export function useOrderedSessions(): SessionRecord[] {
   const sessionsMap = useChatStore((s) => s.sessions);
-  return useMemo(() => {
-    const all = Object.values(sessionsMap);
-    const pinned = all.filter((s) => s.pinned).sort(compareForSidebar);
-    const recents = all.filter((s) => !s.pinned).sort(compareForSidebar);
-    return [...pinned, ...recents];
-  }, [sessionsMap]);
+  return useMemo(
+    () => selectOrderedSessions({ sessions: sessionsMap }),
+    [sessionsMap],
+  );
 }

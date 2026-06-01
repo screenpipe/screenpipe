@@ -1066,12 +1066,18 @@ async fn main() {
             // disable_vision + disable_audio so the e2e harness can drive the
             // app without granting Screen Recording / Microphone TCC. The
             // server (DB + HTTP) still boots; only SCK + audio capture skip.
+            // "no-audio" keeps vision enabled while disabling only audio, which
+            // lets Windows hosted runners exercise OCR without booting Whisper.
             // See get_e2e_seed_flags above for parsing.
             let e2e_flags = get_e2e_seed_flags();
             if e2e_flags.iter().any(|f| f == "no-recording") {
                 store.recording.disable_audio = true;
                 store.recording.disable_vision = true;
                 info!("E2E seed: recording disabled (vision + audio)");
+            }
+            if e2e_flags.iter().any(|f| f == "no-audio") {
+                store.recording.disable_audio = true;
+                info!("E2E seed: audio disabled");
             }
             if e2e_flags.iter().any(|f| f == "cloud-audio-fallback") {
                 store.recording.disable_audio = false;

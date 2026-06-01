@@ -134,7 +134,8 @@ pub fn read_audio_from_file(path: &Path) -> Result<(Vec<f32>, u32)> {
 
     let ffmpeg_path = find_ffmpeg_path()
         .ok_or_else(|| anyhow::anyhow!("ffmpeg not found in PATH or bundled binaries"))?;
-    let path_str = path.to_str()
+    let path_str = path
+        .to_str()
         .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {}", path.display()))?;
 
     let mut command = screenpipe_core::ffmpeg_cmd(ffmpeg_path);

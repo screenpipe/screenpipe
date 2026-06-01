@@ -1695,6 +1695,27 @@ async fn connection_proxy(
         }
     }
 
+    // Forward User-Agent and Accept from the caller when present. Two reasons:
+    //  1. Some upstreams (e.g. GitHub) reject requests with an empty/missing
+    //     UA at the edge with 403 — and reqwest's default Client sends no UA.
+    //     This makes the proxy behave like the caller's HTTP client would.
+    //  2. Pipes that hit content-negotiated APIs need to set Accept to pick a
+    //     media type; silently dropping it forces 406s or wrong serializations.
+    // Per-integration `extra_headers` are injected AFTER these and therefore
+    // override on key collision — integration policy still wins over caller hint.
+    if let Some(ua) = headers.get("user-agent") {
+        if let Ok(s) = ua.to_str() {
+            if !s.is_empty() {
+                req = req.header("user-agent", s);
+            }
+        }
+    }
+    if let Some(accept) = headers.get("accept") {
+        if let Ok(s) = accept.to_str() {
+            req = req.header("accept", s);
+        }
+    }
+
     // Inject auth
     match auth {
         ResolvedAuth::Header(name, value) => {

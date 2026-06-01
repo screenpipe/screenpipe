@@ -337,6 +337,7 @@ export function RetentionSettings() {
 
           <div className="space-y-2 pl-6">
             <ModeRow
+              testId="retention-mode-media"
               checked={effective === "media"}
               recommended
               icon={<Film className="h-4 w-4" />}
@@ -345,6 +346,7 @@ export function RetentionSettings() {
               onClick={() => handleSelectMode("media")}
             />
             <ModeRow
+              testId="retention-mode-all"
               checked={effective === "all"}
               icon={<Trash2 className="h-4 w-4" />}
               title="everything"
@@ -352,6 +354,7 @@ export function RetentionSettings() {
               onClick={() => handleSelectMode("all")}
             />
             <ModeRow
+              testId="retention-mode-off"
               checked={effective === "off"}
               title="off"
               body="keep everything forever. you'll need to monitor disk usage manually."
@@ -425,7 +428,7 @@ export function RetentionSettings() {
           if (!open) setPendingRecent(null);
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent data-testid="retention-recent-delete-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>
               delete the last {pendingRecent} minutes?
@@ -455,7 +458,7 @@ export function RetentionSettings() {
           if (!open) setPendingMode(null);
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent data-testid="retention-mode-confirm-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {pendingMode === "media"
@@ -518,8 +521,9 @@ export function RetentionSettings() {
             </Select>
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogCancel data-testid="retention-mode-cancel">cancel</AlertDialogCancel>
             <AlertDialogAction
+              data-testid="retention-mode-confirm"
               onClick={confirmEnable}
               className={
                 pendingMode === "all"
@@ -543,6 +547,7 @@ function ModeRow({
   recommended,
   icon,
   onClick,
+  testId,
 }: {
   checked: boolean;
   title: string;
@@ -550,10 +555,12 @@ function ModeRow({
   recommended?: boolean;
   icon?: React.ReactNode;
   onClick: () => void;
+  testId?: string;
 }) {
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={onClick}
       className={`w-full text-left flex gap-3 rounded border p-2.5 transition-colors ${
         checked

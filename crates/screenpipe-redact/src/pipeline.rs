@@ -143,13 +143,15 @@ impl Pipeline {
 #[async_trait]
 impl Redactor for Pipeline {
     fn name(&self) -> &str {
+        // Match on the inner AI adapter's reported name. The onnx adapter
+        // reports a versioned name (e.g. `v45_phase4_onnx`), so match on
+        // the `onnx` substring rather than an exact literal — otherwise a
+        // model bump silently downgrades this to `pipeline+ai`.
         match self.ai.as_ref().map(|a| a.name()) {
-            Some(n) => match n {
-                "tinfoil" => "pipeline+tinfoil",
-                "onnx" => "pipeline+onnx",
-                _ => "pipeline+ai",
-            },
             None => "pipeline+regex",
+            Some("tinfoil") => "pipeline+tinfoil",
+            Some(n) if n.contains("onnx") => "pipeline+onnx",
+            Some(_) => "pipeline+ai",
         }
     }
 

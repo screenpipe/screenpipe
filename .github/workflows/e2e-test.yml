@@ -208,6 +208,15 @@ jobs:
       run: |
         bun run test:e2e
 
+    - name: Run Windows Core Recording E2E
+      shell: pwsh
+      working-directory: ./apps/screenpipe-app-tauri
+      env:
+        RECORD_VIDEO: "true"
+        SCREENPIPE_E2E_SEED: "onboarding,no-audio"
+      run: |
+        bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/windows-core-recording.spec.ts
+
     - name: Upload E2E Test Artifacts
       uses: actions/upload-artifact@v4
       if: always()

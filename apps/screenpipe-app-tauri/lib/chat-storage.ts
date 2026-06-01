@@ -18,6 +18,12 @@ import type {
   ConversationKind,
   PipeContext,
 } from "@/lib/hooks/use-settings";
+import {
+  CHAT_PROCESSING_PLACEHOLDER,
+  CONVERSATION_DEDUP_WINDOW_MS,
+  conversationDedupKey,
+  messagesHaveCompletedReply,
+} from "@/lib/chat-dedup";
 
 let _chatsDir: string | null = null;
 let _orderedEntriesCacheDir: string | null = null;
@@ -26,10 +32,11 @@ let _orderedEntriesCache: ConversationEntry[] | null = null;
 export const CHAT_HISTORY_INITIAL_LIMIT = 50;
 export const CHAT_SEARCH_RESULT_LIMIT = 50;
 
-/** Placeholder the chat panel writes for an assistant turn that hasn't started
- *  streaming yet (see standalone-chat.tsx send path). Centralized here so the
- *  dedup's "completed reply" check can't silently drift from the writer. */
-export const CHAT_PROCESSING_PLACEHOLDER = "Processing...";
+// Dedup primitives now live in the tauri-free `chat-dedup` module so the
+// chat-store can share them without pulling in the filesystem layer. Re-export
+// here to keep this module's public API stable (chat-storage.test.ts + prior
+// import sites pull these from `@/lib/chat-storage`).
+export { CHAT_PROCESSING_PLACEHOLDER, CONVERSATION_DEDUP_WINDOW_MS, conversationDedupKey };
 
 export function __resetChatStorageCachesForTests(): void {
   _chatsDir = null;
@@ -177,6 +184,12 @@ export interface ConversationMeta {
   pipeContext?: PipeContext;
   /** Title source priority: user > ai > fallback. */
   titleSource?: "user" | "ai" | "fallback";
+  /** Normalized first user message — the cross-window duplicate key. Carried
+   *  onto the in-memory SessionRecord so the live sidebar/switcher can dedup
+   *  metadata-only rows (a cross-window twin synced via
+   *  `chat-conversation-saved`) the same way `dedupeConversationMetas` does
+   *  on disk. Undefined for pipe runs / chats with no user message yet. */
+  dedupKey?: string;
 }
 
 interface ConversationEntry {
@@ -286,6 +299,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     kind: conv.kind ?? "chat",
     pipeContext: conv.pipeContext,
     titleSource: conv.titleSource,
+    dedupKey: conversationDedupKey(conv) ?? undefined,
   };
 }
 
@@ -329,10 +343,6 @@ function normalizeLimit(limit: number | undefined): number | undefined {
 // are never merged.
 // ---------------------------------------------------------------------------
 
-/** Chats sharing a first user message and created within this window of each
- *  other are treated as the same conversation persisted twice. */
-export const CONVERSATION_DEDUP_WINDOW_MS = 30 * 60 * 1000;
-
 export interface ConversationDedupCandidate {
   meta: ConversationMeta;
   /** Normalized first user message. `null` exempts the row from dedup
@@ -345,28 +355,8 @@ export interface ConversationDedupCandidate {
   hasCompletedReply: boolean;
 }
 
-/** Dedup key for a conversation: its first user message, normalized. Returns
- *  null for non-chat (pipe) conversations — repeated pipe runs share a
- *  templated first message and must never be collapsed — and for chats with
- *  no user message. */
-export function conversationDedupKey(conv: any): string | null {
-  const kind: ConversationKind = conv?.kind ?? "chat";
-  if (kind !== "chat") return null;
-  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
-  const firstUser = messages.find((m: any) => m?.role === "user");
-  const raw = typeof firstUser?.content === "string" ? firstUser.content : "";
-  const cleaned = raw.trim().toLowerCase().replace(/\s+/g, " ");
-  return cleaned ? cleaned.slice(0, 200) : null;
-}
-
 function conversationHasCompletedReply(conv: any): boolean {
-  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
-  return messages.some((m: any) => {
-    if (m?.role !== "assistant") return false;
-    const content = typeof m.content === "string" ? m.content.trim() : "";
-    if (content && content !== CHAT_PROCESSING_PLACEHOLDER) return true;
-    return Array.isArray(m.contentBlocks) && m.contentBlocks.length > 0;
-  });
+  return messagesHaveCompletedReply(conv?.messages);
 }
 
 function dedupCandidateIsBetter(
