@@ -176,6 +176,11 @@ where
 {
     use serde::de;
 
+    fn normalized_preset(s: &str) -> Option<String> {
+        let trimmed = s.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
     struct PresetVisitor;
 
     impl<'de> de::Visitor<'de> for PresetVisitor {
@@ -186,11 +191,7 @@ where
         }
 
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Vec<String>, E> {
-            if v.is_empty() {
-                Ok(vec![])
-            } else {
-                Ok(vec![v.to_string()])
-            }
+            Ok(normalized_preset(v).into_iter().collect())
         }
 
         fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
@@ -204,7 +205,7 @@ where
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
             let mut result = Vec::new();
             while let Some(s) = seq.next_element::<String>()? {
-                if !s.is_empty() {
+                if let Some(s) = normalized_preset(&s) {
                     result.push(s);
                 }
             }
@@ -4957,6 +4958,14 @@ mod tests {
         assert_eq!(config.model, "auto");
         assert!(config.enabled);
         assert!(config.provider.is_none());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_trims_preset_ids() {
+        let content = "---\nschedule: every 1h\nenabled: true\npreset:\n  - \" primary \"\n  - \"   \"\n  - \"fallback  \"\n---\n\nBody";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.preset, vec!["primary", "fallback"]);
+        assert_eq!(body, "Body");
     }
 
     #[test]

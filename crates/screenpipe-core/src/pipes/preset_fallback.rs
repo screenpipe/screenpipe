@@ -384,10 +384,15 @@ fn now_epoch() -> u64 {
 /// ```
 pub fn parse_preset_list(value: &serde_json::Value) -> Vec<String> {
     match value {
-        serde_json::Value::String(s) if !s.is_empty() => vec![s.clone()],
+        serde_json::Value::String(s) => s
+            .trim()
+            .is_empty()
+            .then(Vec::new)
+            .unwrap_or_else(|| vec![s.trim().to_string()]),
         serde_json::Value::Array(arr) => arr
             .iter()
             .filter_map(|v| v.as_str())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect(),
@@ -421,6 +426,12 @@ mod tests {
     fn test_parse_preset_list_empty_string() {
         let v = serde_json::json!("");
         assert!(parse_preset_list(&v).is_empty());
+    }
+
+    #[test]
+    fn test_parse_preset_list_trims_whitespace() {
+        let v = serde_json::json!([" primary ", "   ", "fallback  "]);
+        assert_eq!(parse_preset_list(&v), vec!["primary", "fallback"]);
     }
 
     #[test]
