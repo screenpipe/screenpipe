@@ -2249,10 +2249,17 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
 interface ConnectionsSectionProps {
   focusConnectionId?: string | null;
+  focusCategory?: string | null;
   focusRequestId?: number;
+  onFocusRequestConsumed?: () => void;
 }
 
-export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: ConnectionsSectionProps = {}) {
+export function ConnectionsSection({
+  focusConnectionId,
+  focusCategory,
+  focusRequestId = 0,
+  onFocusRequestConsumed,
+}: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
   const [sortBy, setSortBy] = useState<ConnectionSort>("default");
@@ -2272,7 +2279,15 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
   useEffect(() => {
     if (!focusRequestId) return;
     setSelected(focusConnectionId || null);
-  }, [focusConnectionId, focusRequestId]);
+    setCategoryFilter(
+      focusCategory
+        ? normalizeConnectionCategory(focusCategory)
+        : ALL_CONNECTION_CATEGORIES,
+    );
+    setSearch("");
+    setSortBy("default");
+    onFocusRequestConsumed?.();
+  }, [focusCategory, focusConnectionId, focusRequestId, onFocusRequestConsumed]);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);

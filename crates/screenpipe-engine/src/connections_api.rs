@@ -296,7 +296,7 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
             "id": "apple-calendar",
             "name": "Apple Calendar",
             "icon": "apple-calendar",
-            "category": "productivity",
+            "category": "calendar",
             "description": format!(
                 "Read-only access to your native {} calendar. \
                 Query events via GET /connections/calendar/events?hours_back=1&hours_ahead=8",
