@@ -7881,9 +7881,18 @@ export function StandaloneChat({
     // Un-mark the assistant that was marked interrupted.
     setAssistantInterruptedState(interruptedAssistantId, false);
 
-    // Remove the optimistic user message inserted by steerMessage.
+    // Remove only the optimistic steer user bubble inserted by steerMessage.
     const optimisticId = latest.optimisticUserId;
-    setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+    setMessages((prev) =>
+      prev.filter(
+        (m) =>
+          !(
+            m.id === optimisticId &&
+            m.role === "user" &&
+            m.intent === "steer"
+          ),
+      ),
+    );
 
     // Put the batch back so a retry or future steer can use it.
     pendingSteerBatchRef.current = [
@@ -7938,6 +7947,7 @@ export function StandaloneChat({
         queueId: prompt.id,
         createdAt: existingTurnIntent?.createdAt ?? Date.now(),
       });
+      const interruptedAssistantBeforeSteer = piMessageIdRef.current;
       markCurrentAssistantInterrupted();
       let nextRowsAfterQueuedSteer: Message[] | null = null;
       setMessages((prev) => {
@@ -7963,19 +7973,41 @@ export function StandaloneChat({
         pendingNextPiUserIntentRef.current = null;
         pendingNextPiUserDisplayRef.current = null;
         removeTurnIntent(turnIntentId);
-        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+        setMessages((prev) =>
+          prev.filter(
+            (m) =>
+              !(
+                m.id === optimisticQueuedUser.id &&
+                m.role === "user" &&
+                m.intent === "steer"
+              ),
+          ),
+        );
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-        clearCurrentAssistantInterrupted();
+        setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
         toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
         return;
       }
       if (!result.data) {
+        // Benign race: the queued prompt already left the queue and will
+        // render via the normal message_start path. Only remove the
+        // steer-specific optimistic user bubble — do not remove or disturb
+        // any transcript state that the normal message_start path may need.
         pendingNextPiUserIntentRef.current = null;
         pendingNextPiUserDisplayRef.current = null;
         removeTurnIntent(turnIntentId);
-        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+        setMessages((prev) =>
+          prev.filter(
+            (m) =>
+              !(
+                m.id === optimisticQueuedUser.id &&
+                m.role === "user" &&
+                m.intent === "steer"
+              ),
+          ),
+        );
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-        clearCurrentAssistantInterrupted();
+        setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
         toast({
           title: "message already started",
           description: "That follow-up has moved out of the queue.",
@@ -7994,9 +8026,18 @@ export function StandaloneChat({
       pendingNextPiUserIntentRef.current = null;
       pendingNextPiUserDisplayRef.current = null;
       removeTurnIntent(turnIntentId);
-      setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+      setMessages((prev) =>
+        prev.filter(
+          (m) =>
+            !(
+              m.id === optimisticQueuedUser.id &&
+              m.role === "user" &&
+              m.intent === "steer"
+            ),
+        ),
+      );
       restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-      clearCurrentAssistantInterrupted();
+      setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
       toast({
         title: "failed to steer queued message",
         description: e instanceof Error ? e.message : String(e),
