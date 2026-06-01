@@ -607,7 +607,7 @@ impl ServerCore {
         //
         // The single `pii_backend` config flag selects the inner
         // adapter for BOTH modalities:
-        //   - "local"   → local ONNX (text: stub, image: rfdetr_v8)
+        //   - "local"   → on-device ONNX models for both text and image
         //   - "tinfoil" → confidential-compute enclave (H200) for both
         let backend = config.pii_backend.as_str();
         let use_tinfoil = matches!(backend, "tinfoil" | "cloud" | "enclave");
@@ -656,15 +656,17 @@ impl ServerCore {
             // removal" toggle means. The 20260507 migration drops the
             // dead duplicate columns the old non-destructive mode used.
             if use_tinfoil {
-                info!(
-                    has_api_key = tinfoil_api_key.is_some(),
-                    "starting async text-PII reconciliation worker (backend=tinfoil)"
-                );
                 let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::new(TinfoilConfig {
                     api_key: tinfoil_api_key.clone(),
                     labels: pii_labels.clone(),
                     ..Default::default()
                 }));
+                info!(
+                    model = ai.name(),
+                    version = ai.version(),
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async text-PII reconciliation worker (backend=tinfoil)"
+                );
                 let pipeline = Pipeline::regex_then_ai(
                     ai,
                     PipelineConfig {
@@ -689,22 +691,26 @@ impl ServerCore {
                 let labels = pii_labels.clone();
                 tokio::spawn(async move {
                     let policy = TextRedactionPolicy::from_labels(&labels);
-                    // Prefer v45 phase 3 ONNX (~278 MB INT8, HIPAA 90.2%,
+                    // Prefer the local ONNX text redactor (~278 MB INT8,
                     // sub-10 ms p50, gets CoreML on macOS / DirectML on
                     // Windows / CPU on Linux via the redact-onnx-* CI
-                    // feature). Fall back to the legacy OPF v6 candle
+                    // feature). Fall back to the legacy OPF candle
                     // adapter (~2.8 GB) if the ONNX feature isn't
-                    // compiled in or the HF download fails.
+                    // compiled in or the HF download fails. The concrete
+                    // model name + version are logged once it loads, so
+                    // these strings never drift on a model bump.
+                    let onnx_cfg = OnnxConfig::default();
                     info!(
-                        "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
-                         cached at ~/.screenpipe/models/v45_phase3_onnx/)"
+                        cache_dir = %onnx_cfg.model_dir.display(),
+                        "fetching local ONNX text redactor (~278 MB INT8 on first run)"
                     );
-                    let onnx_result = OnnxRedactor::load_or_download(OnnxConfig::default()).await;
+                    let onnx_result = OnnxRedactor::load_or_download(onnx_cfg).await;
                     let pipeline = match onnx_result {
                         Ok(adapter) => {
                             info!(
-                                "starting async text-PII reconciliation worker (backend=local, \
-                                 v45_phase3_onnx)"
+                                model = adapter.name(),
+                                version = adapter.version(),
+                                "starting async text-PII reconciliation worker (backend=local)"
                             );
                             let ai: Arc<dyn Redactor> = Arc::new(adapter);
                             Pipeline::regex_then_ai(
@@ -717,14 +723,16 @@ impl ServerCore {
                         }
                         Err(onnx_err) => {
                             warn!(
-                                "couldn't load v45 phase 3 ONNX redactor ({onnx_err}); falling \
-                                 back to OPF v6 candle"
+                                "couldn't load local ONNX text redactor ({onnx_err}); falling \
+                                 back to OPF candle"
                             );
                             match OpfAdapter::load_or_download(OpfConfig::default()).await {
                                 Ok(adapter) => {
                                     info!(
+                                        model = adapter.name(),
+                                        version = adapter.version(),
                                         "starting async text-PII reconciliation worker \
-                                         (backend=local, opf-rs fallback)"
+                                         (backend=local, fallback)"
                                     );
                                     let ai: Arc<dyn Redactor> = Arc::new(adapter);
                                     Pipeline::regex_then_ai(
@@ -768,15 +776,17 @@ impl ServerCore {
 
             let pool = db.pool.clone();
             if use_tinfoil {
-                info!(
-                    has_api_key = tinfoil_api_key.is_some(),
-                    "starting async image-PII worker (backend=tinfoil)"
-                );
                 let detector = Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
                     api_key: tinfoil_api_key.clone(),
                     labels: pii_labels.clone(),
                     ..Default::default()
                 })) as Arc<dyn ImageRedactor>;
+                info!(
+                    model = detector.name(),
+                    version = detector.version(),
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async image-PII worker (backend=tinfoil)"
+                );
                 let _ = ImageWorker::new(
                     pool,
                     detector,
@@ -787,15 +797,21 @@ impl ServerCore {
                 )
                 .spawn_with_shutdown(redact_shutdown.clone());
             } else {
-                // Local mode: rfdetr_v8 ONNX. First-run downloads
-                // ~108 MB from huggingface.co/screenpipe/pii-image-redactor
-                // and verifies SHA-256 before landing in ~/.screenpipe/models/.
+                // Local mode: rfdetr ONNX. First-run downloads ~108 MB
+                // from huggingface.co/screenpipe/pii-image-redactor and
+                // verifies SHA-256 before landing in ~/.screenpipe/models/.
+                // The concrete model name + version are logged once it
+                // loads, so they never drift on a model bump.
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
                 tokio::spawn(async move {
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
-                            info!("starting async image-PII worker (backend=local)");
+                            info!(
+                                model = detector.name(),
+                                version = detector.version(),
+                                "starting async image-PII worker (backend=local)"
+                            );
                             let detector_arc = Arc::new(detector) as Arc<dyn ImageRedactor>;
                             let _ = ImageWorker::new(
                                 pool,
@@ -809,9 +825,9 @@ impl ServerCore {
                         }
                         Err(e) => {
                             warn!(
-                                "image-PII (local) enabled but couldn't load rfdetr_v8 model; \
-                                 skipping: {e}. switch to backend=tinfoil in Settings to use \
-                                 the cloud enclave instead."
+                                "image-PII (local) enabled but couldn't load local rfdetr image \
+                                 model; skipping: {e}. switch to backend=tinfoil in Settings to \
+                                 use the cloud enclave instead."
                             );
                         }
                     }
