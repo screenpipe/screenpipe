@@ -26,6 +26,10 @@ export function useLiveText(opts: {
 	guardRefs?: Record<string, React.RefObject<HTMLDivElement | null>>;
 	/** Adjacent frames for prefetching VisionKit analysis */
 	adjacentFrames?: Array<{ devices?: Array<{ frame_id?: string; metadata?: { file_path?: string } }> } | null>;
+	/** When true, the timeline/Live Text feature is disabled entirely — the native
+	 *  overlay is never initialized. Prevents the VisionKit overlay from leaking
+	 *  over other windows (e.g. the chat input). */
+	disabled?: boolean;
 }) {
 	const {
 		debouncedFrame,
@@ -40,6 +44,7 @@ export function useLiveText(opts: {
 		navBarRef,
 		guardRefs,
 		adjacentFrames,
+		disabled,
 	} = opts;
 
 	// Native macOS Live Text overlay (VisionKit ImageAnalysisOverlayView)
@@ -69,6 +74,14 @@ export function useLiveText(opts: {
 	// Initialize Live Text overlay once on mount (macOS only), and re-init on mode change
 	useEffect(() => {
 		if (!isMac) return;
+		// Feature disabled by the user — never attach the native overlay.
+		if (disabled) {
+			if (liveTextInitRef.current) {
+				commands.livetextHide().catch(() => {});
+				setNativeLiveTextActive(false);
+			}
+			return;
+		}
 		// If label changed, we need to re-init on the new panel
 		if (liveTextInitRef.current && prevLabelRef.current === windowLabel) return;
 		prevLabelRef.current = windowLabel;
@@ -91,7 +104,35 @@ export function useLiveText(opts: {
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [isMac, windowLabel]);
+	}, [isMac, windowLabel, disabled]);
+
+	// Defensive teardown: the native VisionKit overlay is an NSView added on top
+	// of the webview, so it can intercept mouse/keyboard within its rect even when
+	// the timeline is not the focused surface. If the window loses focus or the
+	// page is hidden (e.g. the chat window comes forward over the same host
+	// window), hide the overlay so it can't "leak" a selection layer over the
+	// chat input and block typing. It is re-shown on the next frame analysis.
+	useEffect(() => {
+		if (!isMac || !nativeLiveTextActive) return;
+
+		const hideOverlay = () => {
+			commands.livetextHide().catch(() => {});
+		};
+
+		const onVisibility = () => {
+			if (document.visibilityState === "hidden") hideOverlay();
+		};
+
+		document.addEventListener("visibilitychange", onVisibility);
+		window.addEventListener("blur", hideOverlay);
+		window.addEventListener("pagehide", hideOverlay);
+
+		return () => {
+			document.removeEventListener("visibilitychange", onVisibility);
+			window.removeEventListener("blur", hideOverlay);
+			window.removeEventListener("pagehide", hideOverlay);
+		};
+	}, [isMac, nativeLiveTextActive]);
 
 	// Analyze frame when frameId changes. Decoupled from renderedImageInfo —
 	// we start analysis immediately and update position separately when layout is ready.

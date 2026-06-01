@@ -522,6 +522,9 @@ async getE2eSeedFlags() : Promise<string[]> {
 async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
     return await TAURI_INVOKE("get_enterprise_install_metadata");
 },
+async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
+    return await TAURI_INVOKE("get_enterprise_install_metadata");
+},
 /**
  * Read the enterprise license key from `enterprise.json`.
  * Checks in order:
@@ -1657,6 +1660,12 @@ async setEnhancedAiSuggestions(enabled: boolean, token: string) : Promise<Result
 async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
     await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
 },
+/**
+ * Called by the frontend after fetching the enterprise policy.
+ */
+async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
+    await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
+},
 async setNativeTheme(theme: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_native_theme", { theme }) };
@@ -1683,6 +1692,14 @@ async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Called by the frontend after fetching the `syncStreams` block from
+ * `/api/enterprise/policy`. Flat booleans rather than a struct so the
+ * specta-generated TS binding stays trivial.
+ */
+async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots });
 },
 /**
  * Called by the frontend after fetching the `syncStreams` block from
@@ -2617,6 +2634,13 @@ overlayMode?: string;
  * Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
  */
 showOverlayInScreenRecording?: boolean;
+/**
+ * When true, the timeline / rewind feature is disabled entirely. This also
+ * disables the native macOS Live Text overlay used by the timeline, which
+ * can otherwise leak a native VisionKit selection view over other windows
+ * (e.g. the chat input) and silently block keyboard input.
+ */
+disableTimeline?: boolean;
 /**
  * When true, the chat window stays above all other windows (default: true).
  */
