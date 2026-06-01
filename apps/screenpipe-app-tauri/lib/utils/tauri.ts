@@ -1657,9 +1657,6 @@ async setEnhancedAiSuggestions(enabled: boolean, token: string) : Promise<Result
 async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
     await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
 },
-/**
- * Called by the frontend after fetching the enterprise policy.
- */
 async setNativeTheme(theme: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_native_theme", { theme }) };
@@ -1695,11 +1692,6 @@ async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
 async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean) : Promise<void> {
     await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots });
 },
-/**
- * Called by the frontend after fetching the `syncStreams` block from
- * `/api/enterprise/policy`. Flat booleans rather than a struct so the
- * specta-generated TS binding stays trivial.
- */
 async setTrayHealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_health_icon");
 },
