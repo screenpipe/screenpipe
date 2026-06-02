@@ -1301,22 +1301,32 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
+        // Provider resolution:
+        // 1. Explicit provider from pipe frontmatter → use it
+        // 2. No provider specified → screenpipe cloud (default)
+        let resolved_provider = provider.unwrap_or("screenpipe").to_string();
+
+        let (resolved_model, fell_back_from) = self
+            .resolve_screenpipe_model(model, &resolved_provider)
+            .await;
+        if let Some(ref original) = fell_back_from {
+            warn!(
+                "pipe model '{}' unavailable on current tier — ran on '{}' instead",
+                original, resolved_model
+            );
+        }
+
         let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
             provider,
-            Some(model),
+            Some(&resolved_model),
             provider_url,
         )
         .await?;
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
-
-        // Provider resolution:
-        // 1. Explicit provider from pipe frontmatter → use it
-        // 2. No provider specified → screenpipe cloud (default)
-        let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
         Self::ensure_context_pruning_extension(working_dir)?;
@@ -1328,15 +1338,6 @@ impl AgentExecutor for PiExecutor {
                 "pi not found. try restarting the app or delete ~/.screenpipe/pi-agent and restart"
             )
         })?;
-        let (resolved_model, fell_back_from) = self
-            .resolve_screenpipe_model(model, &resolved_provider)
-            .await;
-        if let Some(ref original) = fell_back_from {
-            warn!(
-                "pipe model '{}' unavailable on current tier — ran on '{}' instead",
-                original, resolved_model
-            );
-        }
 
         info!(
             "pipe using provider: {}, model: {}",
