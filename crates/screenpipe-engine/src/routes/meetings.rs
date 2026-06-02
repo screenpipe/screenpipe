@@ -462,8 +462,13 @@ pub(crate) async fn start_meeting_handler(
 ) -> Result<JsonResponse<MeetingRecord>, (StatusCode, JsonResponse<Value>)> {
     let app = body.app.as_deref().unwrap_or("manual");
     let resumed_existing = body.id.is_some();
+
+    // Resolve the current active meeting up-front so every branch can reason
+    // about it. This is the guard that prevents a second open `meetings` row
+    // from being inserted while one already exists — the historical bug that
+    // produced duplicate "ongoing" entries in the UI.
+    let status = resolve_meeting_status(&state).await?;
     let id = if let Some(id) = body.id {
-        let status = resolve_meeting_status(&state).await?;
         if status.active && status.active_meeting_id != Some(id) {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -490,6 +495,102 @@ pub(crate) async fn start_meeting_handler(
             })?;
         }
         id
+    } else if let Some(active_id) = status.active_meeting_id {
+        // Something is already recording. Two cases:
+        //   1) The active meeting is already the manual one — idempotent
+        //      re-entry. Optionally enrich title/attendees if the caller
+        //      provided new values (e.g. user clicked a Coming Up event
+        //      after a manual start), then return the existing row.
+        //   2) The active meeting is auto-detected. Adopt it as the manual
+        //      meeting and enrich it with the caller's title/attendees
+        //      (typically sourced from a calendar event). This matches the
+        //      user's mental model — "start meeting" on a call that's
+        //      already being captured should attach to it, not spawn a
+        //      parallel ghost row.
+        if status.manual_active {
+            // Idempotent: enrich only if blank, never overwrite user input.
+            let existing = state.db.get_meeting_by_id(active_id).await.map_err(|e| {
+                (
+                    StatusCode::NOT_FOUND,
+                    JsonResponse(json!({"error": format!("meeting not found: {}", e)})),
+                )
+            })?;
+            let title_update = body
+                .title
+                .as_deref()
+                .filter(|t| !t.trim().is_empty())
+                .filter(|_| {
+                    existing
+                        .title
+                        .as_deref()
+                        .is_none_or(|s| s.trim().is_empty())
+                });
+            let attendees_update = body
+                .attendees
+                .as_deref()
+                .filter(|a| !a.trim().is_empty())
+                .filter(|_| {
+                    existing
+                        .attendees
+                        .as_deref()
+                        .is_none_or(|s| s.trim().is_empty())
+                });
+            if title_update.is_some() || attendees_update.is_some() {
+                if let Err(e) = state
+                    .db
+                    .update_meeting(
+                        active_id,
+                        None,
+                        None,
+                        title_update,
+                        attendees_update,
+                        None,
+                        None,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "start_meeting: idempotent enrich failed for {}: {}",
+                        active_id,
+                        e
+                    );
+                }
+            }
+            active_id
+        } else {
+            // Adopt the auto-detected meeting. Enrich with caller-supplied
+            // metadata, treating blank/whitespace as "no value" so an empty
+            // body doesn't wipe out detector-stamped fields.
+            let title_update = body.title.as_deref().filter(|t| !t.trim().is_empty());
+            let attendees_update = body.attendees.as_deref().filter(|a| !a.trim().is_empty());
+            if title_update.is_some() || attendees_update.is_some() {
+                if let Err(e) = state
+                    .db
+                    .update_meeting(
+                        active_id,
+                        None,
+                        None,
+                        title_update,
+                        attendees_update,
+                        None,
+                        None,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "start_meeting: adoption enrich failed for {}: {}",
+                        active_id,
+                        e
+                    );
+                }
+            }
+            tracing::info!(
+                "start_meeting: adopting active auto-detected meeting (id={}, app={:?})",
+                active_id,
+                status.meeting_app
+            );
+            active_id
+        }
     } else {
         state
             .db
@@ -501,10 +602,25 @@ pub(crate) async fn start_meeting_handler(
             )
             .await
             .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    JsonResponse(json!({"error": e.to_string()})),
-                )
+                // The unique partial index on open meetings (see migration
+                // 20260603000000) turns a duplicate-insert race into a
+                // UNIQUE constraint failure. Map it to 409 Conflict so the
+                // client knows to refresh status and retry, instead of
+                // surfacing a generic 500.
+                let msg = e.to_string();
+                if msg.contains("UNIQUE constraint failed") && msg.contains("meetings") {
+                    (
+                        StatusCode::CONFLICT,
+                        JsonResponse(json!({
+                            "error": "another meeting is already active",
+                        })),
+                    )
+                } else {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        JsonResponse(json!({"error": msg})),
+                    )
+                }
             })?
     };
 
