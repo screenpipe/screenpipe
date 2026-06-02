@@ -66,6 +66,14 @@ describe("isNotificationsDenied", () => {
       )
     ).toBe(false);
   });
+
+  it("supports CRLF frontmatter line endings", () => {
+    expect(
+      isNotificationsDenied(
+        "---\r\npermissions:\r\n  deny:\r\n    - Api(POST /notify)\r\n---\r\n\r\n# Hello"
+      )
+    ).toBe(true);
+  });
 });
 
 // ─── toggleNotificationInContent: DISABLE (enabled=false) ──────────────
@@ -124,6 +132,16 @@ describe("toggleNotificationInContent — disable notifications", () => {
     expect(result).toContain("permissions:");
     expect(result).toContain("deny:");
     expect(result).toContain("- Api(POST /notify)");
+    expect(isNotificationsDenied(result)).toBe(true);
+  });
+
+  it("updates CRLF frontmatter without duplicating it", () => {
+    const input = "---\r\nschedule: every 30m\r\n---\r\n\r\n# My Pipe";
+    const result = toggleNotificationInContent(input, false);
+    expect(result).toContain("schedule: every 30m");
+    expect(result).toContain("permissions:");
+    expect(result).toContain("- Api(POST /notify)");
+    expect(result.match(/^---/gm)?.length).toBe(2);
     expect(isNotificationsDenied(result)).toBe(true);
   });
 });
