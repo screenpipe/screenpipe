@@ -905,9 +905,7 @@ impl PiExecutor {
                     .as_array()
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|m| {
-                                m.get("id").and_then(|v| v.as_str()).map(String::from)
-                            })
+                            .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
                             .collect::<Vec<String>>()
                     })
                     .unwrap_or_default()
