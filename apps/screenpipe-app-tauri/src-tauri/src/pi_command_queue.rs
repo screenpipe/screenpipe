@@ -176,12 +176,14 @@ impl PiQueueState {
     /// `agent_start`). The drain loop checks this alongside `agent_active`.
     pub fn set_steer_in_flight(&self) {
         self.steer_in_flight.store(true, Ordering::SeqCst);
+        self.done_notify.notify_waiters();
     }
 
     /// Clear the steer-in-flight guard. Called on `agent_start`, write
     /// failure, process termination, and the bounded 30s timeout.
     pub fn clear_steer_in_flight(&self) {
         self.steer_in_flight.store(false, Ordering::SeqCst);
+        self.done_notify.notify_waiters();
     }
 
     /// Whether a steer command is awaiting its `agent_start`.
