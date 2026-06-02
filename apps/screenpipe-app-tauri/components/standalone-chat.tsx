@@ -7928,6 +7928,7 @@ export function StandaloneChat({
       turnIntentId,
       timestamp: Date.now(),
     };
+    const interruptedAssistantBeforeSteer = piMessageIdRef.current;
     try {
       pendingNextPiUserIntentRef.current = "steer";
       pendingNextPiUserDisplayRef.current = {
@@ -7947,7 +7948,6 @@ export function StandaloneChat({
         queueId: prompt.id,
         createdAt: existingTurnIntent?.createdAt ?? Date.now(),
       });
-      const interruptedAssistantBeforeSteer = piMessageIdRef.current;
       markCurrentAssistantInterrupted();
       let nextRowsAfterQueuedSteer: Message[] | null = null;
       setMessages((prev) => {
