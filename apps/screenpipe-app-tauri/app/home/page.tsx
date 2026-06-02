@@ -77,7 +77,11 @@ import {
 } from "@/components/ui/tooltip";
 
 type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "meetings" | "help";
-type ConnectionFocusRequest = { id: string | null; requestId: number };
+type ConnectionFocusRequest = {
+  id: string | null;
+  category: string | null;
+  requestId: number;
+};
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
@@ -719,6 +723,9 @@ function HomeContent() {
   const openSettings = useCallback((section: string = "general") => {
     router.push(`/settings?section=${section}`);
   }, [router]);
+  const clearConnectionFocusRequest = useCallback(() => {
+    setConnectionFocusRequest(null);
+  }, []);
 
   // Listen for open-settings events from child components (e.g. connections strip)
   useEffect(() => {
@@ -729,6 +736,7 @@ function HomeContent() {
       if (section === "connections") {
         setConnectionFocusRequest({
           id: typeof detail?.connectionId === "string" ? detail.connectionId : null,
+          category: typeof detail?.category === "string" ? detail.category : null,
           requestId: Date.now(),
         });
         setActiveSection("connections");
@@ -765,7 +773,9 @@ function HomeContent() {
         return (
           <ConnectionsSection
             focusConnectionId={connectionFocusRequest?.id ?? null}
+            focusCategory={connectionFocusRequest?.category ?? null}
             focusRequestId={connectionFocusRequest?.requestId ?? 0}
+            onFocusRequestConsumed={clearConnectionFocusRequest}
           />
         );
       case "meetings":

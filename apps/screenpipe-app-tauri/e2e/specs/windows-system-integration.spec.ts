@@ -139,6 +139,14 @@ async function pageIsAlive(): Promise<boolean> {
   );
 }
 
+async function waitForPageAlive(timeoutMs = t(10_000)): Promise<void> {
+  await browser.waitUntil(pageIsAlive, {
+    timeout: timeoutMs,
+    interval: t(250),
+    timeoutMsg: "Home WebView did not become interactive after route change",
+  });
+}
+
 describe("Windows system integration", function () {
   this.timeout(180_000);
 
@@ -449,8 +457,7 @@ $uniqueNames = @($names | Sort-Object -Unique)
     for (const page of routes) {
       await showWindow({ Home: { page } });
       await browser.switchToWindow("home");
-      await browser.pause(200);
-      expect(await pageIsAlive()).toBe(true);
+      await waitForPageAlive();
     }
 
     await showWindow({ Home: { page: "home" } });

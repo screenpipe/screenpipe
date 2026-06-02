@@ -255,6 +255,10 @@ pub struct SCServer {
     /// Shared high-FPS controller. Set before `start()` so AppState and
     /// the per-monitor capture loops point at the same instance.
     pub high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
+    /// When true, the timeline / rewind feature is disabled. The server skips
+    /// warming the hot frame cache from the DB at startup (the cache is only
+    /// read by the timeline streaming endpoint). Set before `start()`.
+    pub timeline_disabled: bool,
 }
 
 impl SCServer {
@@ -295,6 +299,7 @@ impl SCServer {
             oauth_refresher: None,
             external_memory_sync: None,
             high_fps_controller: None,
+            timeline_disabled: false,
         }
     }
 
@@ -493,7 +498,11 @@ impl SCServer {
             .hot_frame_cache
             .clone()
             .unwrap_or_else(|| Arc::new(HotFrameCache::new()));
-        {
+        if self.timeline_disabled {
+            // Timeline disabled: the hot frame cache is only read by the timeline
+            // streaming endpoint, so skip the (potentially 40s+) DB warm-up.
+            tracing::info!("timeline disabled: skipping hot frame cache warm_from_db");
+        } else {
             let cache = hot_frame_cache.clone();
             let db = self.db.clone();
             tokio::spawn(async move {

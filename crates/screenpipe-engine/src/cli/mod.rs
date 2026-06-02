@@ -415,10 +415,10 @@ pub struct RecordArgs {
     pub async_pii_redaction: bool,
 
     /// Enable the async IMAGE-PII reconciliation worker. Independent
-    /// of `--async-pii-redaction` (text). Runs the rfdetr_v8 detector
+    /// of `--async-pii-redaction` (text). Runs the rfdetr_v11 detector
     /// over each captured frame, blacks out detected PII regions in
     /// the JPG (atomic overwrite of the source file). Requires
-    /// `rfdetr_v8.onnx` at `~/.screenpipe/models/` and the binary
+    /// `rfdetr_v11.onnx` at `~/.screenpipe/models/` and the binary
     /// built with one of the `onnx-*` cargo features. Off by default.
     #[arg(long, default_value_t = false)]
     pub async_image_pii_redaction: bool,
@@ -813,6 +813,9 @@ impl RecordArgs {
             port: self.port,
             disable_audio: self.disable_audio,
             disable_vision: self.disable_vision,
+            // CLI has no --disable-timeline flag; the desktop app drives this
+            // toggle. Default to enabled (timeline on) for the engine binary.
+            disable_timeline: false,
             use_pii_removal: self.use_pii_removal,
             async_pii_redaction: self.async_pii_redaction,
             async_image_pii_redaction: self.async_image_pii_redaction,

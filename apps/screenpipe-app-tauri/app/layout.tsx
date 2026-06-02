@@ -304,6 +304,29 @@ export default function RootLayout({
     };
   }, []);
 
+  // Suppress stray text-selection in non-content areas. The app globally sets
+  // `user-select: none` (app/globals.css) so the desktop UI feels native, and
+  // re-enables selection only for real content — chat-message prose, the OCR
+  // `.selectable-text-layer`, and form inputs. But WKWebView still paints an
+  // empty selection highlight when you click-drag across blank layout space
+  // (e.g. the empty area of the chat welcome screen): it looks like you're
+  // "selecting text" where there is none, and copying yields nothing. CSS
+  // `user-select: none` blocks the copyable text and is honored by keyboard
+  // select-all, but not the drag-highlight on real pointer input. Cancel the
+  // selection at its source unless the drag begins inside a selectable surface.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const SELECTABLE =
+      '.prose, .selectable-text-layer, input, textarea, [contenteditable="true"], [contenteditable=""]';
+    const onSelectStart = (e: Event) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.(SELECTABLE)) return; // allow selecting real content
+      e.preventDefault();
+    };
+    document.addEventListener("selectstart", onSelectStart);
+    return () => document.removeEventListener("selectstart", onSelectStart);
+  }, []);
+
   return (
     <html lang="en" suppressHydrationWarning className={isSearch ? "bg-transparent" : ""}>
       <head>

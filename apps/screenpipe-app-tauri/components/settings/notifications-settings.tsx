@@ -58,6 +58,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-capture-stalls"
             checked={prefs.captureStalls ?? true}
             onCheckedChange={(v) => {
               updateSettings({
@@ -77,6 +78,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-app-updates"
             checked={prefs.appUpdates ?? true}
             onCheckedChange={(v) => updatePref("appUpdates", v)}
           />
@@ -120,6 +122,7 @@ export function NotificationsSettings() {
               </SelectContent>
             </Select>
             <Switch
+              data-testid="notification-pref-pipe-suggestions"
               checked={settings.pipeSuggestionsEnabled !== false}
               onCheckedChange={(checked) => {
                 updateSettings({
@@ -146,6 +149,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-pipe-notifications"
             checked={prefs.pipeNotifications ?? true}
             onCheckedChange={(v) => updatePref("pipeNotifications", v)}
           />
@@ -160,6 +164,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-display-changes"
             checked={prefs.displayChanges ?? true}
             onCheckedChange={(v) => updatePref("displayChanges", v)}
           />
@@ -174,6 +179,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-meeting-live-notes"
             checked={prefs.meetingLiveNotes ?? true}
             onCheckedChange={(v) => updatePref("meetingLiveNotes", v)}
           />
@@ -188,6 +194,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-audio-capture-stalled"
             checked={prefs.audioCaptureStalled ?? true}
             onCheckedChange={(v) => updatePref("audioCaptureStalled", v)}
           />
@@ -202,6 +209,7 @@ export function NotificationsSettings() {
             </p>
           </div>
           <Switch
+            data-testid="notification-pref-live-transcript-stalled"
             checked={prefs.liveTranscriptStalled ?? true}
             onCheckedChange={(v) => updatePref("liveTranscriptStalled", v)}
           />

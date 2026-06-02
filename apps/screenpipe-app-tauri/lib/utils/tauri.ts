@@ -357,6 +357,25 @@ async e2eEmitPipeStream(pipeName: string, executionId: number, deltaCount: numbe
 async e2eMainOverlayVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_main_overlay_visible");
 },
+/**
+ * E2E-only probe: whether the owned-browser native webview is currently shown.
+ * Mirrors `e2e_main_overlay_visible` — internal visibility state stays hidden
+ * in production binaries and is only exposed under the `e2e` feature. Used by
+ * `zz-owned-browser-background-nav.spec.ts` to assert a background agent/pipe
+ * navigation does not reveal the browser over a non-chat view.
+ */
+async e2eOwnedBrowserVisible() : Promise<boolean> {
+    return await TAURI_INVOKE("e2e_owned_browser_visible");
+},
+/**
+ * E2E helper: report whether the shortcut reminder overlay is visibly shown.
+ *
+ * The reminder window is hidden rather than destroyed, so WebDriver can keep a
+ * stale handle after users disable it from Settings > Display.
+ */
+async e2eShortcutReminderVisible() : Promise<boolean> {
+    return await TAURI_INVOKE("e2e_shortcut_reminder_visible");
+},
 async enableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("enable_keychain_encryption") };
@@ -427,6 +446,12 @@ async forceRegenerateSuggestions() : Promise<Result<CachedSuggestions, string>> 
  */
 async getAppIdentifier() : Promise<string> {
     return await TAURI_INVOKE("get_app_identifier");
+},
+/**
+ * Get the app-local focus/notification server port.
+ */
+async getAppServerConfig() : Promise<JsonValue> {
+    return await TAURI_INVOKE("get_app_server_config");
 },
 async getAudioDevices() : Promise<Result<AudioDeviceInfo[], string>> {
     try {
@@ -2244,6 +2269,13 @@ vocabularyWords?: VocabEntry[];
  * Disable all screen capture.
  */
 disableVision: boolean;
+/**
+ * Disable the timeline / rewind feature. When true, the engine skips
+ * timeline-only work: warming the hot frame cache from the DB at startup
+ * and buffering captured frames/audio into the in-memory hot cache that
+ * only the timeline streaming endpoint reads.
+ */
+disableTimeline?: boolean;
 /**
  * Specific monitor IDs to capture.
  */

@@ -79,9 +79,17 @@ impl CaptureSession {
             let vision_config =
                 config.to_vision_manager_config(output_path, server.vision_metrics.clone());
 
+            // Only the timeline streaming endpoint reads the hot frame cache.
+            // When the timeline is disabled, don't buffer captured frames into
+            // it (skips push_frame's per-frame work for nothing to consume).
+            let hot_cache_for_capture = if config.disable_timeline {
+                None
+            } else {
+                Some(server.hot_frame_cache.clone())
+            };
             let vision_manager = Arc::new(
                 VisionManager::new(vision_config, db_clone, tokio::runtime::Handle::current())
-                    .with_hot_frame_cache(server.hot_frame_cache.clone())
+                    .with_hot_frame_cache(hot_cache_for_capture)
                     .with_power_profile(server.power_manager.subscribe())
                     .with_high_fps_controller(server.high_fps_controller.clone()),
             );

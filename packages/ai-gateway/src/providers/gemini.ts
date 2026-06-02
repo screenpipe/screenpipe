@@ -69,52 +69,6 @@ export class GeminiProvider implements AIProvider {
 		return headers;
 	}
 
-	// Check if web search is requested in tools
-	private hasWebSearchTool(tools?: any[]): boolean {
-		if (!tools) return false;
-		return tools.some(tool =>
-			tool.type === 'web_search' ||
-			tool.type === 'google_search' ||
-			tool.googleSearch !== undefined ||
-			(tool.function?.name === 'web_search') ||
-			(tool.function?.name === 'google_search')
-		);
-	}
-
-	/**
-	 * Detect if user is explicitly asking for web search
-	 * Fallback for when frontend doesn't send web_search tool
-	 */
-	private detectWebSearchIntent(messages: Message[]): string | null {
-		const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-		if (!lastUserMsg) return null;
-
-		const content = typeof lastUserMsg.content === 'string'
-			? lastUserMsg.content.toLowerCase()
-			: '';
-
-		const webSearchPatterns = [
-			/search\s+(.+?)\s+on\s+(?:the\s+)?(?:internet|web)/i,
-			/search\s+(?:the\s+)?(?:internet|web)\s+(?:for|about)\s+(.+)/i,
-			/(?:use\s+)?(?:internet|web)\s+search/i,
-			/search\s+(?:the\s+)?(?:internet|web)/i,
-		];
-
-		for (const pattern of webSearchPatterns) {
-			const match = content.match(pattern);
-			if (match) {
-				const query = match[1]?.trim().replace(/[?.!]+$/, '') ||
-					content.replace(/search|internet|web|the|for|about|use/gi, '').trim();
-				if (query.length > 2) {
-					console.log('[Gemini] Web search intent detected:', query);
-					return query;
-				}
-			}
-		}
-
-		return null;
-	}
-
 	private mapModel(model: string): string {
 		const modelMap: Record<string, string> = {
 			'gemini-flash': 'gemini-2.5-flash',
@@ -157,9 +111,7 @@ export class GeminiProvider implements AIProvider {
 
 	async createCompletion(body: RequestBody): Promise<Response> {
 		const url = this.getEndpointUrl(body.model, false);
-		const hasWebSearch = this.hasWebSearchTool(body.tools);
-
-		let requestBody = this.buildRequestBody(body, hasWebSearch);
+		const requestBody = this.buildRequestBody(body);
 
 		console.log('[Gemini] Request to:', url.replace(this.apiKey || 'N/A', '***'));
 		const headers = await this.getAuthHeaders();
@@ -176,56 +128,11 @@ export class GeminiProvider implements AIProvider {
 			throw new Error(`Gemini API request failed: ${response.status} ${error}`);
 		}
 
-		let result: any = await response.json();
-
-		// Check if model called web_search - if so, execute it and continue
-		const parts = result.candidates?.[0]?.content?.parts || [];
-		const webSearchCall = parts.find((p: any) =>
-			p.functionCall?.name === 'web_search' || p.functionCall?.name === 'google_search'
-		);
-
-		if (webSearchCall) {
-			const query = webSearchCall.functionCall.args?.query || webSearchCall.functionCall.args?.q || '';
-			console.log('[Gemini] Model called web_search, executing for:', query);
-
-			try {
-				const searchResult = await this.executeWebSearch(query);
-
-				const followUpContents = [
-					...requestBody.contents,
-					{
-						role: 'model',
-						parts: [{ functionCall: webSearchCall.functionCall }],
-					},
-					{
-						role: 'user',
-						parts: [{
-							functionResponse: {
-								name: 'web_search',
-								response: { result: searchResult.content },
-							},
-						}],
-					},
-				];
-
-				const followUpUrl = this.getEndpointUrl(body.model, false);
-				const followUpHeaders = await this.getAuthHeaders();
-				const followUpResponse = await fetch(followUpUrl, {
-					method: 'POST',
-					headers: followUpHeaders,
-					body: JSON.stringify({
-						contents: followUpContents,
-						generationConfig: requestBody.generationConfig,
-					}),
-				});
-
-				if (followUpResponse.ok) {
-					result = await followUpResponse.json();
-				}
-			} catch (error) {
-				console.error('[Gemini] Web search execution failed:', error);
-			}
-		}
+		// Tool calls (web_search included) flow through formatResponse as
+		// OpenAI tool_calls. The gateway does NOT execute tools inline — the
+		// client (pi) owns tool execution and re-enters the model loop with the
+		// result. See createStreamingCompletion for the streaming counterpart.
+		const result: any = await response.json();
 
 		return new Response(JSON.stringify(this.formatResponse(result, false)), {
 			headers: { 'Content-Type': 'application/json' },
@@ -233,19 +140,8 @@ export class GeminiProvider implements AIProvider {
 	}
 
 	async createStreamingCompletion(body: RequestBody): Promise<ReadableStream> {
-		const hasWebSearch = this.hasWebSearchTool(body.tools);
-
-		// Fallback: detect web search intent when frontend doesn't send web_search tool
-		if (!hasWebSearch) {
-			const webSearchQuery = this.detectWebSearchIntent(body.messages);
-			if (webSearchQuery) {
-				console.log('[Gemini] Fallback web search for:', webSearchQuery);
-				return this.createDirectWebSearchStream(webSearchQuery);
-			}
-		}
-
 		const url = this.getEndpointUrl(body.model, true);
-		const requestBody = this.buildRequestBody(body, hasWebSearch);
+		const requestBody = this.buildRequestBody(body);
 
 		console.log('[Gemini] Streaming request to:', url.replace(this.apiKey || 'N/A', '***'));
 		console.log('[Gemini] Request body:', JSON.stringify({
@@ -271,10 +167,8 @@ export class GeminiProvider implements AIProvider {
 		const reader = response.body!.getReader();
 		const decoder = new TextDecoder();
 		let buffer = '';
-		const self = this;
 
 		let toolCallIndex = 0;
-		let pendingWebSearch: { name: string; args: any } | null = null;
 		let inputTokens = 0;
 		let outputTokens = 0;
 
@@ -295,49 +189,6 @@ export class GeminiProvider implements AIProvider {
 												completion_tokens: outputTokens,
 												total_tokens: inputTokens + outputTokens,
 											},
-										})}\n\n`
-									)
-								);
-							}
-
-							// Before closing, check if we have a pending web search to execute
-							if (pendingWebSearch) {
-								const query = pendingWebSearch.args?.query || pendingWebSearch.args?.q || '';
-								console.log('[Gemini] Executing pending web_search:', query);
-
-								controller.enqueue(
-									new TextEncoder().encode(
-										`data: ${JSON.stringify({
-											choices: [{ delta: { content: `\n\n*Searching the web for "${query}"...*\n\n` } }],
-										})}\n\n`
-									)
-								);
-
-								try {
-									const searchResult = await self.executeWebSearch(query);
-
-									controller.enqueue(
-										new TextEncoder().encode(
-											`data: ${JSON.stringify({
-												choices: [{ delta: { content: '\n\n' + searchResult.content } }],
-											})}\n\n`
-										)
-									);
-								} catch (error) {
-									console.error('[Gemini] Web search failed:', error);
-									controller.enqueue(
-										new TextEncoder().encode(
-											`data: ${JSON.stringify({
-												choices: [{ delta: { content: '\n\nWeb search failed. Please try again.' } }],
-											})}\n\n`
-										)
-									);
-								}
-
-								controller.enqueue(
-									new TextEncoder().encode(
-										`data: ${JSON.stringify({
-											choices: [{ delta: {}, finish_reason: 'stop' }],
 										})}\n\n`
 									)
 								);
@@ -380,57 +231,50 @@ export class GeminiProvider implements AIProvider {
 											const funcName = part.functionCall.name;
 											console.log('[Gemini] Model called function:', funcName, JSON.stringify(part.functionCall.args || {}));
 
-											if (funcName === 'web_search' || funcName === 'google_search') {
-												pendingWebSearch = {
-													name: funcName,
-													args: part.functionCall.args || {},
-												};
-												console.log('[Gemini] Saving web_search for execution after stream ends');
-											} else {
-												const sig = part.thoughtSignature || '';
-												const toolCallId = sig
-													? `call_${toolCallIndex}_ts_${btoa(sig)}`
-													: `call_${Date.now()}_${toolCallIndex}`;
-												controller.enqueue(
-													new TextEncoder().encode(
-														`data: ${JSON.stringify({
-															choices: [{
-																delta: {
-																	tool_calls: [{
-																		index: toolCallIndex,
-																		id: toolCallId,
-																		type: 'function',
-																		function: {
-																			name: funcName,
-																			arguments: JSON.stringify(part.functionCall.args || {}),
-																		},
-																	}],
-																},
-															}],
-														})}\n\n`
-													)
-												);
-												toolCallIndex++;
-											}
+											// Surface every tool call — web_search included — to the client.
+											// pi executes its own registered tools and feeds the result back
+											// into the loop. The gateway must NOT run tools inline: doing so
+											// bypassed pi's web_search extension and dumped raw search results
+											// into the chat instead of letting the model use them.
+											const sig = part.thoughtSignature || '';
+											const toolCallId = sig
+												? `call_${toolCallIndex}_ts_${btoa(sig)}`
+												: `call_${Date.now()}_${toolCallIndex}`;
+											controller.enqueue(
+												new TextEncoder().encode(
+													`data: ${JSON.stringify({
+														choices: [{
+															delta: {
+																tool_calls: [{
+																	index: toolCallIndex,
+																	id: toolCallId,
+																	type: 'function',
+																	function: {
+																		name: funcName,
+																		arguments: JSON.stringify(part.functionCall.args || {}),
+																	},
+																}],
+															},
+														}],
+													})}\n\n`
+												)
+											);
+											toolCallIndex++;
 										}
 									}
 
 									const finishReason = data.candidates?.[0]?.finishReason;
 									if (finishReason) {
-										if (pendingWebSearch && finishReason === 'TOOL_USE') {
-											console.log('[Gemini] Suppressing tool_calls finish_reason for web_search');
-										} else {
-											const mappedReason = finishReason === 'STOP' ? 'stop' :
-												finishReason === 'MAX_TOKENS' ? 'length' :
-												finishReason === 'TOOL_USE' ? 'tool_calls' : 'stop';
-											controller.enqueue(
-												new TextEncoder().encode(
-													`data: ${JSON.stringify({
-														choices: [{ delta: {}, finish_reason: mappedReason }],
-													})}\n\n`
-												)
-											);
-										}
+										const mappedReason = finishReason === 'STOP' ? 'stop' :
+											finishReason === 'MAX_TOKENS' ? 'length' :
+											finishReason === 'TOOL_USE' ? 'tool_calls' : 'stop';
+										controller.enqueue(
+											new TextEncoder().encode(
+												`data: ${JSON.stringify({
+													choices: [{ delta: {}, finish_reason: mappedReason }],
+												})}\n\n`
+											)
+										);
 									}
 								} catch (e) {
 									// Skip invalid JSON
@@ -464,7 +308,7 @@ export class GeminiProvider implements AIProvider {
 		});
 	}
 
-	private buildRequestBody(body: RequestBody, _hasWebSearch: boolean): any {
+	private buildRequestBody(body: RequestBody): any {
 		const systemMsg = body.messages.find(m => m.role === 'system');
 		const contents = this.formatMessages(body.messages);
 
@@ -577,55 +421,6 @@ export class GeminiProvider implements AIProvider {
 		}));
 
 		return { content, sources };
-	}
-
-	private async createDirectWebSearchStream(query: string): Promise<ReadableStream> {
-		const self = this;
-		return new ReadableStream({
-			async start(controller) {
-				try {
-					controller.enqueue(
-						new TextEncoder().encode(
-							`data: ${JSON.stringify({
-								choices: [{ delta: { content: `*Searching the web for "${query}"...*\n\n` } }],
-							})}\n\n`
-						)
-					);
-
-					const searchResult = await self.executeWebSearch(query);
-
-					controller.enqueue(
-						new TextEncoder().encode(
-							`data: ${JSON.stringify({
-								choices: [{ delta: { content: searchResult.content } }],
-							})}\n\n`
-						)
-					);
-
-					controller.enqueue(
-						new TextEncoder().encode(
-							`data: ${JSON.stringify({
-								choices: [{ delta: {}, finish_reason: 'stop' }],
-							})}\n\n`
-						)
-					);
-
-					controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-					controller.close();
-				} catch (error) {
-					console.error('[Gemini] Direct web search failed:', error);
-					controller.enqueue(
-						new TextEncoder().encode(
-							`data: ${JSON.stringify({
-								choices: [{ delta: { content: 'Web search failed. Please try again.' } }],
-							})}\n\n`
-						)
-					);
-					controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-					controller.close();
-				}
-			},
-		});
 	}
 
 	/**

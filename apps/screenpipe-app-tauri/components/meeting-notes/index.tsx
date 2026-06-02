@@ -517,7 +517,7 @@ export function MeetingNotesSection({
   const openCalendarConnections = useCallback(() => {
     window.dispatchEvent(
       new CustomEvent("open-settings", {
-        detail: { section: "connections" },
+        detail: { section: "connections", category: "Calendar" },
       }),
     );
   }, []);

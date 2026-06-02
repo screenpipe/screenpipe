@@ -95,6 +95,13 @@ import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards, type ConnectionSetupSuggestion } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
+import {
+  buildDailyLimitMessage,
+  classifyQuotaError,
+  buildRateLimitMessage,
+  parseRateLimitWaitSeconds,
+  PI_MAX_RATE_LIMIT_RETRIES,
+} from "@/lib/chat/quota-errors";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
 import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
@@ -553,83 +560,6 @@ const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
  * Extract tier info from gateway error JSON embedded in error strings and
  * return a user-facing message appropriate to their actual subscription tier.
  */
-function buildDailyLimitMessage(errorStr: string): string {
-  try {
-    const isCostLimit = errorStr.includes("daily_cost_limit_exceeded");
-    const isRateLimit = errorStr.includes("rate limit") || errorStr.includes("Rate limit");
-
-    if (isRateLimit) {
-      return "This model is temporarily rate-limited. Try again in a few seconds, or switch to a different model.";
-    }
-
-    if (isCostLimit) {
-      // Don't leak the raw dollar cap — that's our internal margin. Frame it
-      // as an account-wide budget so the user understands why it fired even
-      // when they "didn't use much" (background pipes consume it too).
-      return "You've hit today's AI usage limit. This is an account-wide budget — background pipes count too. Switch to a free model (gemini-3-flash, haiku) or check Settings → Pipes for chatty schedules.";
-    }
-
-    const tierMatch = errorStr.match(/"tier":\s*"([^"]+)"/);
-    const tier = tierMatch?.[1];
-
-    if (tier === "subscribed") {
-      return "You've hit your daily limit. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage.";
-    } else if (tier === "logged_in") {
-      return "You've used your free queries for today. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage, or upgrade to Pro.";
-    } else {
-      return "You've used your free queries for today. Sign in for more, or switch to a free model (Qwen3 Coder, Gemini Flash).";
-    }
-  } catch {
-    return "You've reached your daily limit. Try a free model like Qwen3 Coder or Gemini Flash.";
-  }
-}
-
-function classifyQuotaError(errorStr: string): "daily" | "rate" | "none" {
-  const normalized = errorStr.toLowerCase();
-  const isDailyLimit =
-    normalized.includes("credits_exhausted") ||
-    normalized.includes("daily_limit_exceeded") ||
-    normalized.includes("daily_cost_limit_exceeded");
-  if (isDailyLimit) {
-    return "daily";
-  }
-
-  const isRateLimit =
-    normalized.includes("429") ||
-    normalized.includes("rate limit") ||
-    normalized.includes("rate_limit") ||
-    normalized.includes("requests per minute") ||
-    normalized.includes("too many requests");
-  return isRateLimit ? "rate" : "none";
-}
-
-function buildRateLimitMessage(errorStr: string): string {
-  const waitMatch = errorStr.match(/wait (\d+) seconds/i);
-  const waitTime = waitMatch ? waitMatch[1] : "a moment";
-  const isPerMinuteRate = /rate limit exceeded|requests per minute/i.test(errorStr);
-  return isPerMinuteRate
-    ? `Rate limited — please wait ${waitTime} seconds and try again.`
-    : "Rate limited — try again in a moment or switch to a different model.";
-}
-
-/** How many times a single turn auto-retries on a 429 before giving up. */
-const PI_MAX_RATE_LIMIT_RETRIES = 3;
-
-/**
- * Seconds to wait before retrying a rate-limited (429) request. Prefers the
- * gateway's structured `reset_in` hint, falls back to the "wait N seconds"
- * prose, then a safe default. Clamped to [1, 60].
- */
-function parseRateLimitWaitSeconds(errorStr: string): number {
-  const DEFAULT_WAIT = 10;
-  const resetMatch = errorStr.match(/"reset_in"\s*:\s*(\d+)/i);
-  const waitMatch = errorStr.match(/wait (\d+) seconds/i);
-  const raw = resetMatch?.[1] ?? waitMatch?.[1];
-  const secs = raw ? parseInt(raw, 10) : DEFAULT_WAIT;
-  if (!Number.isFinite(secs) || secs <= 0) return DEFAULT_WAIT;
-  return Math.min(Math.max(secs, 1), 60);
-}
-
 // Helper to get timezone offset string (e.g., "+1" or "-5")
 function getTimezoneOffsetString(): string {
   const offsetMinutes = new Date().getTimezoneOffset();
@@ -3234,6 +3164,12 @@ export function StandaloneChat({
   };
 
   const [input, setInput] = useState("");
+  // Mirror `input` into a ref so the chat-switch logic in
+  // useChatConversations can snapshot the outgoing composer text
+  // without needing it as a dep (which would re-bind handlers every
+  // keystroke). Same pattern as attachedDocsRef / pendingDocsRef below.
+  const inputValueRef = useRef<string>("");
+  useEffect(() => { inputValueRef.current = input; }, [input]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
@@ -3356,6 +3292,9 @@ export function StandaloneChat({
   const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
   const [isPreparingPrefill, setIsPreparingPrefill] = useState(false);
   const [pastedImages, setPastedImages] = useState<string[]>([]); // Base64 data URLs
+  // Mirror for the per-conversation draft snapshot — see inputValueRef.
+  const pastedImagesRef = useRef<string[]>([]);
+  useEffect(() => { pastedImagesRef.current = pastedImages; }, [pastedImages]);
   const [attachedDocs, setAttachedDocs] = useState<ExtractedDoc[]>([]); // extracted text from non-image files
   // ref mirror so send paths read the latest docs without widening their deps arrays
   const attachedDocsRef = useRef<ExtractedDoc[]>([]);
@@ -3560,6 +3499,39 @@ export function StandaloneChat({
     void refreshConnectionState();
   }, [conversationId, refreshConnectionState]);
 
+  // Drop any single-shot attachment metadata stashed for the previous
+  // chat's next-send when the user navigates away. Without this, a user
+  // who staged an attachment in chat A and switched to chat B before
+  // sending would have A's attachment metadata silently ride along on
+  // B's next message. Pairs with the composer-state clear inside
+  // loadConversation / startNewConversation.
+  useEffect(() => {
+    pendingAttachmentsRef.current = [];
+  }, [conversationId]);
+
+  // Mirror the live composer into the chat store so the CURRENT chat
+  // always has an up-to-date draft snapshot. This covers the case
+  // where the user closes/hides the panel (or quits Pi without
+  // switching first) — the draft survives because it's in the store,
+  // not just in React state. It also handles the "draft cleared after
+  // send" case for free: when sendMessage calls setInput("") etc.,
+  // the next mirror tick writes an empty draft, which the store action
+  // treats as "drop draft entirely". Debounced so per-keystroke writes
+  // don't churn the store. Skip when conversationId is null (brand-new
+  // chat with no session record yet — setComposerDraft would no-op).
+  useEffect(() => {
+    if (!conversationId) return;
+    const t = setTimeout(() => {
+      useChatStore.getState().actions.setComposerDraft(conversationId, {
+        input,
+        pastedImages,
+        attachedDocs,
+        pendingDocs,
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [conversationId, input, pastedImages, attachedDocs, pendingDocs]);
+
   const cancelStreamingMessageRender = useCallback(() => {
     if (streamRenderTimerRef.current) {
       clearTimeout(streamRenderTimerRef.current);
@@ -3660,6 +3632,13 @@ export function StandaloneChat({
     setPastedImages,
     setAttachedDocs,
     setPendingDocs,
+    // Refs for the per-conversation composer draft snapshot/restore.
+    // Passing refs (not values) keeps the hook's deps stable so the
+    // event listeners inside don't churn on every keystroke.
+    inputValueRef,
+    pastedImagesRef,
+    attachedDocsRef,
+    pendingDocsRef,
     settings,
     selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,
@@ -3965,6 +3944,34 @@ export function StandaloneChat({
   // receive the same event, causing duplicate abort→session→prompt sequences.
   const prefillInFlightRef = useRef(false);
 
+  // Cross-window dedup for parallel-job autoSend prefills. Two parallel jobs
+  // can fire identical-content autoSend prefills targeting DIFFERENT windows
+  // ("home" + "chat"); each window mints its own session id and persists the
+  // same logical run twice (the duplicate sidebar rows). Each Tauri window has
+  // isolated localStorage, so we coordinate via Tauri events with a
+  // DETERMINISTIC tie-break (no atomic lock needed): every competing window
+  // broadcasts its claim, waits a fixed collection window to gather all claims
+  // for the same normalized prompt, then independently picks the SAME winner
+  // (smallest window label, then earliest ts, then nonce). Losers drop.
+  const prefillClaimsRef = useRef<Map<string, Array<{ windowLabel: string; timestamp: number; nonce: string }>>>(new Map());
+  useEffect(() => {
+    const unlisten = listen<{ dedupKey: string; windowLabel: string; timestamp: number; nonce: string }>(
+      "chat-prefill-claim",
+      (event) => {
+        const { dedupKey, windowLabel, timestamp, nonce } = event.payload || ({} as any);
+        if (!dedupKey) return;
+        const bucket = prefillClaimsRef.current.get(dedupKey) ?? [];
+        if (!bucket.some((c) => c.nonce === nonce && c.windowLabel === windowLabel)) {
+          bucket.push({ windowLabel, timestamp, nonce });
+          prefillClaimsRef.current.set(dedupKey, bucket);
+        }
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // Listen for chat-prefill events from search modal and pipe creation
   useEffect(() => {
     const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
@@ -3988,6 +3995,31 @@ export function StandaloneChat({
         // Start a new conversation then send
         (async () => {
           try {
+            // Cross-window dedup: compete for the right to handle this prefill.
+            const dedupKey = fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200);
+            const myWindowLabel = getCurrentWindow().label;
+            const myNonce = Math.random().toString(36).slice(2, 10);
+            const myClaim = { windowLabel: myWindowLabel, timestamp: Date.now(), nonce: myNonce };
+            const bucket = prefillClaimsRef.current.get(dedupKey) ?? [];
+            bucket.push(myClaim);
+            prefillClaimsRef.current.set(dedupKey, bucket);
+            try {
+              await emit("chat-prefill-claim", { dedupKey, ...myClaim });
+            } catch {}
+            // Wait the collection window so every competing window's claim lands.
+            await new Promise((r) => setTimeout(r, 250));
+            const claims = prefillClaimsRef.current.get(dedupKey) ?? [myClaim];
+            const winner = [...claims].sort((a, b) => {
+              if (a.windowLabel !== b.windowLabel) return a.windowLabel < b.windowLabel ? -1 : 1;
+              if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+              return a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0;
+            })[0];
+            setTimeout(() => prefillClaimsRef.current.delete(dedupKey), 5_000);
+            if (!winner || winner.nonce !== myNonce || winner.windowLabel !== myWindowLabel) {
+              // Another window won the tie-break — drop this duplicate.
+              console.log(`[chat-prefill] dropped duplicate autoSend (winner=${winner?.windowLabel})`);
+              return;
+            }
             // Clear all streaming state so sendPiMessage doesn't think a message is in-flight
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;

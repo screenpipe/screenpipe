@@ -747,8 +747,15 @@ export function NoteView({
   };
 
   return (
-    <div className="h-full overflow-y-auto relative bg-background">
-      <main className="min-h-full w-full max-w-5xl mx-auto px-5 pt-5 pb-24 sm:px-10 lg:px-16">
+    <div className="flex h-full flex-col bg-background">
+      {/* The note scrolls in `main`; the footer is a non-overlapping dock below
+          it. Previously the footer was `sticky bottom-0` and floated over the
+          bottom of a full-height scroll area, so its opaque bar (control row +
+          transcript panel) covered the last lines of the note — clicks landed
+          on the footer and the caret could only be moved there with the arrow
+          keys. Making `main` the scroll viewport and the footer `shrink-0`
+          removes that dead zone entirely. */}
+      <main className="relative min-h-0 flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-5 pt-5 pb-16 sm:px-10 lg:px-16">
         <div className="flex items-center justify-between mb-9">
           <Button
             variant="ghost"
@@ -888,7 +895,7 @@ export function NoteView({
         </section>
       </main>
 
-      <footer className="sticky bottom-0 z-30 border-t border-border bg-background">
+      <footer className="z-30 shrink-0 border-t border-border bg-background">
         <div className="mx-auto max-w-3xl px-5 py-3 sm:px-0">
           {!isLive && inactivityPrompt && (
             <InactivityResumeBanner

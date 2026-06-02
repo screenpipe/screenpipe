@@ -886,35 +886,38 @@ async fn main() -> anyhow::Result<()> {
     let audio_manager = match audio_manager_builder.build(db.clone()).await {
         Ok(mut manager) => {
             // Wire up audio → hot cache: push new transcriptions so the WS
-            // streaming handler can attach audio to live frames.
-            let cache = hot_frame_cache.clone();
-            let rt = tokio::runtime::Handle::current();
-            // Use the actual capture time (when audio was recorded), not Utc::now().
-            // In smart/batch mode, transcription can be deferred by minutes — using
-            // Utc::now() would place audio far from the frames it belongs to.
-            manager.set_on_transcription_insert(std::sync::Arc::new(move |info| {
-                let cache = cache.clone();
-                let ts = chrono::DateTime::from_timestamp(info.capture_timestamp as i64, 0)
-                    .unwrap_or_else(chrono::Utc::now);
-                rt.spawn(async move {
-                    use screenpipe_engine::hot_frame_cache::HotAudio;
-                    cache
-                        .push_audio(HotAudio {
-                            audio_chunk_id: info.audio_chunk_id,
-                            timestamp: ts,
-                            transcription: info.transcription.into(),
-                            device_name: info.device_name.into(),
-                            is_input: info.is_input,
-                            audio_file_path: info.audio_file_path.into(),
-                            duration_secs: info.duration_secs,
-                            start_time: info.start_time,
-                            end_time: info.end_time,
-                            speaker_id: info.speaker_id,
-                            speaker_name: None,
-                        })
-                        .await;
-                });
-            }));
+            // streaming handler can attach audio to live frames. Skipped when the
+            // timeline is disabled (the cache is only read by the timeline).
+            if !config.disable_timeline {
+                let cache = hot_frame_cache.clone();
+                let rt = tokio::runtime::Handle::current();
+                // Use the actual capture time (when audio was recorded), not Utc::now().
+                // In smart/batch mode, transcription can be deferred by minutes — using
+                // Utc::now() would place audio far from the frames it belongs to.
+                manager.set_on_transcription_insert(std::sync::Arc::new(move |info| {
+                    let cache = cache.clone();
+                    let ts = chrono::DateTime::from_timestamp(info.capture_timestamp as i64, 0)
+                        .unwrap_or_else(chrono::Utc::now);
+                    rt.spawn(async move {
+                        use screenpipe_engine::hot_frame_cache::HotAudio;
+                        cache
+                            .push_audio(HotAudio {
+                                audio_chunk_id: info.audio_chunk_id,
+                                timestamp: ts,
+                                transcription: info.transcription.into(),
+                                device_name: info.device_name.into(),
+                                is_input: info.is_input,
+                                audio_file_path: info.audio_file_path.into(),
+                                duration_secs: info.duration_secs,
+                                start_time: info.start_time,
+                                end_time: info.end_time,
+                                speaker_id: info.speaker_id,
+                                speaker_name: None,
+                            })
+                            .await;
+                    });
+                }));
+            }
             Arc::new(manager)
         }
         Err(e) => {
@@ -1028,9 +1031,16 @@ async fn main() -> anyhow::Result<()> {
     let (handle, capture_trigger_tx, linker_tx) = if !config.disable_vision {
         let vision_config =
             config.to_vision_manager_config(output_path_clone.to_string(), vision_metrics.clone());
+        // Hot frame cache is only consumed by the timeline streaming endpoint;
+        // skip frame buffering when the timeline is disabled.
+        let hot_cache_for_capture = if config.disable_timeline {
+            None
+        } else {
+            Some(hot_frame_cache.clone())
+        };
         let vision_manager = Arc::new(
             VisionManager::new(vision_config, db_clone.clone(), vision_handle.clone())
-                .with_hot_frame_cache(hot_frame_cache.clone())
+                .with_hot_frame_cache(hot_cache_for_capture)
                 .with_power_profile(power_manager.subscribe())
                 .with_high_fps_controller(high_fps_controller.clone()),
         );
@@ -1128,6 +1138,7 @@ async fn main() -> anyhow::Result<()> {
     server.vision_metrics = vision_metrics;
     server.audio_metrics = audio_manager.metrics.clone();
     server.hot_frame_cache = Some(hot_frame_cache);
+    server.timeline_disabled = config.disable_timeline;
     server.power_manager = Some(power_manager);
     server.manual_meeting = Some(manual_meeting.clone());
     server.api_auth = config.api_auth;

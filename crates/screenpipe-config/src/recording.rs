@@ -140,6 +140,13 @@ pub struct RecordingSettings {
     #[serde(rename = "disableVision")]
     pub disable_vision: bool,
 
+    /// Disable the timeline / rewind feature. When true, the engine skips
+    /// timeline-only work: warming the hot frame cache from the DB at startup
+    /// and buffering captured frames/audio into the in-memory hot cache that
+    /// only the timeline streaming endpoint reads.
+    #[serde(rename = "disableTimeline", default)]
+    pub disable_timeline: bool,
+
     /// Specific monitor IDs to capture.
     #[serde(rename = "monitorIds")]
     pub monitor_ids: Vec<String>,
@@ -527,6 +534,7 @@ impl Default for RecordingSettings {
             batch_max_duration_secs: None,
             vocabulary: vec![],
             disable_vision: false,
+            disable_timeline: false,
             monitor_ids: vec![],
             use_all_monitors: true,
             video_quality: "balanced".to_string(),

@@ -509,6 +509,18 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
     fallback_local_api_config(crate::store::resolved_api_auth_key())
 }
 
+/// Get the app-local focus/notification server port.
+#[tauri::command]
+#[specta::specta]
+pub fn get_app_server_config() -> serde_json::Value {
+    let port = std::env::var("SCREENPIPE_FOCUS_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(11435);
+
+    serde_json::json!({ "port": port })
+}
+
 /// Pure JSON shape used by the cold-spawn fallback. Extracted so the contract
 /// is covered by a unit test without needing a tauri::AppHandle. Port is the
 /// well-known default because the server hasn't bound yet — the UI will refresh
@@ -1016,6 +1028,23 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
         }
         false
     }
+}
+
+/// E2E helper: report whether the shortcut reminder overlay is visibly shown.
+///
+/// The reminder window is hidden rather than destroyed, so WebDriver can keep a
+/// stale handle after users disable it from Settings > Display.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_shortcut_reminder_visible(app_handle: tauri::AppHandle) -> bool {
+    if !cfg!(feature = "e2e") {
+        return false;
+    }
+
+    app_handle
+        .get_webview_window("shortcut-reminder")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
 }
 
 #[derive(serde::Serialize, specta::Type)]

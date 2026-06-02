@@ -57,6 +57,9 @@ controller is unavailable, so it never fails the default CI lane.
 ```
 
 Uses `.e2e/` as isolated data dir; real data is never touched.
+The E2E launcher also moves the app-local focus/notification server to
+`SCREENPIPE_FOCUS_PORT` (default `11436`) so tests can exercise `/notify` and
+`/notifications` without colliding with a developer's production app on 11435.
 
 ## Running locally on Windows
 
@@ -160,9 +163,9 @@ Saves to `e2e/videos/`.
 |---|---|
 | `home-window.spec.ts` | Opens Home window; clicks through Home, Pipes, Timeline, Help, Settings nav items |
 | `timeline.spec.ts` | Navigates to Timeline; seeds a capture event; verifies at least one frame renders |
-| `windows-core-recording.spec.ts` | Windows opt-in. Enables real vision recording and requires API auth, health/load, audio/device, vision, and search endpoints to stay responsive. In CI it uses `SCREENPIPE_E2E_SEED=onboarding,no-audio` so hosted runners exercise OCR without booting Whisper. When the runner exposes usable desktop frames, it also shows a foreground marker window and verifies OCR indexing/query search plus Timeline frame metadata; hosted runners without frames self-skip those capture-dependent assertions. |
+| `windows-core-recording.spec.ts` | Windows opt-in. Enables real vision recording and requires API auth, health/load, audio/device, vision, and search endpoints to stay responsive. In CI it uses `SCREENPIPE_E2E_SEED=onboarding,no-audio` so hosted runners exercise OCR without booting Whisper. When the runner exposes usable desktop frames, it also shows a foreground marker window and verifies OCR indexing/query search plus Timeline frame metadata, visible scrubber clicks, and arrow-key frame stepping; hosted runners without frames self-skip those capture-dependent assertions. |
 | `windows-system-integration.spec.ts` | Windows-only. Verifies isolated data dir, native DLL/WebView2 runtime, display/DPI topology, localhost-only API binding, process health, Defender visibility, audio service/device health, concurrent local API load, focus churn, rapid Home-window routing, Home close/reopen backend survival, and absence of Windows crash-report events during the suite |
-| `windows-user-journey.spec.ts` | Windows-only. Drives Home search button -> floating Search input -> Timeline -> Home, and opens Recording settings to reveal Windows audio troubleshooting controls from the real UI |
+| `windows-user-journey.spec.ts` | Windows-only. Drives Home search button -> floating Search input -> Timeline -> Home, opens Recording settings to reveal Windows audio troubleshooting controls, starts/stops a manual Meeting note through the visible UI, opens the Shortcuts editor and cancels an open-search hotkey capture, toggles the Display shortcut-reminder overlay, clicks its visible Search, Chat, Timeline, and Hide controls, opens notification history from the bell, manages notification preferences, dismisses a notification from the visible bell UI, previews the Storage retention safety confirmation without applying destructive cleanup, and verifies the Privacy API-auth restart warning without restarting |
 | `hd-recording-pipeline.spec.ts` | macOS opt-in. Starts an HD timer session via `/capture/hd/start`; asserts the controller goes active, a non-empty `hd_*.mp4` chunk is written, and OCR keeps indexing during HD (high-fps + indexing decouple, #3699/#3707) |
 | `settings-sections.spec.ts` | Navigates General → Recording → AI → Speakers settings; verifies content and no crash |
 | `audio-fallback.spec.ts` | macOS opt-in spec for the Screenpipe Cloud → local Whisper fallback alert and `/notify` history |

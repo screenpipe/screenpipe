@@ -551,10 +551,17 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         inject_cookies_for_url(&self.app, &parsed).await;
 
         if let Some(active) = self.state.active().await {
-            if !self.state.is_visible().await {
-                let _ = active.show();
-                self.state.set_visible(true).await;
-            }
+            // Do NOT force the native webview visible here. Whether the panel is
+            // on screen is a frontend concern — the chat layer that hosts
+            // `<BrowserSidebar />` is `display:none` whenever the user is on
+            // Meeting notes / Timeline / Settings / etc. The sidebar reveals and
+            // positions the webview via `owned_browser_set_bounds` only when its
+            // host is actually visible, and hides it otherwise (the
+            // `offsetParent === null` guard in browser-sidebar.tsx). A
+            // background agent/pipe navigate that called `show()` here would pop
+            // the native browser over whatever the user is looking at. The
+            // navigate still loads while hidden, so the page is ready when the
+            // sidebar next reveals it.
             active
                 .navigate(parsed)
                 .map_err(|e| format!("webview.navigate failed: {e}"))?;
@@ -867,10 +874,10 @@ pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), S
     prepare_navigation(&app, &state, &parsed).await;
     inject_cookies_for_url(&app, &parsed).await;
     if let Some(active) = state.active().await {
-        if !state.is_visible().await {
-            active.show().map_err(|e| e.to_string())?;
-            state.set_visible(true).await;
-        }
+        // Visibility is owned by the frontend sidebar — never force-show here
+        // (see the matching note in `TauriOwnedHandle::navigate`). Force-showing
+        // pops the browser over non-chat views when a background agent/pipe
+        // navigates while the user is on Meeting notes, Timeline, etc.
         active.navigate(parsed).map_err(|e| e.to_string())?;
         state.clear_pending_url().await;
     }
@@ -889,6 +896,20 @@ pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
     }
     state.set_visible(false).await;
     Ok(())
+}
+
+/// E2E-only probe: whether the owned-browser native webview is currently shown.
+/// Mirrors `e2e_main_overlay_visible` — internal visibility state stays hidden
+/// in production binaries and is only exposed under the `e2e` feature. Used by
+/// `zz-owned-browser-background-nav.spec.ts` to assert a background agent/pipe
+/// navigation does not reveal the browser over a non-chat view.
+#[specta::specta]
+#[tauri::command]
+pub async fn e2e_owned_browser_visible() -> bool {
+    if !cfg!(feature = "e2e") {
+        return false;
+    }
+    browser_state().is_visible().await
 }
 
 /// Cross-platform cookie pre-navigate hook. Resolves the URL's host,

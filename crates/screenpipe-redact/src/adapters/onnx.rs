@@ -360,9 +360,17 @@ mod runtime {
 
             let id2label = parse_id2label(&config_path)?;
 
-            let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+            let mut tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
                 RedactError::Runtime(format!("tokenizer load {}: {e}", tokenizer_path.display()))
             })?;
+            // Disable the tokenizer's built-in truncation (tokenizer.json
+            // pins it to the model context, e.g. 256). We slide our own
+            // overlapping window over the full token sequence in `infer`,
+            // so the tokenizer must hand us *every* token — otherwise PII
+            // past the cutoff is dropped before we ever see it.
+            tokenizer
+                .with_truncation(None)
+                .map_err(|e| RedactError::Runtime(format!("disable tokenizer truncation: {e}")))?;
 
             let session = build_session(&model_path)?;
 
@@ -374,7 +382,15 @@ mod runtime {
             })
         }
 
-        /// Tokenize, run the session, BIO-decode, return [`RedactionOutput`].
+        /// Tokenize, run the session (sliding window for long inputs),
+        /// BIO-decode, return [`RedactionOutput`].
+        ///
+        /// The model has a fixed context (`max_seq_len`). Inputs that
+        /// tokenize longer than that are processed in overlapping
+        /// windows instead of being truncated — otherwise PII past the
+        /// cutoff (a password at the end of a long note, a key deep in a
+        /// chat log) silently passed through while the row was still
+        /// stamped "redacted".
         fn infer(&self, text: &str) -> Result<RedactionOutput, RedactError> {
             if text.is_empty() {
                 return Ok(RedactionOutput {
@@ -389,15 +405,39 @@ mod runtime {
                 .encode(text, true)
                 .map_err(|e| RedactError::Runtime(format!("tokenize: {e}")))?;
 
-            let max_len = self.cfg.max_seq_len;
-            let ids_slice = enc.get_ids();
-            let mask_slice = enc.get_attention_mask();
-            let offsets_slice = enc.get_offsets();
+            let max_len = self.cfg.max_seq_len.max(3);
+            let ids = enc.get_ids();
+            let mask = enc.get_attention_mask();
+            let offsets = enc.get_offsets();
 
-            let len = ids_slice.len().min(max_len);
-            let input_ids: Vec<i64> = ids_slice[..len].iter().map(|x| *x as i64).collect();
-            let attention_mask: Vec<i64> = mask_slice[..len].iter().map(|x| *x as i64).collect();
-            let offsets = &offsets_slice[..len];
+            let mut spans = if ids.len() <= max_len {
+                // Fits in one window — fast path, identical to before.
+                let label_ids = self.run_window(ids, mask)?;
+                bio_decode(text, &label_ids, offsets, &self.id2label)
+            } else {
+                self.infer_windowed(text, ids, offsets, max_len)?
+            };
+            // Windows overlap (and may split an entity at an edge) → sort
+            // + merge so the returned spans are sorted and
+            // non-overlapping, which downstream renderers assume.
+            merge_spans(&mut spans, text);
+
+            let redacted = render_redacted(text, &spans);
+
+            Ok(RedactionOutput {
+                input: text.to_string(),
+                redacted,
+                spans,
+            })
+        }
+
+        /// Run one window of token ids (already `<= max_seq_len`, framed
+        /// with the model's special tokens) through the session and
+        /// return the per-token argmax label ids.
+        fn run_window(&self, ids: &[u32], mask: &[u32]) -> Result<Vec<usize>, RedactError> {
+            let len = ids.len();
+            let input_ids: Vec<i64> = ids.iter().map(|x| *x as i64).collect();
+            let attention_mask: Vec<i64> = mask.iter().map(|x| *x as i64).collect();
 
             // ndarray shapes: [batch=1, seq_len]
             let ids_arr = Array::from_shape_vec((1, len), input_ids)
@@ -441,15 +481,59 @@ mod runtime {
                 label_ids.push(best_i);
             }
             // outputs (and the session borrow) drop here at end of block.
+            Ok(label_ids)
+        }
 
-            let spans = bio_decode(text, &label_ids, offsets, &self.id2label);
-            let redacted = render_redacted(text, &spans);
+        /// Inference for inputs longer than the model context. Slides an
+        /// overlapping window over the content tokens (re-using the full
+        /// encode's `<s>` / `</s>` at each window edge) so every token —
+        /// including PII at the very end — is inspected. Returns the
+        /// union of spans across windows, anchored to `text` by the
+        /// per-token byte offsets; the caller merges overlaps.
+        fn infer_windowed(
+            &self,
+            text: &str,
+            ids: &[u32],
+            offsets: &[(usize, usize)],
+            max_len: usize,
+        ) -> Result<Vec<RedactedSpan>, RedactError> {
+            let n = ids.len();
+            // Special tokens framing the full encode (xlm-roberta: <s> … </s>).
+            let bos = ids[0];
+            let eos = ids[n - 1];
+            let content_ids = &ids[1..n - 1];
+            let content_offsets = &offsets[1..n - 1];
+            let content_len = content_ids.len();
 
-            Ok(RedactionOutput {
-                input: text.to_string(),
-                redacted,
-                spans,
-            })
+            let win = max_len.saturating_sub(2).max(1); // room for bos + eos
+            let overlap = (win / 4).min(48); // cover PII straddling a window edge
+            let stride = win.saturating_sub(overlap).max(1);
+
+            let mut spans = Vec::new();
+            let mut start = 0usize;
+            loop {
+                let end = (start + win).min(content_len);
+                let wlen = end - start + 2;
+                let mut win_ids = Vec::with_capacity(wlen);
+                let mut win_off = Vec::with_capacity(wlen);
+                win_ids.push(bos);
+                win_off.push((0usize, 0usize));
+                win_ids.extend_from_slice(&content_ids[start..end]);
+                win_off.extend_from_slice(&content_offsets[start..end]);
+                win_ids.push(eos);
+                win_off.push((0, 0));
+                let win_mask = vec![1u32; wlen];
+
+                let label_ids = self.run_window(&win_ids, &win_mask)?;
+                let mut ws = bio_decode(text, &label_ids, &win_off, &self.id2label);
+                spans.append(&mut ws);
+
+                if end >= content_len {
+                    break;
+                }
+                start += stride;
+            }
+            Ok(spans)
         }
     }
 
@@ -564,6 +648,34 @@ mod runtime {
         out
     }
 
+    /// Sort spans by start and merge overlaps into non-overlapping runs.
+    /// Sliding-window inference emits the same entity from two adjacent
+    /// windows (and can split one entity at a window edge); merging
+    /// yields the clean, sorted, non-overlapping list the pipeline's
+    /// policy renderer assumes. On a label clash inside an overlap the
+    /// earlier span's label wins — the union of both ranges is still
+    /// fully covered.
+    fn merge_spans(spans: &mut Vec<RedactedSpan>, text: &str) {
+        if spans.len() <= 1 {
+            return;
+        }
+        spans.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let mut merged: Vec<RedactedSpan> = Vec::with_capacity(spans.len());
+        for s in spans.drain(..) {
+            if let Some(last) = merged.last_mut() {
+                if s.start < last.end {
+                    if s.end > last.end {
+                        last.end = s.end;
+                        last.text = text[last.start..last.end].to_string();
+                    }
+                    continue;
+                }
+            }
+            merged.push(s);
+        }
+        *spans = merged;
+    }
+
     fn parse_id2label(config_path: &std::path::Path) -> Result<Vec<String>, RedactError> {
         let raw = std::fs::read_to_string(config_path)
             .map_err(|e| RedactError::Runtime(format!("read config: {e}")))?;
@@ -672,6 +784,49 @@ mod runtime {
             assert_eq!(spans[0].label, SpanLabel::Person);
             assert_eq!(spans[0].start, 0);
             assert_eq!(spans[0].end, 4);
+        }
+
+        #[test]
+        fn merge_spans_dedups_and_merges_window_overlap() {
+            // Two adjacent windows both detect the same secret (overlap),
+            // and one splits an entity at its edge. After merge we expect
+            // sorted, non-overlapping spans covering the full ranges.
+            let text = "aaaa SECRETVALUE bbbb KEY";
+            let mut spans = vec![
+                // window B (out of order): the duplicate secret
+                RedactedSpan {
+                    start: 5,
+                    end: 16,
+                    label: SpanLabel::Secret,
+                    text: "SECRETVALUE".into(),
+                },
+                // window A: same secret, plus a split half of "KEY"
+                RedactedSpan {
+                    start: 5,
+                    end: 11,
+                    label: SpanLabel::Secret,
+                    text: "SECRET".into(),
+                },
+                RedactedSpan {
+                    start: 22,
+                    end: 24,
+                    label: SpanLabel::Secret,
+                    text: "KE".into(),
+                },
+                // window B: the other half of "KEY", overlapping
+                RedactedSpan {
+                    start: 23,
+                    end: 25,
+                    label: SpanLabel::Secret,
+                    text: "EY".into(),
+                },
+            ];
+            merge_spans(&mut spans, text);
+            assert_eq!(spans.len(), 2, "duplicate + split spans must merge");
+            assert_eq!((spans[0].start, spans[0].end), (5, 16));
+            assert_eq!((spans[1].start, spans[1].end), (22, 25));
+            // sorted ascending
+            assert!(spans[0].start < spans[1].start);
         }
     }
 }

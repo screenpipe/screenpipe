@@ -179,6 +179,58 @@ async function waitForTimelineFrameCount(timeoutMs = t(45_000)): Promise<number>
   return latestCount;
 }
 
+async function getCurrentTimelineFrame(): Promise<{ timestamp: string; frameId: string } | null> {
+  return (await browser.execute(() => {
+    const frame = document.querySelector("[data-testid='timeline-slider'] [data-current='true']");
+    if (!frame) return null;
+    return {
+      timestamp: frame.getAttribute("data-timestamp") ?? "",
+      frameId: frame.getAttribute("data-frame-id") ?? "",
+    };
+  })) as { timestamp: string; frameId: string } | null;
+}
+
+async function clickFirstNonCurrentTimelineFrame(): Promise<{
+  timestamp: string;
+  frameId: string;
+  stepKey: "ArrowLeft" | "ArrowRight";
+}> {
+  const frames = await $$("[data-testid='timeline-slider'] [data-timestamp]");
+  let target:
+    | { timestamp: string; frameId: string; stepKey: "ArrowLeft" | "ArrowRight" }
+    | null = null;
+
+  const frameCount = await frames.length;
+  for (let i = 0; i < frameCount; i += 1) {
+    const frame = frames[i]!;
+    if ((await frame.getAttribute("data-current")) === "true") continue;
+
+    target = {
+      timestamp: (await frame.getAttribute("data-timestamp")) ?? "",
+      frameId: (await frame.getAttribute("data-frame-id")) ?? "",
+      stepKey: i === 0 ? "ArrowLeft" : "ArrowRight",
+    };
+    await frame.scrollIntoView({ block: "nearest", inline: "center" });
+    await frame.click();
+    break;
+  }
+
+  if (!target?.timestamp) {
+    throw new Error("Could not find a non-current Timeline frame to click");
+  }
+
+  await browser.waitUntil(
+    async () => (await getCurrentTimelineFrame())?.timestamp === target.timestamp,
+    {
+      timeout: t(10_000),
+      interval: 250,
+      timeoutMsg: "Clicked Timeline frame did not become the current frame",
+    },
+  );
+
+  return target;
+}
+
 async function requireHealthyLocalApi(cfg: LocalApiConfig): Promise<HealthBody> {
   return browser.waitUntil(
     async () => {
@@ -377,5 +429,43 @@ describe("Windows core recording pipeline", function () {
 
     const screenshot = await saveScreenshot("windows-core-recording");
     expect(existsSync(screenshot)).toBe(true);
+  });
+
+  it("lets users scrub captured Timeline frames and step with arrow keys", async function () {
+    if (!canRun || !cfg) this.skip();
+
+    const probe = await probeMarkerIndexing();
+    if (probe.rows.length === 0) this.skip();
+
+    await openTimeline();
+    const frameCount = await waitForTimelineFrameCount(t(75_000));
+    if (frameCount < 2) this.skip();
+
+    await browser.waitUntil(async () => (await getCurrentTimelineFrame()) !== null, {
+      timeout: t(20_000),
+      interval: 250,
+      timeoutMsg: "Timeline did not mark any visible frame as current",
+    });
+
+    const clickedFrame = await clickFirstNonCurrentTimelineFrame();
+    expect((await getCurrentTimelineFrame())?.timestamp).toBe(clickedFrame.timestamp);
+
+    await browser.execute(() => window.focus());
+    await browser.keys([clickedFrame.stepKey]);
+
+    await browser.waitUntil(
+      async () => {
+        const current = await getCurrentTimelineFrame();
+        return current !== null && current.timestamp !== clickedFrame.timestamp;
+      },
+      {
+        timeout: t(10_000),
+        interval: 250,
+        timeoutMsg: `${clickedFrame.stepKey} did not move the current Timeline frame`,
+      },
+    );
+
+    const scrubScreenshot = await saveScreenshot("windows-core-recording-timeline-scrub");
+    expect(existsSync(scrubScreenshot)).toBe(true);
   });
 });
