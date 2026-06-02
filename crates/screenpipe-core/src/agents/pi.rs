@@ -854,6 +854,127 @@ impl PiExecutor {
         requested.to_string()
     }
 
+    /// Resolve a screenpipe-cloud model AND validate it against the tier's
+    /// allowed model list returned by the gateway (`/v1/models`).
+    ///
+    /// Why this exists: a pipe's preset can resolve to a model the user's
+    /// current plan/tier does not allow (e.g. `claude-opus-4` on a tier whose
+    /// `allowed_models` are haiku/gemini only). Previously we passed the
+    /// requested model straight through to pi, which then sent it to the
+    /// gateway and got rejected — the pipe failed with an opaque error even
+    /// though the user had valid credits and a valid plan. Validating here
+    /// turns that hard failure into a graceful fallback to an allowed model.
+    ///
+    /// For non-screenpipe providers (ollama / openai-byok / anthropic-byok /
+    /// custom) we don't have an allow-list and must not touch the model — the
+    /// user owns that provider. We only strip the `@date` suffix via
+    /// [`resolve_model`].
+    ///
+    /// Tier-flicker self-heal: tier resolution can momentarily report a LOWER
+    /// tier than the user actually has (stale token captured at engine boot,
+    /// sidecar restart, token refresh mid-run). To avoid silently downgrading
+    /// a paying subscriber who deliberately picked a premium model, when the
+    /// requested model is missing we re-read the CURRENT token and re-fetch
+    /// the catalog once. If the fresh token reveals the model is allowed after
+    /// all, we keep it. Only if it's still disallowed do we fall back.
+    ///
+    /// Returns `(resolved_model, fell_back_from)` — `fell_back_from` is
+    /// `Some(original)` only when we actually downgraded, so the caller can
+    /// surface a visible notice instead of silently swapping the model.
+    async fn resolve_screenpipe_model(
+        &self,
+        requested: &str,
+        provider: &str,
+    ) -> (String, Option<String>) {
+        let base = Self::resolve_model(requested, provider);
+        if provider != "screenpipe" {
+            return (base, None);
+        }
+
+        let api_url = self.api_url.clone();
+
+        // Fetch the tier-filtered catalog. On any failure (offline, gateway
+        // down) we get the minimal fallback list — in that case we trust the
+        // requested model rather than forcing a fallback, since validation is
+        // best-effort and we don't want to break offline/degraded runs.
+        let fetch_allowed = |token: Option<String>| {
+            let api_url = api_url.clone();
+            async move {
+                let models = screenpipe_cloud_models(&api_url, token.as_deref()).await;
+                models
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| {
+                                m.get("id").and_then(|v| v.as_str()).map(String::from)
+                            })
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default()
+            }
+        };
+
+        let allowed = fetch_allowed(self.current_user_token()).await;
+
+        let mut decision = Self::pick_allowed_model(&base, &allowed);
+
+        // Tier-flicker self-heal: model looks disallowed → re-read the token
+        // (it may have refreshed to the real tier since boot) and re-check
+        // once before committing to a downgrade.
+        if decision.is_err() {
+            let fresh = self.current_user_token();
+            let fresh_allowed = fetch_allowed(fresh).await;
+            if !fresh_allowed.is_empty() && fresh_allowed != allowed {
+                let retry = Self::pick_allowed_model(&base, &fresh_allowed);
+                if retry.is_ok() {
+                    info!(
+                        "model '{}' allowed after token refresh (tier flicker self-healed)",
+                        base
+                    );
+                }
+                decision = retry;
+            }
+        }
+
+        match decision {
+            Ok(m) => (m, None),
+            Err(fallback) => {
+                warn!(
+                    "model '{}' is not available on this tier (allowed: [{}]); \
+                     falling back to '{}' so the pipe doesn't fail",
+                    base,
+                    allowed.join(", "),
+                    fallback
+                );
+                (fallback, Some(base))
+            }
+        }
+    }
+
+    /// Pure validation step for [`resolve_screenpipe_model`] (network-free so
+    /// it's unit-testable).
+    ///
+    /// `Ok(model)`  → the requested model is allowed (or we can't validate).
+    /// `Err(model)` → requested not allowed; the returned value is the fallback.
+    fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
+        // No catalog (or only the offline fallback) → don't second-guess.
+        if allowed.is_empty() {
+            return Ok(requested.to_string());
+        }
+        // "auto" is always valid: the gateway picks an allowed model server-side.
+        if requested == "auto" || allowed.iter().any(|m| m == requested) {
+            return Ok(requested.to_string());
+        }
+        // Requested model is NOT in the tier's allow-list. Pick a safe default:
+        // prefer "auto" (gateway chooses), else the first allowed model.
+        let fallback = if allowed.iter().any(|m| m == "auto") {
+            "auto".to_string()
+        } else {
+            allowed[0].clone()
+        };
+        Err(fallback)
+    }
+
     /// Spawn the pi subprocess and wait for its output.
     #[allow(clippy::too_many_arguments)]
     async fn spawn_pi(
@@ -1209,7 +1330,15 @@ impl AgentExecutor for PiExecutor {
                 "pi not found. try restarting the app or delete ~/.screenpipe/pi-agent and restart"
             )
         })?;
-        let resolved_model = Self::resolve_model(model, &resolved_provider);
+        let (resolved_model, fell_back_from) = self
+            .resolve_screenpipe_model(model, &resolved_provider)
+            .await;
+        if let Some(ref original) = fell_back_from {
+            warn!(
+                "pipe model '{}' unavailable on current tier — ran on '{}' instead",
+                original, resolved_model
+            );
+        }
 
         info!(
             "pipe using provider: {}, model: {}",
@@ -1284,9 +1413,23 @@ impl AgentExecutor for PiExecutor {
         pipe_system_prompt: Option<&str>,
     ) -> Result<AgentOutput> {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
-        let resolved_model = Self::resolve_model(model, &resolved_provider);
-
+        let (resolved_model, fell_back_from) = self
+            .resolve_screenpipe_model(model, &resolved_provider)
+            .await;
+        // Surface the downgrade to the UI so a user who deliberately picked a
+        // premium model isn't silently served a weaker one (e.g. during a tier
+        // flicker). The UI renders this status line as a non-blocking notice.
+        if let Some(ref original) = fell_back_from {
+            let _ = line_tx.send(format!(
+                r#"{{"type":"status","kind":"model_fallback","requested":{},"used":{}}}"#,
+                serde_json::Value::String(original.clone()),
+                serde_json::Value::String(resolved_model.clone()),
+            ));
+        }
+        // Re-read after resolution: resolve_screenpipe_model may have refreshed
+        // the token internally; use the current value for config + spawn.
         let cloud_token = self.current_user_token();
+
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
@@ -2278,6 +2421,48 @@ mod tests {
 
         // Unrelated error carries no hint.
         assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
+    }
+
+    #[test]
+    fn test_pick_allowed_model() {
+        let allowed: Vec<String> = ["auto", "claude-haiku-4-5", "gemini-3.5-flash"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Allowed model passes through unchanged.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("gemini-3.5-flash", &allowed),
+            Ok("gemini-3.5-flash".to_string())
+        );
+        // "auto" is always valid.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("auto", &allowed),
+            Ok("auto".to_string())
+        );
+        // Disallowed model (the reported bug: opus on a haiku/gemini tier)
+        // falls back to "auto" when present.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &allowed),
+            Err("auto".to_string())
+        );
+
+        // When "auto" is NOT offered, fall back to the first allowed model.
+        let no_auto: Vec<String> = ["claude-haiku-4-5", "gemini-3.5-flash"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &no_auto),
+            Err("claude-haiku-4-5".to_string())
+        );
+
+        // Empty catalog (offline / gateway down) → trust the requested model,
+        // don't break degraded runs.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &[]),
+            Ok("claude-opus-4".to_string())
+        );
     }
 
     #[test]
