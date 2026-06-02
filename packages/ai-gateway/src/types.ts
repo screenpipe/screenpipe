@@ -168,6 +168,8 @@ export interface Env {
 	// fallback. Set this separately only if you need to rotate it
 	// independently of the gemma4-31b path.
 	SCREENPIPE_ENCLAVE_API_KEY?: string;
+	// MiniMax — OpenAI-compatible chat provider (https://api.minimax.io)
+	MINIMAX_API_KEY: string;
 	// Admin API auth
 	ADMIN_SECRET: string;
 	// Transcription A/B/C test routing

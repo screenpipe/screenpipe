@@ -165,6 +165,8 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'qwen3-coder': 1,
   'step-3.5-flash:free': 0,
   'step-3.5-flash': 0,
+  // MiniMax — mid-tier paid provider, charge 1 query per message
+  'minimax-m3': 1,
 };
 
 export function getModelWeight(model?: string): number {
@@ -225,6 +227,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'meta-llama/llama-4-scout',
       'meta-llama/llama-4-maverick',
       'gemma4-31b',
+      'minimax-m3',
     ],
   },
   subscribed: {

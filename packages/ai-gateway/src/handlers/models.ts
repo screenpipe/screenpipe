@@ -564,6 +564,23 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'medium',
     recommended_for: ['chat', 'analysis'],
   },
+  // ── MiniMax (OpenAI-compatible) — only shown when MINIMAX_API_KEY is configured ──
+  {
+    id: 'MiniMax-M3',
+    object: 'model',
+    owned_by: 'minimax',
+    name: 'MiniMax-M3',
+    description: '512K context, supports image input, optimized for long-context reasoning',
+    tags: ['premium', 'reasoning', 'long-context', 'vision'],
+    free: false,
+    context_window: 512000,
+    best_for: ['long documents', 'vision', 'reasoning', 'analysis'],
+    speed: 'medium',
+    intelligence: 'high',
+    cost_tier: 'medium',
+    recommended_for: ['chat', 'analysis', 'coding'],
+    requires_env: 'MINIMAX_API_KEY',
+  },
 ];
 
 /**

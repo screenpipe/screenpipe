@@ -66,6 +66,9 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'gpt-5.5': { input: 5.00, output: 30.00 },
   'gpt-5.4': { input: 2.50, output: 15.00 },
   'gpt-5.4-mini': { input: 0.75, output: 4.50 },
+  // MiniMax — official per-token pricing (USD / 1M tokens)
+  // https://platform.minimax.io/docs/guides/pricing-paygo
+  'minimax-m3': { input: 0.60, output: 2.40 },
 };
 
 // Estimated average tokens per request when streaming can't determine actual usage.
@@ -164,6 +167,7 @@ export function inferProvider(model: string | null | undefined): string {
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('gemma4')) return 'tinfoil';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';
+  if (lower.includes('minimax')) return 'minimax';
   if (lower.includes('deepseek') || lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
   if (lower.includes('screenpipe-event')) return 'screenpipe-vllm';
   return 'unknown';

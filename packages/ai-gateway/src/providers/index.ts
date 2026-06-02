@@ -6,6 +6,7 @@ import { OpenRouterProvider } from './openrouter';
 import { VertexMaasProvider, isVertexMaasModel } from './vertex-maas';
 import { TinfoilProvider, isTinfoilModel } from './tinfoil';
 import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpipe-enclave';
+import { MiniMaxProvider, isMiniMaxModel } from './minimax';
 import { AIProvider } from './base';
 import { Env } from '../types';
 
@@ -72,6 +73,10 @@ export function createProvider(model: string, env: Env): AIProvider {
 	if (model === 'screenpipe-event-classifier') {
 		const vllmUrl = env.EVENT_CLASSIFIER_URL || 'http://34.122.128.37:8080/v1';
 		return new OpenAIProvider('none', vllmUrl);
+	}
+	// MiniMax — OpenAI-compatible API at api.minimax.io
+	if (isMiniMaxModel(model)) {
+		return new MiniMaxProvider(requireSecret(env.MINIMAX_API_KEY, 'MiniMax API key not configured'));
 	}
 	if (model.toLowerCase().includes('claude')) {
 		return new AnthropicProvider(requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'));
