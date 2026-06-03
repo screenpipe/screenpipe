@@ -170,6 +170,8 @@ export interface SessionRecord {
   kind?: ConversationKind;
   /** Pipe metadata — only meaningful when `kind !== "chat"`. */
   pipeContext?: PipeContext;
+  /** AI preset id selected for this conversation. Mirrored to disk on save. */
+  presetId?: string;
 }
 
 interface ChatStoreState {

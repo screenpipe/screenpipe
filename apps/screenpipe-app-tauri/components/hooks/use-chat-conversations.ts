@@ -111,6 +111,10 @@ interface UseChatConversationsOpts {
   pendingDocsRef?: MutableRefObject<any[]>;
   settings: any;
   selectedPreset?: AIPreset | null;
+  /** Ref to the active preset id — snapshotted on chat switch. */
+  activePresetIdRef?: MutableRefObject<string | null | undefined>;
+  /** Called when switching to a conversation to restore its model choice. */
+  onRestorePreset?: (presetId: string | undefined) => void;
   inlineHistoryEnabled?: boolean;
 }
 
@@ -124,6 +128,17 @@ interface SaveConversationOptions {
  *  (chat window + home page) never both fire for the same conversation.
  *  Entries are removed on failure/null to allow retry. */
 const aiTitleAttempted = new Set<string>();
+
+function snapshotOutgoingPresetId(
+  store: { sessions: Record<string, { presetId?: string }>; actions: { patch: (id: string, patch: { presetId?: string }) => void } },
+  outgoingSid: string,
+  activePresetIdRef?: MutableRefObject<string | null | undefined>,
+) {
+  const presetId = activePresetIdRef?.current ?? undefined;
+  if (presetId && store.sessions[outgoingSid]) {
+    store.actions.patch(outgoingSid, { presetId });
+  }
+}
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
   const {
@@ -152,6 +167,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     pendingDocsRef,
     settings,
     selectedPreset,
+    activePresetIdRef,
+    onRestorePreset,
     inlineHistoryEnabled = true,
   } = opts;
   const componentUnmountedRef = useRef(false);
@@ -702,6 +719,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // plain chat (kind/pipeContext dropped on disk).
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+      // Preserve per-conversation model choice across saves.
+      ...(await (async () => {
+        const { useChatStore } = await import("@/lib/stores/chat-store");
+        const sid = piSessionIdRef.current;
+        const fromStore = sid
+          ? useChatStore.getState().sessions[sid]?.presetId
+          : undefined;
+        const presetId = fromStore ?? selectedPreset?.id ?? existing?.presetId;
+        return presetId ? { presetId } : {};
+      })()),
       // Preserve sort key across reloads. Source of truth: the in-memory
       // chat-store, which is bumped exactly once per user-send.
       ...(await (async () => {
@@ -1011,6 +1038,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           pendingDocs: pendingDocsRef ? [...pendingDocsRef.current] : [],
         });
       }
+      snapshotOutgoingPresetId(store, outgoingSid, activePresetIdRef);
     }
 
     // (2) Reset panel flags — these are panel-local, not session-local.
@@ -1083,6 +1111,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             ...(persisted.hidden === true ? { hidden: true } : {}),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(persisted.presetId ? { presetId: persisted.presetId } : {}),
           });
         } else {
           store.actions.patch(conv.id, {
@@ -1093,6 +1122,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(persisted.presetId ? { presetId: persisted.presetId } : {}),
           });
         }
       }
@@ -1175,6 +1205,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // foreground/background swaps.
           ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
+          ...(full.presetId ? { presetId: full.presetId } : {}),
         });
       } else if (conv.kind || conv.pipeContext) {
         store.actions.patch(conv.id, {
@@ -1217,6 +1248,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         setPendingDocs(incomingDraft.pendingDocs as any[]);
       }
     }
+
+    const incomingPresetId =
+      useChatStore.getState().sessions[conv.id]?.presetId ?? persisted?.presetId;
+    onRestorePreset?.(incomingPresetId);
 
     // Update activeConversationId in store
     try {
@@ -1264,6 +1299,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           isLoading,
         });
       }
+      snapshotOutgoingPresetId(store, outgoingSid, activePresetIdRef);
     }
 
     const newId = crypto.randomUUID();
@@ -1274,9 +1310,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       .reverse()
       .find((m) => m.role === "user")?.timestamp;
 
+    const branchedPresetId =
+      store.sessions[outgoingSid]?.presetId ?? selectedPreset?.id;
+
     const conversation: ChatConversation = {
       id: newId,
       title,
+      ...(branchedPresetId ? { presetId: branchedPresetId } : {}),
       messages: branchedMessages.slice(-100).map((m) => {
         let content = m.content;
         if (!content && m.contentBlocks?.length) {
@@ -1334,6 +1374,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         ...(conversation.lastUserMessageAt
           ? { lastUserMessageAt: conversation.lastUserMessageAt }
           : {}),
+        ...(branchedPresetId ? { presetId: branchedPresetId } : {}),
       });
       store.actions.setMessages(newId, conversation.messages as any);
       store.actions.setCurrent(newId);
@@ -1358,6 +1399,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setMessages(branchedMessages);
     setConversationId(newId);
     setShowHistory(false);
+    onRestorePreset?.(branchedPresetId);
 
     try {
       const { getStore } = await import("@/lib/hooks/use-settings");
@@ -1415,6 +1457,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           pendingDocs: pendingDocsRef ? [...pendingDocsRef.current] : [],
         });
       }
+      snapshotOutgoingPresetId(store, outgoingSid, activePresetIdRef);
     }
 
     // Clear panel state
@@ -1451,6 +1494,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // ("analyzing…" stuck). Setting conversationId here keeps the
     // foreground key in sync with piSessionIdRef from message 0.
     setConversationId(newSid);
+    onRestorePreset?.(undefined);
   };
 
   // ---- filteredConversations ----

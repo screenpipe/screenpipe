@@ -178,6 +178,9 @@ export interface ChatConversation {
 	/** Title source priority: user > ai > fallback. Used to prevent
 	 *  lower-priority titles from overwriting higher-priority ones. */
 	titleSource?: "user" | "ai" | "fallback";
+	/** AI preset id last selected for this conversation. Restored when
+	 *  switching back so each chat keeps its own model choice. */
+	presetId?: string;
 }
 
 export interface ChatHistoryStore {

@@ -2673,6 +2673,8 @@ export function StandaloneChat({
   const [renameValue, setRenameValue] = useState("");
   const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
+  const activePresetIdRef = useRef<string | null>(null);
+  const handlePiRestartRef = useRef<(preset: AIPreset) => void>(() => {});
   const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
@@ -3010,6 +3012,25 @@ export function StandaloneChat({
     reader.readAsDataURL(file);
   }, [resizeImage]);
 
+  useEffect(() => {
+    activePresetIdRef.current = activePreset?.id ?? null;
+  }, [activePreset?.id]);
+
+  const restoreConversationPreset = useCallback(
+    (presetId: string | undefined) => {
+      if (activePipeExecution) return;
+      if (!isSettingsLoaded) return;
+      const presets = settings.aiPresets ?? [];
+      const fallback = presets.find((p) => p.defaultPreset) ?? presets[0];
+      const match =
+        (presetId ? presets.find((p) => p.id === presetId) : undefined) ?? fallback;
+      if (!match) return;
+      setActivePreset(match);
+      handlePiRestartRef.current(match);
+    },
+    [activePipeExecution, isSettingsLoaded, settings.aiPresets],
+  );
+
   // Chat conversations — stored as individual JSON files in ~/.screenpipe/chats/
   const {
     showHistory,
@@ -3053,6 +3074,8 @@ export function StandaloneChat({
     pendingDocsRef,
     settings,
     selectedPreset: activePreset ?? null,
+    activePresetIdRef,
+    onRestorePreset: restoreConversationPreset,
     inlineHistoryEnabled: !hideInlineHistory,
   });
 
@@ -4551,6 +4574,8 @@ export function StandaloneChat({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.user?.token, setRunningConfigFromProviderConfig, restartCurrentPiSession]);
+
+  handlePiRestartRef.current = handlePiRestart;
 
   useEffect(() => {
     if (!isStreaming && pendingPresetRef.current) {
@@ -8965,6 +8990,10 @@ export function StandaloneChat({
                   const match = settings.aiPresets?.find((p) => p.id === id);
                   if (!match) return;
                   setActivePreset(match);
+                  const sid = piSessionIdRef.current;
+                  if (sid && useChatStore.getState().sessions[sid]) {
+                    useChatStore.getState().actions.patch(sid, { presetId: id });
+                  }
                   if (!activePipeExecution) handlePiRestart(match);
                 }}
               />

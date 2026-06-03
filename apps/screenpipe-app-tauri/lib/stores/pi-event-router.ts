@@ -728,6 +728,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         // (back-compat).
         ...(session.kind ? { kind: session.kind } : existing?.kind ? { kind: existing.kind } : {}),
         ...(session.pipeContext ? { pipeContext: session.pipeContext } : existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+        ...(session.presetId ? { presetId: session.presetId } : existing?.presetId ? { presetId: existing.presetId } : {}),
       };
 
       try {
