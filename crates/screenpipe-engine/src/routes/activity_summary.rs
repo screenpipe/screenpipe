@@ -27,6 +27,7 @@ use std::sync::Arc;
 use tracing::error;
 
 use crate::server::AppState;
+use screenpipe_db::DatabaseManager;
 
 /// Frames more than this many seconds apart are treated as idle (screen
 /// untouched), so the gap between them does not count as active time. Shared
@@ -268,7 +269,7 @@ pub async fn get_activity_summary(
     let start = query.start_time.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let end = query.end_time.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    let summary_core = collect_summary_core(&state, &query, &start, &end).await;
+    let summary_core = collect_summary_core(&state.db, &query, &start, &end).await;
 
     // Run optional sidecars in parallel — each is best-effort; failures
     // degrade to None rather than blowing up the whole response.
@@ -276,7 +277,7 @@ pub async fn get_activity_summary(
     let (recording_opt, memories_opt, snippets_opt) = tokio::join!(
         async {
             if query.include_recording {
-                load_recording_status(&state, &start, &end, query.app_name.as_deref())
+                load_recording_status(&state.db, &start, &end, query.app_name.as_deref())
                     .await
                     .map_err(|e| error!("activity summary: recording status failed: {}", e))
                     .ok()
@@ -286,7 +287,7 @@ pub async fn get_activity_summary(
         },
         async {
             if query.include_memories {
-                load_memories(&state, memory_query, query.max_memories.clamp(1, 20))
+                load_memories(&state.db, memory_query, query.max_memories.clamp(1, 20))
                     .await
                     .map_err(|e| error!("activity summary: memories failed: {}", e))
                     .ok()
@@ -296,7 +297,7 @@ pub async fn get_activity_summary(
         },
         async {
             if query.include_snippets {
-                load_snippets(&state, &query, &summary_core.key_texts, &start, &end)
+                load_snippets(&state.db, &query, &summary_core.key_texts, &start, &end)
                     .await
                     .map_err(|e| error!("activity summary: snippets failed: {}", e))
                     .ok()
@@ -354,7 +355,7 @@ struct SummaryCore {
 }
 
 async fn collect_summary_core(
-    state: &AppState,
+    db: &DatabaseManager,
     query: &ActivitySummaryQuery,
     start: &str,
     end: &str,
@@ -491,13 +492,13 @@ async fn collect_summary_core(
         edited_files_result,
         active_ts_result,
     ) = tokio::join!(
-        state.db.execute_raw_sql(&apps_query),
-        state.db.execute_raw_sql(&windows_query),
-        state.db.execute_raw_sql(&texts_query),
-        state.db.execute_raw_sql(&audio_speakers_query),
-        state.db.execute_raw_sql(&audio_transcripts_query),
-        state.db.execute_raw_sql(&edited_files_query),
-        state.db.execute_raw_sql(&active_ts_query),
+        db.execute_raw_sql(&apps_query),
+        db.execute_raw_sql(&windows_query),
+        db.execute_raw_sql(&texts_query),
+        db.execute_raw_sql(&audio_speakers_query),
+        db.execute_raw_sql(&audio_transcripts_query),
+        db.execute_raw_sql(&edited_files_query),
+        db.execute_raw_sql(&active_ts_query),
     );
 
     let mut apps = Vec::new();
@@ -650,7 +651,7 @@ async fn collect_summary_core(
 // ---------- recording health ----------
 
 async fn load_recording_status(
-    state: &AppState,
+    db: &DatabaseManager,
     start: &str,
     end: &str,
     app_name: Option<&str>,
@@ -670,8 +671,7 @@ async fn load_recording_status(
          (SELECT ROUND((JULIANDAY('{now}') - JULIANDAY(MAX(timestamp))) * 86400) FROM audio_transcriptions) AS seconds_since_last_audio"
     );
 
-    let rows = state
-        .db
+    let rows = db
         .execute_raw_sql(&query)
         .await
         .map_err(|e| e.to_string())?;
@@ -700,12 +700,11 @@ async fn load_recording_status(
 // ---------- memories ----------
 
 async fn load_memories(
-    state: &AppState,
+    db: &DatabaseManager,
     q: Option<&str>,
     limit: u32,
 ) -> Result<Vec<ActivityMemory>, String> {
-    let rows = state
-        .db
+    let rows = db
         .list_memories(
             q,
             None,
@@ -741,7 +740,7 @@ async fn load_memories(
 // ---------- snippets ----------
 
 async fn load_snippets(
-    state: &AppState,
+    db: &DatabaseManager,
     query: &ActivitySummaryQuery,
     key_texts: &[KeyText],
     start: &str,
@@ -806,8 +805,7 @@ async fn load_snippets(
         }
     }
 
-    let audio_rows = state
-        .db
+    let audio_rows = db
         .execute_raw_sql(&audio_query)
         .await
         .map_err(|e| e.to_string())?;
@@ -1387,5 +1385,562 @@ mod tests {
         q.include_recording = false;
         let g = build_guidance("ok", "not_requested", &q, None);
         assert_eq!(g.searched_endpoints, vec!["/activity-summary".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    //! Integration tests for the activity-summary SQL, run against a real
+    //! (migrated, temp-file) SQLite database. These exercise the frame-gap
+    //! duration math end to end: the apps / windows `minutes` columns, the new
+    //! `total_active_minutes`, the idle cap, app/window filtering, the audio /
+    //! edited-files / key-text queries, plus a performance smoke test on a large
+    //! frame set.
+    use super::*;
+    use screenpipe_db::DatabaseManager;
+
+    const DAY: &str = "2026-06-02";
+
+    /// A throwaway migrated DB. We use a temp FILE rather than `sqlite::memory:`
+    /// because the manager opens a multi-connection pool and each connection to
+    /// `:memory:` is a separate database; a file is shared across the pool.
+    async fn fresh_db() -> (DatabaseManager, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.db");
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .expect("open + migrate temp db");
+        (db, dir)
+    }
+
+    fn sql_val(v: Option<&str>) -> String {
+        match v {
+            Some(s) => format!("'{}'", s.replace('\'', "''")),
+            None => "NULL".to_string(),
+        }
+    }
+
+    /// Insert one frame. `ts` is `YYYY-MM-DD HH:MM:SS`; app/window are optional
+    /// so tests can exercise NULL/empty filtering.
+    async fn add_frame(db: &DatabaseManager, ts: &str, app: Option<&str>, window: Option<&str>) {
+        let q = format!(
+            "INSERT INTO frames (timestamp, app_name, window_name) VALUES ('{}', {}, {})",
+            ts,
+            sql_val(app),
+            sql_val(window)
+        );
+        db.execute_raw_sql(&q).await.expect("insert frame");
+    }
+
+    /// Query over a range with an optional app filter. `start_time`/`end_time`
+    /// are unused by `collect_summary_core` (it reads the &str bounds); they are
+    /// set to valid values only to satisfy the struct.
+    fn query(app: Option<&str>) -> ActivitySummaryQuery {
+        ActivitySummaryQuery {
+            start_time: "2026-06-02T00:00:00Z".parse().unwrap(),
+            end_time: "2026-06-02T23:59:59Z".parse().unwrap(),
+            app_name: app.map(|s| s.to_string()),
+            q: None,
+            include_recording: true,
+            include_memories: false,
+            include_snippets: false,
+            include_guidance: false,
+            max_snippets: 8,
+            max_snippet_chars: 500,
+            max_memories: 5,
+        }
+    }
+
+    fn full_range() -> (String, String) {
+        (format!("{DAY} 09:00:00"), format!("{DAY} 12:00:00"))
+    }
+
+    fn app_min(core: &SummaryCore, name: &str) -> Option<f64> {
+        core.apps.iter().find(|a| a.name == name).map(|a| a.minutes)
+    }
+    fn win_min(core: &SummaryCore, app: &str, window: &str) -> Option<f64> {
+        core.windows
+            .iter()
+            .find(|w| w.app_name == app && w.window_name == window)
+            .map(|w| w.minutes)
+    }
+    fn near(a: f64, b: f64) -> bool {
+        (a - b).abs() < 0.06
+    }
+
+    /// Arc (10:00:00..10:01:00, GitHub then Gmail) then Claude
+    /// (10:01:30..10:10:30 with an 8-minute idle gap). Hand-computed below.
+    async fn seed_mixed(db: &DatabaseManager) {
+        for ts in ["10:00:00", "10:00:20", "10:00:40"] {
+            add_frame(db, &format!("{DAY} {ts}"), Some("Arc"), Some("GitHub")).await;
+        }
+        add_frame(db, &format!("{DAY} 10:01:00"), Some("Arc"), Some("Gmail")).await;
+        add_frame(db, &format!("{DAY} 10:01:30"), Some("Claude"), Some("Chat")).await;
+        add_frame(db, &format!("{DAY} 10:02:00"), Some("Claude"), Some("Chat")).await;
+        add_frame(db, &format!("{DAY} 10:10:00"), Some("Claude"), Some("Chat")).await; // +480s idle
+        add_frame(db, &format!("{DAY} 10:10:30"), Some("Claude"), Some("Chat")).await;
+    }
+
+    #[tokio::test]
+    async fn durations_apps_windows_and_total() {
+        let (db, _d) = fresh_db().await;
+        seed_mixed(&db).await;
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+
+        // Global consecutive gaps under cap: 20+20+20+30+30+30 = 150s = 2.5 min.
+        assert!(
+            near(core.total_active_minutes, 2.5),
+            "total={}",
+            core.total_active_minutes
+        );
+        assert_eq!(core.total_frames, 8);
+
+        // Per app: Arc = 20+20+20 = 60s = 1.0; Claude = 30+30 = 60s (480 idle
+        // excluded) = 1.0.
+        assert!(near(app_min(&core, "Arc").unwrap(), 1.0));
+        assert!(near(app_min(&core, "Claude").unwrap(), 1.0));
+
+        // Per window: Arc/GitHub = 20+20 = 40s ≈ 0.7; Claude/Chat = 30+30 = 1.0.
+        assert!(near(win_min(&core, "Arc", "GitHub").unwrap(), 0.7));
+        assert!(near(win_min(&core, "Claude", "Chat").unwrap(), 1.0));
+
+        // The total includes the cross-app gap (Arc to Claude) that per-app sums
+        // drop, so it must be >= the sum of per-app minutes.
+        let app_sum: f64 = core.apps.iter().map(|a| a.minutes).sum();
+        assert!(
+            core.total_active_minutes + 1e-9 >= app_sum,
+            "total {} < app_sum {}",
+            core.total_active_minutes,
+            app_sum
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_gap_excluded() {
+        let (db, _d) = fresh_db().await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Win")).await;
+        add_frame(&db, &format!("{DAY} 10:10:00"), Some("Arc"), Some("Win")).await; // 600s
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        assert!(
+            near(core.total_active_minutes, 0.0),
+            "idle should not count, got {}",
+            core.total_active_minutes
+        );
+        assert!(near(app_min(&core, "Arc").unwrap(), 0.0));
+    }
+
+    #[tokio::test]
+    async fn cap_boundary_is_strict() {
+        let (s, e) = full_range();
+
+        // Exactly at the cap (300s) is idle and must not count.
+        let (db1, _d1) = fresh_db().await;
+        add_frame(&db1, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Win")).await;
+        add_frame(&db1, &format!("{DAY} 10:05:00"), Some("Arc"), Some("Win")).await;
+        let at_cap = collect_summary_core(&db1, &query(None), &s, &e).await;
+        assert!(
+            near(at_cap.total_active_minutes, 0.0),
+            "300s must be excluded, got {}",
+            at_cap.total_active_minutes
+        );
+
+        // Just under the cap (299s) counts: 299/60 rounds to 5.0 min.
+        let (db2, _d2) = fresh_db().await;
+        add_frame(&db2, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Win")).await;
+        add_frame(&db2, &format!("{DAY} 10:04:59"), Some("Arc"), Some("Win")).await;
+        let under = collect_summary_core(&db2, &query(None), &s, &e).await;
+        assert!(
+            near(under.total_active_minutes, 5.0),
+            "299s must count, got {}",
+            under.total_active_minutes
+        );
+    }
+
+    #[tokio::test]
+    async fn null_and_empty_app_excluded() {
+        let (db, _d) = fresh_db().await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Win")).await;
+        add_frame(&db, &format!("{DAY} 10:00:30"), None, Some("Win")).await; // NULL app
+        add_frame(&db, &format!("{DAY} 10:00:45"), Some(""), Some("Win")).await; // empty app
+        add_frame(&db, &format!("{DAY} 10:01:00"), Some("Arc"), Some("Win")).await;
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        // Only Arc frames feed durations: 10:00:00 -> 10:01:00 = 60s = 1.0 min.
+        assert_eq!(core.apps.len(), 1, "null/empty app must not become apps");
+        assert!(near(app_min(&core, "Arc").unwrap(), 1.0));
+        assert!(
+            near(core.total_active_minutes, 1.0),
+            "got {}",
+            core.total_active_minutes
+        );
+    }
+
+    #[tokio::test]
+    async fn app_name_filter_restricts_totals() {
+        let (db, _d) = fresh_db().await;
+        seed_mixed(&db).await;
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(Some("Arc")), &s, &e).await;
+        assert!(core.apps.iter().all(|a| a.name == "Arc"));
+        assert!(
+            near(core.total_active_minutes, 1.0),
+            "Arc-only total, got {}",
+            core.total_active_minutes
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_range_is_zero() {
+        let (db, _d) = fresh_db().await;
+        seed_mixed(&db).await;
+        let core = collect_summary_core(
+            &db,
+            &query(None),
+            &format!("{DAY} 20:00:00"),
+            &format!("{DAY} 21:00:00"),
+        )
+        .await;
+        assert_eq!(core.total_frames, 0);
+        assert!(core.apps.is_empty());
+        assert!(near(core.total_active_minutes, 0.0));
+    }
+
+    #[tokio::test]
+    async fn single_frame_has_no_duration() {
+        let (db, _d) = fresh_db().await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Win")).await;
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        assert_eq!(core.total_frames, 1);
+        assert!(near(core.total_active_minutes, 0.0));
+        assert!(near(app_min(&core, "Arc").unwrap(), 0.0));
+    }
+
+    #[tokio::test]
+    async fn short_window_names_filtered_out() {
+        let (db, _d) = fresh_db().await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Inbox")).await;
+        add_frame(&db, &format!("{DAY} 10:00:20"), Some("Arc"), Some("Inbox")).await;
+        add_frame(&db, &format!("{DAY} 10:00:40"), Some("Arc"), Some("hi")).await; // 2 chars
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        assert!(win_min(&core, "Arc", "Inbox").is_some());
+        assert!(
+            win_min(&core, "Arc", "hi").is_none(),
+            "windows < 3 chars are dropped by the handler"
+        );
+    }
+
+    #[tokio::test]
+    async fn edited_files_from_document_path() {
+        let (db, _d) = fresh_db().await;
+        let p = "/Users/me/proj/main.rs";
+        for ts in ["10:00:00", "10:00:20"] {
+            db.execute_raw_sql(&format!(
+                "INSERT INTO frames (timestamp, app_name, window_name, document_path) \
+                 VALUES ('{DAY} {ts}', 'Code', 'main.rs', '{p}')"
+            ))
+            .await
+            .unwrap();
+        }
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        let f = core
+            .edited_files
+            .iter()
+            .find(|f| f.path == p)
+            .expect("document_path surfaced as edited file");
+        assert_eq!(f.frame_count, 2);
+    }
+
+    #[tokio::test]
+    async fn audio_summary_groups_speakers() {
+        let (db, _d) = fresh_db().await;
+        // audio_transcriptions.audio_chunk_id is a NOT NULL FK (sqlx enables
+        // foreign_keys), so the parent chunk must exist first.
+        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+            .await
+            .unwrap();
+        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+            .await
+            .unwrap();
+        for (m, text) in [(0, "hello team this is the weekly sync"), (1, "lets review the roadmap now")] {
+            db.execute_raw_sql(&format!(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
+                 VALUES (1, {m}, '{DAY} 10:0{m}:00', '{text}', 'mic', 1)"
+            ))
+            .await
+            .unwrap();
+        }
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        assert_eq!(core.audio_summary.segment_count, 2);
+        assert!(core
+            .audio_summary
+            .speakers
+            .iter()
+            .any(|sp| sp.name == "Alice"));
+        assert_eq!(core.audio_summary.top_transcriptions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn key_texts_from_accessibility_element() {
+        let (db, _d) = fresh_db().await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Notes"), Some("Draft")).await;
+        // The frame just inserted is the only row, so its id is 1.
+        let txt = "Quarterly planning notes for the leadership offsite";
+        db.execute_raw_sql(&format!(
+            "INSERT INTO elements (frame_id, source, role, text, depth, sort_order) \
+             VALUES (1, 'accessibility', 'AXTextField', '{txt}', 0, 0)"
+        ))
+        .await
+        .unwrap();
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        assert!(
+            core.key_texts.iter().any(|k| k.text.contains("Quarterly planning")),
+            "key_texts missing the accessibility text: {:?}",
+            core.key_texts.iter().map(|k| &k.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn recording_status_counts_frames() {
+        let (db, _d) = fresh_db().await;
+        for ts in ["10:00:00", "10:00:20", "10:00:40"] {
+            add_frame(&db, &format!("{DAY} {ts}"), Some("Arc"), Some("Win")).await;
+        }
+        let (s, e) = full_range();
+        let rec = load_recording_status(&db, &s, &e, None)
+            .await
+            .expect("recording status");
+        assert_eq!(rec.frames_in_range, 3);
+        assert_eq!(rec.audio_segments_in_range, 0);
+        assert!(rec.last_frame_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn performance_large_frame_set() {
+        let (db, _d) = fresh_db().await;
+        // 10_000 frames, 8s apart, in 100-frame app blocks across 5 apps.
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 6, 2)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let total = 10_000usize;
+        let batch = 500usize;
+        let mut i = 0usize;
+        while i < total {
+            let mut vals = Vec::with_capacity(batch);
+            for _ in 0..batch {
+                let ts = base + chrono::Duration::seconds(i as i64 * 8);
+                let app = (i / 100) % 5;
+                vals.push(format!(
+                    "('{}', 'App{}', 'Win')",
+                    ts.format("%Y-%m-%d %H:%M:%S"),
+                    app
+                ));
+                i += 1;
+            }
+            db.execute_raw_sql(&format!(
+                "INSERT INTO frames (timestamp, app_name, window_name) VALUES {}",
+                vals.join(",")
+            ))
+            .await
+            .unwrap();
+        }
+
+        let s = "2026-06-02 00:00:00".to_string();
+        let e = "2026-06-03 00:00:00".to_string();
+        let started = std::time::Instant::now();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        let elapsed = started.elapsed();
+        eprintln!(
+            "activity-summary over {total} frames took {elapsed:?} -> total_active_minutes={}",
+            core.total_active_minutes
+        );
+
+        assert_eq!(core.total_frames, total as i64);
+        // 9_999 gaps of 8s, all under the cap: ~1_333 minutes of active time.
+        assert!(
+            core.total_active_minutes > 1_000.0,
+            "expected a large active total, got {}",
+            core.total_active_minutes
+        );
+        // Loose ceiling so this is not flaky on slow CI runners, but still catches
+        // an accidental O(n^2) / per-frame-roundtrip regression.
+        assert!(
+            elapsed.as_secs() < 30,
+            "activity-summary unexpectedly slow: {elapsed:?}"
+        );
+    }
+
+    /// Real screenpipe timestamps are RFC3339 with microseconds and a `+00:00`
+    /// offset (e.g. `2026-06-02T23:47:33.574798+00:00`), not the clean
+    /// `YYYY-MM-DD HH:MM:SS` the other tests use. This locks in that JULIANDAY
+    /// and the BETWEEN range filter both handle the production format, so a
+    /// future capture-format change cannot silently break the duration math.
+    #[tokio::test]
+    async fn real_world_rfc3339_timestamp_format() {
+        let (db, _d) = fresh_db().await;
+        // Same gaps as `seed_mixed` (total 2.5 min) but in the real stored
+        // format, with real-looking microseconds.
+        let rows = [
+            ("2026-06-02T10:00:00.574798+00:00", "Arc", "GitHub"),
+            ("2026-06-02T10:00:20.111111+00:00", "Arc", "GitHub"),
+            ("2026-06-02T10:00:40.999999+00:00", "Arc", "GitHub"),
+            ("2026-06-02T10:01:00.000001+00:00", "Arc", "Gmail"),
+            ("2026-06-02T10:01:30.250000+00:00", "Claude", "Chat"),
+            ("2026-06-02T10:02:00.750000+00:00", "Claude", "Chat"),
+            ("2026-06-02T10:10:00.500000+00:00", "Claude", "Chat"), // +~480s idle
+            ("2026-06-02T10:10:30.500000+00:00", "Claude", "Chat"),
+        ];
+        for (ts, app, win) in rows {
+            add_frame(&db, ts, Some(app), Some(win)).await;
+        }
+        let core = collect_summary_core(
+            &db,
+            &query(None),
+            "2026-06-02T09:00:00Z",
+            "2026-06-02T12:00:00Z",
+        )
+        .await;
+        // Within the ~3.6s tolerance, identical to the clean-format fixture.
+        assert!(
+            near(core.total_active_minutes, 2.5),
+            "real-format total wrong: {}",
+            core.total_active_minutes
+        );
+        assert!(near(app_min(&core, "Arc").unwrap(), 1.0));
+        assert!(near(app_min(&core, "Claude").unwrap(), 1.0));
+        assert_eq!(core.total_frames, 8);
+    }
+
+    /// The scaling guarantee: a one-hour range against a LARGE table must cost
+    /// in proportion to the rows in range, not the table size. Insert ~50k
+    /// frames across weeks, summarize a single hour, and confirm only that hour
+    /// is read (and quickly).
+    #[tokio::test]
+    async fn small_range_over_large_table() {
+        let (db, _d) = fresh_db().await;
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 5, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let total = 50_000usize; // ~34 days at 1 frame/min
+        let batch = 1_000usize;
+        let mut i = 0usize;
+        while i < total {
+            let mut vals = Vec::with_capacity(batch);
+            for _ in 0..batch {
+                let ts = base + chrono::Duration::seconds(i as i64 * 60);
+                vals.push(format!(
+                    "('{}.000000+00:00', 'App{}', 'Win')",
+                    ts.format("%Y-%m-%dT%H:%M:%S"),
+                    i % 4
+                ));
+                i += 1;
+            }
+            db.execute_raw_sql(&format!(
+                "INSERT INTO frames (timestamp, app_name, window_name) VALUES {}",
+                vals.join(",")
+            ))
+            .await
+            .unwrap();
+        }
+
+        // One hour, ~14 days in: 1 frame/min => ~61 in range out of 50_000.
+        let start = "2026-05-15T00:00:00.000000+00:00";
+        let end = "2026-05-15T01:00:00.000000+00:00";
+        let started = std::time::Instant::now();
+        let core = collect_summary_core(&db, &query(None), start, end).await;
+        let elapsed = started.elapsed();
+        eprintln!(
+            "1h range over {total} frames took {elapsed:?}, in-range frames={}",
+            core.total_frames
+        );
+
+        // Only the in-range hour is summarized, not the whole table.
+        assert!(
+            (55..=65).contains(&core.total_frames),
+            "expected ~61 in-range frames, got {}",
+            core.total_frames
+        );
+        // Index-backed range read. Loose ceiling, but a dropped index / full
+        // table scan on 50k rows would blow past it.
+        assert!(
+            elapsed.as_millis() < 1_500,
+            "range query slow over a big table: {elapsed:?}"
+        );
+    }
+
+    /// Guard the scaling assumption directly: the range predicate must be
+    /// planned as an index SEARCH on idx_frames_timestamp, never a full SCAN.
+    #[tokio::test]
+    async fn range_filter_uses_timestamp_index() {
+        let (db, _d) = fresh_db().await;
+        // Mirrors the WHERE clause shared by the apps / windows / active-ts queries.
+        let plan = db
+            .execute_raw_sql(
+                "EXPLAIN QUERY PLAN SELECT timestamp FROM frames \
+                 WHERE timestamp BETWEEN '2026-05-15T00:00:00Z' AND '2026-05-15T01:00:00Z' \
+                 AND app_name IS NOT NULL AND app_name != ''",
+            )
+            .await
+            .unwrap();
+        let detail = plan.to_string();
+        assert!(
+            detail.contains("idx_frames_timestamp"),
+            "range query must use the timestamp index; plan was: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn null_window_still_counts_toward_app() {
+        let (db, _d) = fresh_db().await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Arc"), None).await;
+        add_frame(&db, &format!("{DAY} 10:00:30"), Some("Arc"), None).await;
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        // App time is still measured (30s gap) even with no window name...
+        assert!(near(app_min(&core, "Arc").unwrap(), 0.5));
+        // ...but a NULL window yields no window row.
+        assert!(win_min(&core, "Arc", "").is_none());
+        assert!(core.windows.iter().all(|w| w.app_name != "Arc"));
+    }
+
+    #[tokio::test]
+    async fn app_name_with_apostrophe_is_escaped() {
+        let (db, _d) = fresh_db().await;
+        let name = "O'Brien's IDE";
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some(name), Some("main")).await;
+        add_frame(&db, &format!("{DAY} 10:00:30"), Some(name), Some("main")).await;
+        let (s, e) = full_range();
+        // Filtering by an app name containing a single quote must not break the SQL.
+        let core = collect_summary_core(&db, &query(Some(name)), &s, &e).await;
+        assert!(
+            near(app_min(&core, name).unwrap_or(-1.0), 0.5),
+            "apostrophe app names: {:?}",
+            core.apps.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn out_of_order_inserts_are_sorted() {
+        let (db, _d) = fresh_db().await;
+        // Insert the later frame first; the queries ORDER BY timestamp.
+        add_frame(&db, &format!("{DAY} 10:00:30"), Some("Arc"), Some("Win")).await;
+        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Arc"), Some("Win")).await;
+        let (s, e) = full_range();
+        let core = collect_summary_core(&db, &query(None), &s, &e).await;
+        assert!(
+            near(core.total_active_minutes, 0.5),
+            "insertion order must not matter, got {}",
+            core.total_active_minutes
+        );
+        assert!(near(app_min(&core, "Arc").unwrap(), 0.5));
     }
 }

@@ -159,8 +159,9 @@ pub struct PipeConfig {
     /// parties (Slack, Notion, Google Docs, etc.).
     ///
     /// NOTE: the front-matter field parses but the pipe runner does NOT
-    /// yet read it into the spawned Pi env. Wire-up is pending — tracked
-    /// separately from the chat-side feature which is already live.
+    /// yet read it into the spawned Pi env. Wire-up is pending. The
+    /// chat-side toggle that used to set this env was removed once PII
+    /// redaction moved to the at-rest redact worker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub privacy_filter: bool,
 

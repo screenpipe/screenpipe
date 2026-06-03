@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
+import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Sparkles, Plug, CornerDownRight } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
@@ -7523,8 +7523,6 @@ export function StandaloneChat({
   };
 
   const renderComposerUtilityMenu = () => {
-    const isPro = settings.user?.cloud_subscribed === true;
-    const privacyOn = isPro && settings.piPrivacyFilter === true;
     const timeLabels: Record<string, string> = {
       "today's activity": "today",
       "yesterday": "yesterday",
@@ -7548,66 +7546,6 @@ export function StandaloneChat({
             <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
             <span>add photos & files</span>
           </button>
-          <TooltipProvider delayDuration={150}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => {
-                    if (!isPro) {
-                      setAppFilterOpen(false);
-                      openUrl("https://screenpipe.com/onboarding");
-                      return;
-                    }
-                    updateSettings({ piPrivacyFilter: !privacyOn });
-                  }}
-                  className="w-full flex items-center gap-2 px-2 py-2 text-left text-sm rounded-md hover:bg-muted disabled:opacity-40 disabled:pointer-events-none transition-colors"
-                >
-                  {privacyOn ? (
-                    <ShieldCheck className="h-4 w-4 text-foreground shrink-0" />
-                  ) : (
-                    <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
-                  )}
-                  <span className="flex-1 min-w-0">privacy filter</span>
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {!isPro ? "pro" : privacyOn ? "on" : "off"}
-                  </span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent
-                side="right"
-                align="start"
-                className="max-w-[320px] p-3 space-y-2 text-xs leading-relaxed"
-              >
-                <div className="font-medium text-sm">
-                  {!isPro
-                    ? "Privacy filter — Pro"
-                    : privacyOn
-                      ? "Privacy filter: ON"
-                      : "Privacy filter: OFF"}
-                </div>
-                <div className="text-muted-foreground">
-                  {!isPro
-                    ? "Remove names, emails, phone numbers and other personal info from your screen data before the AI sees it. Adds ~1-2s per search. Click to upgrade."
-                    : privacyOn
-                      ? "Names, emails, phone numbers and other personal info are removed from your screen data before it reaches the AI. Adds ~1-2s per search. Click to turn off."
-                      : "Turn this on to strip personal info (names, emails, phones, addresses, account numbers) from your screen data before the AI sees it. Adds ~1-2s per search."}
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    openUrl("https://docs.screenpi.pe/privacy-filter");
-                  }}
-                  className="text-[11px] underline text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  How it works →
-                </button>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
         </div>
 
         <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 flex items-center gap-1.5">

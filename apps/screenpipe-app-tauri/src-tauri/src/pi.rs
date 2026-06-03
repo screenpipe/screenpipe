@@ -1488,26 +1488,6 @@ pub async fn pi_start_inner(
         cmd.env("BASH_ENV", p);
     }
 
-    // Privacy filter: if the user enabled the toggle in chat, set the env
-    // var the shim reads so every `curl .../search*` gets rewritten with
-    // `filter_pii=1`. Pro-gated client-side — non-pro can't flip the UI
-    // toggle so this branch won't fire for them.
-    if let Some(home) = dirs::home_dir() {
-        let store_path = home.join(".screenpipe").join("store.bin");
-        if let Ok(data) = std::fs::read_to_string(&store_path) {
-            if let Ok(store) = serde_json::from_str::<serde_json::Value>(&data) {
-                let settings = store.get("settings").unwrap_or(&store);
-                if settings
-                    .get("piPrivacyFilter")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    cmd.env("SCREENPIPE_FILTER_PII", "1");
-                }
-            }
-        }
-    }
-
     // Pass the user's API key as env var for non-screenpipe providers
     if let Some(ref config) = provider_config {
         // ChatGPT OAuth: inject token from secret store (no api_key in config)
