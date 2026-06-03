@@ -292,10 +292,12 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
         let cal_available = tokio::task::spawn_blocking(is_native_calendar_available)
             .await
             .unwrap_or(false);
-        let (cal_id, cal_name, cal_icon) = if cfg!(target_os = "windows") {
+        let (cal_id, cal_name, cal_icon) = if cfg!(target_os = "macos") {
+            ("apple-calendar", "Apple Calendar", "apple-calendar")
+        } else if cfg!(target_os = "windows") {
             ("windows-calendar", "Windows Calendar", "windows-calendar")
         } else {
-            ("apple-calendar", "Apple Calendar", "apple-calendar")
+            ("os-calendar", "OS Calendar", "os-calendar")
         };
         arr.push(json!({
             "id": cal_id,

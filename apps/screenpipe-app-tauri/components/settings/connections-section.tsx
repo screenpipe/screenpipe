@@ -311,6 +311,7 @@ export function IntegrationIcon({
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     "apple-calendar": <img src="/images/apple.svg" alt="Apple Calendar" className="w-5 h-5" />,
     "windows-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
+    "os-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     openclaw: <img src="/openclaw-icon.svg" alt="OpenClaw" className="w-5 h-5" />,
     hermes: <img src="/images/hermes.png" alt="Hermes" className="w-5 h-5 rounded" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,

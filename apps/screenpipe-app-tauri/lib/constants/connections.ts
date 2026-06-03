@@ -19,6 +19,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   gmail: "Communication",
   "ics-calendar": "Calendar",
   "windows-calendar": "Calendar",
+  "os-calendar": "Calendar",
   openclaw: "Productivity",
   hermes: "Communication",
   whatsapp: "Communication",
