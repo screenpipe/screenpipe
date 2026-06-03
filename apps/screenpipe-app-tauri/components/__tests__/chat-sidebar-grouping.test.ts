@@ -36,16 +36,12 @@ describe("sessionGroupKey", () => {
     );
   });
 
-  it("falls back to title with #N suffix stripped", () => {
-    expect(sessionGroupKey(s("1", "morning brief #12"))).toBe(
-      "title:morning brief"
-    );
+  it("returns null for sessions without a pipe context", () => {
+    expect(sessionGroupKey(s("1", "morning brief #12"))).toBeNull();
   });
 
-  it("handles titles with no suffix", () => {
-    expect(sessionGroupKey(s("1", "standalone chat"))).toBe(
-      "title:standalone chat"
-    );
+  it("returns null for plain sessions with no suffix", () => {
+    expect(sessionGroupKey(s("1", "standalone chat"))).toBeNull();
   });
 });
 
@@ -56,8 +52,8 @@ describe("sessionGroupTitle", () => {
     );
   });
 
-  it("strips #N suffix when falling back to title", () => {
-    expect(sessionGroupTitle(s("1", "morning brief #5"))).toBe("morning brief");
+  it("returns raw title for sessions without a pipe context", () => {
+    expect(sessionGroupTitle(s("1", "morning brief #5"))).toBe("morning brief #5");
   });
 });
 
@@ -82,14 +78,11 @@ describe("buildGroupedRecents", () => {
     }
   });
 
-  it("groups two sessions with the same base title (no pipe context)", () => {
+  it("does not group sessions with matching base titles but no pipe context", () => {
     const sessions = [s("1", "standup #1"), s("2", "standup #2")];
     const result = buildGroupedRecents(sessions);
-    expect(result).toHaveLength(1);
-    expect(result[0].kind).toBe("group");
-    if (result[0].kind === "group") {
-      expect(result[0].sessions).toHaveLength(2);
-    }
+    expect(result).toHaveLength(2);
+    expect(result.every((i) => i.kind === "single")).toBe(true);
   });
 
   it("does not group sessions whose base titles differ", () => {

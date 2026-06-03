@@ -300,7 +300,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   // GC stale screenpipe:group-expanded:* keys whose group no longer exists
   // (renamed or retired pipes produce orphaned keys that otherwise persist).
+  // Guard: only run after disk hydration — firing before sessions load would
+  // wrongly classify every stored key as stale and wipe persistence on restart.
   useEffect(() => {
+    if (!diskHydrated) return;
     try {
       const currentKeys = new Set(
         groupedRecents
@@ -316,7 +319,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       }
       for (const k of toRemove) localStorage.removeItem(k);
     } catch {}
-  }, [groupedRecents]);
+  }, [groupedRecents, diskHydrated]);
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
