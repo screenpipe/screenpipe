@@ -1666,7 +1666,10 @@ mod db_tests {
         db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
             .await
             .unwrap();
-        for (m, text) in [(0, "hello team this is the weekly sync"), (1, "lets review the roadmap now")] {
+        for (m, text) in [
+            (0, "hello team this is the weekly sync"),
+            (1, "lets review the roadmap now"),
+        ] {
             db.execute_raw_sql(&format!(
                 "INSERT INTO audio_transcriptions \
                  (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
@@ -1689,7 +1692,13 @@ mod db_tests {
     #[tokio::test]
     async fn key_texts_from_accessibility_element() {
         let (db, _d) = fresh_db().await;
-        add_frame(&db, &format!("{DAY} 10:00:00"), Some("Notes"), Some("Draft")).await;
+        add_frame(
+            &db,
+            &format!("{DAY} 10:00:00"),
+            Some("Notes"),
+            Some("Draft"),
+        )
+        .await;
         // The frame just inserted is the only row, so its id is 1.
         let txt = "Quarterly planning notes for the leadership offsite";
         db.execute_raw_sql(&format!(
@@ -1701,7 +1710,9 @@ mod db_tests {
         let (s, e) = full_range();
         let core = collect_summary_core(&db, &query(None), &s, &e).await;
         assert!(
-            core.key_texts.iter().any(|k| k.text.contains("Quarterly planning")),
+            core.key_texts
+                .iter()
+                .any(|k| k.text.contains("Quarterly planning")),
             "key_texts missing the accessibility text: {:?}",
             core.key_texts.iter().map(|k| &k.text).collect::<Vec<_>>()
         );

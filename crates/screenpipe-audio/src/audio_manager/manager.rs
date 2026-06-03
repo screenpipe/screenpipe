@@ -4,8 +4,10 @@
 
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
+use futures::FutureExt;
 use std::{
     collections::HashSet,
+    panic::AssertUnwindSafe,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -329,41 +331,61 @@ impl AudioManager {
                 // Wait for model to load + initial recordings
                 tokio::time::sleep(Duration::from_secs(120)).await;
                 loop {
-                    if let Some(detector) = &meeting_detector_bg {
-                        detector.check_grace_period().await;
-                        if detector.is_in_audio_session() {
-                            debug!(
-                                "reconciliation: skipping background sweep during active audio session"
-                            );
-                            tokio::time::sleep(Duration::from_secs(120)).await;
-                            continue;
+                    // Contain a panic inside a sweep so it cannot kill this
+                    // long-lived worker (issue #3498: a single panic used to
+                    // stop the loop permanently, silently piling up pending
+                    // chunks until the app was restarted). The sweep stays on
+                    // this task, so shutdown still cancels an in-flight sweep at
+                    // its next await. The locks it holds are tokio::sync locks,
+                    // which do not poison, so a caught panic releases them
+                    // cleanly.
+                    let swept = AssertUnwindSafe(async {
+                        if let Some(detector) = &meeting_detector_bg {
+                            detector.check_grace_period().await;
+                            if detector.is_in_audio_session() {
+                                debug!(
+                                    "reconciliation: skipping background sweep during active audio session"
+                                );
+                                return;
+                            }
                         }
-                    }
 
-                    let engine_guard = engine_ref.read().await;
-                    if let Some(ref transcription_engine) = *engine_guard {
-                        let opts = options_ref.read().await;
-                        let audio_engine = opts.transcription_engine.clone();
-                        let batch_max_dur = opts.batch_max_duration_secs;
-                        drop(opts);
+                        let engine_guard = engine_ref.read().await;
+                        if let Some(ref transcription_engine) = *engine_guard {
+                            let opts = options_ref.read().await;
+                            let audio_engine = opts.transcription_engine.clone();
+                            let batch_max_dur = opts.batch_max_duration_secs;
+                            drop(opts);
 
-                        let data_dir = output_path_bg.as_deref();
-                        let count = super::reconciliation::reconcile_untranscribed(
-                            &db,
-                            transcription_engine,
-                            on_insert_bg.as_ref(),
-                            audio_engine,
-                            Some(seg_mgr.clone()),
-                            data_dir,
-                            batch_max_dur,
-                            Some(metrics_bg.clone()),
-                        )
-                        .await;
-                        if count > 0 {
-                            info!("reconciliation: transcribed {} orphaned chunks", count);
+                            let count = super::reconciliation::reconcile_untranscribed(
+                                &db,
+                                transcription_engine,
+                                on_insert_bg.as_ref(),
+                                audio_engine,
+                                Some(seg_mgr.clone()),
+                                output_path_bg.as_deref(),
+                                batch_max_dur,
+                                Some(metrics_bg.clone()),
+                            )
+                            .await;
+                            if count > 0 {
+                                info!("reconciliation: transcribed {} orphaned chunks", count);
+                            }
                         }
+                    })
+                    .catch_unwind()
+                    .await;
+                    if let Err(panic) = swept {
+                        let reason = panic
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                            .unwrap_or("unknown cause");
+                        error!(
+                            "reconciliation: sweep panicked, worker continues: {}",
+                            reason
+                        );
                     }
-                    drop(engine_guard);
                     tokio::time::sleep(Duration::from_secs(120)).await;
                 }
             });

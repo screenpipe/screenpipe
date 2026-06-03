@@ -1230,28 +1230,36 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				{(() => {
 					const browserUrl = currentFrame?.devices?.[0]?.metadata?.browser_url;
 					if (!browserUrl) return null;
+					// browser_url from screenpipe often lacks a protocol (e.g. "github.com/foo");
+					// both tauri shell.open and window.open reject/misroute schemeless inputs.
+					const openableUrl = browserUrl.includes("://") ? browserUrl : `https://${browserUrl}`;
+					const isHttps = openableUrl.startsWith("https://");
 					return (
 						<div className={`absolute ${embedded ? "top-[56px]" : "top-[calc(env(safe-area-inset-top)+4px)]"} left-0 right-0 z-[45] flex justify-center pointer-events-none`}>
 							<button
 								type="button"
 								className="flex items-center gap-1.5 max-w-lg min-w-0 px-3 py-1 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 hover:bg-black/80 hover:border-white/20 transition-colors cursor-pointer pointer-events-auto"
-								title={`Open ${browserUrl}`}
-								onClick={async () => {
+								title={`Open ${openableUrl}`}
+								onClick={async (e) => {
+									e.stopPropagation();
 									try {
-										const { open } = await import("@tauri-apps/plugin-shell");
-										await open(browserUrl);
-									} catch {
-										window.open(browserUrl, "_blank");
+										const { openUrl } = await import("@tauri-apps/plugin-opener");
+										await openUrl(openableUrl);
+									} catch (err) {
+										console.error("failed to open url", openableUrl, err);
+										try {
+											window.open(openableUrl, "_blank", "noopener,noreferrer");
+										} catch {}
 									}
 								}}
 							>
-								{browserUrl.startsWith("https") ? (
+								{isHttps ? (
 									<Lock className="w-3 h-3 text-green-400/80 shrink-0" />
 								) : (
 									<Globe className="w-3 h-3 text-white/40 shrink-0" />
 								)}
 								<span className="text-[12px] font-mono text-white/80 truncate">
-									{browserUrl.replace(/^https?:\/\/(www\.)?/, "")}
+									{openableUrl.replace(/^https?:\/\/(www\.)?/, "")}
 								</span>
 								<ExternalLink className="w-3 h-3 text-white/40 shrink-0" />
 							</button>

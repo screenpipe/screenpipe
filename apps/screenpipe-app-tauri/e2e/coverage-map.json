@@ -5,104 +5,110 @@
     {
       "id": "app-launch",
       "label": "App launch and Home shell",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e"]
     },
     {
       "id": "home-search",
       "label": "Home to floating Search",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e"]
     },
     {
       "id": "timeline",
       "label": "Timeline navigation and frames",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e"]
     },
     {
       "id": "capture-ocr",
       "label": "Real capture, OCR, and indexing",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["capture-ocr"]
     },
     {
       "id": "local-api-auth",
       "label": "Local API auth enforcement",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api"]
     },
     {
       "id": "local-api-search",
       "label": "Local API search stability",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api"]
     },
     {
       "id": "settings-recording",
       "label": "Recording settings UX",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["settings"]
     },
     {
       "id": "settings-privacy-api-auth",
       "label": "Privacy API auth settings UX",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["settings"]
     },
     {
       "id": "notifications",
       "label": "Notification history and viewer paths",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["notifications"]
     },
     {
       "id": "audio-device-health",
       "label": "Audio device health",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["audio-device"]
     },
     {
       "id": "window-lifecycle",
       "label": "Window lifecycle, focus, and dedupe",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["window-lifecycle"]
     },
     {
       "id": "meeting-notes",
       "label": "Meeting note creation and editing",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e"]
     },
     {
       "id": "pipes",
       "label": "Pipes discover, install, and play",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["pipes"]
     },
     {
       "id": "chat",
       "label": "Chat window, composer, and streaming state",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"]
     },
     {
       "id": "tray-search",
       "label": "Tray/search window behavior",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["window-lifecycle"]
     },
     {
       "id": "storage-retention",
       "label": "Storage retention safety UX",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["storage-privacy"]
     },
     {
       "id": "updates",
       "label": "Updater install and rollback safety",
-      "platforms": ["windows", "macos"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["os-integration"]
+    },
+    {
+      "id": "update-surfacing",
+      "label": "Update-available banner surfacing",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e"]
     }
   ],
   "specs": [
@@ -495,6 +501,16 @@
       "confidence": "smoke",
       "ux": "command",
       "notes": "Owned browser background navigation visibility."
+    },
+    {
+      "spec": "updater-banner.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e"],
+      "features": ["update-surfacing"],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions)."
     }
   ]
 }

@@ -373,6 +373,9 @@ function evaluateCriticalFeature(
 
   const matches = specs.filter(
     (entry) =>
+      // A spec with zero executable test blocks asserts nothing, so it cannot
+      // contribute coverage even if it is mapped to the feature.
+      entry.declaredTests > 0 &&
       entry.platforms.includes(platform) &&
       entry.features.includes(feature.id) &&
       intersects(entry.layers, feature.layers),
@@ -631,6 +634,93 @@ function gapSection(
   return lines.join("\n");
 }
 
+function specsWithoutTests(specs: SpecCoverageWithCount[]): SpecCoverageWithCount[] {
+  return specs.filter((entry) => entry.declaredTests === 0);
+}
+
+// Aggregate the runtime outcome of the specs that make a critical feature
+// "covered"/"weak" on a platform — used to flag declared coverage that never
+// actually executed (self-skipped on hosted runners, opt-in seed missing, etc.).
+function featureRuntimeOutcome(
+  state: CriticalState,
+  platform: Platform,
+  runtime: RuntimeCoverageSummary,
+): { attempts: number; counts: RuntimeCounts } {
+  const counts = emptyRuntimeCounts();
+  let attempts = 0;
+  for (const spec of state.specs) {
+    const aggregate = runtime.bySpec.get(runtimeKey(platform, spec.spec));
+    if (!aggregate) continue;
+    attempts += aggregate.attempts;
+    addRuntimeCounts(counts, aggregate.counts);
+  }
+  return { attempts, counts };
+}
+
+// Declared coverage is only believable if it actually ran. This turns the
+// passive per-cell runtime labels into an explicit integrity report: static
+// smells (specs that assert nothing) plus, when runtime results exist, every
+// critical feature that claims coverage but produced no passing test on a
+// platform. This is what keeps the headline numbers honest.
+function integritySection(
+  manifest: CoverageManifest,
+  specs: SpecCoverageWithCount[],
+  runtime: RuntimeCoverageSummary | null,
+): string {
+  const lines = ["## Execution Integrity", ""];
+
+  const empty = specsWithoutTests(specs);
+  lines.push(
+    empty.length > 0
+      ? `- Specs that claim coverage but contain zero executable test blocks: ${empty
+          .map((entry) => entry.spec)
+          .join(", ")}. They assert nothing and no longer count toward any critical feature.`
+      : "- Every mapped spec declares at least one executable test block.",
+  );
+
+  if (!runtime) {
+    lines.push(
+      "- Declared coverage below is NOT reconciled against execution: no runtime results",
+      "  were supplied. Specs can self-skip on hosted runners (no display, vision off,",
+      "  recording disabled) and still read as covered. Run `e2e:coverage:runtime` (or pass",
+      "  `--results-dir`) in CI to flag declared coverage that did not actually run.",
+    );
+    return lines.join("\n");
+  }
+
+  for (const platform of manifest.platforms) {
+    const platformHasResults = [...runtime.bySpec.values()].some(
+      (aggregate) => aggregate.platform === platform,
+    );
+    if (!platformHasResults) {
+      lines.push(`- ${platform}: no runtime results for this platform.`);
+      continue;
+    }
+
+    const drift: string[] = [];
+    for (const feature of manifest.criticalFeatures) {
+      const state = evaluateCriticalFeature(specs, platform, feature);
+      if (state.state !== "covered" && state.state !== "weak") continue;
+      const { attempts, counts } = featureRuntimeOutcome(state, platform, runtime);
+      if (attempts === 0) {
+        drift.push(`${feature.label} (declared ${state.state}, runtime: no result)`);
+      } else if (counts.passed === 0) {
+        drift.push(
+          `${feature.label} (declared ${state.state}, runtime: ${runtimeCountsLabel(counts)}, nothing passed)`,
+        );
+      }
+    }
+
+    lines.push(
+      drift.length === 0
+        ? `- ${platform}: all declared critical coverage executed at runtime.`
+        : `- ${platform}: declared coverage that did NOT execute — ${drift.join("; ")}.`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
 function specInventoryRows(specs: SpecCoverageWithCount[]): Array<Array<string | number>> {
   return specs
     .slice()
@@ -697,6 +787,8 @@ function generateReport(
     ),
     "",
     gapSection(manifest, specs),
+    "",
+    integritySection(manifest, specs, runtime),
     "",
     "## Spec Inventory",
     "",

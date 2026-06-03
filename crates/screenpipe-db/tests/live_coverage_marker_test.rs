@@ -53,13 +53,28 @@ mod tests {
     }
 
     async fn insert_live_segment(db: &DatabaseManager, meeting_id: i64, captured_at: &str) {
+        insert_live_segment_for_device(db, meeting_id, captured_at, "mic", "input").await;
+    }
+
+    async fn insert_live_segment_for_device(
+        db: &DatabaseManager,
+        meeting_id: i64,
+        captured_at: &str,
+        device_name: &str,
+        device_type: &str,
+    ) {
         sqlx::query(
             "INSERT INTO meeting_transcript_segments \
              (meeting_id, provider, item_id, device_name, device_type, transcript, captured_at) \
-             VALUES (?1, 'deepgram', ?2, 'mic', 'input', 'hello', ?3)",
+             VALUES (?1, 'deepgram', ?2, ?3, ?4, 'hello', ?5)",
         )
         .bind(meeting_id)
-        .bind(format!("item-{}-{}", meeting_id, captured_at))
+        .bind(format!(
+            "item-{}-{}-{}",
+            meeting_id, device_name, captured_at
+        ))
+        .bind(device_name)
+        .bind(device_type)
         .bind(captured_at)
         .execute(&db.pool)
         .await
@@ -76,7 +91,7 @@ mod tests {
         // Chunk captured 5 minutes after meeting start.
         let chunk_ts = start + Duration::minutes(5);
         let chunk = db
-            .insert_audio_chunk("a.mp4", Some(chunk_ts))
+            .insert_audio_chunk("mic (input)_a.mp4", Some(chunk_ts))
             .await
             .unwrap();
 
@@ -102,7 +117,7 @@ mod tests {
         // Chunk in the middle of the meeting.
         let chunk_ts = start + Duration::minutes(5);
         let chunk = db
-            .insert_audio_chunk("gap.mp4", Some(chunk_ts))
+            .insert_audio_chunk("mic (input)_gap.mp4", Some(chunk_ts))
             .await
             .unwrap();
 
@@ -129,7 +144,7 @@ mod tests {
         // Chunk recorded AFTER the meeting ended.
         let chunk_ts = end + Duration::minutes(2);
         let chunk = db
-            .insert_audio_chunk("after.mp4", Some(chunk_ts))
+            .insert_audio_chunk("mic (input)_after.mp4", Some(chunk_ts))
             .await
             .unwrap();
 
@@ -154,7 +169,7 @@ mod tests {
 
         let chunk_ts = start + Duration::minutes(2);
         let chunk = db
-            .insert_audio_chunk("live.mp4", Some(chunk_ts))
+            .insert_audio_chunk("mic (input)_live.mp4", Some(chunk_ts))
             .await
             .unwrap();
 
@@ -170,6 +185,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn leaves_output_chunk_pending_when_only_input_live_segment_exists() {
+        let db = setup_test_db().await;
+        let start = Utc::now() - Duration::minutes(10);
+        let end = Utc::now();
+        let meeting_id = insert_meeting(&db, &start.to_rfc3339(), Some(&end.to_rfc3339())).await;
+
+        let chunk_ts = start + Duration::minutes(5);
+        let mic_chunk = db
+            .insert_audio_chunk("mic (input)_same-time.mp4", Some(chunk_ts))
+            .await
+            .unwrap();
+        let output_chunk = db
+            .insert_audio_chunk("System Audio (output)_same-time.mp4", Some(chunk_ts))
+            .await
+            .unwrap();
+
+        let live_ts = chunk_ts + Duration::seconds(2);
+        insert_live_segment_for_device(&db, meeting_id, &live_ts.to_rfc3339(), "mic", "input")
+            .await;
+
+        let updated = db
+            .mark_chunks_covered_by_live(meeting_id, 15.0)
+            .await
+            .unwrap();
+        assert_eq!(updated, 1);
+        assert_eq!(chunk_status(&db, mic_chunk).await, "transcribed");
+        assert_eq!(chunk_status(&db, output_chunk).await, "pending");
+    }
+
+    #[tokio::test]
     async fn is_idempotent() {
         let db = setup_test_db().await;
         let start = Utc::now() - Duration::minutes(10);
@@ -178,7 +223,7 @@ mod tests {
 
         let chunk_ts = start + Duration::minutes(3);
         let chunk = db
-            .insert_audio_chunk("idemp.mp4", Some(chunk_ts))
+            .insert_audio_chunk("mic (input)_idemp.mp4", Some(chunk_ts))
             .await
             .unwrap();
         let live_ts = chunk_ts + Duration::seconds(5);

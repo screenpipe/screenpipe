@@ -105,6 +105,9 @@ struct McpOAuthToken {
     token_url: String,
     #[serde(default)]
     client_id: String,
+    /// Set for confidential clients; replayed via HTTP Basic on refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_secret: Option<String>,
     #[serde(default)]
     resource: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,6 +128,8 @@ struct McpOAuthPending {
     resource: String,
     token_url: String,
     client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_secret: Option<String>,
     scopes: Vec<String>,
     created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,6 +168,12 @@ struct AuthorizationServerMetadata {
 #[derive(Debug, Deserialize)]
 struct ClientRegistrationResponse {
     client_id: String,
+    /// Present when the server registers us as a *confidential* client. Some
+    /// authorization servers (e.g. Krisp) ignore our requested
+    /// `token_endpoint_auth_method: none` and always issue a secret, then
+    /// reject the token exchange unless we authenticate with it.
+    #[serde(default)]
+    client_secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -507,13 +518,14 @@ impl McpServerStore {
             ));
         };
         let discovered = self.discover_oauth(&cfg).await?;
-        let client_id = match cfg
+        let (client_id, client_secret) = match cfg
             .oauth
             .as_ref()
             .map(|o| o.client_id.trim())
             .filter(|s| !s.is_empty())
         {
-            Some(client_id) => client_id.to_string(),
+            // Manual config supplies only a public client_id (no secret field).
+            Some(client_id) => (client_id.to_string(), None),
             None => {
                 self.register_oauth_client(
                     discovered.registration_endpoint.as_deref(),
@@ -557,6 +569,7 @@ impl McpServerStore {
             resource: discovered.resource,
             token_url: discovered.token_endpoint,
             client_id,
+            client_secret,
             scopes,
             created_at: chrono::Utc::now().timestamp(),
             create_config: create_on_complete.then_some(cfg),
@@ -603,10 +616,14 @@ impl McpServerStore {
         if !pending.resource.is_empty() {
             token_form.push(("resource", &pending.resource));
         }
-        let response = self
-            .client
-            .post(&pending.token_url)
-            .form(&token_form)
+        let mut token_req = self.client.post(&pending.token_url).form(&token_form);
+        if let Some(secret) = pending.client_secret.as_deref() {
+            // Confidential client (e.g. Krisp): authenticate the token request
+            // with client_secret_basic. Without this the server rejects the
+            // exchange with 401 even though PKCE succeeded.
+            token_req = token_req.basic_auth(&pending.client_id, Some(secret));
+        }
+        let response = token_req
             .send()
             .await
             .map_err(|e| anyhow!("OAuth token exchange failed: {}", e))?;
@@ -643,6 +660,7 @@ impl McpServerStore {
             pending.token_url.clone(),
             pending.client_id.clone(),
             pending.resource.clone(),
+            pending.client_secret.clone(),
         );
         let (probe_url, probe_headers) = if let Some(cfg) = pending.create_config.as_ref() {
             (cfg.url.clone(), pending.create_headers.clone())
@@ -825,11 +843,14 @@ impl McpServerStore {
         ))
     }
 
+    /// Returns `(client_id, client_secret)`. The secret is `Some` only when the
+    /// server registers us as a confidential client (and then it must be
+    /// presented on every token / refresh request).
     async fn register_oauth_client(
         &self,
         registration_endpoint: Option<&str>,
         redirect_uri: &str,
-    ) -> Result<String> {
+    ) -> Result<(String, Option<String>)> {
         let Some(registration_endpoint) = registration_endpoint else {
             return Err(anyhow!(
                 "OAuth server does not advertise dynamic client registration"
@@ -863,7 +884,7 @@ impl McpServerStore {
         }
         let parsed: ClientRegistrationResponse = serde_json::from_str(&text)
             .map_err(|e| anyhow!("OAuth client registration returned invalid JSON: {}", e))?;
-        Ok(parsed.client_id)
+        Ok((parsed.client_id, parsed.client_secret))
     }
 
     async fn refresh_oauth_token(
@@ -888,10 +909,11 @@ impl McpServerStore {
         if !current.resource.is_empty() {
             refresh_form.push(("resource", current.resource.as_str()));
         }
-        let response = self
-            .client
-            .post(&current.token_url)
-            .form(&refresh_form)
+        let mut refresh_req = self.client.post(&current.token_url).form(&refresh_form);
+        if let Some(secret) = current.client_secret.as_deref() {
+            refresh_req = refresh_req.basic_auth(&current.client_id, Some(secret));
+        }
+        let response = refresh_req
             .send()
             .await
             .map_err(|e| anyhow!("OAuth refresh failed: {}", e))?;
@@ -915,6 +937,7 @@ impl McpServerStore {
             current.token_url.clone(),
             current.client_id.clone(),
             current.resource.clone(),
+            current.client_secret.clone(),
         );
         self.write_oauth_token(id, next.clone()).await?;
         Ok(next)
@@ -1152,12 +1175,14 @@ fn token_from_response(
     token_url: String,
     client_id: String,
     resource: String,
+    client_secret: Option<String>,
 ) -> McpOAuthToken {
     let now = chrono::Utc::now().timestamp();
     McpOAuthToken {
         access_token: resp.access_token,
         token_url,
         client_id,
+        client_secret,
         resource,
         refresh_token: resp.refresh_token.or(fallback_refresh),
         token_type: resp.token_type,
@@ -2487,5 +2512,114 @@ mod tests {
         .await
         .unwrap();
         assert!(tools.is_empty());
+    }
+
+    // Regression: confidential-client OAuth (e.g. Krisp). The server's dynamic
+    // registration hands back a client_secret and pins client_secret_basic, so
+    // both the authorization-code exchange and any refresh must present that
+    // secret via HTTP Basic. Before the fix we discarded the secret and spoke
+    // the public-client flow, so the token endpoint answered 401
+    // (AUTH_BASIC_INVALID_TOKEN). The token mock here only matches when the
+    // correct Basic header is on the wire, so a regression makes the exchange
+    // fail to match → 404 → complete_oauth errors.
+    #[tokio::test]
+    async fn confidential_client_sends_basic_auth_on_token_exchange() {
+        use base64::Engine as _;
+        use sqlx::SqlitePool;
+
+        let server = MockServer::start().await;
+        let base = server.uri();
+
+        // Protected-resource metadata → this server is its own AS.
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": base,
+                "authorization_servers": [base],
+            })))
+            .mount(&server)
+            .await;
+
+        // Authorization-server metadata: confidential client only.
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": base,
+                "authorization_endpoint": format!("{}/authorize", base),
+                "token_endpoint": format!("{}/token", base),
+                "registration_endpoint": format!("{}/register", base),
+                "scopes_supported": ["meetings::read"],
+                "token_endpoint_auth_methods_supported": ["client_secret_basic"],
+            })))
+            .mount(&server)
+            .await;
+
+        // Dynamic registration hands back a secret, ignoring our requested
+        // `none` — exactly what Krisp does.
+        Mock::given(method("POST"))
+            .and(path("/register"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "client_id": "conf-client",
+                "client_secret": "shhh-secret",
+                "token_endpoint_auth_method": "client_secret_basic",
+            })))
+            .mount(&server)
+            .await;
+
+        // Token endpoint only answers 200 with the correct Basic credentials.
+        let expected_basic = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("conf-client:shhh-secret")
+        );
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(wiremock::matchers::header(
+                "authorization",
+                expected_basic.as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "at-123",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rt-456",
+            })))
+            .mount(&server)
+            .await;
+
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let ss = Arc::new(SecretStore::new(pool, None).await.unwrap());
+        let dir = temp_dir();
+        let store = McpServerStore::new(dir.clone(), Some(ss));
+
+        let mut cfg = sample_config("krisp");
+        cfg.url = base.clone();
+        cfg.auth_mode = McpAuthMode::OAuth;
+
+        let start = store
+            .start_oauth_for_config(cfg, vec![], format!("{}/callback", base))
+            .await
+            .expect("start_oauth should discover + register");
+
+        // Pull the opaque `state` back out of the authorization URL.
+        let auth_url = reqwest::Url::parse(&start.auth_url).unwrap();
+        let state = auth_url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .expect("auth url carries state");
+        assert_eq!(state, start.state);
+
+        // Only succeeds if the exchange authenticated with the secret.
+        store
+            .complete_oauth(&state, "auth-code-xyz")
+            .await
+            .expect("token exchange must send client_secret_basic");
+
+        // The secret is persisted so later refreshes can reuse it.
+        let token = store.read_oauth_token("krisp").await.unwrap().unwrap();
+        assert_eq!(token.client_secret.as_deref(), Some("shhh-secret"));
+        assert_eq!(token.access_token, "at-123");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

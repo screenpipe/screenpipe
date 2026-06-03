@@ -155,6 +155,20 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         let app_for_closure = app.clone();
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;
+            // The "show" shortcut only opens the timeline/rewind overlay, so it
+            // must be a no-op when the timeline is disabled. Checked at press
+            // time (not registration): the Disable-Timeline toggle restarts only
+            // the recording engine, so these shortcuts stay registered until the
+            // next app restart.
+            if crate::store::SettingsStore::get(app)
+                .unwrap_or_default()
+                .unwrap_or_default()
+                .recording
+                .disable_timeline
+            {
+                info!("timeline disabled: ignoring show shortcut");
+                return;
+            }
             info!("show shortcut triggered - attempting to show/hide main overlay");
             let _ = app.emit("shortcut-show", ());
             {

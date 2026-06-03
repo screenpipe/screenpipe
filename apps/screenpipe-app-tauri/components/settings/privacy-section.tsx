@@ -5,6 +5,7 @@
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
+import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import {
   Eye,
   EyeOff,
@@ -252,6 +253,11 @@ export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
   const isEnterprise = useIsEnterpriseBuild();
   const { toast } = useToast();
+  // when the admin forces the PII backend (local/cloud) we lock the radios so
+  // the employee can't override it (the value itself is applied to settings by
+  // useEnterprisePolicy.applyPiiPolicy on every policy poll).
+  const { getManagedValue } = useEnterprisePolicy();
+  const managedPiiBackend = getManagedValue("piiBackend");
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -1079,12 +1085,13 @@ export function PrivacySection() {
             {aiPiiRemovalEnabled && (
               <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
                 <p className="text-xs font-medium text-foreground">Where it runs</p>
-                <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <label className={`flex items-start gap-2 text-xs ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
                   <input
                     type="radio"
                     name="piiBackend"
                     className="mt-0.5"
                     checked={piiBackend === "local"}
+                    disabled={!!managedPiiBackend}
                     onChange={() => handlePiiBackendChange("local")}
                   />
                   <span>
@@ -1094,12 +1101,13 @@ export function PrivacySection() {
                     </span>
                   </span>
                 </label>
-                <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <label className={`flex items-start gap-2 text-xs ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
                   <input
                     type="radio"
                     name="piiBackend"
                     className="mt-0.5"
                     checked={piiBackend === "tinfoil"}
+                    disabled={!!managedPiiBackend}
                     onChange={() => handlePiiBackendChange("tinfoil")}
                   />
                   <span>

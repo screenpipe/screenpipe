@@ -1190,17 +1190,24 @@ impl DatabaseManager {
         })
     }
 
-    /// Returns true if there are audio transcriptions from output devices
-    /// within the given number of seconds. Used by meeting detection to keep
-    /// browser-based meetings alive when the user switches tabs but audio is
-    /// still flowing (i.e. the meeting is still going).
+    /// Returns true if output audio was recently captured. Used by meeting
+    /// detection to keep meetings alive when controls disappear but call audio
+    /// still flows.
+    ///
+    /// Important: batch mode defers `audio_transcriptions` while the meeting is
+    /// active, so this must also inspect durable `audio_chunks` file paths.
     pub async fn has_recent_output_audio(&self, within_secs: i64) -> Result<bool, sqlx::Error> {
-        // EXISTS short-circuits on the first matching row instead of scanning
-        // every transcription in the window like COUNT(*) would.
+        // EXISTS short-circuits on the first matching row. Match both old
+        // transcribed output rows and fresh persisted chunks that have not been
+        // transcribed yet (batch/live meeting path).
         let exists = sqlx::query_scalar::<_, i64>(
             "SELECT EXISTS(
                  SELECT 1 FROM audio_transcriptions
                  WHERE is_input_device = 0
+                   AND timestamp >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)
+                 UNION ALL
+                 SELECT 1 FROM audio_chunks
+                 WHERE lower(file_path) LIKE '%(output)%'
                    AND timestamp >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)
              )",
         )
@@ -8968,6 +8975,8 @@ LIMIT ? OFFSET ?
                   SELECT 1 FROM meeting_transcript_segments mts
                   WHERE mts.meeting_id = ?2
                     AND ABS(julianday(mts.captured_at) - julianday(audio_chunks.timestamp)) <= ?3
+                    AND instr(audio_chunks.file_path, mts.device_name) > 0
+                    AND instr(lower(audio_chunks.file_path), '(' || lower(mts.device_type) || ')') > 0
               )
             "#,
         )
@@ -9042,9 +9051,12 @@ LIMIT ? OFFSET ?
         let max_ts = segs.iter().map(|s| s.captured_at).max().unwrap() + window;
 
         // Candidate chunks across the meeting window, fetched ONCE (a 40-min meeting
-        // is ~80 chunks), then matched in memory — avoids a per-segment query.
+        // is ~80 chunks), then matched in memory — avoids a per-segment query. We
+        // pull file_path because chunk audio is single-device and the device is
+        // encoded in the filename ("<name> (input|output)_<ts>.mp4"), which is the
+        // only place a chunk records its device.
         let chunk_rows = sqlx::query(
-            "SELECT id, timestamp FROM audio_chunks \
+            "SELECT id, timestamp, file_path FROM audio_chunks \
              WHERE timestamp IS NOT NULL \
                AND julianday(timestamp) >= julianday(?1) \
                AND julianday(timestamp) <= julianday(?2)",
@@ -9054,12 +9066,15 @@ LIMIT ? OFFSET ?
         .fetch_all(&self.pool)
         .await?;
 
-        let chunks: Vec<(i64, i64)> = chunk_rows
+        let chunks: Vec<(i64, i64, String)> = chunk_rows
             .iter()
             .filter_map(|r| {
                 let id: i64 = r.try_get("id").ok()?;
                 let ts: DateTime<Utc> = r.try_get("timestamp").ok()?;
-                Some((id, ts.timestamp_millis()))
+                // Lowercased for case-insensitive device matching (mirrors #3776's
+                // lower(file_path) in mark_chunks_covered_by_live).
+                let file_path: String = r.try_get::<String, _>("file_path").unwrap_or_default();
+                Some((id, ts.timestamp_millis(), file_path.to_lowercase()))
             })
             .collect();
         if chunks.is_empty() {
@@ -9071,13 +9086,33 @@ LIMIT ? OFFSET ?
         let mut inserted: u64 = 0;
         for s in &segs {
             let seg_ms = s.captured_at.timestamp_millis();
-            let Some(&(chunk_id, chunk_ms)) = chunks.iter().min_by_key(|c| (c.1 - seg_ms).abs())
-            else {
+            // Match the SAME physical device's chunk so an input (mic) segment can't
+            // inherit a remote speaker from a System Audio (output) chunk, and vice
+            // versa. The device string is sanitized the same way the recorder names
+            // files (only '/' and '\\' replaced). Fall back to nearest-any within the
+            // window if no same-device chunk exists (legacy/odd naming) — never worse
+            // than before.
+            let device_key = format!(
+                "{} ({})",
+                s.device_name,
+                if s.is_input { "input" } else { "output" }
+            )
+            .replace(['/', '\\'], "_")
+            .to_lowercase();
+            let pick = chunks
+                .iter()
+                .filter(|c| (c.1 - seg_ms).abs() <= window_ms && c.2.contains(device_key.as_str()))
+                .min_by_key(|c| (c.1 - seg_ms).abs())
+                .or_else(|| {
+                    chunks
+                        .iter()
+                        .filter(|c| (c.1 - seg_ms).abs() <= window_ms)
+                        .min_by_key(|c| (c.1 - seg_ms).abs())
+                });
+            let Some(chunk) = pick else {
                 continue;
             };
-            if (chunk_ms - seg_ms).abs() > window_ms {
-                continue;
-            }
+            let chunk_id = chunk.0;
             let text_length = s.transcript.len() as i64;
             let res = sqlx::query(
                 "INSERT OR IGNORE INTO audio_transcriptions \
@@ -9099,6 +9134,81 @@ LIMIT ? OFFSET ?
         Ok(inserted)
     }
 
+    /// Give live meeting-transcript segments the SAME global `speaker_id` that the
+    /// engine-agnostic backfill (`backfill_missing_speakers`) resolved on
+    /// `audio_transcriptions` — so the Meeting view shows the cross-meeting, nameable
+    /// identity instead of Deepgram's per-stream "speaker N" label.
+    ///
+    /// For each segment still missing a speaker (and `captured_at >= since`), take the
+    /// `speaker_id` of the nearest already-identified `audio_transcriptions` row within
+    /// `coverage_window_secs`. The mirrored live row shares the segment's exact
+    /// timestamp, so once the chunk backfill stamps it, it matches first. Idempotent —
+    /// only fills NULLs, and the `EXISTS` guard avoids no-op NULL writes. Returns rows
+    /// updated. Cheap: runs on the reconciliation sweep, never the hot path.
+    pub async fn backfill_meeting_segment_speakers(
+        &self,
+        since: DateTime<Utc>,
+        coverage_window_secs: f64,
+    ) -> Result<u64, SqlxError> {
+        // SQLite can't correlate the UPDATE target table inside a SET subquery, so
+        // do it as fetch-candidates → per-row nearest-lookup → update-by-id (the
+        // same shape as the mirror). Capped per pass; resolved segments drop out of
+        // the candidate set, so steady-state work is just newly-mirrored segments.
+        const PER_PASS_LIMIT: i64 = 500;
+        let window_days = coverage_window_secs / 86_400.0;
+
+        let segs = sqlx::query(
+            "SELECT id, captured_at, device_type FROM meeting_transcript_segments \
+             WHERE speaker_id IS NULL AND julianday(captured_at) >= julianday(?1) \
+             ORDER BY captured_at DESC LIMIT ?2",
+        )
+        .bind(since)
+        .bind(PER_PASS_LIMIT)
+        .fetch_all(&self.pool)
+        .await?;
+        if segs.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let mut updated: u64 = 0;
+        for seg in &segs {
+            let seg_id: i64 = seg.get("id");
+            let captured_at: DateTime<Utc> = seg.get("captured_at");
+            let is_input: bool =
+                seg.try_get::<String, _>("device_type").unwrap_or_default() == "input";
+            // The global speaker_id of the nearest already-identified audio row OF
+            // THE SAME DEVICE (input vs output), so a mic segment can't pick up a
+            // remote speaker. The mirrored live row shares this exact timestamp +
+            // device, so it wins.
+            let speaker_id: Option<i64> = sqlx::query_scalar(
+                "SELECT at.speaker_id FROM audio_transcriptions at \
+                 WHERE at.speaker_id IS NOT NULL \
+                   AND COALESCE(at.is_input_device, 1) = ?3 \
+                   AND ABS(julianday(at.timestamp) - julianday(?1)) <= ?2 \
+                 ORDER BY ABS(julianday(at.timestamp) - julianday(?1)) ASC LIMIT 1",
+            )
+            .bind(captured_at)
+            .bind(window_days)
+            .bind(is_input)
+            .fetch_optional(&mut **tx.conn())
+            .await?;
+            if let Some(sid) = speaker_id {
+                let r = sqlx::query(
+                    "UPDATE meeting_transcript_segments SET speaker_id = ?1 \
+                     WHERE id = ?2 AND speaker_id IS NULL",
+                )
+                .bind(sid)
+                .bind(seg_id)
+                .execute(&mut **tx.conn())
+                .await?;
+                updated += r.rows_affected();
+            }
+        }
+        tx.commit().await?;
+        Ok(updated)
+    }
+
     pub async fn list_meeting_transcript_segments(
         &self,
         meeting_id: i64,
@@ -9118,24 +9228,28 @@ LIMIT ? OFFSET ?
             ),
             live_segments AS (
                 SELECT
-                    id,
-                    meeting_id,
+                    mts.id,
+                    mts.meeting_id,
                     'live' AS source,
-                    provider,
-                    model,
-                    item_id,
-                    device_name,
-                    device_type,
+                    mts.provider,
+                    mts.model,
+                    mts.item_id,
+                    mts.device_name,
+                    mts.device_type,
                     NULL AS audio_transcription_id,
                     NULL AS audio_chunk_id,
                     NULL AS audio_file_path,
-                    NULL AS speaker_id,
-                    speaker_name,
-                    transcript,
-                    captured_at,
-                    created_at
-                FROM meeting_transcript_segments
-                WHERE meeting_id = ?1
+                    mts.speaker_id AS speaker_id,
+                    -- Prefer the resolved global speaker's name; fall back to the
+                    -- free-text Deepgram label until backfilled / if the speaker is
+                    -- unnamed (NULLIF treats '' as "no name yet").
+                    COALESCE(NULLIF(s.name, ''), mts.speaker_name) AS speaker_name,
+                    mts.transcript,
+                    mts.captured_at,
+                    mts.created_at
+                FROM meeting_transcript_segments mts
+                LEFT JOIN speakers s ON s.id = mts.speaker_id
+                WHERE mts.meeting_id = ?1
             ),
             background_segments AS (
                 SELECT
@@ -9173,9 +9287,21 @@ LIMIT ? OFFSET ?
                   -- archival via reconciliation), but consumers should see one copy.
                   -- The window is half a typical chunk; gaps in live coverage stay
                   -- visible because their background rows won't have a nearby live row.
+                  --
+                  -- The match MUST be scoped to the same direction (input vs
+                  -- output). Input and output are independent captures: when the
+                  -- user is the primary speaker their input live segments are
+                  -- dense, and a direction-agnostic window would suppress every
+                  -- backfilled *output* (other participants') row that merely
+                  -- happens to fall within 15s of the user talking — silently
+                  -- dropping the audience from the transcript.
                   AND NOT EXISTS (
                       SELECT 1 FROM meeting_transcript_segments mts
                       WHERE mts.meeting_id = mw.meeting_id
+                        AND mts.device_type = CASE
+                              WHEN COALESCE(at.is_input_device, 1) THEN 'input'
+                              ELSE 'output'
+                            END
                         AND ABS(julianday(mts.captured_at) - julianday(at.timestamp))
                             <= (15.0 / 86400.0)
                   )
