@@ -96,6 +96,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_recent_output_audio_detects_deferred_output_chunk() {
+        let db = setup_test_db().await;
+
+        db.insert_audio_chunk("System Audio (output)_recent.mp4", Some(Utc::now()))
+            .await
+            .unwrap();
+
+        assert!(db.has_recent_output_audio(30).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_recent_output_audio_ignores_input_chunk() {
+        let db = setup_test_db().await;
+
+        db.insert_audio_chunk("Ruark’s AirPods (input)_recent.mp4", Some(Utc::now()))
+            .await
+            .unwrap();
+
+        assert!(!db.has_recent_output_audio(30).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn test_insert_and_search_audio() {
         let db = setup_test_db().await;
         let audio_chunk_id = db.insert_audio_chunk("test_audio.mp4", None).await.unwrap();
