@@ -139,6 +139,7 @@ function removeEmptyBlock(lines: string[], pattern: RegExp): string[] {
   const result: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (pattern.test(lines[i].trim())) {
+      const blockIndent = lines[i].match(/^\s*/)?.[0].length ?? 0;
       // Check if next non-empty line is indented (a child of this block)
       let nextIdx = i + 1;
       while (nextIdx < lines.length && lines[nextIdx].trim() === "") {
@@ -146,7 +147,7 @@ function removeEmptyBlock(lines: string[], pattern: RegExp): string[] {
       }
       const hasChildren =
         nextIdx < lines.length &&
-        (lines[nextIdx].startsWith("  ") || lines[nextIdx].trim().startsWith("-"));
+        (lines[nextIdx].match(/^\s*/)?.[0].length ?? 0) > blockIndent;
       if (!hasChildren) {
         // Skip this empty block header
         continue;

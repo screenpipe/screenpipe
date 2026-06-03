@@ -195,6 +195,18 @@ describe("toggleNotificationInContent — enable notifications", () => {
     expect(isNotificationsDenied(result)).toBe(false);
   });
 
+  it("removes an empty deny block even when allow follows it", () => {
+    const input =
+      "---\npermissions:\n  deny:\n    - Api(POST /notify)\n  allow:\n    - Bash\n---\n\n# My Pipe";
+    const result = toggleNotificationInContent(input, true);
+    expect(result).toContain("permissions:");
+    expect(result).toContain("allow:");
+    expect(result).toContain("- Bash");
+    expect(result).not.toContain("deny:");
+    expect(result).not.toContain("Api(POST /notify)");
+    expect(isNotificationsDenied(result)).toBe(false);
+  });
+
   it("no-ops when notifications already enabled (no deny rule)", () => {
     const input = "---\nschedule: every 30m\n---\n\n# My Pipe";
     const result = toggleNotificationInContent(input, true);
