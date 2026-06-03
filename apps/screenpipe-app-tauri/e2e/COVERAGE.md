@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 39
-- Declared test blocks: 141
-- Weighted coverage points: 112.5
+- Mapped specs: 40
+- Declared test blocks: 142
+- Weighted coverage points: 113.2
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 32 | 130 | 109.1 | 14 | 38 | 91% |
-| macos | 36 | 111 | 86.7 | 14 | 39 | 88% |
-| linux | 27 | 99 | 83.2 | 12 | 35 | n/a |
+| windows | 33 | 131 | 109.8 | 14 | 39 | 92% |
+| macos | 37 | 112 | 87.4 | 14 | 40 | 89% |
+| linux | 28 | 100 | 83.9 | 12 | 36 | 86% |
 
 ## Runtime Results
 
@@ -42,7 +42,7 @@ pass/fail/skip counts.
 | os-integration | 3 specs / 16 tests / 15.1 pts | 3 specs / 3 tests / 0.9 pts | - |
 | performance | 2 specs / 43 tests / 43.0 pts | 4 specs / 33 tests / 29.5 pts | 1 specs / 28 tests / 28.0 pts |
 | pipes | 1 specs / 7 tests / 7.0 pts | 1 specs / 7 tests / 7.0 pts | 1 specs / 7 tests / 7.0 pts |
-| real-ui-e2e | 15 specs / 62 tests / 52.8 pts | 16 specs / 53 tests / 43.9 pts | 13 specs / 47 tests / 42.0 pts |
+| real-ui-e2e | 16 specs / 63 tests / 53.5 pts | 17 specs / 54 tests / 44.6 pts | 14 specs / 48 tests / 42.7 pts |
 | settings | 4 specs / 19 tests / 18.4 pts | 4 specs / 12 tests / 10.7 pts | 3 specs / 11 tests / 10.4 pts |
 | storage-privacy | 4 specs / 19 tests / 18.4 pts | 3 specs / 11 tests / 10.4 pts | 3 specs / 11 tests / 10.4 pts |
 | tauri-command | 8 specs / 17 tests / 10.3 pts | 9 specs / 19 tests / 10.8 pts | 8 specs / 17 tests / 10.3 pts |
@@ -52,29 +52,38 @@ pass/fail/skip counts.
 
 | Feature | Required layers | windows | macos | linux |
 | --- | --- | --- | --- | --- |
-| App launch and Home shell | real-ui-e2e | covered (strong; app-lifecycle, onboarding-redirect) | covered (strong; app-lifecycle, onboarding-redirect) | - |
-| Home to floating Search | real-ui-e2e | covered (strong; windows-user-journey, tray-search) | covered (partial; tray-search) | - |
-| Timeline navigation and frames | real-ui-e2e | covered (strong; windows-user-journey, windows-core-recording) | covered (strong; home-window, timeline) | - |
-| Real capture, OCR, and indexing | capture-ocr | weak (conditional; windows-core-recording, timeline) | weak (conditional; timeline, hd-recording-pipeline) | - |
-| Local API auth enforcement | local-api | covered (strong; api-search-stress, windows-system-integration) | covered (strong; api-search-stress, api) | - |
-| Local API search stability | local-api | covered (strong; api-search-stress, windows-core-recording) | covered (strong; api-search-stress) | - |
-| Recording settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, audio-fallback) | - |
-| Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | - |
-| Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (partial; notification-viewer-link, audio-fallback) | - |
-| Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; audio-fallback) | - |
-| Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | - |
-| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) | - |
-| Pipes discover, install, and play | pipes | covered (strong; pipes) | covered (strong; pipes) | - |
-| Chat window, composer, and streaming state | chat-ai | covered (strong; chat-window, chat-composer-isolation) | covered (strong; chat-window, chat-streaming-performance) | - |
-| Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | - |
-| Storage retention safety UX | storage-privacy | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections) | - |
-| Updater install and rollback safety | os-integration | gap | gap | - |
+| App launch and Home shell | real-ui-e2e | covered (strong; app-lifecycle, onboarding-redirect) | covered (strong; app-lifecycle, onboarding-redirect) | covered (strong; app-lifecycle, onboarding-redirect) |
+| Home to floating Search | real-ui-e2e | covered (strong; windows-user-journey, tray-search) | covered (partial; tray-search) | covered (partial; tray-search) |
+| Timeline navigation and frames | real-ui-e2e | covered (strong; windows-user-journey, windows-core-recording) | covered (strong; home-window, timeline) | covered (strong; home-window, timeline) |
+| Real capture, OCR, and indexing | capture-ocr | weak (conditional; windows-core-recording, timeline) | weak (conditional; timeline, hd-recording-pipeline) | weak (conditional; timeline) |
+| Local API auth enforcement | local-api | covered (strong; api-search-stress, windows-system-integration) | covered (strong; api-search-stress, api) | covered (strong; api-search-stress, api) |
+| Local API search stability | local-api | covered (strong; api-search-stress, windows-core-recording) | covered (strong; api-search-stress) | covered (strong; api-search-stress) |
+| Recording settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, audio-fallback) | covered (strong; settings-sections) |
+| Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | covered (strong; settings-sections, privacy-api-auth) |
+| Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (partial; notification-viewer-link, audio-fallback) | covered (partial; notification-viewer-link) |
+| Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; audio-fallback) | gap |
+| Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
+| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) |
+| Pipes discover, install, and play | pipes | covered (strong; pipes) | covered (strong; pipes) | covered (strong; pipes) |
+| Chat window, composer, and streaming state | chat-ai | covered (strong; chat-window, chat-composer-isolation) | covered (strong; chat-window, chat-streaming-performance) | covered (strong; chat-window, chat-composer-isolation) |
+| Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
+| Storage retention safety UX | storage-privacy | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections) | covered (strong; settings-sections) |
+| Updater install and rollback safety | os-integration | gap | gap | gap |
+| Update-available banner surfacing | real-ui-e2e | covered (partial; updater-banner) | covered (partial; updater-banner) | covered (partial; updater-banner) |
 
 ## Critical Gaps
 
 - windows: Real capture, OCR, and indexing (weak); Updater install and rollback safety (gap).
 - macos: Real capture, OCR, and indexing (weak); Audio device health (weak); Updater install and rollback safety (gap).
-- linux: no critical gaps in the current manifest.
+- linux: Real capture, OCR, and indexing (weak); Audio device health (gap); Updater install and rollback safety (gap).
+
+## Execution Integrity
+
+- Specs that claim coverage but contain zero executable test blocks: zz-owned-browser-background-nav.spec.ts. They assert nothing and no longer count toward any critical feature.
+- Declared coverage below is NOT reconciled against execution: no runtime results
+  were supplied. Specs can self-skip on hosted runners (no display, vision off,
+  recording disabled) and still read as covered. Run `e2e:coverage:runtime` (or pass
+  `--results-dir`) in CI to flag declared coverage that did not actually run.
 
 ## Spec Inventory
 
@@ -112,6 +121,7 @@ pass/fail/skip counts.
 | settings-sections.spec.ts | windows, macos, linux | settings, real-ui-e2e, storage-privacy | settings-recording, settings-privacy-api-auth, storage-retention, audio-device-health | high | strong | real-user-flow | 9 | Settings sections, storage, privacy, and rapid switching crash guard. |
 | timeline.spec.ts | windows, macos, linux | real-ui-e2e, capture-ocr | timeline, capture-ocr | high | conditional | real-user-flow | 2 | Timeline shell always runs; seeded frame assertion skips under no-recording. |
 | tray-search.spec.ts | windows, macos, linux | window-lifecycle, tauri-command, real-ui-e2e | tray-search, home-search, window-lifecycle | high | partial | command | 2 | Invokes open_search_window and verifies focused floating Search. |
+| updater-banner.spec.ts | windows, macos, linux | real-ui-e2e | update-surfacing | high | partial | synthetic | 1 | Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions). |
 | viewer-deeplink.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | viewer-deeplink, window-lifecycle | medium | partial | command | 3 | Viewer window creation and per-path dedupe. |
 | window-activation.spec.ts | macos | window-lifecycle, tauri-command, real-ui-e2e | window-lifecycle, chat | medium | conditional | real-user-flow | 2 | macOS-only show_window_activated focus coverage. |
 | window-lifecycle.spec.ts | windows, macos, linux | window-lifecycle, tauri-command, real-ui-e2e | window-lifecycle, onboarding, tray-search | high | strong | mixed | 3 | Home, Search, and onboarding window routing. |

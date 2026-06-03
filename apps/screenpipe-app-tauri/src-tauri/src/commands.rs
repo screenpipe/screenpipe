@@ -1305,6 +1305,17 @@ pub fn update_show_screenpipe_shortcut(
     if let Err(e) = app_handle.global_shortcut().on_shortcut(
         show_window_shortcut,
         move |app_handle, _event, _shortcut| {
+            // The "show" shortcut only opens the timeline/rewind overlay, so
+            // ignore it when the timeline is disabled (checked at press time).
+            if crate::store::SettingsStore::get(app_handle)
+                .unwrap_or_default()
+                .unwrap_or_default()
+                .recording
+                .disable_timeline
+            {
+                info!("timeline disabled: ignoring show shortcut");
+                return;
+            }
             #[cfg(target_os = "macos")]
             {
                 use crate::window::MAIN_PANEL_SHOWN;

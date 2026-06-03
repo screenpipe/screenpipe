@@ -340,6 +340,8 @@ export function IntegrationIcon({
     "google-sheets": <img src="/images/google-sheets.svg" alt="Google Sheets" className="w-5 h-5" />,
     notion: <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />,
     linear: <img src="/images/linear.svg" alt="Linear" className="w-5 h-5" />,
+    krisp: <img src="/images/krisp.svg" alt="Krisp" className="w-5 h-5 dark:invert" />,
+    odoo: <img src="/images/odoo.svg" alt="Odoo" className="w-5 h-5" />,
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     posthog: <img src="/images/posthog.svg" alt="PostHog" className="w-5 h-5" />,
     n8n: <img src="/images/n8n.png" alt="n8n" className="w-5 h-5 rounded" />,
@@ -2244,6 +2246,237 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 }
 
 // ---------------------------------------------------------------------------
+// Krisp — official OAuth MCP card
+// ---------------------------------------------------------------------------
+//
+// Krisp exposes its meeting data (transcripts, notes, action items) through a
+// remote, OAuth-gated MCP server. Rather than make the user paste the URL into
+// the Custom MCP form, this card creates the server config and runs the OAuth
+// flow in one click. Krisp registers screenpipe as a *confidential* client
+// (client_secret_basic) — handled in screenpipe-connect's mcp_servers.rs.
+
+const KRISP_MCP_URL = "https://mcp.krisp.ai/mcp";
+
+function krispMcpRandomId(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function KrispPanel({
+  onConnected,
+  onDisconnected,
+}: {
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
+  const [serverId, setServerId] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
+
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  // Reflect reality on open: find a Krisp MCP server created by a prior connect
+  // and read its OAuth status.
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await localFetch("/mcp-servers");
+      if (!r.ok) return;
+      const body = await r.json();
+      const list = (body?.data ?? []) as { id: string; url?: string }[];
+      const existing = list.find(
+        (s) => (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL
+      );
+      if (!existing) {
+        setServerId(null);
+        setConnected(false);
+        return;
+      }
+      setServerId(existing.id);
+      const sr = await localFetch(
+        `/mcp-servers/${encodeURIComponent(existing.id)}/oauth/status`
+      );
+      if (sr.ok) {
+        const sb = await sr.json();
+        setConnected(!!sb?.data?.connected);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+    return () => {
+      cancelledRef.current = true;
+      clearTimer();
+    };
+  }, [loadStatus]);
+
+  const handleConnect = async () => {
+    setBusy(true);
+    setStatusMsg(null);
+    cancelledRef.current = false;
+    clearTimer();
+    try {
+      // Reuse an existing Krisp server if present; otherwise create-on-complete
+      // (the server is persisted only when OAuth succeeds).
+      const targetId = serverId ?? krispMcpRandomId();
+      const isNew = !serverId;
+      const res = await localFetch(
+        `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            isNew
+              ? { name: "Krisp", url: KRISP_MCP_URL, headers: [], enabled: true }
+              : {}
+          ),
+        }
+      );
+      const body = await res.json();
+      if (!res.ok) {
+        setStatusMsg(body?.error ?? `Sign-in failed (HTTP ${res.status})`);
+        return;
+      }
+      await openUrl(body.data.auth_url);
+      setWaiting(true);
+      setStatusMsg("Finish sign-in in the browser…");
+      const started = Date.now();
+      const poll = async () => {
+        if (cancelledRef.current) return;
+        try {
+          const sr = await localFetch(
+            `/mcp-servers/${encodeURIComponent(targetId)}/oauth/status`
+          );
+          if (sr.ok) {
+            const sb = await sr.json();
+            if (sb?.data?.connected) {
+              clearTimer();
+              setWaiting(false);
+              setConnected(true);
+              setServerId(targetId);
+              setStatusMsg(null);
+              notifyConnectionsUpdated();
+              onConnected?.();
+              return;
+            }
+          }
+        } catch {}
+        if (Date.now() - started < 120_000) {
+          timerRef.current = setTimeout(poll, 2000);
+        } else {
+          setWaiting(false);
+          setStatusMsg("Sign-in was not completed");
+        }
+      };
+      timerRef.current = setTimeout(poll, 2000);
+    } catch (e: any) {
+      setWaiting(false);
+      setStatusMsg(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancel = () => {
+    cancelledRef.current = true;
+    clearTimer();
+    setWaiting(false);
+    setBusy(false);
+    setStatusMsg("Sign-in cancelled");
+  };
+
+  const handleDisconnect = async () => {
+    if (!serverId) return;
+    setBusy(true);
+    try {
+      await localFetch(
+        `/mcp-servers/${encodeURIComponent(serverId)}/oauth/disconnect`,
+        { method: "POST" }
+      );
+      setConnected(false);
+      setStatusMsg(null);
+      notifyConnectionsUpdated();
+      onDisconnected?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-3 text-sm">
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        Connect Krisp so your AI can search your meeting transcripts, notes, and
+        action items. Sign-in is handled by Krisp&apos;s OAuth — screenpipe never
+        sees your password.
+      </p>
+      {connected ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
+            <Check className="h-3.5 w-3.5" /> Connected
+          </span>
+          <Button
+            onClick={handleDisconnect}
+            disabled={busy}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal ml-auto"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <LogOut className="h-3 w-3" />
+            )}
+            Disconnect
+          </Button>
+        </div>
+      ) : waiting ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />{" "}
+            {statusMsg ?? "Waiting for sign-in…"}
+          </span>
+          <Button
+            onClick={handleCancel}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal ml-auto"
+          >
+            <X className="h-3 w-3" /> Cancel
+          </Button>
+        </div>
+      ) : (
+        <Button
+          onClick={handleConnect}
+          disabled={busy}
+          size="sm"
+          className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+        >
+          {busy ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <LogIn className="h-3 w-3" />
+          )}
+          Connect Krisp
+        </Button>
+      )}
+      {statusMsg && !waiting && !connected && (
+        <p className="text-xs text-muted-foreground">{statusMsg}</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main connections section
 // ---------------------------------------------------------------------------
 
@@ -2300,6 +2533,7 @@ export function ConnectionsSection({
   const [googleSheetsConnected, setGoogleSheetsConnected] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
+  const [krispConnected, setKrispConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
 
   const refreshStatus = useCallback(() => {
@@ -2327,11 +2561,12 @@ export function ConnectionsSection({
       setGmailConnected(res.status === "ok" && res.data.connected);
     }).catch(() => {});
     localFetch("/mcp-servers").then(async r => {
-      if (!r.ok) { setCustomMcpConnected(false); return; }
+      if (!r.ok) { setCustomMcpConnected(false); setKrispConnected(false); return; }
       const body = await r.json();
-      const list = (body?.data ?? []) as { enabled: boolean }[];
+      const list = (body?.data ?? []) as { enabled: boolean; url?: string }[];
       setCustomMcpConnected(list.some(s => s.enabled));
-    }).catch(() => setCustomMcpConnected(false));
+      setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
+    }).catch(() => { setCustomMcpConnected(false); setKrispConnected(false); });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
         setBrowserUrlConnected(
@@ -2419,6 +2654,7 @@ export function ConnectionsSection({
       { id: "notion", name: "Notion", icon: "notion", connected: false },
       { id: "linear", name: "Linear", icon: "linear", connected: false },
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false },
+      { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false },
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
@@ -2456,7 +2692,7 @@ export function ConnectionsSection({
       ...tile,
       category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, inputMonitoringGranted]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, krispConnected, inputMonitoringGranted]);
 
   const categoryOptions = useMemo(() => {
     const categories = Array.from(
@@ -2535,6 +2771,10 @@ export function ConnectionsSection({
       case "anythingllm": return <AnythingLLMPanel />;
       case "hermes": return <HermesCard />;
       case "custom-mcp": return <CustomMcpCard />;
+      case "krisp": return <KrispPanel
+        onConnected={() => setKrispConnected(true)}
+        onDisconnected={() => setKrispConnected(false)}
+      />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;

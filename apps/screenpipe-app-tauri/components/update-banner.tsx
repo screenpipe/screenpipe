@@ -206,6 +206,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
     return (
       <button
         type="button"
+        data-testid="update-banner"
         onClick={handleUpdate}
         disabled={isInstalling}
         className={cn(

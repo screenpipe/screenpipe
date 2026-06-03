@@ -419,6 +419,32 @@ struct TauriOwnedHandle {
     eval_lock: Mutex<()>,
 }
 
+/// Reveal the native child webview just long enough to run a *background*
+/// `eval`, returning whether it actually showed it.
+///
+/// macOS/WKWebView runs `evaluateJavaScript` while the webview is hidden — the
+/// same reason `TauriOwnedHandle::navigate` loads a page while hidden — so this
+/// is a no-op there and a background snapshot/eval never flashes the browser
+/// over whatever section (Timeline, Live notes, …) the user is currently on.
+/// Windows/WebView2 will not execute script against a hidden controller, so
+/// there we still show it for the duration of the eval; the caller hides it
+/// again afterwards. (Parking the Windows webview off-screen so it runs script
+/// without painting over the user is a tracked follow-up.)
+#[allow(unused_variables)]
+async fn show_native_for_background_eval(active: &Webview<Wry>, state: &OwnedBrowserState) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = active.show();
+        state.set_visible(true).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        true
+    }
+}
+
 #[async_trait]
 impl OwnedWebviewHandle for TauriOwnedHandle {
     async fn eval(
@@ -450,16 +476,20 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             None => return Err("owned-browser child webview not attached".to_string()),
         };
 
-        // A hidden WebView2 window can accept `eval()` without actually
-        // executing the script. Make sure the native webview is live before
-        // code-only evals. URL navigations defer showing until after the
-        // optional session-access prompt, so the sidebar can explain the
-        // request before any native webview covers it.
+        // Background reads (snapshot / code-only eval) must NOT reveal the
+        // native webview over whatever section the user is on — a pipe working
+        // in the background must never flash the browser over Timeline / Live
+        // notes / etc. `show_native_for_background_eval` is a no-op on macOS
+        // (WKWebView evals while hidden) and only shows on Windows, where a
+        // hidden WebView2 controller no-ops the script. `shown_for_eval` records
+        // whether we revealed it, so we only hide afterwards on the platform
+        // that actually showed it. URL navigations still defer showing until
+        // after the optional session-access prompt so the sidebar can explain
+        // the request before any native webview covers it.
         let was_visible = self.state.is_visible().await;
+        let mut shown_for_eval = false;
         if !was_visible && target_url.is_none() {
-            let _ = active.show();
-            self.state.set_visible(true).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            shown_for_eval = show_native_for_background_eval(&active, &self.state).await;
         }
 
         // If a target URL was supplied, navigate via Tauri's native navigate
@@ -470,9 +500,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         if let Some(parsed) = target_url {
             inject_cookies_for_url(&self.app, &parsed).await;
             if !was_visible {
-                let _ = active.show();
-                self.state.set_visible(true).await;
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                shown_for_eval = show_native_for_background_eval(&active, &self.state).await;
             }
             active
                 .navigate(parsed)
@@ -528,7 +556,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         let start = Instant::now();
         let result_json = loop {
             if start.elapsed() >= timeout {
-                if !was_visible && url.is_none() {
+                if shown_for_eval && url.is_none() {
                     let _ = active.hide();
                     self.state.set_visible(false).await;
                 }
@@ -549,7 +577,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // tab labels in any embedding UI) doesn't keep our marker.
         let restore_lit = serde_json::to_string(&original_title).unwrap_or_else(|_| "\"\"".into());
         let _ = active.eval(format!("document.title = {restore_lit};"));
-        if !was_visible && url.is_none() {
+        if shown_for_eval && url.is_none() {
             let _ = active.hide();
             self.state.set_visible(false).await;
         }

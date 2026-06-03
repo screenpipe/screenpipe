@@ -22,6 +22,9 @@ export function DisplaySection() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
   const { isMac } = usePlatform();
+  // Guards the Disable-Timeline toggle against double-invoke (rapid toggle /
+  // re-render) so we never fire two overlapping screenpipe restarts.
+  const timelineRestartingRef = React.useRef(false);
 
   const handleSettingsChange = (newSettings: Partial<Settings>) => {
     if (settings) {
@@ -111,36 +114,44 @@ export function DisplaySection() {
                 id="disableTimeline"
                 checked={settings?.disableTimeline ?? false}
                 onCheckedChange={async (checked) => {
-                  // Persist first (awaited) so the backend reads the new value on
-                  // restart and the shortcut-reminder guard sees it immediately.
-                  await updateSettings({ disableTimeline: checked });
-                  // The screenpipe shortcut only opens the timeline, so its
-                  // reminder overlay is meaningless once the timeline is off —
-                  // tear it down on disable, restore it on re-enable.
+                  // Collapse double-invoke (rapid toggle / re-render) into one
+                  // restart — two overlapping stop/spawn cycles raced before.
+                  if (timelineRestartingRef.current) return;
+                  timelineRestartingRef.current = true;
                   try {
-                    if (checked) {
-                      await commands.hideShortcutReminder();
-                    } else if (settings?.showShortcutOverlay) {
-                      await commands.showShortcutReminder(settings.showScreenpipeShortcut);
+                    // Persist first (awaited) so the backend reads the new value
+                    // on restart and the shortcut-reminder guard sees it.
+                    await updateSettings({ disableTimeline: checked });
+                    // The screenpipe shortcut only opens the timeline, so its
+                    // reminder overlay is meaningless once the timeline is off —
+                    // tear it down on disable, restore it on re-enable.
+                    try {
+                      if (checked) {
+                        await commands.hideShortcutReminder();
+                      } else if (settings?.showShortcutOverlay) {
+                        await commands.showShortcutReminder(settings.showScreenpipeShortcut);
+                      }
+                    } catch {}
+                    // disableTimeline gates timeline-only backend work (hot-cache
+                    // warm-up + frame/audio buffering) wired at server startup, so
+                    // it needs a full screenpipe restart to take effect.
+                    try {
+                      await commands.stopScreenpipe();
+                      await new Promise((r) => setTimeout(r, 500));
+                      await commands.spawnScreenpipe(null);
+                      toast({
+                        title: checked ? "timeline disabled" : "timeline enabled",
+                        description: "screenpipe restarted to apply the change.",
+                      });
+                    } catch (e) {
+                      toast({
+                        title: "failed to restart screenpipe",
+                        description: "restart screenpipe manually to apply the change.",
+                        variant: "destructive",
+                      });
                     }
-                  } catch {}
-                  // disableTimeline gates timeline-only backend work (hot-cache
-                  // warm-up + frame/audio buffering) wired at server startup, so
-                  // it needs a full screenpipe restart to take effect.
-                  try {
-                    await commands.stopScreenpipe();
-                    await new Promise((r) => setTimeout(r, 500));
-                    await commands.spawnScreenpipe(null);
-                    toast({
-                      title: checked ? "timeline disabled" : "timeline enabled",
-                      description: "screenpipe restarted to apply the change.",
-                    });
-                  } catch (e) {
-                    toast({
-                      title: "failed to restart screenpipe",
-                      description: "restart screenpipe manually to apply the change.",
-                      variant: "destructive",
-                    });
+                  } finally {
+                    timelineRestartingRef.current = false;
                   }
                 }}
               />
