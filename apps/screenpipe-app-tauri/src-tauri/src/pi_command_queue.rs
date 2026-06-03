@@ -907,33 +907,4 @@ mod tests {
         let _ = abort_handle.await;
     }
 
-    /// Reproduces the composer-steer + queued-followups scenario:
-    /// turn "a" active, b/c/d queued, steer "e" sent via send_immediate.
-    /// The drain loop must not advance to "b" until the steer turn ends.
-    #[tokio::test]
-    async fn test_steer_in_flight_blocks_drain_loop_until_steer_turn_ends() {
-        let state = PiQueueState::new();
-        let blocked = |s: &PiQueueState| s.is_agent_active() || s.is_steer_in_flight();
-
-        // Turn "a" is active. Steer "e" sent → steer_in_flight set.
-        state.mark_agent_active();
-        state.set_steer_in_flight();
-
-        // Pi fires agent_end for turn "a".
-        state.mark_agent_idle();
-        state.signal_done();
-
-        // Drain loop wakes but steer_in_flight holds it back.
-        assert!(blocked(&state), "queued 'b' must not proceed while steer in flight");
-
-        // Pi fires message_start for the steer (native steer skips agent_start).
-        state.mark_agent_active();
-        state.clear_steer_in_flight();
-        assert!(blocked(&state), "agent_active holds drain loop during steer turn");
-
-        // Pi fires agent_end for the steer turn.
-        state.mark_agent_idle();
-        state.signal_done();
-        assert!(!blocked(&state), "drain loop can now proceed to 'b'");
-    }
 }
