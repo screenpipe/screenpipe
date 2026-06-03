@@ -1259,7 +1259,6 @@ const STATIC_APP_ICONS: Record<string, string> = {
   airtable: "/images/airtable.png",
   apple: "/images/apple.svg",
   "apple-calendar": "/images/apple.svg",
-  "windows-calendar": "/images/windows.svg",
   "apple intelligence": "/images/apple-intelligence.png",
   screenpipe: "/images/screenpipe.png",
 };
