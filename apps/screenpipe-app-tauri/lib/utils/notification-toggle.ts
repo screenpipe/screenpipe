@@ -145,9 +145,15 @@ function removeEmptyBlock(lines: string[], pattern: RegExp): string[] {
       while (nextIdx < lines.length && lines[nextIdx].trim() === "") {
         nextIdx++;
       }
+      const childIndent =
+        nextIdx < lines.length
+          ? lines[nextIdx].match(/^\s*/)?.[0].length ?? 0
+          : -1;
+      const isListItem =
+        nextIdx < lines.length && lines[nextIdx].trim().startsWith("-");
       const hasChildren =
-        nextIdx < lines.length &&
-        (lines[nextIdx].match(/^\s*/)?.[0].length ?? 0) > blockIndent;
+        childIndent > blockIndent ||
+        (isListItem && childIndent >= blockIndent);
       if (!hasChildren) {
         // Skip this empty block header
         continue;

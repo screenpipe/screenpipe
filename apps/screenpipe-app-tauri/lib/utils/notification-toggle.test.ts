@@ -171,6 +171,17 @@ describe("toggleNotificationInContent — enable notifications", () => {
     expect(isNotificationsDenied(result)).toBe(false);
   });
 
+  it("keeps compact YAML deny list items under deny when removing notify rule", () => {
+    const input =
+      "---\npermissions:\n  deny:\n  - Api(POST /search)\n  - Api(POST /notify)\n---\n\n# My Pipe";
+    const result = toggleNotificationInContent(input, true);
+    expect(result).not.toContain("Api(POST /notify)");
+    expect(result).toContain("permissions:");
+    expect(result).toContain("deny:");
+    expect(result).toContain("  - Api(POST /search)");
+    expect(isNotificationsDenied(result)).toBe(false);
+  });
+
   it("preserves other frontmatter fields after cleanup", () => {
     const input =
       "---\nschedule: every 30m\nenabled: true\npermissions:\n  deny:\n    - Api(POST /notify)\n---\n\n# My Pipe";
