@@ -378,7 +378,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const { history, addQuery, removeQuery } = useSearchHistory();
+  const { history, addQuery, removeQuery, clearHistory } = useSearchHistory();
   const { inputRef, inputElRef, focusInput } = useSearchFocus(isOpen);
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -2076,10 +2076,18 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {/* Recent search history */}
               {history.length > 0 && (
                 <div>
-                  <p className="text-xs text-muted-foreground/60 mb-1 flex items-center gap-1.5 px-1">
-                    <Clock className="w-3 h-3" />
-                    recent searches
-                  </p>
+                  <div className="flex items-center justify-between mb-1 px-1">
+                    <p className="text-xs text-muted-foreground/60 flex items-center gap-1.5">
+                      <Clock className="w-3 h-3" />
+                      recent searches
+                    </p>
+                    <button
+                      onClick={clearHistory}
+                      className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors hover:underline"
+                    >
+                      clear
+                    </button>
+                  </div>
                   <div className="flex flex-col">
                     {history.map((h) => (
                       <div

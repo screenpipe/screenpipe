@@ -23,7 +23,7 @@ export function useSearchHistory() {
 
   const addQuery = useCallback((query: string) => {
     const trimmed = query.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("@")) return;
+    if (!trimmed) return;
 
     setHistory((prev) => {
       const filtered = prev.filter((q) => q !== trimmed);
