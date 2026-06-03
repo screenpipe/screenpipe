@@ -22,6 +22,7 @@ import { commands } from "@/lib/utils/tauri";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
+import { useSearchHistory } from "@/lib/hooks/use-search-history";
 
 interface SpeakerResult {
   id: number;
@@ -377,6 +378,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const { history, addQuery, removeQuery } = useSearchHistory();
   const { inputRef, inputElRef, focusInput } = useSearchFocus(isOpen);
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -1192,10 +1194,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     // Track which result was selected so timeline arrow keys can cycle from here
     const idx = searchResults.findIndex((r) => r.frame_id === result.frame_id);
     if (idx >= 0) setCurrentResultIndex(idx);
+    addQuery(query);
     const resultsJson = JSON.stringify(searchResults);
     onNavigateToTimestamp(result.timestamp, result.frame_id, queryTokens, resultsJson, query);
     onClose();
-  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex]);
+  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex, addQuery]);
 
   // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
@@ -1296,6 +1299,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           if (e.metaKey || e.ctrlKey) {
             handleSendToAI();
           } else {
+            addQuery(query);
             setSelectedIndex(i => {
               const r = filteredResultsRef.current[i];
               if (r) handleSelectResult(r);
@@ -2069,6 +2073,36 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Suggestions when no query */}
           {!debouncedQuery && !isSearching && contentFilter !== "chats" && (
             <div className="py-4 px-2 space-y-4">
+              {/* Recent search history */}
+              {history.length > 0 && (
+                <div>
+                  <p className="text-xs text-muted-foreground/60 mb-1 flex items-center gap-1.5 px-1">
+                    <Clock className="w-3 h-3" />
+                    recent searches
+                  </p>
+                  <div className="flex flex-col">
+                    {history.map((h) => (
+                      <div
+                        key={h}
+                        className="group flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors hover:bg-muted/50 cursor-pointer"
+                        onClick={() => setQuery(h)}
+                      >
+                        <Search className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
+                        <span className="text-sm text-foreground/80 truncate flex-1">{h}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeQuery(h);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded-md transition-all"
+                        >
+                          <X className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* Recent chats — list with timestamps */}
               {recentChats.length > 0 && (
                 <div>
