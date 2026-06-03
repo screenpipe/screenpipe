@@ -292,10 +292,15 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
         let cal_available = tokio::task::spawn_blocking(is_native_calendar_available)
             .await
             .unwrap_or(false);
+        let (cal_id, cal_name, cal_icon) = if cfg!(target_os = "windows") {
+            ("windows-calendar", "Windows Calendar", "windows-calendar")
+        } else {
+            ("apple-calendar", "Apple Calendar", "apple-calendar")
+        };
         arr.push(json!({
-            "id": "apple-calendar",
-            "name": "Apple Calendar",
-            "icon": "apple-calendar",
+            "id": cal_id,
+            "name": cal_name,
+            "icon": cal_icon,
             "category": "calendar",
             "description": format!(
                 "Read-only access to your native {} calendar. \

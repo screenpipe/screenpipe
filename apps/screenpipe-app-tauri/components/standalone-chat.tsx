@@ -186,19 +186,11 @@ type ConnectedIntegration = {
 type ConnectionListItem = ConnectedIntegration & { connected: boolean };
 type ActivityAppItem = { name: string; count: number; app_name?: string };
 
-function normalizeConnectionForPlatform<T extends ConnectedIntegration>(connection: T, isWindows: boolean): T {
-  if (isWindows && connection.id === "apple-calendar") {
-    return {
-      ...connection,
-      name: "Windows Calendar",
-      icon: "windows-calendar",
-    };
-  }
+function normalizeConnectionForPlatform<T extends ConnectedIntegration>(connection: T, _isWindows: boolean): T {
   return connection;
 }
 
-function connectionMentionTag(connection: ConnectedIntegration, isWindows: boolean) {
-  if (isWindows && connection.id === "apple-calendar") return "@windows-calendar";
+function connectionMentionTag(connection: ConnectedIntegration, _isWindows: boolean) {
   return `@${connection.id}`;
 }
 
@@ -1267,6 +1259,7 @@ const STATIC_APP_ICONS: Record<string, string> = {
   airtable: "/images/airtable.png",
   apple: "/images/apple.svg",
   "apple-calendar": "/images/apple.svg",
+  "windows-calendar": "/images/windows.svg",
   "apple intelligence": "/images/apple-intelligence.png",
   screenpipe: "/images/screenpipe.png",
 };

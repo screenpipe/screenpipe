@@ -58,7 +58,7 @@ Never POST, PUT, or PATCH to a connection proxy unless the user explicitly asks 
 
 # Tool selection
 
-- "upcoming meetings / calendar events / what's on my calendar / schedule" → if a calendar integration is connected (google-calendar, apple-calendar), call its events endpoint first; only fall back to audio search if no calendar is connected
+- "upcoming meetings / calendar events / what's on my calendar / schedule" → if a calendar integration is connected (google-calendar, apple-calendar, windows-calendar), call its events endpoint first; only fall back to audio search if no calendar is connected
 - "meeting / call / conversation / what did I/they say" → search with content_type: "audio", no q param (for past meetings/calls captured by screenpipe)
 - "how long / time spent / which apps / most used" → activity-summary (not raw frame counts or SQL)
 - "what was on screen / what was I reading" → search with content_type: "all" or "accessibility"

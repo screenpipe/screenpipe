@@ -51,6 +51,8 @@ const KIND_LABEL: Record<SourceCitationKind, string> = {
 const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
   ["apple-calendar", "/images/apple.svg"],
   ["apple calendar", "/images/apple.svg"],
+  ["windows-calendar", "/images/windows.svg"],
+  ["windows calendar", "/images/windows.svg"],
   ["asana", "/images/asana.svg"],
   ["airtable", "/images/airtable.png"],
   ["bitrix24", "/images/bitrix24.png"],
