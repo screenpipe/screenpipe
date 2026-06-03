@@ -507,6 +507,8 @@ type ConnectionSort = "default" | "alphabetical";
 
 const ALL_CONNECTION_CATEGORIES = "All";
 
+const SINGLE_INSTANCE_INTEGRATIONS = new Set<string>(["honcho"]);
+
 // Curated row shown above the search bar. Order is editorial — high-activation
 // AI surfaces first, then communication, then write-back knowledge tools. We
 // hide this row whenever the user is searching/filtering so the result set
@@ -2268,11 +2270,17 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
     setAddingInstance(false);
   };
 
+  const singleInstance = SINGLE_INSTANCE_INTEGRATIONS.has(integration.id);
+
   return (
     <div className="space-y-4">
       {/* Default instance */}
       <div>
-        <p className="text-xs text-muted-foreground mb-2">default</p>
+        {/* The "default" label only makes sense when there can be other,
+            named instances. Single-instance integrations just show the form. */}
+        {!singleInstance && (
+          <p className="text-xs text-muted-foreground mb-2">default</p>
+        )}
         <ConnectionCredentialForm
           integrationId={integration.id}
           fields={integration.fields}
@@ -2282,8 +2290,9 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
         />
       </div>
 
-      {/* Named instances */}
-      {instancesLoaded && instances.map((inst) => (
+      {/* Named instances — hidden for single-instance integrations whose
+          backend only reads the default connection. */}
+      {!singleInstance && instancesLoaded && instances.map((inst) => (
         <div key={inst.name} className="border-t border-border pt-3">
           <p className="text-xs text-muted-foreground mb-2">{inst.name}</p>
           <ConnectionCredentialForm
@@ -2300,7 +2309,8 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
         </div>
       ))}
 
-      {/* Add instance */}
+      {/* Add instance — hidden for single-instance integrations. */}
+      {!singleInstance && (
       <div className="border-t border-border pt-3">
         {addingInstance ? (
           <div className="flex items-center gap-2">
@@ -2326,6 +2336,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
           </Button>
         )}
       </div>
+      )}
     </div>
   );
 }
