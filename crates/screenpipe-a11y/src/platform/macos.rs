@@ -12,7 +12,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
@@ -535,6 +535,10 @@ struct TapState {
     config: UiCaptureConfig,
     last_mouse: Mutex<(f64, f64)>,
     text_buf: Mutex<TextBuffer>,
+    /// Raw pointer to the leaked `EventTap` so the callback can re-enable
+    /// itself after `kCGEventTapDisabledByTimeout`. Not owning; the tap is
+    /// kept alive by a separate `Box::leak` in `run_event_tap`.
+    tap_ptr: AtomicPtr<cg::EventTap>,
     /// Lock-free reads for app/window context — no mutex contention in the
     /// event tap callback (the hot path for every input event).
     current_app: Arc<ArcSwap<Option<String>>>,
@@ -658,6 +662,7 @@ fn run_event_tap(
         activity_feed,
         context_tx,
         clipboard_tx,
+        tap_ptr: AtomicPtr::new(std::ptr::null_mut()),
     }));
 
     let tap = cg::EventTap::new(
@@ -674,7 +679,16 @@ fn run_event_tap(
         return;
     };
 
-    let Some(src) = cf::MachPort::run_loop_src(&tap, 0) else {
+    // Leak the Retained<EventTap> so the underlying CF object stays alive
+    // for the program's lifetime; the callback dereferences `tap_ptr` to
+    // call `set_enabled(true)` after a timeout-disable. The run loop also
+    // retains the MachPort, so the leak isn't the only thing keeping it
+    // alive — but owning it explicitly is the simplest way to expose
+    // `&mut EventTap` from the C callback.
+    let tap_retained: &'static mut cidre::arc::R<cg::EventTap> = Box::leak(Box::new(tap));
+    state.tap_ptr.store(&mut **tap_retained as *mut _, Ordering::Release);
+
+    let Some(src) = cf::MachPort::run_loop_src(&**tap_retained, 0) else {
         error!("Failed to create run loop source");
         return;
     };
@@ -687,32 +701,34 @@ fn run_event_tap(
     while !stop.load(Ordering::Relaxed) {
         cf::RunLoop::run_in_mode(cf::RunLoopMode::default(), 0.05, true);
 
-        // Check text buffer timeout
-        let mut buf = state.text_buf.lock();
-        if buf.should_flush() {
-            if let Some(s) = buf.flush() {
-                let text = if state.config.apply_pii_removal {
-                    remove_pii(&s)
-                } else {
-                    s
-                };
-                let mut event =
-                    UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
-                event.app_name = (**state.current_app.load()).clone();
-                event.window_title = (**state.current_window.load()).clone();
-                let _ = state.tx.try_send(event);
-            }
+        // Drain the text buffer without holding the lock during PII regex.
+        // Previously `remove_pii(&s)` ran under the same Mutex the event-tap
+        // callback grabs on every KEY_DOWN — stalling the callback past the
+        // kernel's tap-timeout (~1s) and triggering replay bursts that show
+        // up as phantom keystrokes in the focused app.
+        // Refs:
+        //   Apple CGEventTapCreate docs — "event_tap_timeout"
+        //     https://developer.apple.com/documentation/coregraphics/1454426-cgeventtapcreate
+        //   Apple Event Taps Programming Guide — "Handling tap timeouts"
+        //     https://developer.apple.com/library/archive/documentation/Carbon/Conceptual/Carbon_Event_Manager/Tasks/HandlingTapEvents.html
+        let drained = {
+            let mut buf = state.text_buf.lock();
+            if buf.should_flush() { buf.flush() } else { None }
+        };
+        if let Some(s) = drained {
+            let text = if state.config.apply_pii_removal { remove_pii(&s) } else { s };
+            let mut event =
+                UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
+            event.app_name = (**state.current_app.load()).clone();
+            event.window_title = (**state.current_window.load()).clone();
+            let _ = state.tx.try_send(event);
         }
     }
 
-    // Final flush
-    let mut buf = state.text_buf.lock();
-    if let Some(s) = buf.flush() {
-        let text = if state.config.apply_pii_removal {
-            remove_pii(&s)
-        } else {
-            s
-        };
+    // Final flush — same lock discipline as the loop above.
+    let drained = { state.text_buf.lock().flush() };
+    if let Some(s) = drained {
+        let text = if state.config.apply_pii_removal { remove_pii(&s) } else { s };
         let mut event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
         event.app_name = (**state.current_app.load()).clone();
         event.window_title = (**state.current_window.load()).clone();
@@ -730,6 +746,33 @@ extern "C" fn tap_callback(
     user_info: *mut TapState,
 ) -> Option<&cg::Event> {
     let state = unsafe { &*user_info };
+
+    // Apple requires us to re-enable the tap if the kernel disables it for
+    // running too long. Without this, *all* subsequent input is queued and
+    // replayed in bursts to the focused app — the "phantom keystrokes" bug.
+    // User-input-triggered disables are user-initiated and we leave alone.
+    //
+    // Refs:
+    //   Apple — kCGEventTapDisabledByTimeout / kCGEventTapDisabledByUserInput
+    //     https://developer.apple.com/documentation/coregraphics/cgeventtype/kcgeventtapdisabledbytimeout
+    //     https://developer.apple.com/documentation/coregraphics/cgeventtype/kcgeventtapdisabledbyuserinput
+    //   CGEventTapEnable
+    //     https://developer.apple.com/documentation/coregraphics/1454426-cgeventtapenable
+    //   Chromium has the same handler in `EventMonitorMac`
+    //     https://source.chromium.org/chromium/chromium/src/+/main:ui/events/cocoa/cocoa_event_utils.mm
+    //   Karabiner-Elements `event_tap_utility::re_enable_tap_if_disabled`
+    //     https://github.com/pqrs-org/Karabiner-Elements/blob/main/src/share/event_tap_utility.hpp
+    if event_type == cg::EventType::TAP_DISABLED_BY_TIMEOUT {
+        let tap_ptr = state.tap_ptr.load(Ordering::Acquire);
+        if !tap_ptr.is_null() {
+            unsafe { (*tap_ptr).set_enabled(true) };
+            tracing::warn!("CGEventTap disabled by timeout — re-enabled");
+        }
+        return Some(event);
+    }
+    if event_type == cg::EventType::TAP_DISABLED_BY_USER_INPUT {
+        return Some(event);
+    }
     let t = state.start.elapsed().as_millis() as u64;
     let timestamp = Utc::now();
     let loc = event.location();
@@ -919,9 +962,15 @@ extern "C" fn tap_callback(
                 };
                 let _ = state.tx.try_send(event);
             } else if state.config.capture_text {
-                // Aggregate into text buffer
+                // Aggregate into text buffer. `try_lock` so a slow flush on the
+                // run-loop thread can never stall this callback past the
+                // kernel's tap-timeout. Dropping a char from our buffer is
+                // strictly a capture-completeness issue; the user's keystroke
+                // still reaches the focused app normally (LISTEN_ONLY tap).
                 if let Some(c) = keycode_to_char(keycode, mods) {
-                    state.text_buf.lock().push(c);
+                    if let Some(mut buf) = state.text_buf.try_lock() {
+                        buf.push(c);
+                    }
                 } else if state.config.capture_keystrokes {
                     // Unknown key, record as key event
                     let event = UiEvent {
