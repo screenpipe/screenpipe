@@ -25,40 +25,41 @@ static DEF: IntegrationDef = IntegrationDef {
     icon: "honcho",
     category: Category::Productivity,
     description: "Continuously sync screenpipe's curated memory facts into a Honcho \
-        workspace so other AI agents can query a modeled understanding of you. Works with \
-        self-hosted (local) or hosted Honcho — set api_url (defaults to localhost). Only \
-        importance-filtered memories are sent; never raw screen or audio. By default the \
-        facts are authored as your own peer (Model 1); set a different peer_name to model \
-        screenpipe as an observer instead — see the screenpipe-honcho README.",
+        workspace so other AI agents can query a modeled understanding of you. Defaults to \
+        hosted Honcho (api.honcho.dev — set an api_key); point api_url at a local instance \
+        to self-host instead. Only importance-filtered memories are sent; never raw screen \
+        or audio. By default the facts are authored as your own peer (Model 1); set a \
+        different peer_name to model screenpipe as an observer instead. Setup guide: \
+        https://honcho.dev/docs/v3/guides/integrations/screenpipe",
     fields: &[
-        // api_url defaults to LOCAL self-host; hosted Honcho is an explicit opt-in.
+        // api_url defaults to HOSTED Honcho; point it at a localhost instance to self-host.
         FieldDef {
             key: "api_url",
             label: "Honcho API URL",
             secret: false,
-            placeholder: "http://localhost:8000",
-            help_url: "https://docs.honcho.dev",
+            placeholder: "https://api.honcho.dev",
+            help_url: "https://honcho.dev/docs/v3/guides/integrations/screenpipe",
         },
         FieldDef {
             key: "api_key",
-            label: "API key (hosted only)",
+            label: "API key (hosted)",
             secret: true,
             placeholder: "",
-            help_url: "https://docs.honcho.dev",
+            help_url: "https://honcho.dev/docs/v3/guides/integrations/screenpipe",
         },
         FieldDef {
             key: "workspace",
             label: "Workspace",
             secret: false,
             placeholder: "screenpipe",
-            help_url: "",
+            help_url: "https://honcho.dev/docs/v3/guides/integrations/screenpipe",
         },
         FieldDef {
             key: "peer_name",
             label: "Peer name",
             secret: false,
             placeholder: "user-default",
-            help_url: "",
+            help_url: "https://honcho.dev/docs/v3/guides/integrations/screenpipe",
         },
     ],
 };
@@ -74,7 +75,7 @@ pub struct HonchoConfig {
     pub peer_name: String,
 }
 
-pub const DEFAULT_API_URL: &str = "http://localhost:8000";
+pub const DEFAULT_API_URL: &str = "https://api.honcho.dev";
 pub const DEFAULT_WORKSPACE: &str = "screenpipe";
 pub const DEFAULT_PEER_NAME: &str = "user-default";
 
@@ -166,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_creds_resolve_to_localhost_defaults() {
+    fn empty_creds_resolve_to_hosted_defaults() {
         let cfg = resolve_config(&Map::new());
         assert_eq!(
             cfg,
