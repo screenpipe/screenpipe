@@ -23,9 +23,11 @@ This crate is *only* the HTTP client (`create_peer`, `create_session`,
 
 Only the importance-filtered `memories` table — the same curated digest
 screenpipe already exports to Claude Code / Codex. **Never** raw OCR frames or
-audio transcripts. `api_url` defaults to a local self-hosted Honcho
-(`http://localhost:8000`); hosted Honcho is an explicit opt-in (set `api_url`
-and supply an `api_key`).
+audio transcripts. `api_url` defaults to hosted Honcho (`https://api.honcho.dev`,
+supply an `api_key`); point `api_url` at a local instance (e.g.
+`http://localhost:8000`) to self-host instead.
+
+Setup guide: <https://honcho.dev/docs/v3/guides/integrations/screenpipe>
 
 ## Delivery semantics
 
