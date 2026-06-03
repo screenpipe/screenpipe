@@ -31,4 +31,5 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   krisp: "Meetings",
   perplexity: "Research",
   "custom-mcp": "AI",
+  honcho: "AI",
 };

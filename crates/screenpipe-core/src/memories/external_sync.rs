@@ -247,6 +247,10 @@ pub enum SyncOutcome {
     /// Returned so the trigger endpoint can be honest about why it
     /// skipped a target.
     Skipped { reason: &'static str },
+    /// We pushed entries to a network destination (Honcho) rather than a
+    /// file. Network sinks have no `path`; `endpoint` carries the API base
+    /// URL so the status UI stays honest about where the data went.
+    Pushed { endpoint: String, entries: usize },
 }
 
 /// Write the marker-spliced digest into `target_path` atomically.
