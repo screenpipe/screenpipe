@@ -112,7 +112,54 @@ bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/home-window.spec.ts
 |---|---|
 | `e2e/screenshots/` | PNG screenshots taken during tests |
 | `e2e/videos/` | Desktop recording (only when `RECORD_VIDEO=1`) |
+| `e2e/results/` | Runtime JSON emitted by the WDIO coverage reporter |
 | `.e2e/` | Isolated screenpipe data dir used during tests (deleted on each run) |
+| `e2e/COVERAGE.md` | Generated platform/layer/feature coverage dashboard |
+| `e2e/COVERAGE.runtime.md` | Runtime dashboard with actual pass/fail/skip counts |
+
+## Coverage dashboard
+
+The E2E coverage dashboard is behavioral coverage, not line or branch
+coverage. It answers "which user/product risks are exercised on which
+platforms and layers?" using `e2e/coverage-map.json`.
+
+From `apps/screenpipe-app-tauri`:
+
+```bash
+bun run e2e:coverage
+```
+
+This validates that every `e2e/specs/*.spec.ts` file is mapped and writes
+the static baseline report to `e2e/COVERAGE.md`. The report summarizes:
+
+- platform coverage for Windows, macOS, and Linux
+- layer coverage such as real UI E2E, local API, capture/OCR, audio/device,
+  OS integration, settings, storage/privacy, chat, pipes, and performance
+- critical feature gaps, including weak coverage where specs are conditional
+  or smoke-only
+- a per-spec inventory with declared test counts, confidence, UX type, and
+  notes
+
+Declared test counts are static source counts. Parameterized specs can execute
+more runtime cases in WDIO than the source count shows.
+
+To verify that the checked-in report is current:
+
+```bash
+bun run e2e:coverage:check
+```
+
+Every WDIO run also writes JSON files to `e2e/results/`. To merge those actual
+runtime pass/fail/skip counts into the coverage dashboard:
+
+```bash
+bun run e2e:coverage:runtime
+```
+
+This writes `e2e/COVERAGE.runtime.md`. CI uploads the runtime report and raw
+JSON result files for each E2E platform job. Use the runtime report when judging
+whether a mapped feature really passed on a given run; use the static report to
+review taxonomy drift and unmapped specs.
 
 ### Troubleshooting on Windows
 

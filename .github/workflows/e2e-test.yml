@@ -206,6 +206,7 @@ jobs:
       env:
         RECORD_VIDEO: "true"
       run: |
+        Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
         bun run test:e2e
 
     - name: Run Windows Core Recording E2E
@@ -217,6 +218,14 @@ jobs:
       run: |
         bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/windows-core-recording.spec.ts
 
+    - name: Generate E2E Coverage Report
+      if: always()
+      shell: pwsh
+      working-directory: ./apps/screenpipe-app-tauri
+      run: |
+        bun run e2e:coverage
+        bun run e2e:coverage:runtime
+
     - name: Upload E2E Test Artifacts
       uses: actions/upload-artifact@v4
       if: always()
@@ -225,6 +234,9 @@ jobs:
         path: |
           ./apps/screenpipe-app-tauri/e2e/videos
           ./apps/screenpipe-app-tauri/e2e/screenshots
+          ./apps/screenpipe-app-tauri/e2e/results
+          ./apps/screenpipe-app-tauri/e2e/COVERAGE.md
+          ./apps/screenpipe-app-tauri/e2e/COVERAGE.runtime.md
 
     - name: Upload Screenpipe data
       uses: actions/upload-artifact@v4
@@ -492,6 +504,7 @@ jobs:
       shell: bash
       working-directory: ./apps/screenpipe-app-tauri
       run: |
+        rm -rf ./e2e/results
         export XDG_RUNTIME_DIR=/run/user/$(id -u)
         export XDG_CONFIG_HOME="$HOME/.config"
         export XDG_DATA_HOME="$HOME/.local/share"
@@ -502,6 +515,14 @@ jobs:
 
         bun run test:e2e
 
+    - name: Generate E2E Coverage Report
+      if: always()
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: |
+        bun run e2e:coverage
+        bun run e2e:coverage:runtime
+
     - name: Upload E2E Test Artifacts
       uses: actions/upload-artifact@v4
       if: always()
@@ -510,6 +531,9 @@ jobs:
         path: |
           ./apps/screenpipe-app-tauri/e2e/videos
           ./apps/screenpipe-app-tauri/e2e/screenshots
+          ./apps/screenpipe-app-tauri/e2e/results
+          ./apps/screenpipe-app-tauri/e2e/COVERAGE.md
+          ./apps/screenpipe-app-tauri/e2e/COVERAGE.runtime.md
 
     - name: Upload Screenpipe data
       uses: actions/upload-artifact@v4
@@ -599,7 +623,16 @@ jobs:
       env:
         RECORD_VIDEO: "true"
       run: |
+        rm -rf ./e2e/results
         bun run test:e2e
+
+    - name: Generate E2E Coverage Report
+      if: always()
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: |
+        bun run e2e:coverage
+        bun run e2e:coverage:runtime
 
     - name: Upload E2E Test Artifacts
       uses: actions/upload-artifact@v4
@@ -609,6 +642,9 @@ jobs:
         path: |
           ./apps/screenpipe-app-tauri/e2e/videos
           ./apps/screenpipe-app-tauri/e2e/screenshots
+          ./apps/screenpipe-app-tauri/e2e/results
+          ./apps/screenpipe-app-tauri/e2e/COVERAGE.md
+          ./apps/screenpipe-app-tauri/e2e/COVERAGE.runtime.md
 
     - name: Upload Screenpipe data
       uses: actions/upload-artifact@v4

@@ -5,6 +5,7 @@
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import video from 'wdio-video-reporter';
+import RuntimeCoverageReporter from './runtime-coverage-reporter.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export function isRecordVideoEnabled(): boolean {
@@ -14,7 +15,15 @@ export function isRecordVideoEnabled(): boolean {
 /** When RECORD_VIDEO=1, records one video per spec file. */
 export function getReporters(): unknown[] {
   const recordVideo = isRecordVideoEnabled();
-  const base: unknown[] = ['spec'];
+  const base: unknown[] = [
+    'spec',
+    [
+      RuntimeCoverageReporter,
+      {
+        outputDir: resolve(__dirname, '../results'),
+      },
+    ],
+  ];
   if (recordVideo) {
     base.push([
       video,

@@ -14,6 +14,8 @@ pnpm-lock.yaml
 .e2e/
 e2e/videos/
 e2e/screenshots/
+e2e/results/
+e2e/COVERAGE.runtime.md
 e2e/dist/
 
 # next.js

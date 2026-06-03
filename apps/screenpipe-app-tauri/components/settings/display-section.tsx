@@ -9,7 +9,7 @@ import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2 } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
@@ -85,6 +85,65 @@ export function DisplaySection() {
                   );
                 })}
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Disable Timeline / rewind. Gates timeline-only backend work
+            (hot-cache warm-up + frame/audio buffering) and the native macOS
+            Live Text overlay. Lives in Display next to Timeline Mode, but
+            unlike the other display toggles it needs a full screenpipe restart
+            to take effect, so the handler restarts the server inline. */}
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Disable Timeline
+                    <HelpTooltip text="Turn off the timeline / rewind feature. Skips the in-memory hot frame cache (warm-up + per-frame/audio buffering) that only the timeline uses, and disables the native macOS Live Text overlay that can otherwise leak a selection layer over other windows (e.g. the chat input) and block typing. Restarts screenpipe to apply." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Hide rewind and skip its background work</p>
+                </div>
+              </div>
+              <Switch
+                id="disableTimeline"
+                checked={settings?.disableTimeline ?? false}
+                onCheckedChange={async (checked) => {
+                  // Persist first (awaited) so the backend reads the new value on
+                  // restart and the shortcut-reminder guard sees it immediately.
+                  await updateSettings({ disableTimeline: checked });
+                  // The screenpipe shortcut only opens the timeline, so its
+                  // reminder overlay is meaningless once the timeline is off —
+                  // tear it down on disable, restore it on re-enable.
+                  try {
+                    if (checked) {
+                      await commands.hideShortcutReminder();
+                    } else if (settings?.showShortcutOverlay) {
+                      await commands.showShortcutReminder(settings.showScreenpipeShortcut);
+                    }
+                  } catch {}
+                  // disableTimeline gates timeline-only backend work (hot-cache
+                  // warm-up + frame/audio buffering) wired at server startup, so
+                  // it needs a full screenpipe restart to take effect.
+                  try {
+                    await commands.stopScreenpipe();
+                    await new Promise((r) => setTimeout(r, 500));
+                    await commands.spawnScreenpipe(null);
+                    toast({
+                      title: checked ? "timeline disabled" : "timeline enabled",
+                      description: "screenpipe restarted to apply the change.",
+                    });
+                  } catch (e) {
+                    toast({
+                      title: "failed to restart screenpipe",
+                      description: "restart screenpipe manually to apply the change.",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+              />
             </div>
           </CardContent>
         </Card>
@@ -239,6 +298,10 @@ export function DisplaySection() {
           </Card>
         )}
 
+        {/* Shortcut reminder advertises the screenpipe shortcut, which only
+            opens the timeline — hide the whole section when the timeline is off. */}
+        {!(settings?.disableTimeline ?? false) && (
+        <>
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -312,6 +375,8 @@ export function DisplaySection() {
               </div>
             </CardContent>
           </Card>
+        )}
+        </>
         )}
 
       </div>

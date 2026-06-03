@@ -33,8 +33,9 @@
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
@@ -128,6 +129,7 @@ struct BrowserSessionAccessRequestPayload {
     request_id: String,
     url: String,
     host: String,
+    already_granted: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -147,22 +149,26 @@ struct V20CookieBlockPayload {
 static SESSION_ACCESS_PENDING: OnceLock<
     Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>>,
 > = OnceLock::new();
-/// Hosts the user allowed this app session (`Use browser session`). Cleared on
-/// restart. We never remember "continue logged out" — deny is per navigation.
-static SESSION_ACCESS_ALLOWED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-static SESSION_ACCESS_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// Global flag: user has granted blanket cookie-access permission.
+/// Persisted to the frontend store (`browserCookieAccessGranted`);
+/// this AtomicBool is the runtime cache so every navigate avoids
+/// an async store read. Set via `set_browser_cookie_access_granted`.
+static GLOBAL_SESSION_ACCESS_GRANTED: AtomicBool = AtomicBool::new(false);
+/// User explicitly disabled browser cookie access. When true, do not prompt
+/// and do not read cookies. User can re-enable from the cookie menu.
+static GLOBAL_SESSION_ACCESS_DISABLED: AtomicBool = AtomicBool::new(false);
+/// Guards against showing duplicate prompt cards when multiple
+/// navigations fire before the user answers the first one.
+static SESSION_ACCESS_PROMPT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+/// macOS-only UX guard: after app launch, even if global cookie access is
+/// already persisted, show Screenpipe's own warning before the first Keychain
+/// Safe Storage read can trigger an OS prompt. Explicit menu enable/retry or
+/// prompt allow primes this for the current process.
+static SESSION_ACCESS_PRIMED_THIS_RUN: AtomicBool = AtomicBool::new(false);
 
 fn pending_session_access(
 ) -> &'static Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>> {
     SESSION_ACCESS_PENDING.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn session_access_allowed() -> &'static Mutex<HashSet<String>> {
-    SESSION_ACCESS_ALLOWED.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-fn session_access_in_flight() -> &'static Mutex<HashSet<String>> {
-    SESSION_ACCESS_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// Normalize host keys so `www.example.com` and `example.com` share one decision.
@@ -172,13 +178,6 @@ fn session_host_key(host: &str) -> String {
         .strip_prefix("www.")
         .map(|rest| rest.to_string())
         .unwrap_or(lower)
-}
-
-async fn remember_session_access_allow(host: &str) {
-    session_access_allowed()
-        .lock()
-        .await
-        .insert(session_host_key(host));
 }
 
 #[specta::specta]
@@ -199,6 +198,63 @@ pub async fn owned_browser_resolve_session_access(
         .ok_or_else(|| "session access request expired".to_string())?;
     tx.send(decision)
         .map_err(|_| "session access request was already closed".to_string())
+}
+
+/// Persist the global browser cookie-access permission. Called from the
+/// frontend when the user clicks "Use browser session" in the prompt card
+/// or toggles the setting in the settings page.
+#[specta::specta]
+#[tauri::command]
+pub async fn set_browser_cookie_access_granted(granted: bool) -> Result<(), String> {
+    GLOBAL_SESSION_ACCESS_GRANTED.store(granted, Ordering::SeqCst);
+    if granted {
+        GLOBAL_SESSION_ACCESS_DISABLED.store(false, Ordering::SeqCst);
+    } else {
+        SESSION_ACCESS_PRIMED_THIS_RUN.store(false, Ordering::SeqCst);
+    }
+    info!(
+        granted,
+        "owned-browser: global cookie access permission updated"
+    );
+    Ok(())
+}
+
+/// Hydrate/update the complete browser cookie access state. `granted=false`
+/// with `disabled=false` means first-run unknown: prompt once if cookies exist.
+#[specta::specta]
+#[tauri::command]
+pub async fn set_browser_cookie_access_state(granted: bool, disabled: bool) -> Result<(), String> {
+    GLOBAL_SESSION_ACCESS_GRANTED.store(granted, Ordering::SeqCst);
+    GLOBAL_SESSION_ACCESS_DISABLED.store(disabled && !granted, Ordering::SeqCst);
+    if !granted {
+        SESSION_ACCESS_PRIMED_THIS_RUN.store(false, Ordering::SeqCst);
+    }
+    info!(
+        granted,
+        disabled,
+        "owned-browser: global cookie access state updated"
+    );
+    Ok(())
+}
+
+/// Mark the current app run as explicitly cleared to read browser Safe Storage.
+/// Used by the owned-browser cookie menu's enable-and-retry action so the next
+/// navigate can proceed to the macOS Keychain prompt without showing a second
+/// in-app confirmation card.
+#[specta::specta]
+#[tauri::command]
+pub async fn confirm_browser_cookie_access_for_session() -> Result<(), String> {
+    SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Read the current runtime value of the global cookie-access flag.
+/// Frontend calls this on startup to hydrate the AtomicBool from the
+/// persisted store value.
+#[specta::specta]
+#[tauri::command]
+pub async fn get_browser_cookie_access_granted() -> bool {
+    GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst)
 }
 
 // ---------------------------------------------------------------------------
@@ -1205,46 +1261,83 @@ async fn browser_session_decision_for_url(
         return BrowserSessionDecision::ContinueLoggedOut;
     }
 
-    if session_access_allowed().lock().await.contains(&host_key) {
-        return BrowserSessionDecision::UseBrowserSession;
+    if GLOBAL_SESSION_ACCESS_DISABLED.load(Ordering::SeqCst) {
+        info!(
+            host = host_key.as_str(),
+            "owned-browser cookies: disabled by user — navigating without real-browser session"
+        );
+        return BrowserSessionDecision::ContinueLoggedOut;
     }
+
+    let already_granted = GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst);
 
     // On Windows there is no OS-level permission dialog (unlike macOS Keychain),
     // so we don't need an explicit consent step. DPAPI cookies inject silently;
     // if they are v20-encrypted inject_cookies_for_url will show the single
     // "Browser login is protected" card which already acts as consent + setup.
-    // SESSION_ACCESS_ALLOWED is a macOS-only concept (remembers "user clicked
-    // allow" to skip the Keychain consent dialog next time) — we don't store
-    // anything on Windows because there is no dialog to skip.
     #[cfg(target_os = "windows")]
     return BrowserSessionDecision::UseBrowserSession;
 
-    // Agent may navigate the same host repeatedly while the first prompt is open.
-    let wait_deadline = Instant::now() + SESSION_ACCESS_TIMEOUT;
-    loop {
-        if session_access_allowed().lock().await.contains(&host_key) {
+    // macOS: a persisted app-level grant is not enough to avoid surprise.
+    // The first Safe Storage read after app launch can still trigger a macOS
+    // Keychain prompt, so require an in-app confirmation once per process
+    // before reading Keychain.
+    #[cfg(target_os = "macos")]
+    if already_granted {
+        if SESSION_ACCESS_PRIMED_THIS_RUN.load(Ordering::SeqCst) {
             return BrowserSessionDecision::UseBrowserSession;
         }
-        let in_flight = session_access_in_flight().lock().await;
-        if !in_flight.contains(&host_key) {
-            drop(in_flight);
-            break;
+        if !crate::owned_browser_cookies::safe_storage_likely_prompts_for_host(&host_key).await {
+            SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+            return BrowserSessionDecision::UseBrowserSession;
         }
-        drop(in_flight);
-        if Instant::now() >= wait_deadline {
-            warn!(
-                host = host_key.as_str(),
-                "owned-browser session access: timed out waiting for in-flight prompt"
-            );
-            return BrowserSessionDecision::ContinueLoggedOut;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    session_access_in_flight()
-        .lock()
-        .await
-        .insert(host_key.clone());
+    // If a prompt is already on screen (concurrent navigations), wait for it
+    // instead of spawning a second card. compare_exchange makes prompt ownership
+    // atomic so two parallel navigations can't both show cards.
+    loop {
+        #[cfg(target_os = "macos")]
+        if GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst) {
+            if SESSION_ACCESS_PRIMED_THIS_RUN.load(Ordering::SeqCst) {
+                return BrowserSessionDecision::UseBrowserSession;
+            }
+            if !crate::owned_browser_cookies::safe_storage_likely_prompts_for_host(&host_key).await
+            {
+                SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+                return BrowserSessionDecision::UseBrowserSession;
+            }
+        }
+        if SESSION_ACCESS_PROMPT_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            break;
+        }
+        let wait_deadline = Instant::now() + SESSION_ACCESS_TIMEOUT;
+        while SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst) {
+            #[cfg(target_os = "macos")]
+            if GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst) {
+                if SESSION_ACCESS_PRIMED_THIS_RUN.load(Ordering::SeqCst) {
+                    return BrowserSessionDecision::UseBrowserSession;
+                }
+                if !crate::owned_browser_cookies::safe_storage_likely_prompts_for_host(&host_key)
+                    .await
+                {
+                    SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+                    return BrowserSessionDecision::UseBrowserSession;
+                }
+            }
+            if Instant::now() >= wait_deadline {
+                warn!(
+                    host = host_key.as_str(),
+                    "owned-browser session access: timed out waiting for in-flight prompt"
+                );
+                return BrowserSessionDecision::ContinueLoggedOut;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 
     let state = browser_state();
     if let Some(active) = state.active().await {
@@ -1263,11 +1356,12 @@ async fn browser_session_decision_for_url(
         request_id: request_id.clone(),
         url: url.as_str().to_string(),
         host: host_key.clone(),
+        already_granted,
     };
 
     if let Err(e) = app.emit(SESSION_ACCESS_REQUEST_EVENT, payload) {
         pending_session_access().lock().await.remove(&request_id);
-        session_access_in_flight().lock().await.remove(&host_key);
+        SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
         warn!("owned-browser session access: failed to emit request: {e}");
         return BrowserSessionDecision::ContinueLoggedOut;
     }
@@ -1285,9 +1379,18 @@ async fn browser_session_decision_for_url(
         }
     };
 
-    session_access_in_flight().lock().await.remove(&host_key);
+    SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
     if decision == BrowserSessionDecision::UseBrowserSession {
-        remember_session_access_allow(&host_key).await;
+        // Set the global runtime flag — frontend is responsible for
+        // persisting to the store and calling set_browser_cookie_access_granted.
+        GLOBAL_SESSION_ACCESS_GRANTED.store(true, Ordering::SeqCst);
+        GLOBAL_SESSION_ACCESS_DISABLED.store(false, Ordering::SeqCst);
+        SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+    } else {
+        // First-time "Continue logged out" is a real preference: don't keep
+        // prompting. User can enable cookies later from the cookie menu.
+        GLOBAL_SESSION_ACCESS_GRANTED.store(false, Ordering::SeqCst);
+        GLOBAL_SESSION_ACCESS_DISABLED.store(true, Ordering::SeqCst);
     }
     decision
 }

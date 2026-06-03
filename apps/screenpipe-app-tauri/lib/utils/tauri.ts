@@ -229,6 +229,20 @@ async completeOnboarding() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Mark the current app run as explicitly cleared to read browser Safe Storage.
+ * Used by the owned-browser cookie menu's enable-and-retry action so the next
+ * navigate can proceed to the macOS Keychain prompt without showing a second
+ * in-app confirmation card.
+ */
+async confirmBrowserCookieAccessForSession() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("confirm_browser_cookie_access_for_session") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Copy a frame deeplink (screenpipe://frame/N) to clipboard. Native API only.
  */
 async copyDeeplinkToClipboard(frameId: number) : Promise<Result<null, string>> {
@@ -469,6 +483,14 @@ async getAudioDevices() : Promise<Result<AudioDeviceInfo[], string>> {
  */
 async getBootPhase() : Promise<BootPhaseSnapshot> {
     return await TAURI_INVOKE("get_boot_phase");
+},
+/**
+ * Read the current runtime value of the global cookie-access flag.
+ * Frontend calls this on startup to hydrate the AtomicBool from the
+ * persisted store value.
+ */
+async getBrowserCookieAccessGranted() : Promise<boolean> {
+    return await TAURI_INVOKE("get_browser_cookie_access_granted");
 },
 /**
  * Returns per-browser automation permission status for all installed Chromium browsers.
@@ -1582,6 +1604,31 @@ async setApiAuthKey(key: string) : Promise<Result<null, string>> {
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Persist the global browser cookie-access permission. Called from the
+ * frontend when the user clicks "Use browser session" in the prompt card
+ * or toggles the setting in the settings page.
+ */
+async setBrowserCookieAccessGranted(granted: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_browser_cookie_access_granted", { granted }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Hydrate/update the complete browser cookie access state. `granted=false`
+ * with `disabled=false` means first-run unknown: prompt once if cookies exist.
+ */
+async setBrowserCookieAccessState(granted: boolean, disabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_browser_cookie_access_state", { granted, disabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

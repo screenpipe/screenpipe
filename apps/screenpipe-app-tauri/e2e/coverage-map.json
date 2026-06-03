@@ -1,0 +1,500 @@
+{
+  "version": 1,
+  "platforms": ["windows", "macos", "linux"],
+  "criticalFeatures": [
+    {
+      "id": "app-launch",
+      "label": "App launch and Home shell",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e"]
+    },
+    {
+      "id": "home-search",
+      "label": "Home to floating Search",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e"]
+    },
+    {
+      "id": "timeline",
+      "label": "Timeline navigation and frames",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e"]
+    },
+    {
+      "id": "capture-ocr",
+      "label": "Real capture, OCR, and indexing",
+      "platforms": ["windows", "macos"],
+      "layers": ["capture-ocr"]
+    },
+    {
+      "id": "local-api-auth",
+      "label": "Local API auth enforcement",
+      "platforms": ["windows", "macos"],
+      "layers": ["local-api"]
+    },
+    {
+      "id": "local-api-search",
+      "label": "Local API search stability",
+      "platforms": ["windows", "macos"],
+      "layers": ["local-api"]
+    },
+    {
+      "id": "settings-recording",
+      "label": "Recording settings UX",
+      "platforms": ["windows", "macos"],
+      "layers": ["settings"]
+    },
+    {
+      "id": "settings-privacy-api-auth",
+      "label": "Privacy API auth settings UX",
+      "platforms": ["windows", "macos"],
+      "layers": ["settings"]
+    },
+    {
+      "id": "notifications",
+      "label": "Notification history and viewer paths",
+      "platforms": ["windows", "macos"],
+      "layers": ["notifications"]
+    },
+    {
+      "id": "audio-device-health",
+      "label": "Audio device health",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device"]
+    },
+    {
+      "id": "window-lifecycle",
+      "label": "Window lifecycle, focus, and dedupe",
+      "platforms": ["windows", "macos"],
+      "layers": ["window-lifecycle"]
+    },
+    {
+      "id": "meeting-notes",
+      "label": "Meeting note creation and editing",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e"]
+    },
+    {
+      "id": "pipes",
+      "label": "Pipes discover, install, and play",
+      "platforms": ["windows", "macos"],
+      "layers": ["pipes"]
+    },
+    {
+      "id": "chat",
+      "label": "Chat window, composer, and streaming state",
+      "platforms": ["windows", "macos"],
+      "layers": ["chat-ai"]
+    },
+    {
+      "id": "tray-search",
+      "label": "Tray/search window behavior",
+      "platforms": ["windows", "macos"],
+      "layers": ["window-lifecycle"]
+    },
+    {
+      "id": "storage-retention",
+      "label": "Storage retention safety UX",
+      "platforms": ["windows", "macos"],
+      "layers": ["storage-privacy"]
+    },
+    {
+      "id": "updates",
+      "label": "Updater install and rollback safety",
+      "platforms": ["windows", "macos"],
+      "layers": ["os-integration"]
+    }
+  ],
+  "specs": [
+    {
+      "spec": "api.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api"],
+      "features": ["health", "audio-device-health", "connections", "local-api-auth"],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "api",
+      "notes": "Smoke coverage for local HTTP API shape and auth behavior."
+    },
+    {
+      "spec": "api-key-cold-spawn.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "tauri-command"],
+      "features": ["local-api-auth", "app-launch"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Cold-spawn local API config regression coverage."
+    },
+    {
+      "spec": "api-search-stress.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "performance"],
+      "features": ["local-api-auth", "local-api-search", "health", "audio-device-health", "local-api-load"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "api",
+      "notes": "Broad readonly API, auth, search, and load coverage."
+    },
+    {
+      "spec": "app-lifecycle.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "window-lifecycle"],
+      "features": ["app-launch", "home-navigation", "webview-stability", "route-churn", "browser-storage"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Home webview, routing, reload, focus, resize, and storage stability."
+    },
+    {
+      "spec": "audio-fallback.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["audio-device", "settings", "notifications"],
+      "features": ["audio-device-health", "settings-recording", "notifications"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in macOS cloud audio fallback seed."
+    },
+    {
+      "spec": "chat-composer-isolation.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat", "chat-drafts"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Composer draft isolation across conversations."
+    },
+    {
+      "spec": "chat-newchat-duplicate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Synthetic chat event regression for duplicate sidebar rows."
+    },
+    {
+      "spec": "chat-parallel-jobs-duplicate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Parallel auto-send prefill dedupe regression."
+    },
+    {
+      "spec": "chat-prefill-duplicate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-prefill"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Cross-window prefill duplicate regression."
+    },
+    {
+      "spec": "chat-streaming-performance.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai", "performance"],
+      "features": ["chat", "chat-streaming"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "performance",
+      "notes": "macOS-only chat streaming responsiveness."
+    },
+    {
+      "spec": "chat-switch-context-loss.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-context"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Switching conversations during streaming must not corrupt state."
+    },
+    {
+      "spec": "chat-window.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "window-lifecycle", "real-ui-e2e"],
+      "features": ["chat", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens Chat and focuses the composer for typing."
+    },
+    {
+      "spec": "chat-within-session-context-loss.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-context"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "synthetic",
+      "notes": "macOS-only within-chat context retention regression."
+    },
+    {
+      "spec": "focus-server.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "window-lifecycle", "tauri-command"],
+      "features": ["window-lifecycle", "focus-server", "deeplink"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "api",
+      "notes": "Focus server opens windows and forwards deeplink args."
+    },
+    {
+      "spec": "hd-recording-pipeline.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["capture-ocr", "local-api", "performance"],
+      "features": ["capture-ocr", "hd-recording", "timeline"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS HD capture and OCR indexing."
+    },
+    {
+      "spec": "help-discord-link.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e"],
+      "features": ["help"],
+      "criticality": "low",
+      "confidence": "smoke",
+      "ux": "real-user-flow",
+      "notes": "Help section Discord invite link."
+    },
+    {
+      "spec": "home-window.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "window-lifecycle"],
+      "features": ["app-launch", "home-navigation", "timeline", "settings-recording", "pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Clicks through Home, Pipes, Timeline, Help, and Settings."
+    },
+    {
+      "spec": "macos-ui-performance.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["performance", "real-ui-e2e"],
+      "features": ["timeline", "audio-device-health"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "performance",
+      "notes": "macOS-only timeline/audio UI performance guards."
+    },
+    {
+      "spec": "main-overlay-visibility.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["window-lifecycle", "tauri-command"],
+      "features": ["window-lifecycle", "main-overlay"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Main overlay show/hide without duplicate handles."
+    },
+    {
+      "spec": "main-window.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["window-lifecycle", "tauri-command"],
+      "features": ["window-lifecycle", "main-window"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Main window show/hide dedupe."
+    },
+    {
+      "spec": "main-window-close-reopen.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["window-lifecycle", "tauri-command"],
+      "features": ["window-lifecycle", "main-window"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Main close/reopen without handle leaks."
+    },
+    {
+      "spec": "meeting-note-bottom-click.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["meeting-notes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds and opens a long meeting note, then clicks the bottom editor line."
+    },
+    {
+      "spec": "notification-viewer-link.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["notifications", "local-api", "window-lifecycle"],
+      "features": ["notifications", "viewer-deeplink"],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Notification local file links rewrite into in-app viewer links."
+    },
+    {
+      "spec": "onboarding-redirect.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "real-ui-e2e", "window-lifecycle"],
+      "features": ["onboarding", "app-launch"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in no-onboarding seed verifies onboarding redirect."
+    },
+    {
+      "spec": "owned-browser.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["os-integration", "window-lifecycle"],
+      "features": ["owned-browser", "window-lifecycle"],
+      "criticality": "low",
+      "confidence": "smoke",
+      "ux": "command",
+      "notes": "Embedded agent browser hides safely without an attached child."
+    },
+    {
+      "spec": "permission-recovery.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["os-integration", "real-ui-e2e", "window-lifecycle"],
+      "features": ["permission-recovery", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "macOS-only recovery window for missing TCC permissions."
+    },
+    {
+      "spec": "pipes.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["pipes", "real-ui-e2e", "local-api"],
+      "features": ["pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Pipes discover, install failure, connection modal, install, list, and play."
+    },
+    {
+      "spec": "privacy-api-auth.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "storage-privacy", "real-ui-e2e"],
+      "features": ["settings-privacy-api-auth", "local-api-auth"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Privacy settings reveal/copy local API key flow."
+    },
+    {
+      "spec": "privacy-api-auth-enforcement.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "local-api", "storage-privacy"],
+      "features": ["settings-privacy-api-auth", "local-api-auth", "restart-flow"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in restart smoke toggles API auth and verifies backend behavior."
+    },
+    {
+      "spec": "settings-sections.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "real-ui-e2e", "storage-privacy"],
+      "features": ["settings-recording", "settings-privacy-api-auth", "storage-retention", "audio-device-health"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Settings sections, storage, privacy, and rapid switching crash guard."
+    },
+    {
+      "spec": "timeline.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "capture-ocr"],
+      "features": ["timeline", "capture-ocr"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Timeline shell always runs; seeded frame assertion skips under no-recording."
+    },
+    {
+      "spec": "tray-search.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["window-lifecycle", "tauri-command", "real-ui-e2e"],
+      "features": ["tray-search", "home-search", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Invokes open_search_window and verifies focused floating Search."
+    },
+    {
+      "spec": "viewer-deeplink.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["window-lifecycle", "tauri-command"],
+      "features": ["viewer-deeplink", "window-lifecycle"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Viewer window creation and per-path dedupe."
+    },
+    {
+      "spec": "window-activation.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["window-lifecycle", "tauri-command", "real-ui-e2e"],
+      "features": ["window-lifecycle", "chat"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "macOS-only show_window_activated focus coverage."
+    },
+    {
+      "spec": "window-lifecycle.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["window-lifecycle", "tauri-command", "real-ui-e2e"],
+      "features": ["window-lifecycle", "onboarding", "tray-search"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Home, Search, and onboarding window routing."
+    },
+    {
+      "spec": "windows-core-recording.spec.ts",
+      "platforms": ["windows"],
+      "layers": ["capture-ocr", "local-api", "audio-device", "real-ui-e2e"],
+      "features": ["capture-ocr", "local-api-auth", "local-api-search", "audio-device-health", "timeline"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Windows recording-enabled lane; hosted runners can skip frame-dependent OCR assertions."
+    },
+    {
+      "spec": "windows-system-integration.spec.ts",
+      "platforms": ["windows"],
+      "layers": ["os-integration", "local-api", "audio-device", "window-lifecycle", "performance"],
+      "features": ["app-launch", "local-api-auth", "audio-device-health", "window-lifecycle", "os-process-health", "webview-stability"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Windows display, WebView2, loopback, process, Defender, audio, focus, and crash-report checks."
+    },
+    {
+      "spec": "windows-user-journey.spec.ts",
+      "platforms": ["windows"],
+      "layers": ["real-ui-e2e", "settings", "notifications", "storage-privacy", "window-lifecycle"],
+      "features": ["home-search", "timeline", "settings-recording", "meeting-notes", "shortcut-reminder", "notifications", "storage-retention", "settings-privacy-api-auth"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Windows-first real UX journey across search, timeline, settings, meetings, notifications, storage, and privacy."
+    },
+    {
+      "spec": "zz-owned-browser-background-nav.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["os-integration", "window-lifecycle"],
+      "features": ["owned-browser", "window-lifecycle"],
+      "criticality": "low",
+      "confidence": "smoke",
+      "ux": "command",
+      "notes": "Owned browser background navigation visibility."
+    }
+  ]
+}

@@ -36,6 +36,32 @@ export default function GeneralSettings() {
   const handleCheckForUpdates = async () => {
     setIsCheckingForUpdate(true);
     try {
+      const pendingRes = await commands.getPendingUpdate();
+      if (pendingRes.status === "ok" && pendingRes.data) {
+        const pending = pendingRes.data;
+        if (pending.auth_required) {
+          toast({
+            title: "update available",
+            description: `v${pending.version} is available — sign in to download it`,
+          });
+          return;
+        }
+
+        if (pending.downloaded) {
+          toast({
+            title: "update ready",
+            description: `v${pending.version} is ready — restart to update`,
+          });
+          return;
+        }
+
+        toast({
+          title: "update found",
+          description: `v${pending.version} is still downloading in the background`,
+        });
+        return;
+      }
+
       const res = await commands.triggerUpdateCheck();
       if (res.status === "error") throw new Error(res.error);
       const updateFound = res.data;

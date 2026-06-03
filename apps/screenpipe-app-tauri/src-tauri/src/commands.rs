@@ -2123,6 +2123,19 @@ pub async fn show_shortcut_reminder(
 
     info!("show_shortcut_reminder called");
 
+    // The screenpipe shortcut only opens the timeline/rewind overlay, so the
+    // reminder is pointless when the timeline is disabled. Suppress it here so
+    // every caller (startup, settings toggles, shortcut edits) is covered.
+    let timeline_disabled = crate::store::SettingsStore::get(&app_handle)
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .recording
+        .disable_timeline;
+    if timeline_disabled {
+        info!("timeline disabled: skipping shortcut reminder overlay");
+        return Ok(());
+    }
+
     let shortcut_overlay_size = crate::store::SettingsStore::get(&app_handle)
         .unwrap_or_default()
         .unwrap_or_default()

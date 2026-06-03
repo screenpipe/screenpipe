@@ -28,6 +28,12 @@ use tracing::error;
 
 use crate::server::AppState;
 
+/// Frames more than this many seconds apart are treated as idle (screen
+/// untouched), so the gap between them does not count as active time. Shared
+/// by the per-app / per-window `minutes` SQL and the whole-range
+/// `total_active_minutes` so the three definitions never drift apart.
+const IDLE_CAP_SECS: i64 = 300;
+
 // ---------- query ----------
 
 #[derive(Debug, Deserialize, OaSchema)]
@@ -207,6 +213,11 @@ pub struct ActivitySummaryResponse {
     pub edited_files: Vec<EditedFile>,
     pub audio_summary: AudioSummary,
     pub total_frames: i64,
+    /// Authoritative total active screen time (minutes) over the WHOLE range —
+    /// every app, not just the top 20, with idle gaps (frames > IDLE_CAP_SECS
+    /// apart) excluded. Use this as the grand total / denominator; summing
+    /// `windows[].minutes` undercounts because `windows` is capped at 30.
+    pub total_active_minutes: f64,
     pub time_range: TimeRange,
 
     // --- agent context fields ---
@@ -319,6 +330,7 @@ pub async fn get_activity_summary(
         edited_files: summary_core.edited_files,
         audio_summary: summary_core.audio_summary,
         total_frames: summary_core.total_frames,
+        total_active_minutes: summary_core.total_active_minutes,
         time_range: TimeRange { start, end },
         data_status,
         query_status,
@@ -338,6 +350,7 @@ struct SummaryCore {
     edited_files: Vec<EditedFile>,
     audio_summary: AudioSummary,
     total_frames: i64,
+    total_active_minutes: f64,
 }
 
 async fn collect_summary_core(
@@ -361,7 +374,7 @@ async fn collect_summary_core(
     let apps_query = format!(
         "SELECT app_name, \
          COUNT(*) as frame_count, \
-         ROUND(SUM(CASE WHEN gap_sec < 300 THEN gap_sec ELSE 0 END) / 60.0, 1) as minutes, \
+         ROUND(SUM(CASE WHEN gap_sec < {IDLE_CAP_SECS} THEN gap_sec ELSE 0 END) / 60.0, 1) as minutes, \
          MIN(ts) as first_seen, \
          MAX(ts) as last_seen \
          FROM ( \
@@ -379,7 +392,7 @@ async fn collect_summary_core(
         "SELECT app_name, window_name, \
          COALESCE(browser_url, '') as browser_url, \
          COUNT(*) as frame_count, \
-         ROUND(SUM(CASE WHEN gap_sec < 300 THEN gap_sec ELSE 0 END) / 60.0, 1) as minutes \
+         ROUND(SUM(CASE WHEN gap_sec < {IDLE_CAP_SECS} THEN gap_sec ELSE 0 END) / 60.0, 1) as minutes \
          FROM ( \
            SELECT app_name, \
              COALESCE(window_name, '') as window_name, \
@@ -457,6 +470,18 @@ async fn collect_summary_core(
          LIMIT 50"
     );
 
+    // Whole-range active time: the gap from each frame to the next (across all
+    // apps), idle gaps excluded. We return raw epoch-seconds and fold them in
+    // Rust via `active_minutes` so the grand total is deterministic, unit
+    // tested, and never truncated the way top-N `windows` is.
+    let active_ts_query = format!(
+        "SELECT (JULIANDAY(timestamp) - 2440587.5) * 86400.0 AS epoch \
+         FROM frames \
+         WHERE timestamp BETWEEN '{start}' AND '{end}'{app_filter} \
+         AND app_name IS NOT NULL AND app_name != '' \
+         ORDER BY timestamp"
+    );
+
     let (
         apps_result,
         windows_result,
@@ -464,6 +489,7 @@ async fn collect_summary_core(
         audio_speakers_result,
         audio_transcripts_result,
         edited_files_result,
+        active_ts_result,
     ) = tokio::join!(
         state.db.execute_raw_sql(&apps_query),
         state.db.execute_raw_sql(&windows_query),
@@ -471,6 +497,7 @@ async fn collect_summary_core(
         state.db.execute_raw_sql(&audio_speakers_query),
         state.db.execute_raw_sql(&audio_transcripts_query),
         state.db.execute_raw_sql(&edited_files_query),
+        state.db.execute_raw_sql(&active_ts_query),
     );
 
     let mut apps = Vec::new();
@@ -588,6 +615,23 @@ async fn collect_summary_core(
         error!("activity summary: edited files query failed: {}", e);
     }
 
+    let mut active_epochs: Vec<f64> = Vec::new();
+    if let Ok(rows) = &active_ts_result {
+        if let Some(arr) = rows.as_array() {
+            active_epochs.reserve(arr.len());
+            for row in arr {
+                let epoch = num_field(row, "epoch");
+                if epoch > 0.0 {
+                    active_epochs.push(epoch);
+                }
+            }
+        }
+    } else if let Err(e) = &active_ts_result {
+        error!("activity summary: active timestamps query failed: {}", e);
+    }
+    // Round to 0.1 min, matching the SQL `minutes` columns.
+    let total_active_minutes = (active_minutes(&active_epochs) * 10.0).round() / 10.0;
+
     SummaryCore {
         apps,
         windows,
@@ -599,6 +643,7 @@ async fn collect_summary_core(
             top_transcriptions,
         },
         total_frames,
+        total_active_minutes,
     }
 }
 
@@ -940,6 +985,24 @@ fn value_i64(value: &Value) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
 }
 
+/// Sum the frame-to-frame gaps (in seconds) that fall under the idle cap and
+/// return the result in minutes. `epochs` must be ascending epoch-seconds.
+/// Gaps >= `IDLE_CAP_SECS` are treated as idle and skipped; non-positive gaps
+/// (duplicate or out-of-order timestamps) are ignored. Pure and deterministic
+/// — this is the canonical definition of "active time" the SQL `minutes`
+/// columns mirror, so the number never comes from an LLM.
+fn active_minutes(epochs: &[f64]) -> f64 {
+    let cap = IDLE_CAP_SECS as f64;
+    let mut secs = 0.0;
+    for pair in epochs.windows(2) {
+        let gap = pair[1] - pair[0];
+        if gap > 0.0 && gap < cap {
+            secs += gap;
+        }
+    }
+    secs / 60.0
+}
+
 fn truncate_text(text: &str, max_chars: usize) -> String {
     let char_count = text.chars().count();
     if char_count <= max_chars {
@@ -990,6 +1053,7 @@ mod tests {
                 top_transcriptions: vec![],
             },
             total_frames: 0,
+            total_active_minutes: 0.0,
         }
     }
 
@@ -1005,6 +1069,7 @@ mod tests {
                 top_transcriptions: vec![],
             },
             total_frames: 42,
+            total_active_minutes: 0.0,
         }
     }
 
@@ -1055,6 +1120,51 @@ mod tests {
         let s = "🎉".repeat(100);
         let t = truncate_text(&s, 10);
         assert!(t.contains("(truncated"));
+    }
+
+    // ---- active_minutes ----
+
+    const EPS: f64 = 1e-9;
+
+    #[test]
+    fn active_minutes_empty_is_zero() {
+        assert_eq!(active_minutes(&[]), 0.0);
+    }
+
+    #[test]
+    fn active_minutes_single_frame_is_zero() {
+        // One frame has no "next" frame, so no measurable active time.
+        assert_eq!(active_minutes(&[1_000.0]), 0.0);
+    }
+
+    #[test]
+    fn active_minutes_sums_small_gaps() {
+        // 0,10,20,30 -> three 10s gaps = 30s = 0.5 min.
+        assert!((active_minutes(&[0.0, 10.0, 20.0, 30.0]) - 0.5).abs() < EPS);
+    }
+
+    #[test]
+    fn active_minutes_excludes_idle_gap() {
+        // 0->10 active (10s), 10->10000 idle (excluded), 10000->10005 active (5s).
+        let v = [0.0, 10.0, 10_000.0, 10_005.0];
+        assert!((active_minutes(&v) - (15.0 / 60.0)).abs() < EPS);
+    }
+
+    #[test]
+    fn active_minutes_cap_boundary_is_strict() {
+        let cap = IDLE_CAP_SECS as f64;
+        // A gap exactly at the cap is idle (strict `<`), so it does not count.
+        assert_eq!(active_minutes(&[0.0, cap]), 0.0);
+        // Just under the cap counts.
+        assert!((active_minutes(&[0.0, cap - 1.0]) - ((cap - 1.0) / 60.0)).abs() < EPS);
+    }
+
+    #[test]
+    fn active_minutes_ignores_nonpositive_gaps() {
+        // Duplicate / out-of-order timestamps must not subtract time or panic.
+        assert_eq!(active_minutes(&[100.0, 100.0]), 0.0);
+        // 0->50 (50s) + 50->50 dup (0) + 50->60 (10s) = 60s = 1 min.
+        assert!((active_minutes(&[0.0, 50.0, 50.0, 60.0]) - 1.0).abs() < EPS);
     }
 
     // ---- sql escaping ----

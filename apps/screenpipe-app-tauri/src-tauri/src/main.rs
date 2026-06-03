@@ -1287,8 +1287,14 @@ async fn main() {
             // auto-stops it after 5 minutes of inactivity to avoid stale processes.
 
             // Show shortcut reminder overlay on app startup if enabled AND onboarding is completed
-            // Don't show reminder during first-time onboarding to reduce overwhelm
-            if store.show_shortcut_overlay && onboarding_store.is_completed && !app_ui_hidden {
+            // Don't show reminder during first-time onboarding to reduce overwhelm.
+            // Skip entirely when the timeline is disabled — the shortcut it
+            // advertises only opens the (now-off) timeline overlay.
+            if store.show_shortcut_overlay
+                && onboarding_store.is_completed
+                && !app_ui_hidden
+                && !store.recording.disable_timeline
+            {
                 let shortcut = store.show_screenpipe_shortcut.clone();
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {

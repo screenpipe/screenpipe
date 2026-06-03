@@ -166,6 +166,14 @@ function HomeContent() {
     setActiveSection(fallback ?? "home");
   }, [activeSection, isSectionHidden, setActiveSection]);
 
+  // Timeline can be turned off in Display settings. When it is, the nav item is
+  // gone, so bounce out of the (now unreachable) timeline section to chat.
+  useEffect(() => {
+    if ((settings.disableTimeline ?? false) && activeSection === "timeline") {
+      setActiveSection("home");
+    }
+  }, [settings.disableTimeline, activeSection, setActiveSection]);
+
   // Mount the Pi event router once, app-wide. Listens for `pi_event` /
   // `pi_session_evicted` outside any chat-component lifecycle and mirrors
   // per-session liveness into the chat store. This is what lets the chat
@@ -764,6 +772,10 @@ function HomeContent() {
         // means the case branch falls through to the always-mounted chat.
         return null;
       case "timeline":
+        // Timeline can be disabled in Display settings; when it is, fall through
+        // to chat (the redirect effect also resets activeSection to "home"). This
+        // avoids a flash of the disabled placeholder on reload.
+        if (settings.disableTimeline) return null;
         return <Timeline embedded />;
       case "memories":
         return <MemoriesSection />;
@@ -820,7 +832,11 @@ function HomeContent() {
     { id: "meetings", label: "Meeting notes", icon: <NotebookPen className="h-3.5 w-3.5" /> },
     { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
-  ].filter((s) => !isSectionHidden(s.id));
+  ]
+    .filter((s) => !isSectionHidden(s.id))
+    // Timeline can be turned off in Display settings — when it is, drop it from
+    // the sidebar entirely (the "Timeline Disabled" placeholder was poor UX).
+    .filter((s) => !(s.id === "timeline" && (settings.disableTimeline ?? false)));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
   useEffect(() => {
