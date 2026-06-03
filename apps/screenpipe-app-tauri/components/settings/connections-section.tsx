@@ -284,6 +284,7 @@ export function IntegrationIcon({
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
+    honcho: <img src="/images/honcho.svg" alt="Honcho" className="w-5 h-5 rounded" />,
     warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
     telegram: (
@@ -970,6 +971,11 @@ function MemorySyncSubsection({
         } else if (result?.unchanged) {
           const n = result.unchanged.entries;
           resultText = `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
+        } else if (result?.pushed) {
+          // Honcho is a network sink (append semantics), not a file — it
+          // reports `pushed` with the count of new memories sent this tick.
+          const n = result.pushed.entries;
+          resultText = `pushed ${n} ${n === 1 ? "memory" : "memories"}`;
         } else if (result?.skipped) {
           resultText = `skipped · ${result.skipped.reason}`;
         } else {

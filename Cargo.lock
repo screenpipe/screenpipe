@@ -8344,6 +8344,7 @@ dependencies = [
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",
+ "screenpipe-honcho",
  "screenpipe-redact",
  "screenpipe-screen",
  "screenpipe-secrets",
@@ -8371,6 +8372,7 @@ dependencies = [
  "url",
  "uuid",
  "windows 0.58.0",
+ "wiremock",
 ]
 
 [[package]]
@@ -8388,6 +8390,19 @@ dependencies = [
  "serial_test",
  "tokio",
  "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "screenpipe-honcho"
+version = "0.3.351"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest 0.13.3",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

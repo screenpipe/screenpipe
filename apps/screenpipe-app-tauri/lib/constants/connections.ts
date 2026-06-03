@@ -30,4 +30,5 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   linear: "Productivity",
   perplexity: "Research",
   "custom-mcp": "AI",
+  honcho: "AI",
 };

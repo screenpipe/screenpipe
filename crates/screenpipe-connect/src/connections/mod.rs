@@ -30,6 +30,7 @@ pub mod google_calendar;
 pub mod google_docs;
 pub mod google_sheets;
 pub mod granola;
+pub mod honcho;
 pub mod hubspot;
 pub mod intercom;
 pub mod jira;
@@ -318,6 +319,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(zoom::Zoom),
         Box::new(claude_code::ClaudeCode),
         Box::new(codex::Codex),
+        Box::new(honcho::Honcho),
         Box::new(workflowy::Workflowy),
         Box::new(openclaw::OpenClaw),
     ]
