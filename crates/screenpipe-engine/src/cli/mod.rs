@@ -1022,6 +1022,18 @@ impl RecordArgs {
         if sources.use_system_default_audio {
             settings.use_system_default_audio = self.use_system_default_audio;
         }
+        // An explicit --audio-device or --use-system-default-audio means the
+        // user wants audio on, so it clears a persisted disable_audio:true
+        // (issue #3648). An explicit --disable-audio on the same command still
+        // wins, which the guard preserves.
+        if (sources.audio_device || sources.use_system_default_audio) && !sources.disable_audio {
+            if settings.disable_audio {
+                tracing::warn!(
+                    "audio was disabled in the persisted store; an explicit audio-input flag re-enabled it"
+                );
+            }
+            settings.disable_audio = false;
+        }
         if sources.experimental_coreaudio_system_audio {
             settings.experimental_coreaudio_system_audio = self.experimental_coreaudio_system_audio;
         }
@@ -1963,6 +1975,95 @@ mod tests {
         assert!(
             !settings.use_pii_removal,
             "absent CLI defaults must not overwrite app settings"
+        );
+    }
+
+    #[test]
+    fn test_audio_device_flag_enables_audio_over_persisted_disable() {
+        // issue #3648: passing --audio-device must override a persisted
+        // disable_audio:true, otherwise the device is set but audio stays off.
+        let args = [
+            "screenpipe",
+            "record",
+            "--audio-device",
+            "MacBook Pro Microphone (input)",
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_audio: true,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            !settings.disable_audio,
+            "an explicit --audio-device must re-enable audio"
+        );
+        assert_eq!(
+            settings.audio_devices,
+            vec!["MacBook Pro Microphone (input)".to_string()]
+        );
+        assert!(!settings.use_system_default_audio);
+    }
+
+    #[test]
+    fn test_explicit_disable_audio_wins_over_audio_device() {
+        // An explicit --disable-audio on the same invocation still wins.
+        let args = [
+            "screenpipe",
+            "record",
+            "--audio-device",
+            "mic",
+            "--disable-audio",
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_audio: false,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            settings.disable_audio,
+            "explicit --disable-audio must override the implicit enable"
+        );
+    }
+
+    #[test]
+    fn test_no_audio_flags_preserve_persisted_disable_audio() {
+        // Without any audio flag, a persisted disable_audio:true is untouched.
+        let args = ["screenpipe", "record", "--port", "4040"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_audio: true,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            settings.disable_audio,
+            "absent audio flags must not flip a persisted disable_audio"
         );
     }
 }
