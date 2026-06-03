@@ -11,17 +11,28 @@ import { OpenAIProvider } from './openai';
  * that `temperature` is clamped to (0, 1.0] — passing 0 or a negative value
  * is rejected with 400. The base OpenAIProvider already forwards whatever
  * the caller sets, so we override `createCompletion` /
- * `createStreamingCompletion` to substitute a safe value (1.0) when the
- * caller passes 0 or omits the field.
+ * `createStreamingCompletion` so:
+ *   - `undefined` (caller omitted the field) → API-recommended default 1.0
+ *   - `0` (caller asked for greedy decoding) → clamp to the smallest legal
+ *     value (0.01), preserving the caller's intent of near-deterministic
+ *     output instead of silently switching to the recommended default
+ *   - negatives → also clamped to the floor (0.01) for symmetry
+ *   - values >1 → clamped to 1
  */
 export const MINIMAX_DEFAULT_TEMPERATURE = 1.0;
+export const MINIMAX_MIN_TEMPERATURE = 0.01;
 
 export function clampMiniMaxTemperature(temperature: number | undefined): number {
-	// MiniMax rejects 0 with 400 "Invalid temperature: 0, range is (0, 1]".
-	// Substitute the API-recommended default for both 0 and undefined so
-	// both "unset" and "explicit zero" fall back to a known-good value.
-	if (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature <= 0) {
+	// Unset: MiniMax's docs recommend ~1.0 as the default chat temperature.
+	if (typeof temperature !== 'number' || !Number.isFinite(temperature)) {
 		return MINIMAX_DEFAULT_TEMPERATURE;
+	}
+	// Explicit 0 (or negative): MiniMax rejects 0 with 400
+	// "Invalid temperature: 0, range is (0, 1]". The caller almost
+	// certainly wants near-greedy decoding here — not random sampling —
+	// so map to the smallest legal value rather than the high default.
+	if (temperature <= 0) {
+		return MINIMAX_MIN_TEMPERATURE;
 	}
 	if (temperature > 1) return 1;
 	return temperature;
