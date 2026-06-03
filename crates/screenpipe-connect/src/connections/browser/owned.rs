@@ -44,7 +44,13 @@ pub trait OwnedWebviewHandle: Send + Sync {
     /// existing transports keep working unchanged; the Tauri impl
     /// overrides it with the native webview `navigate(...)` call so we
     /// don't pay the eval round-trip.
-    async fn navigate(&self, url: &str) -> Result<(), String> {
+    ///
+    /// `owner` is the chat/session id that issued this navigation (see
+    /// [`Browser::navigate_with_owner`]). The eval fallback can't emit the
+    /// frontend navigate event, so it ignores `owner`; the Tauri impl forwards
+    /// it so the embedded sidebar can keep a background pipe's page out of an
+    /// unrelated chat.
+    async fn navigate(&self, url: &str, _owner: Option<&str>) -> Result<(), String> {
         let escaped = serde_json::to_string(url).map_err(|e| format!("encode url: {e}"))?;
         self.eval(
             &format!("location.href = {escaped}"),
@@ -140,11 +146,17 @@ impl Browser for OwnedBrowser {
             .map_err(EvalError::SendFailed)
     }
     async fn navigate(&self, url: &str) -> Result<(), EvalError> {
+        self.navigate_with_owner(url, None).await
+    }
+    async fn navigate_with_owner(&self, url: &str, owner: Option<&str>) -> Result<(), EvalError> {
         let handle = {
             let guard = self.handle.read().await;
             guard.as_ref().cloned().ok_or(EvalError::NotConnected)?
         };
-        handle.navigate(url).await.map_err(EvalError::SendFailed)
+        handle
+            .navigate(url, owner)
+            .await
+            .map_err(EvalError::SendFailed)
     }
 }
 
@@ -163,6 +175,7 @@ mod tests {
 
     struct NativeNavigateHandle {
         last_url: Mutex<Option<String>>,
+        last_owner: Mutex<Option<String>>,
     }
 
     #[async_trait]
@@ -197,8 +210,9 @@ mod tests {
             })
         }
 
-        async fn navigate(&self, url: &str) -> Result<(), String> {
+        async fn navigate(&self, url: &str, owner: Option<&str>) -> Result<(), String> {
             *self.last_url.lock().await = Some(url.to_string());
+            *self.last_owner.lock().await = owner.map(|s| s.to_string());
             Ok(())
         }
     }
@@ -264,6 +278,7 @@ mod tests {
         let owned = OwnedBrowser::default_instance();
         let handle = Arc::new(NativeNavigateHandle {
             last_url: Mutex::new(None),
+            last_owner: Mutex::new(None),
         });
         owned.attach(handle.clone()).await;
 
@@ -272,6 +287,36 @@ mod tests {
         assert_eq!(
             handle.last_url.lock().await.clone(),
             Some("https://example.com/native".into())
+        );
+        // Plain `navigate` carries no owner (sidebar's own action).
+        assert_eq!(handle.last_owner.lock().await.clone(), None);
+    }
+
+    #[tokio::test]
+    async fn navigate_with_owner_forwards_owner_to_handle() {
+        // Regression: a background pipe / chat agent tags its navigation with
+        // the issuing session id so the embedded sidebar can ignore navigations
+        // that belong to a chat other than the one on screen. The owner must
+        // survive the trip through the connect seam to the desktop handle.
+        let owned = OwnedBrowser::default_instance();
+        let handle = Arc::new(NativeNavigateHandle {
+            last_url: Mutex::new(None),
+            last_owner: Mutex::new(None),
+        });
+        owned.attach(handle.clone()).await;
+
+        owned
+            .navigate_with_owner("https://example.com/owned", Some("pipe:reddit"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle.last_url.lock().await.clone(),
+            Some("https://example.com/owned".into())
+        );
+        assert_eq!(
+            handle.last_owner.lock().await.clone(),
+            Some("pipe:reddit".into())
         );
     }
 }

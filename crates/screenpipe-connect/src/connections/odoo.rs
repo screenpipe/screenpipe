@@ -118,10 +118,9 @@ impl Integration for Odoo {
             .error_for_status()
             .map_err(|e| anyhow!("Odoo returned an error for {endpoint} — check the URL ({e})"))?;
 
-        let payload: Value = resp
-            .json()
-            .await
-            .map_err(|e| anyhow!("unexpected (non-JSON) response from Odoo — check the URL ({e})"))?;
+        let payload: Value = resp.json().await.map_err(|e| {
+            anyhow!("unexpected (non-JSON) response from Odoo — check the URL ({e})")
+        })?;
 
         // JSON-RPC surfaces application errors in the body with HTTP 200.
         if let Some(err) = payload.get("error") {
@@ -153,8 +152,14 @@ mod tests {
     #[test]
     fn derives_db_from_odoo_online_host() {
         assert_eq!(derive_db("https://acme.odoo.com"), Some("acme".to_string()));
-        assert_eq!(derive_db("https://acme.odoo.com/web"), Some("acme".to_string()));
-        assert_eq!(derive_db("https://acme.odoo.com/"), Some("acme".to_string()));
+        assert_eq!(
+            derive_db("https://acme.odoo.com/web"),
+            Some("acme".to_string())
+        );
+        assert_eq!(
+            derive_db("https://acme.odoo.com/"),
+            Some("acme".to_string())
+        );
     }
 
     #[test]

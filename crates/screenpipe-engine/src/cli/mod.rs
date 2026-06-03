@@ -589,6 +589,13 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_clipboard_capture: bool,
 
+    /// Disable keyboard / typed-text capture entirely. The UI recorder will
+    /// not record what you type (`capture_text`) — the accessibility tree +
+    /// OCR still capture on-screen text. Useful when piping ~/.screenpipe
+    /// data into a remote LLM (secrets get typed).
+    #[arg(long, default_value_t = false)]
+    pub disable_keyboard_capture: bool,
+
     /// Require authentication for remote API access. When enabled, non-localhost
     /// requests must include Authorization: Bearer <SCREENPIPE_API_KEY>.
     /// Localhost requests are always allowed.
@@ -666,6 +673,7 @@ pub struct RecordArgSources {
     pub video_quality: bool,
     pub pause_on_drm_content: bool,
     pub disable_clipboard_capture: bool,
+    pub disable_keyboard_capture: bool,
     pub api_auth: bool,
     pub listen_on_lan: bool,
     pub encrypt_secrets: bool,
@@ -711,6 +719,7 @@ impl RecordArgSources {
             video_quality: from_command_line(record, "video_quality"),
             pause_on_drm_content: from_command_line(record, "pause_on_drm_content"),
             disable_clipboard_capture: from_command_line(record, "disable_clipboard_capture"),
+            disable_keyboard_capture: from_command_line(record, "disable_keyboard_capture"),
             api_auth: from_command_line(record, "api_auth"),
             listen_on_lan: from_command_line(record, "listen_on_lan"),
             encrypt_secrets: from_command_line(record, "encrypt_secrets"),
@@ -748,6 +757,7 @@ impl RecordArgSources {
             || self.video_quality
             || self.pause_on_drm_content
             || self.disable_clipboard_capture
+            || self.disable_keyboard_capture
             || self.api_auth
             || self.listen_on_lan
             || self.encrypt_secrets
@@ -789,6 +799,9 @@ impl RecordArgs {
             // `true` for both, so opting out has to be explicit.
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
+            // --disable-keyboard-capture drops the typed-text stream; the
+            // a11y tree + OCR still capture on-screen text.
+            capture_text: !self.disable_keyboard_capture,
             capture_on_keystroke: self
                 .capture_on_keystroke
                 .unwrap_or(defaults.capture_on_keystroke),
@@ -861,6 +874,7 @@ impl RecordArgs {
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
             disable_clipboard_capture: self.disable_clipboard_capture,
+            disable_keyboard_capture: self.disable_keyboard_capture,
             listen_on_lan: self.listen_on_lan,
             ..screenpipe_config::RecordingSettings::default()
         }
@@ -1126,6 +1140,9 @@ impl RecordArgs {
         }
         if sources.disable_clipboard_capture {
             settings.disable_clipboard_capture = self.disable_clipboard_capture;
+        }
+        if sources.disable_keyboard_capture {
+            settings.disable_keyboard_capture = self.disable_keyboard_capture;
         }
         if sources.api_auth {
             settings.api_auth = self.api_auth;

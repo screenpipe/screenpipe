@@ -41,10 +41,12 @@ pub const WRAPPER_RELATIVE_PATH: &str = "pi-agent/bash-env.sh";
 /// substrings in command arguments. If none match, `curl` runs unchanged.
 pub const WRAPPER_SCRIPT: &str = r#"# screenpipe — auto-injected by pi-agent bash subshells (do not edit by hand)
 # Transparently adds Authorization: Bearer to curl calls that target the
-# local screenpipe API, and — when SCREENPIPE_FILTER_PII=1 — rewrites any
-# /search URL to include filter_pii=1 so responses are PII-redacted
-# before Pi sees them. Other curl calls pass through unchanged — the
-# token never leaks to third-party hosts.
+# local screenpipe API, tags them with x-screenpipe-session (the chat/pipe
+# that owns this agent, from SCREENPIPE_SESSION_ID) so the owned-browser
+# sidebar can route navigations to the right chat, and — when
+# SCREENPIPE_FILTER_PII=1 — rewrites any /search URL to include filter_pii=1
+# so responses are PII-redacted before Pi sees them. Other curl calls pass
+# through unchanged — the token never leaks to third-party hosts.
 #
 # Regenerated on every pi-agent spawn from screenpipe-core::agents::bash_env.
 
@@ -65,9 +67,15 @@ _sp_auth_key() {
 }
 
 curl() {
-  local key has_local=0 add_filter=0 arg
-  local -a out=()
+  local key sid has_local=0 add_filter=0 arg
+  local -a out=() hdrs=()
   key="$(_sp_auth_key)"
+  # Chat/session this agent runs under. The owned-browser is a singleton shared
+  # by every chat and background pipe, so we tag local API calls with the owner
+  # (x-screenpipe-session); the navigate handler rides it to the frontend so a
+  # background pipe's page doesn't pop into whatever chat is on screen. Empty
+  # for spawn paths that don't set it — then the call is simply untagged.
+  sid="${SCREENPIPE_SESSION_ID:-}"
   if [ "${SCREENPIPE_FILTER_PII:-}" = "1" ]; then
     add_filter=1
   fi
@@ -95,8 +103,10 @@ curl() {
     out+=("$arg")
   done
 
-  if [ "$has_local" = "1" ] && [ -n "$key" ]; then
-    command curl -H "Authorization: Bearer $key" "${out[@]}"
+  if [ "$has_local" = "1" ]; then
+    [ -n "$key" ] && hdrs+=(-H "Authorization: Bearer $key")
+    [ -n "$sid" ] && hdrs+=(-H "x-screenpipe-session: $sid")
+    command curl "${hdrs[@]}" "${out[@]}"
   else
     command curl "${out[@]}"
   fi
@@ -235,6 +245,82 @@ mod tests {
         assert!(
             WRAPPER_SCRIPT.contains("filter_pii=1"),
             "wrapper must append the filter_pii query param"
+        );
+    }
+
+    #[test]
+    fn wrapper_script_tags_session_owner() {
+        assert!(
+            WRAPPER_SCRIPT.contains("SCREENPIPE_SESSION_ID"),
+            "wrapper must read the session id env var"
+        );
+        assert!(
+            WRAPPER_SCRIPT.contains("x-screenpipe-session"),
+            "wrapper must send the owner header so navigations route to the right chat"
+        );
+    }
+
+    /// End-to-end: the shim adds `x-screenpipe-session: <id>` to local API
+    /// calls when `SCREENPIPE_SESSION_ID` is set, and never leaks it to
+    /// third-party hosts. This is the production path that lets a background
+    /// pipe's owned-browser navigation be ignored by an unrelated chat.
+    #[test]
+    #[cfg(unix)]
+    fn shim_tags_session_header_for_local_only() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wrapper = ensure_wrapper(tmp.path()).unwrap();
+
+        let fake_curl_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&fake_curl_dir).unwrap();
+        let fake_curl = fake_curl_dir.join("curl");
+        std::fs::write(
+            &fake_curl,
+            "#!/usr/bin/env bash\nfor a in \"$@\"; do echo \"$a\" >> \"$CURL_ARGV_FILE\"; done\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake_curl).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_curl, perms).unwrap();
+
+        // Local API call → owner header present.
+        let argv_local = tmp.path().join("local.argv");
+        let status = Command::new("bash")
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_curl_dir.display()))
+            .env("BASH_ENV", &wrapper)
+            .env("CURL_ARGV_FILE", &argv_local)
+            .env("SCREENPIPE_LOCAL_API_KEY", "sp-test")
+            .env("SCREENPIPE_SESSION_ID", "conv-abc-123")
+            .arg("-c")
+            .arg("curl -X POST http://localhost:3030/connections/browsers/owned-default/navigate")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let local = std::fs::read_to_string(&argv_local).unwrap();
+        assert!(
+            local.contains("x-screenpipe-session: conv-abc-123"),
+            "local API call must carry the session owner header; got: {local}"
+        );
+
+        // Third-party host → owner header must NOT leak.
+        let argv_ext = tmp.path().join("ext.argv");
+        let status = Command::new("bash")
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_curl_dir.display()))
+            .env("BASH_ENV", &wrapper)
+            .env("CURL_ARGV_FILE", &argv_ext)
+            .env("SCREENPIPE_LOCAL_API_KEY", "sp-test")
+            .env("SCREENPIPE_SESSION_ID", "conv-abc-123")
+            .arg("-c")
+            .arg("curl https://example.com/api")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let ext = std::fs::read_to_string(&argv_ext).unwrap();
+        assert!(
+            !ext.contains("x-screenpipe-session"),
+            "owner header must not leak to third-party hosts; got: {ext}"
         );
     }
 

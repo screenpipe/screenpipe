@@ -89,6 +89,10 @@ pub struct RecordingConfig {
     /// the box — passwords / api keys / private keys frequently flow
     /// through the clipboard.
     pub disable_clipboard_capture: bool,
+    /// Skip keyboard / typed-text capture in the UI recorder
+    /// (`UiCaptureConfig::capture_text`). The a11y tree + OCR still capture
+    /// on-screen text. See `RecordingSettings.disable_keyboard_capture`.
+    pub disable_keyboard_capture: bool,
     pub languages: Vec<Language>,
 
     // Cloud/auth
@@ -272,6 +276,7 @@ impl RecordingConfig {
             ignore_incognito_windows: settings.ignore_incognito_windows,
             pause_on_drm_content: settings.pause_on_drm_content,
             disable_clipboard_capture: settings.disable_clipboard_capture,
+            disable_keyboard_capture: settings.disable_keyboard_capture,
             languages: settings
                 .languages
                 .iter()
@@ -376,6 +381,10 @@ impl RecordingConfig {
             included_windows: self.included_windows.clone(),
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
+            // Keyboard / typed-text capture. Off when disabled — the a11y
+            // tree + OCR still capture on-screen text, this only drops the
+            // raw keystroke stream.
+            capture_text: !self.disable_keyboard_capture,
             // Input-latency tuning. `extraction_thread_priority` is parsed from its
             // string form; an unrecognized value falls back to the enum default.
             prioritize_input_latency: self.prioritize_input_latency,
@@ -518,6 +527,84 @@ mod tests {
         let c = build(&settings_with(false, false));
         assert_eq!(c.listen_address, Ipv4Addr::LOCALHOST);
         assert!(!c.api_auth);
+    }
+
+    #[test]
+    fn privacy_capture_toggles_flow_to_ui_recorder_config() {
+        let settings = screenpipe_config::RecordingSettings {
+            disable_clipboard_capture: true,
+            disable_keyboard_capture: true,
+            ignored_windows: vec!["Secret Notes".to_string(), "Password Manager".to_string()],
+            included_windows: vec!["Work Browser".to_string()],
+            capture_on_keystroke: Some(true),
+            capture_on_clipboard: Some(false),
+            capture_scroll: Some(true),
+            prioritize_input_latency: true,
+            extraction_thread_priority: "lowest".to_string(),
+            pause_extraction_on_input_ms: 400,
+            ..Default::default()
+        };
+
+        let ui = build(&settings).to_ui_recorder_config();
+
+        assert!(!ui.capture_clipboard);
+        assert!(!ui.capture_clipboard_content);
+        assert!(!ui.capture_text);
+        assert_eq!(ui.ignored_windows, settings.ignored_windows);
+        assert_eq!(ui.excluded_windows, settings.ignored_windows);
+        assert_eq!(ui.included_windows, settings.included_windows);
+        assert!(ui.capture_on_keystroke);
+        assert!(!ui.capture_on_clipboard);
+        assert!(ui.capture_scroll);
+        assert!(ui.prioritize_input_latency);
+        assert_eq!(
+            ui.extraction_thread_priority,
+            screenpipe_a11y::ExtractionThreadPriority::Lowest
+        );
+        assert_eq!(ui.pause_extraction_on_input_ms, 400);
+    }
+
+    #[test]
+    fn vision_filters_and_capture_triggers_flow_to_vision_manager_config() {
+        let settings = screenpipe_config::RecordingSettings {
+            ignored_windows: vec!["Streaming App".to_string()],
+            included_windows: vec!["Editor".to_string()],
+            ignored_urls: vec!["https://private.example".to_string()],
+            ignore_incognito_windows: true,
+            pause_on_drm_content: true,
+            monitor_ids: vec!["MONITOR-1".to_string()],
+            use_all_monitors: false,
+            video_quality: "high".to_string(),
+            idle_capture_interval_ms: Some(2_000),
+            visual_check_interval_ms: Some(350),
+            visual_change_threshold: Some(0.18),
+            min_capture_interval_ms: Some(120),
+            capture_on_keystroke: Some(true),
+            capture_on_clipboard: Some(true),
+            ..Default::default()
+        };
+
+        let config = build(&settings);
+        let vision = config.to_vision_manager_config(
+            "capture-output".to_string(),
+            std::sync::Arc::new(PipelineMetrics::new()),
+        );
+
+        assert_eq!(config.ignored_urls, settings.ignored_urls);
+        assert_eq!(vision.output_path, "capture-output");
+        assert_eq!(vision.ignored_windows, settings.ignored_windows);
+        assert_eq!(vision.included_windows, settings.included_windows);
+        assert_eq!(vision.monitor_ids, settings.monitor_ids);
+        assert!(!vision.use_all_monitors);
+        assert!(vision.ignore_incognito_windows);
+        assert!(vision.pause_on_drm_content);
+        assert_eq!(vision.video_quality, "high");
+        assert_eq!(vision.idle_capture_interval_ms, Some(2_000));
+        assert_eq!(vision.visual_check_interval_ms, Some(350));
+        assert_eq!(vision.visual_change_threshold, Some(0.18));
+        assert_eq!(vision.min_capture_interval_ms, Some(120));
+        assert_eq!(vision.capture_on_keystroke, Some(true));
+        assert_eq!(vision.capture_on_clipboard, Some(true));
     }
 
     fn langs(items: &[&str]) -> Vec<String> {

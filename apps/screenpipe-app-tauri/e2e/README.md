@@ -161,6 +161,17 @@ JSON result files for each E2E platform job. Use the runtime report when judging
 whether a mapped feature really passed on a given run; use the static report to
 review taxonomy drift and unmapped specs.
 
+For repo-wide behavioral coverage, including the Rust core engine crates:
+
+```bash
+bun run coverage:all
+bun run coverage:all:check
+```
+
+This refreshes/checks `e2e/COVERAGE.md`, `../../coverage/CORE.md`, and the
+top-level `../../COVERAGE.md` summary. Core line/branch coverage is tracked
+separately via `cargo llvm-cov`; see `../../coverage/README.md`.
+
 ### Troubleshooting on Windows
 
 **Binary not found**

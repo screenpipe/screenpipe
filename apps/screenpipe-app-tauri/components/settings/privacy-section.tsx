@@ -20,6 +20,7 @@ import {
   Lock,
   Copy,
   ClipboardX,
+  Keyboard,
   FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -535,6 +536,12 @@ export function PrivacySection() {
     handleSettingsChange({ disableClipboardCapture: !checked }, true);
   };
 
+  const handleKeyboardCaptureToggle = (checked: boolean) => {
+    // UI is "Capture keyboard" on/off. Settings store inverts to match
+    // the CLI flag name (--disable-keyboard-capture).
+    handleSettingsChange({ disableKeyboardCapture: !checked }, true);
+  };
+
   const handleRecordWhileLockedToggle = (checked: boolean) => {
     handleSettingsChange({ recordWhileLocked: checked }, true);
   };
@@ -956,8 +963,34 @@ export function PrivacySection() {
             </div>
             <Switch
               id="captureClipboard"
-              checked={!(settings.disableClipboardCapture ?? false)}
+              checked={!(settings.disableClipboardCapture ?? true)}
               onCheckedChange={handleClipboardCaptureToggle}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Keyboard capture toggle */}
+      <Card>
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Capture keyboard
+                  <HelpTooltip text="when on, screenpipe records what you type (your keystrokes). off by default. the accessibility tree and OCR still capture on-screen text either way, so Rewind and Ask keep working — this only controls the raw keystroke stream, where passwords, API keys, and secrets you type would otherwise be logged." />
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Off by default. Records the raw keystroke stream (secrets
+                  often get typed). On-screen text is still captured.
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="captureKeyboard"
+              checked={!(settings.disableKeyboardCapture ?? true)}
+              onCheckedChange={handleKeyboardCaptureToggle}
             />
           </div>
         </CardContent>

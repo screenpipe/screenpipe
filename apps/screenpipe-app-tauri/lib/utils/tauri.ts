@@ -1019,9 +1019,10 @@ async ownedBrowserHide() : Promise<Result<null, string>> {
 }
 },
 /**
- * Navigate the embedded webview to `url`. Used by the agent (via
- * `POST /connections/browsers/owned-default/eval`) and by the sidebar
- * when restoring per-chat state.
+ * Navigate the embedded webview to `url`. Used by the sidebar when restoring
+ * per-chat state or on user reload — i.e. always an action of the chat that's
+ * on screen, so it carries no owner (`None`) and the frontend always honors
+ * it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
  */
 async ownedBrowserNavigate(url: string) : Promise<Result<null, string>> {
     try {
@@ -2463,12 +2464,21 @@ ignoreIncognitoWindows: boolean;
  */
 pauseOnDrmContent?: boolean;
 /**
- * Skip clipboard capture in the UI recorder. Off by default; recommended
- * when piping ~/.screenpipe data into a remote LLM or sharing it,
- * since passwords / API keys / private keys often pass through the
- * clipboard.
+ * Skip clipboard capture in the UI recorder. Defaults to `true`
+ * (clipboard capture OFF) — passwords / API keys / private keys
+ * frequently pass through the clipboard, so it's opt-in via the
+ * "Capture clipboard" toggle.
  */
 disableClipboardCapture?: boolean;
+/**
+ * Skip keyboard / typed-text capture in the UI recorder
+ * (`UiCaptureConfig::capture_text`). Defaults to `true` (keyboard
+ * capture OFF) — the raw keystroke stream is the highest-risk,
+ * most-redundant signal (secrets get typed), and the accessibility
+ * tree + OCR still capture on-screen text so Rewind/Ask keep working.
+ * Opt-in via the "Capture keyboard" toggle.
+ */
+disableKeyboardCapture?: boolean;
 /**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).

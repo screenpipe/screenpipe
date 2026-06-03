@@ -2045,6 +2045,11 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
+                    // Owner tag: a pipe's owned-browser navigations are
+                    // `pipe:<name>`, which never matches an open chat's
+                    // conversationId, so they stay out of whatever chat is on
+                    // screen. See screenpipe-core::agents::bash_env.
+                    Some(format!("pipe:{pipe_name}").as_str()),
                 ),
             )
             .await;
@@ -2526,6 +2531,11 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
+                    // Owner tag: a pipe's owned-browser navigations are
+                    // `pipe:<name>`, which never matches an open chat's
+                    // conversationId, so they stay out of whatever chat is on
+                    // screen. See screenpipe-core::agents::bash_env.
+                    Some(format!("pipe:{name}").as_str()),
                 ),
             )
             .await;
@@ -3694,6 +3704,8 @@ impl PipeManager {
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
+                                // Owner tag — see run_pipe_with_trigger.
+                                Some(format!("pipe:{pipe_name}").as_str()),
                             ),
                         )
                         .await;

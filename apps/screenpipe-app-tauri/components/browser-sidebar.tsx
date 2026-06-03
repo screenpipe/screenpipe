@@ -40,6 +40,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
+import {
+  isForeignNavigation,
+  parseNavigatePayload,
+  type OwnedBrowserNavigatePayload,
+} from "@/lib/owned-browser-ownership";
 
 const NAVIGATE_EVENT = "owned-browser:navigate";
 const SESSION_ACCESS_REQUEST_EVENT = "owned-browser:session-access-request";
@@ -62,6 +67,9 @@ interface SessionAccessEvent {
   host: string;
   already_granted?: boolean;
   alreadyGranted?: boolean;
+  /** Conversation that issued the navigation (see `owner` on the navigate
+   *  event). Null for the sidebar's own restore/reload. */
+  owner?: string | null;
 }
 
 interface ActiveSessionAccessRequest {
@@ -79,6 +87,7 @@ interface V20CookieBlockEvent {
   v20_count?: number;
   sources?: string[];
   reason?: string;
+  owner?: string | null;
 }
 
 interface ActiveV20CookieBlock {
@@ -94,6 +103,7 @@ interface OwnedBrowserStateEvent {
   url?: string | null;
   title?: string | null;
   loading?: boolean | null;
+  owner?: string | null;
 }
 
 /** Clamp the panel width so it can never push the chat below MIN_CHAT_WIDTH
@@ -278,23 +288,34 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    const unlistenPromise = listen<string>(NAVIGATE_EVENT, (e) => {
-      const url = typeof e.payload === "string" ? e.payload : null;
-      if (!url) return;
-      setSessionAccessRequest(null);
-      setSessionAccessAnswer(null);
-      setV20CookieBlock(null);
-      setVisible(true);
-      setCollapsed(false);
-      setCurrentUrl(url);
-      setCurrentTitle(null);
-      setLoading(true);
-      persistState({ url, collapsed: false });
-    });
+    const unlistenPromise = listen<OwnedBrowserNavigatePayload>(
+      NAVIGATE_EVENT,
+      (e) => {
+        const { url, owner } = parseNavigatePayload(e.payload);
+        if (!url) return;
+        // The owned browser is a singleton shared across every chat and
+        // background pipe. Ignore navigations owned by a *different*
+        // conversation than the one on screen — otherwise a background pipe
+        // (or another chat's agent) pops its page into whatever chat the user
+        // is looking at, and `persistState` writes that URL into the wrong
+        // chat's file so it sticks on reopen. Untagged events (owner == null)
+        // are the sidebar's own restore/reload and are always honored.
+        if (isForeignNavigation(owner, conversationId)) return;
+        setSessionAccessRequest(null);
+        setSessionAccessAnswer(null);
+        setV20CookieBlock(null);
+        setVisible(true);
+        setCollapsed(false);
+        setCurrentUrl(url);
+        setCurrentTitle(null);
+        setLoading(true);
+        persistState({ url, collapsed: false });
+      },
+    );
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistState]);
+  }, [persistState, conversationId]);
 
   useEffect(() => {
     const unlistenPromise = listen<SessionAccessEvent>(
@@ -303,6 +324,9 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         const payload = e.payload;
         const requestId = payload?.requestId ?? payload?.request_id;
         if (!requestId || !payload?.url || !payload?.host) return;
+        // Same ownership gate as the navigate event — a background pipe's
+        // cookie-consent prompt must not surface in another chat.
+        if (isForeignNavigation(payload.owner, conversationId)) return;
         const request = {
           requestId,
           url: payload.url,
@@ -325,7 +349,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistState]);
+  }, [persistState, conversationId]);
 
   useEffect(() => {
     const unlistenPromise = listen<V20CookieBlockEvent>(
@@ -333,6 +357,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       (e) => {
         const payload = e.payload;
         if (!payload?.url || !payload?.host) return;
+        if (isForeignNavigation(payload.owner, conversationId)) return;
         const block = {
           url: payload.url,
           host: payload.host,
@@ -356,7 +381,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistState]);
+  }, [persistState, conversationId]);
 
   useEffect(() => {
     sessionAccessActiveRef.current =
@@ -411,6 +436,12 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     const unlistenPromise = listen<OwnedBrowserStateEvent>(STATE_EVENT, (e) => {
       const payload = e.payload;
       if (!payload || typeof payload !== "object") return;
+      // Native page-state updates reflect the singleton webview's *current*
+      // content. When a background pipe drives it, these still fire — ignore
+      // them so the foreign URL/title isn't persisted into this chat (the
+      // sticky half of the leak: without this the URL is restored on reopen
+      // even though the panel never visibly popped).
+      if (isForeignNavigation(payload.owner, conversationId)) return;
 
       if (typeof payload.url === "string" && payload.url.length > 0) {
         if (payload.url !== currentUrl) {
@@ -430,7 +461,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [currentUrl, persistState]);
+  }, [currentUrl, persistState, conversationId]);
 
   // ---------------------------------------------------------------------------
   // Per-conversation restore

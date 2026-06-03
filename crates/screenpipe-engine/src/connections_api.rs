@@ -2200,6 +2200,7 @@ struct BrowserNavigateBody {
 async fn browser_run_navigate(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<BrowserNavigateBody>,
 ) -> (StatusCode, Json<Value>) {
     // Validate the URL up front so a malformed input returns 400 (client
@@ -2211,6 +2212,18 @@ async fn browser_run_navigate(
         );
     }
 
+    // Owner of this navigation — the chat/session id the calling agent or pipe
+    // runs under. Injected by the agent's curl shim (see
+    // `screenpipe-core::agents::bash_env`) as `x-screenpipe-session`. It rides
+    // the navigate event to the frontend so the embedded owned-browser sidebar
+    // can ignore navigations that belong to a chat other than the one on
+    // screen (the singleton browser is otherwise shared by every chat + pipe).
+    let owner = headers
+        .get("x-screenpipe-session")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let browser = match state.browser_registry.get(&id).await {
         Some(b) => b,
         None => {
@@ -2221,7 +2234,7 @@ async fn browser_run_navigate(
         }
     };
 
-    match browser.navigate(&body.url).await {
+    match browser.navigate_with_owner(&body.url, owner).await {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({

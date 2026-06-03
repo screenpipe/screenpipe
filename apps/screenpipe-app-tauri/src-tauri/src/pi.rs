@@ -1481,6 +1481,14 @@ pub async fn pi_start_inner(
         }
     }
 
+    // Tag this chat's local API calls with its session id so the owned-browser
+    // sidebar reveals the agent's browser only in the chat that launched it.
+    // `sid` equals the frontend `conversationId`; the bash shim forwards it as
+    // x-screenpipe-session and the navigate handler rides it to the frontend.
+    // If the user switches to another chat mid-run, this agent's later
+    // navigations no longer match the on-screen conversation and stay hidden.
+    cmd.env("SCREENPIPE_SESSION_ID", &sid);
+
     // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
     // shim sourced from $BASH_ENV on every subshell. See bash_env.rs in
     // screenpipe-core.

@@ -542,7 +542,7 @@ impl McpServerStore {
             .unwrap_or_else(|| default_oauth_scopes(&discovered.scopes_supported));
 
         let state = random_url_token();
-        let code_verifier = random_url_token();
+        let code_verifier = pkce_verifier();
         let code_challenge = pkce_challenge(&code_verifier);
         let mut auth_url = reqwest::Url::parse(&discovered.authorization_endpoint)
             .map_err(|e| anyhow!("invalid OAuth auth URL: {}", e))?;
@@ -1074,6 +1074,21 @@ fn random_url_token() -> String {
         uuid::Uuid::new_v4().simple()
     );
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes())
+}
+
+/// RFC 7636 §4.1 PKCE code verifier: 32 random bytes (256 bits of entropy)
+/// rendered as base64url-no-pad → exactly 43 chars, safely inside the spec's
+/// 43..=128 length bound and the unreserved character set.
+///
+/// Note: do NOT use [`random_url_token`] here — it base64-encodes a 128-char
+/// hex string, yielding a 171-char verifier. Strict token endpoints (e.g.
+/// Krisp) validate the length and reject the exchange with
+/// `400 invalid_request: Invalid parameter: code_verifier`.
+fn pkce_verifier() -> String {
+    let mut raw = [0u8; 32];
+    raw[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    raw[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
 }
 
 fn pkce_challenge(verifier: &str) -> String {
@@ -2241,6 +2256,49 @@ mod tests {
         }
     }
 
+    /// Custom wiremock matcher reproducing a strict OAuth token endpoint
+    /// (e.g. Krisp): the form must carry a `code_verifier` whose length is
+    /// inside RFC 7636's 43..=128 bound. The old 171-char verifier produced
+    /// by `random_url_token` fails this, so the exchange 404s.
+    struct CodeVerifierWithinSpec;
+    impl wiremock::Match for CodeVerifierWithinSpec {
+        fn matches(&self, request: &wiremock::Request) -> bool {
+            // base64url verifiers never percent-encode, so the on-wire form
+            // value length equals the real verifier length.
+            String::from_utf8_lossy(&request.body)
+                .split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .find(|(k, _)| *k == "code_verifier")
+                .map(|(_, v)| (43..=128).contains(&v.len()))
+                .unwrap_or(false)
+        }
+    }
+
+    #[test]
+    fn pkce_verifier_is_rfc7636_compliant() {
+        // RFC 7636 §4.1: verifier is 43..=128 chars from the unreserved set.
+        // The previous code reused random_url_token(), which base64-encodes a
+        // 128-char hex string → a 171-char verifier that strict token
+        // endpoints (Krisp) reject with `invalid_request: code_verifier`.
+        for _ in 0..256 {
+            let v = pkce_verifier();
+            assert!(
+                (43..=128).contains(&v.len()),
+                "code_verifier length {} outside RFC 7636 43..=128",
+                v.len()
+            );
+            assert!(
+                v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')),
+                "code_verifier has non-unreserved chars: {v}"
+            );
+        }
+        // S256 challenge of a 32-byte verifier is 43 base64url-no-pad chars.
+        let challenge = pkce_challenge(&pkce_verifier());
+        assert_eq!(challenge.len(), 43);
+        assert!(!challenge.contains('='), "challenge must be unpadded");
+    }
+
     #[tokio::test]
     async fn probe_handles_sse_content_type() {
         let server = MockServer::start().await;
@@ -2577,6 +2635,10 @@ mod tests {
                 "authorization",
                 expected_basic.as_str(),
             ))
+            // Krisp also validates the PKCE verifier length; a 171-char
+            // verifier is rejected, so the exchange must send a spec-compliant
+            // one to match here.
+            .and(CodeVerifierWithinSpec)
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "access_token": "at-123",
                 "token_type": "Bearer",
