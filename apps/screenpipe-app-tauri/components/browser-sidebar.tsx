@@ -256,6 +256,14 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      // Route changes like /home -> /settings unmount the React owner, but the
+      // native child webview can remain visible unless we hide it explicitly.
+      commands.ownedBrowserHide().catch(() => {});
+    };
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Viewport resize tracking — drives both the JS clamp and re-pushing bounds
   // ---------------------------------------------------------------------------
