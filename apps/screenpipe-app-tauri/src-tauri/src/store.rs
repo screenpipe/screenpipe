@@ -697,6 +697,13 @@ pub struct SettingsStore {
     /// serialize only known fields and silently wipe frontend-only data.
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, serde_json::Value>,
+
+    /// Windows-only: when true, clicking the X on the Home window hides it to
+    /// the system tray (and removes it from the taskbar) instead of minimizing.
+    /// Read by the CloseRequested handler in main.rs. Default off (historical
+    /// minimize-to-taskbar behavior).
+    #[serde(rename = "minimizeToTrayOnClose", default)]
+    pub minimize_to_tray_on_close: bool,
 }
 
 fn generate_device_id() -> String {
@@ -1050,6 +1057,7 @@ Rules:
             translucent_sidebar: false,
             hide_thinking_blocks: true,
             ui_theme: "system".to_string(),
+            minimize_to_tray_on_close: false,
             extra: std::collections::HashMap::new(),
         }
     }

@@ -802,9 +802,45 @@ async fn main() {
                 #[cfg(target_os = "windows")]
                 {
                     if window.label() == "home" {
-                        // Minimize instead of closing so the Home window stays in the
-                        // taskbar as the persistent app icon.
-                        let _ = window.minimize();
+                        // Behavior depends on the user setting `minimizeToTrayOnClose`:
+                        //  - false (default, historical behavior): minimize the Home
+                        //    window so its icon stays in the Windows taskbar as the
+                        //    persistent app entry point.
+                        //  - true (opt-in): hide the window AND remove it from the
+                        //    taskbar so the system tray icon becomes the only entry
+                        //    point. The app process keeps running (see ExitRequested
+                        //    handler below). The tray left-click handler in
+                        //    tray.rs::setup_tray_click_handlers restores the window,
+                        //    and window/show.rs::show_existing_main resets
+                        //    skip_taskbar back to false on restore.
+                        //
+                        // Settings reads are best-effort: if the store can't be read
+                        // we fall back to the historical minimize() behavior so the
+                        // user never loses access to the window. set_skip_taskbar /
+                        // hide failures also fall back to minimize() for the same
+                        // reason — see plan.md "lost-window risk".
+                        let minimize_to_tray = crate::store::SettingsStore::get(
+                            window.app_handle(),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(|s| s.minimize_to_tray_on_close)
+                        .unwrap_or(false);
+
+                        if minimize_to_tray {
+                            let skip_ok = window.set_skip_taskbar(true).is_ok();
+                            let hide_ok = window.hide().is_ok();
+                            if !(skip_ok && hide_ok) {
+                                // Hard fallback so the user is never left with an
+                                // off-taskbar but visible window.
+                                let _ = window.set_skip_taskbar(false);
+                                let _ = window.minimize();
+                            }
+                        } else {
+                            // Minimize instead of closing so the Home window stays in
+                            // the taskbar as the persistent app icon.
+                            let _ = window.minimize();
+                        }
                     } else {
                         // Overlay and other windows: hide (they're skip_taskbar anyway)
                         let _ = window.hide();

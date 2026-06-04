@@ -537,6 +537,13 @@ impl ShowRewindWindow {
                         ));
                     }
                 }
+                // Windows: if the user opted into `minimizeToTrayOnClose`, the
+                // Home window may have been hidden with skip_taskbar(true) on
+                // close. Clear that flag here so the window reappears in the
+                // taskbar regardless of whether we were previously hidden or
+                // minimized. No-op on macOS/Linux. See main.rs CloseRequested.
+                #[cfg(target_os = "windows")]
+                let _ = window.set_skip_taskbar(false);
                 window.show().ok();
 
                 #[cfg(target_os = "macos")]

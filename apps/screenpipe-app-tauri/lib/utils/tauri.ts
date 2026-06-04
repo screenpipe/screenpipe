@@ -2716,7 +2716,14 @@ hideThinkingBlocks?: boolean;
 /**
  * UI theme: "light", "dark", or "system".
  */
-uiTheme?: string }
+uiTheme?: string;
+/**
+ * Windows-only: when true, clicking the X on the Home window hides it to
+ * the system tray (and removes it from the taskbar) instead of minimizing.
+ * Read by the CloseRequested handler in main.rs. Default off (historical
+ * minimize-to-taskbar behavior).
+ */
+minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type Suggestion = { text: string;
 /**

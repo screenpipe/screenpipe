@@ -353,6 +353,10 @@ export type Settings = SettingsStore & {
 	 *  logged into. Revocable from the owned-browser cookie menu.
 	 *  Undefined = not decided yet, false = disabled, true = enabled. */
 	browserCookieAccessGranted?: boolean;
+	/** Windows-only: when true, closing the Home window hides it to the system
+	 * tray (and removes it from the taskbar) instead of minimizing. The Rust
+	 * close handler in src-tauri/src/main.rs reads this directly. Default off. */
+	minimizeToTrayOnClose?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {
