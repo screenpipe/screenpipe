@@ -47,38 +47,10 @@ the cursor is in-memory and the backlog re-sends on restart — low-harm (Honcho
 deriver dedupes semantically and memory volume is low), and it's logged so it
 isn't silent.
 
-## Peer modeling — Model 1 (implemented) vs Model 2 (configurable)
+## Peer modeling
 
-How memories are *attributed* in Honcho is a real design choice. The connection's
-`peer_name` field is the lever.
-
-### Model 1 — facts as the user's own statements (default)
-
-Memory facts are authored **as the user peer's own messages**. There is one peer
-(id = `peer_name`, default `user-default`) created with `observe_me: true`, and a
-single stable session `screenpipe-memories`. Honcho models the user from a
-first-person stream of durable facts about them.
-
-This is what screenpipe ships. It's the simplest mapping and matches how the
-other destinations treat the digest (facts *about* the user, stated plainly).
-
-### Model 2 — screenpipe as an observer peer (not implemented, but reachable)
-
-The alternative is to author the messages as a **`screenpipe` observer peer**
-that observes a separate user peer, so Honcho attributes "screenpipe observed X
-about this user" rather than treating the facts as the user's own statements.
-This changes how provenance/trust weighting can be modeled (third-party
-observation vs. self-statement).
-
-We don't build Model 2, but because `peer_name` is **configurable** you can
-experiment with it **without code changes**:
-
-1. Set the connection's `peer_name` to e.g. `screenpipe` — the synced facts are
-   now authored by a `screenpipe` peer.
-2. In Honcho (app.honcho.dev or your local API), add yourself as a separate user
-   peer on the `screenpipe-memories` session and set the observe directionality
-   so your user peer observes the `screenpipe` peer.
-
-The trade-off is self-statement modeling (Model 1) vs. third-party-observation
-modeling (Model 2). Pick based on how you want a downstream agent to weigh these
-facts.
+Memory facts are authored as the user peer's own messages. One peer
+(id = `peer_name`, default `user-default`, created with `observe_me: true`) and a
+single stable session `screenpipe-memories`, so Honcho models the user from a
+first-person stream of durable facts about them. This matches how the other
+destinations treat the digest — facts *about* the user, stated plainly.
