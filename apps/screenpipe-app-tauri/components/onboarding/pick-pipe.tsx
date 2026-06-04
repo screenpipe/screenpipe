@@ -309,15 +309,6 @@ export default function PickPipe() {
     posthog.capture("onboarding_completed");
 
     try {
-      // Best-effort install of digital-clone — the breakout pipe — so even
-      // skippers leave with the highest-value pipe enabled.
-      await installAndEnable("digital-clone").catch((e) => {
-        const msg = (e as Error)?.stack ?? (e as Error)?.message ?? String(e);
-        console.warn("failed to install default pipe:", msg);
-      });
-    } catch {}
-
-    try {
       await completeOnboarding();
     } catch {}
     try {

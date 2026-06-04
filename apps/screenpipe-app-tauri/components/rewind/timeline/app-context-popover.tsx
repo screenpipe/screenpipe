@@ -304,14 +304,19 @@ export function AppContextPopover({
 						<div className="pl-4 space-y-0.5">
 							{data.topUrls.map((u, i) => {
 								const domain = extractDomain(u.url);
+								// browser_url from screenpipe often lacks a protocol (e.g. "github.com/foo");
+								// openUrl rejects such inputs silently, so normalize before opening.
+								const openableUrl = u.url.includes("://") ? u.url : `https://${u.url}`;
 								return (
 									<button
 										key={i}
-										className="flex items-center gap-1 text-blue-400 hover:text-blue-300 truncate w-full text-left transition-colors"
-										title={u.url}
-										onClick={() => {
-											openUrl(u.url).catch(() => {});
-											commands.closeWindow("Main").catch(() => {});
+										className="flex items-center gap-1 text-blue-400 hover:text-blue-300 truncate w-full text-left transition-colors cursor-pointer"
+										title={openableUrl}
+										onClick={(e) => {
+											e.stopPropagation();
+											openUrl(openableUrl).catch((err) => {
+												console.error("failed to open url", openableUrl, err);
+											});
 										}}
 									>
 										{domain ? (

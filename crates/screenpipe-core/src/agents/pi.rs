@@ -989,6 +989,7 @@ impl PiExecutor {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
+        session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
@@ -1046,6 +1047,16 @@ impl PiExecutor {
         if let Some(ref key) = self.api_auth_key {
             cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
             cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
+        }
+
+        // Tag this run's local API calls with the owning chat/session so the
+        // owned-browser sidebar can route navigations to the right chat (the
+        // bash shim reads SCREENPIPE_SESSION_ID and adds x-screenpipe-session;
+        // the navigate handler forwards it to the frontend). For pipes this is
+        // `pipe:<name>`, which never matches an open chat's conversationId, so a
+        // background pipe's browser stays out of whatever chat is on screen.
+        if let Some(owner) = session_owner {
+            cmd.env("SCREENPIPE_SESSION_ID", owner);
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
@@ -1282,6 +1293,7 @@ impl AgentExecutor for PiExecutor {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
+        session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let resolved_model = Self::resolve_model(model, &resolved_provider);
@@ -1325,6 +1337,7 @@ impl AgentExecutor for PiExecutor {
                 line_tx.clone(),
                 continue_session,
                 pipe_system_prompt,
+                session_owner,
             )
             .await?;
 
@@ -1357,6 +1370,7 @@ impl AgentExecutor for PiExecutor {
                     line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
+                    session_owner,
                 )
                 .await?;
         }
@@ -1404,6 +1418,7 @@ impl AgentExecutor for PiExecutor {
                     line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
+                    session_owner,
                 )
                 .await?;
         }

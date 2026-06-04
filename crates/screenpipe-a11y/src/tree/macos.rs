@@ -273,13 +273,25 @@ fn looks_like_url(s: &str) -> bool {
         || (trimmed.contains('.') && !trimmed.starts_with('.') && trimmed.len() > 4)
 }
 
+/// Process-global enhanced-mode tracker.
+///
+/// CRITICAL: the vision pipeline recreates the tree walker on EVERY frame
+/// (`screenpipe_capture::paired_capture::walk_accessibility_tree` calls
+/// `create_tree_walker` per capture). A per-walker cache therefore resets every
+/// frame and re-asserts `AXEnhancedUserInterface` on the focused app on every
+/// single walk. Re-asserting forces Chromium/Electron to synchronously rebuild
+/// its AX tree, and that rebuild can commit (and duplicate) a pending
+/// composition/autocomplete buffer into the focused field — the "phantom text"
+/// bug. Keeping the gate in a process-global static makes set-once actually hold
+/// across the short-lived walkers: poke a pid once, never again while it stays
+/// focused (re-enable only after it disappears for the eviction window).
+static ENHANCED_MODE_CACHE: std::sync::LazyLock<super::enhanced_mode_cache::EnhancedModeCache> =
+    std::sync::LazyLock::new(super::enhanced_mode_cache::EnhancedModeCache::with_default_ttl);
+
 /// macOS tree walker using cidre's AX bindings.
 pub struct MacosTreeWalker {
     config: TreeWalkerConfig,
     incognito_detector: Box<dyn crate::incognito::IncognitoDetector>,
-    /// Gates the per-walk `AXEnhancedUserInterface` toggle so we only poke a
-    /// given renderer at most once per TTL instead of on every walk.
-    enhanced_mode_cache: super::enhanced_mode_cache::EnhancedModeCache,
 }
 
 impl MacosTreeWalker {
@@ -287,7 +299,6 @@ impl MacosTreeWalker {
         Self {
             config,
             incognito_detector: crate::incognito::create_detector(),
-            enhanced_mode_cache: super::enhanced_mode_cache::EnhancedModeCache::with_default_ttl(),
         }
     }
 }
@@ -373,7 +384,7 @@ impl MacosTreeWalker {
         // we poke it), so we only re-assert it once per TTL per pid. Chromium
         // latches the mode so one poke is plenty; if the renderer ever drops
         // the mode we recover on the next TTL window.
-        if self.enhanced_mode_cache.should_enable(pid) {
+        if ENHANCED_MODE_CACHE.should_enable_once(pid) {
             let eui_attr_name = cf::String::from_str("AXEnhancedUserInterface");
             let eui_attr = ax::Attr::with_string(&eui_attr_name);
             let _ = ax_app.set_attr(eui_attr, cf::Boolean::value_true());

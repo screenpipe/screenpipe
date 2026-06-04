@@ -683,3 +683,111 @@ pub struct WindowOcr {
     pub timestamp: Instant,
     pub browser_url: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn number(block: &HashMap<String, String>, key: &str) -> f64 {
+        block
+            .get(key)
+            .unwrap_or_else(|| panic!("missing OCR coordinate {key}"))
+            .parse::<f64>()
+            .unwrap_or_else(|_| panic!("invalid OCR coordinate {key}"))
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 0.000_001,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_ocr_task_uses_cached_window_ocr_and_preserves_capture_metadata() {
+        let screen_image = Arc::new(DynamicImage::new_rgb8(400, 300));
+        let window_image = DynamicImage::new_rgb8(100, 50);
+        let captured_at = Utc::now();
+        let timestamp = Instant::now();
+
+        let captured_window = CapturedWindow {
+            image: window_image,
+            app_name: "Code".to_string(),
+            window_name: "screenpipe-core.rs".to_string(),
+            process_id: 42,
+            is_focused: true,
+            browser_url: Some("https://example.test/docs".to_string()),
+            window_x: 40,
+            window_y: 30,
+            window_width: 100,
+            window_height: 50,
+        };
+
+        let cache_key = WindowCacheKey {
+            window_id: WindowOcrCache::make_window_id(
+                &captured_window.app_name,
+                &captured_window.window_name,
+            ),
+            image_hash: WindowOcrCache::calculate_image_hash(&captured_window.image),
+        };
+        let ocr_cache = Arc::new(Mutex::new(WindowOcrCache::new(Duration::from_secs(60), 10)));
+        {
+            let mut cache = ocr_cache.lock().await;
+            cache.insert(
+                cache_key,
+                "cached visible OCR text".to_string(),
+                r#"[{"text":"cached visible OCR text","left":"0.25","top":"0.20","width":"0.50","height":"0.40"}]"#.to_string(),
+                0.91,
+            );
+        }
+
+        let raw = RawCaptureResult {
+            image: screen_image.clone(),
+            window_images: vec![captured_window],
+            frame_number: 17,
+            timestamp,
+            captured_at,
+        };
+
+        let result = process_ocr_task(&raw, &OcrEngine::Tesseract, &[], ocr_cache)
+            .await
+            .expect("cached OCR path should not require a live OCR engine");
+
+        assert_eq!(result.cache_hits, 1);
+        assert_eq!(result.cache_misses, 0);
+        assert_eq!(result.capture.frame_number, 17);
+        assert_eq!(result.capture.timestamp, timestamp);
+        assert_eq!(result.capture.captured_at, captured_at);
+        assert!(Arc::ptr_eq(&result.capture.image, &screen_image));
+
+        let window = result
+            .capture
+            .window_ocr_results
+            .first()
+            .expect("one captured window should produce one OCR result");
+        assert_eq!(result.capture.window_ocr_results.len(), 1);
+        assert_eq!(window.app_name, "Code");
+        assert_eq!(window.window_name, "screenpipe-core.rs");
+        assert_eq!(window.text, "cached visible OCR text");
+        assert_eq!(
+            window.browser_url.as_deref(),
+            Some("https://example.test/docs")
+        );
+        assert!(window.focused);
+        assert_close(window.confidence, 0.91);
+
+        let block = window
+            .text_json
+            .first()
+            .expect("cached OCR block should be transformed to screen coordinates");
+        assert_eq!(
+            block.get("text").map(String::as_str),
+            Some("cached visible OCR text")
+        );
+        assert_close(number(block, "left"), 0.1625);
+        assert_close(number(block, "top"), 0.133_333_333_333_333_33);
+        assert_close(number(block, "width"), 0.125);
+        assert_close(number(block, "height"), 0.066_666_666_666_666_67);
+    }
+}

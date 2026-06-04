@@ -340,6 +340,8 @@ export function IntegrationIcon({
     "google-sheets": <img src="/images/google-sheets.svg" alt="Google Sheets" className="w-5 h-5" />,
     notion: <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />,
     linear: <img src="/images/linear.svg" alt="Linear" className="w-5 h-5" />,
+    krisp: <img src="/images/krisp.svg" alt="Krisp" className="w-5 h-5 dark:invert" />,
+    odoo: <img src="/images/odoo.svg" alt="Odoo" className="w-5 h-5" />,
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     posthog: <img src="/images/posthog.svg" alt="PostHog" className="w-5 h-5" />,
     n8n: <img src="/images/n8n.png" alt="n8n" className="w-5 h-5 rounded" />,
@@ -1949,28 +1951,56 @@ async function discoverObsidianVaults(): Promise<Array<{ id: string; name: strin
   } catch { return []; }
 }
 
+// A connected vault. `instance === null` is the default connection (stored
+// under the bare `obsidian` key, what single-vault users + the ai-prompt-journal
+// pipe read). Additional vaults are named instances (`obsidian:<slug>`).
+interface ConnectedVault {
+  instance: string | null;
+  path: string;
+}
+
+const vaultFolderName = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+
+// Turn a vault folder name into a URL-safe instance slug (it becomes a path param).
+const vaultSlug = (p: string): string =>
+  vaultFolderName(p).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "vault";
+
 function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void }) {
   const sessionKey = "disconnected:obsidian";
-  const [vaults, setVaults] = useState<Array<{ id: string; name: string; path: string }>>([]);
-  const [connectedPath, setConnectedPath] = useState<string | null>(null);
-  const [status, setStatus] = useState<"idle" | "connecting" | "error">("idle");
+  const [discovered, setDiscovered] = useState<Array<{ id: string; name: string; path: string }>>([]);
+  const [connected, setConnected] = useState<ConnectedVault[]>([]);
+  const [busyPath, setBusyPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [manualPath, setManualPath] = useState("");
 
-  useEffect(() => {
-    const wasDisconnected = typeof window !== "undefined" && !!sessionStorage.getItem(sessionKey);
-    if (!wasDisconnected) {
-      localFetch("/connections/obsidian")
-        .then(r => r.json())
-        .then(data => { if (data.credentials?.vault_path) setConnectedPath(data.credentials.vault_path); })
-        .catch(() => {});
+  // Load every connected vault (default + named instances) from the backend.
+  const loadConnected = useCallback(async () => {
+    try {
+      const r = await localFetch("/connections/obsidian/instances");
+      if (!r.ok) throw new Error("instances unavailable");
+      const data = await r.json();
+      const list = data.instances || data.data || data || [];
+      const mapped: ConnectedVault[] = (Array.isArray(list) ? list : [])
+        .map((i: any) => ({ instance: i.instance ?? null, path: i.credentials?.vault_path as string }))
+        .filter((v: ConnectedVault) => !!v.path);
+      setConnected(mapped);
+    } catch {
+      /* leave as-is — server may still be starting */
     }
-    discoverObsidianVaults().then(setVaults).catch(() => {});
   }, []);
 
-  const handleConnect = async (vaultPath: string) => {
-    if (!vaultPath.trim()) return;
-    setStatus("connecting");
+  useEffect(() => {
+    loadConnected();
+    discoverObsidianVaults().then(setDiscovered).catch(() => {});
+  }, [loadConnected]);
+
+  const connectedPaths = new Set(connected.map(v => v.path));
+
+  const handleConnect = async (rawPath: string) => {
+    const vaultPath = rawPath.trim();
+    if (!vaultPath || busyPath) return;
+    if (connectedPaths.has(vaultPath)) { setManualPath(""); return; }
+    setBusyPath(vaultPath);
     setError(null);
     try {
       const testRes = await localFetch("/connections/obsidian/test", {
@@ -1980,89 +2010,139 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       });
       const testData = await testRes.json();
       if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
-      const saveRes = await localFetch("/connections/obsidian", {
+
+      // First vault → default connection (backward compatible). Additional
+      // vaults → a named instance keyed by a unique slug of the folder name.
+      const hasDefault = connected.some(v => v.instance === null);
+      let endpoint = "/connections/obsidian";
+      if (hasDefault) {
+        const taken = new Set(connected.map(v => v.instance).filter(Boolean) as string[]);
+        const base = vaultSlug(vaultPath);
+        let slug = base;
+        for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+        endpoint = `/connections/obsidian/instances/${encodeURIComponent(slug)}`;
+      }
+      const saveRes = await localFetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credentials: { vault_path: vaultPath } }),
       });
       const saveData = await saveRes.json();
       if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+
       sessionStorage.removeItem(sessionKey);
-      setConnectedPath(vaultPath);
       setManualPath("");
-      setStatus("idle");
+      await loadConnected();
       notifyConnectionsUpdated();
       posthog.capture("connection_saved", { integration: "obsidian" });
       onConnected?.();
     } catch (e: any) {
       setError(e?.message || "connection failed");
-      setStatus("idle");
+    } finally {
+      setBusyPath(null);
     }
   };
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = async (vault: ConnectedVault) => {
     try {
-      const res = await localFetch("/connections/obsidian", { method: "DELETE" });
+      const endpoint = vault.instance === null
+        ? "/connections/obsidian"
+        : `/connections/obsidian/instances/${encodeURIComponent(vault.instance)}`;
+      const res = await localFetch(endpoint, { method: "DELETE" });
       if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
-      sessionStorage.setItem(sessionKey, "1");
-      setConnectedPath(null);
-      setManualPath("");
-      setStatus("idle");
+
+      const remaining = connected.filter(v => v.instance !== vault.instance);
+      // Keep the default `obsidian` slot filled so single-vault consumers (the
+      // ai-prompt-journal pipe, onboarding's connected check) keep resolving a
+      // vault. If we just removed the default but named vaults remain, promote
+      // one of them into the default slot.
+      const promote = vault.instance === null ? remaining.find(v => v.instance !== null) : undefined;
+      if (promote && promote.instance !== null) {
+        await localFetch("/connections/obsidian", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ credentials: { vault_path: promote.path } }),
+        });
+        await localFetch(`/connections/obsidian/instances/${encodeURIComponent(promote.instance)}`, { method: "DELETE" });
+      }
+
       setError(null);
+      // Only suppress auto-reconnect hints once the last vault is gone.
+      if (remaining.length === 0) sessionStorage.setItem(sessionKey, "1");
+      await loadConnected();
       notifyConnectionsUpdated();
       onDisconnected?.();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
+      loadConnected();
     }
   };
 
-  if (connectedPath) {
-    return (
-      <div className="space-y-3">
-        <div className="p-3 bg-muted border border-border rounded-lg space-y-0.5">
-          <p className="text-xs font-medium text-foreground">connected vault</p>
-          <p className="text-xs text-muted-foreground font-mono break-all">{connectedPath}</p>
-        </div>
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <Button onClick={handleDisconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
-          <X className="h-3 w-3" />disconnect
-        </Button>
-      </div>
-    );
-  }
+  // Auto-discovered vaults the user hasn't connected yet.
+  const suggestions = discovered.filter(v => !connectedPaths.has(v.path));
+  const isWindows = typeof window !== "undefined" && platform() === "windows";
 
   return (
     <div className="space-y-4">
-      {vaults.length > 0 && (
+      {connected.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs text-muted-foreground">detected vaults</p>
+          <p className="text-xs text-muted-foreground">connected {connected.length === 1 ? "vault" : "vaults"}</p>
           <div className="space-y-1">
-            {vaults.map(v => (
+            {connected.map(v => (
+              <div
+                key={v.instance ?? "__default__"}
+                className="p-2.5 rounded-lg border border-border bg-muted flex items-center gap-2.5"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">{vaultFolderName(v.path)}</p>
+                  <p className="text-xs text-muted-foreground truncate font-mono">{v.path}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDisconnect(v)}
+                  title="disconnect vault"
+                  className="text-muted-foreground hover:text-destructive shrink-0"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">{connected.length > 0 ? "add another vault" : "detected vaults"}</p>
+          <div className="space-y-1">
+            {suggestions.map(v => (
               <button
                 key={v.id}
                 onClick={() => handleConnect(v.path)}
-                disabled={status === "connecting"}
+                disabled={!!busyPath}
                 className="w-full text-left p-2.5 rounded-lg border border-border bg-card hover:bg-muted transition-colors flex items-center gap-2.5 disabled:opacity-50"
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium truncate">{v.name}</p>
                   <p className="text-xs text-muted-foreground truncate font-mono">{v.path}</p>
                 </div>
-                {status === "connecting" ? <Loader2 className="h-3 w-3 animate-spin shrink-0 text-muted-foreground" /> : <Check className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />}
+                {busyPath === v.path ? <Loader2 className="h-3 w-3 animate-spin shrink-0 text-muted-foreground" /> : <Plus className="h-3 w-3 shrink-0 text-muted-foreground" />}
               </button>
             ))}
           </div>
         </div>
       )}
+
       <div className="space-y-1.5">
-        {vaults.length > 0 && <p className="text-xs text-muted-foreground">or enter path manually</p>}
-        {vaults.length === 0 && <p className="text-xs text-muted-foreground">select your vault folder</p>}
+        <p className="text-xs text-muted-foreground">
+          {connected.length > 0 || suggestions.length > 0 ? "or enter a vault path manually" : "select your vault folder"}
+        </p>
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Input
               value={manualPath}
               onChange={e => setManualPath(e.target.value)}
-              placeholder={typeof window !== "undefined" && platform() === "windows" ? "C:\\Users\\you\\Documents\\MyVault" : "/Users/you/Documents/MyVault"}
+              placeholder={isWindows ? "C:\\Users\\you\\Documents\\MyVault" : "/Users/you/Documents/MyVault"}
               className="h-8 text-xs font-mono pr-8"
               onKeyDown={e => { if (e.key === "Enter") handleConnect(manualPath); }}
             />
@@ -2080,15 +2160,16 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
           </div>
           <Button
             onClick={() => handleConnect(manualPath)}
-            disabled={!manualPath.trim() || status === "connecting"}
+            disabled={!manualPath.trim() || !!busyPath}
             size="sm"
             className="gap-1.5 h-8 text-xs normal-case font-sans tracking-normal shrink-0"
           >
-            {status === "connecting" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-            connect
+            {busyPath && busyPath === manualPath.trim() ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+            add vault
           </Button>
         </div>
       </div>
+
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
@@ -2244,15 +2325,253 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 }
 
 // ---------------------------------------------------------------------------
+// Krisp — official OAuth MCP card
+// ---------------------------------------------------------------------------
+//
+// Krisp exposes its meeting data (transcripts, notes, action items) through a
+// remote, OAuth-gated MCP server. Rather than make the user paste the URL into
+// the Custom MCP form, this card creates the server config and runs the OAuth
+// flow in one click. Krisp registers screenpipe as a *confidential* client
+// (client_secret_basic) — handled in screenpipe-connect's mcp_servers.rs.
+
+const KRISP_MCP_URL = "https://mcp.krisp.ai/mcp";
+
+function krispMcpRandomId(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function KrispPanel({
+  onConnected,
+  onDisconnected,
+}: {
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
+  const [serverId, setServerId] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
+
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  // Reflect reality on open: find a Krisp MCP server created by a prior connect
+  // and read its OAuth status.
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await localFetch("/mcp-servers");
+      if (!r.ok) return;
+      const body = await r.json();
+      const list = (body?.data ?? []) as { id: string; url?: string }[];
+      const existing = list.find(
+        (s) => (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL
+      );
+      if (!existing) {
+        setServerId(null);
+        setConnected(false);
+        return;
+      }
+      setServerId(existing.id);
+      const sr = await localFetch(
+        `/mcp-servers/${encodeURIComponent(existing.id)}/oauth/status`
+      );
+      if (sr.ok) {
+        const sb = await sr.json();
+        setConnected(!!sb?.data?.connected);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+    return () => {
+      cancelledRef.current = true;
+      clearTimer();
+    };
+  }, [loadStatus]);
+
+  const handleConnect = async () => {
+    setBusy(true);
+    setStatusMsg(null);
+    cancelledRef.current = false;
+    clearTimer();
+    try {
+      // Reuse an existing Krisp server if present; otherwise create-on-complete
+      // (the server is persisted only when OAuth succeeds).
+      const targetId = serverId ?? krispMcpRandomId();
+      const isNew = !serverId;
+      const res = await localFetch(
+        `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            isNew
+              ? { name: "Krisp", url: KRISP_MCP_URL, headers: [], enabled: true }
+              : {}
+          ),
+        }
+      );
+      const body = await res.json();
+      if (!res.ok) {
+        setStatusMsg(body?.error ?? `Sign-in failed (HTTP ${res.status})`);
+        return;
+      }
+      await openUrl(body.data.auth_url);
+      setWaiting(true);
+      setStatusMsg("Finish sign-in in the browser…");
+      const started = Date.now();
+      const poll = async () => {
+        if (cancelledRef.current) return;
+        try {
+          const sr = await localFetch(
+            `/mcp-servers/${encodeURIComponent(targetId)}/oauth/status`
+          );
+          if (sr.ok) {
+            const sb = await sr.json();
+            if (sb?.data?.connected) {
+              clearTimer();
+              setWaiting(false);
+              setConnected(true);
+              setServerId(targetId);
+              setStatusMsg(null);
+              notifyConnectionsUpdated();
+              onConnected?.();
+              return;
+            }
+          }
+        } catch {}
+        if (Date.now() - started < 120_000) {
+          timerRef.current = setTimeout(poll, 2000);
+        } else {
+          setWaiting(false);
+          setStatusMsg("Sign-in was not completed");
+        }
+      };
+      timerRef.current = setTimeout(poll, 2000);
+    } catch (e: any) {
+      setWaiting(false);
+      setStatusMsg(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancel = () => {
+    cancelledRef.current = true;
+    clearTimer();
+    setWaiting(false);
+    setBusy(false);
+    setStatusMsg("Sign-in cancelled");
+  };
+
+  const handleDisconnect = async () => {
+    if (!serverId) return;
+    setBusy(true);
+    try {
+      await localFetch(
+        `/mcp-servers/${encodeURIComponent(serverId)}/oauth/disconnect`,
+        { method: "POST" }
+      );
+      setConnected(false);
+      setStatusMsg(null);
+      notifyConnectionsUpdated();
+      onDisconnected?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-3 text-sm">
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        Connect Krisp so your AI can search your meeting transcripts, notes, and
+        action items. Sign-in is handled by Krisp&apos;s OAuth — screenpipe never
+        sees your password.
+      </p>
+      {connected ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
+            <Check className="h-3.5 w-3.5" /> Connected
+          </span>
+          <Button
+            onClick={handleDisconnect}
+            disabled={busy}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal ml-auto"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <LogOut className="h-3 w-3" />
+            )}
+            Disconnect
+          </Button>
+        </div>
+      ) : waiting ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />{" "}
+            {statusMsg ?? "Waiting for sign-in…"}
+          </span>
+          <Button
+            onClick={handleCancel}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal ml-auto"
+          >
+            <X className="h-3 w-3" /> Cancel
+          </Button>
+        </div>
+      ) : (
+        <Button
+          onClick={handleConnect}
+          disabled={busy}
+          size="sm"
+          className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+        >
+          {busy ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <LogIn className="h-3 w-3" />
+          )}
+          Connect Krisp
+        </Button>
+      )}
+      {statusMsg && !waiting && !connected && (
+        <p className="text-xs text-muted-foreground">{statusMsg}</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main connections section
 // ---------------------------------------------------------------------------
 
 interface ConnectionsSectionProps {
   focusConnectionId?: string | null;
+  focusCategory?: string | null;
   focusRequestId?: number;
+  onFocusRequestConsumed?: () => void;
 }
 
-export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: ConnectionsSectionProps = {}) {
+export function ConnectionsSection({
+  focusConnectionId,
+  focusCategory,
+  focusRequestId = 0,
+  onFocusRequestConsumed,
+}: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
   const [sortBy, setSortBy] = useState<ConnectionSort>("default");
@@ -2272,7 +2591,15 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
   useEffect(() => {
     if (!focusRequestId) return;
     setSelected(focusConnectionId || null);
-  }, [focusConnectionId, focusRequestId]);
+    setCategoryFilter(
+      focusCategory
+        ? normalizeConnectionCategory(focusCategory)
+        : ALL_CONNECTION_CATEGORIES,
+    );
+    setSearch("");
+    setSortBy("default");
+    onFocusRequestConsumed?.();
+  }, [focusCategory, focusConnectionId, focusRequestId, onFocusRequestConsumed]);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
@@ -2285,6 +2612,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
   const [googleSheetsConnected, setGoogleSheetsConnected] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
+  const [krispConnected, setKrispConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
 
   const refreshStatus = useCallback(() => {
@@ -2312,11 +2640,12 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       setGmailConnected(res.status === "ok" && res.data.connected);
     }).catch(() => {});
     localFetch("/mcp-servers").then(async r => {
-      if (!r.ok) { setCustomMcpConnected(false); return; }
+      if (!r.ok) { setCustomMcpConnected(false); setKrispConnected(false); return; }
       const body = await r.json();
-      const list = (body?.data ?? []) as { enabled: boolean }[];
+      const list = (body?.data ?? []) as { enabled: boolean; url?: string }[];
       setCustomMcpConnected(list.some(s => s.enabled));
-    }).catch(() => setCustomMcpConnected(false));
+      setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
+    }).catch(() => { setCustomMcpConnected(false); setKrispConnected(false); });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
         setBrowserUrlConnected(
@@ -2404,6 +2733,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       { id: "notion", name: "Notion", icon: "notion", connected: false },
       { id: "linear", name: "Linear", icon: "linear", connected: false },
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false },
+      { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false },
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
@@ -2441,7 +2771,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       ...tile,
       category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, inputMonitoringGranted]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, krispConnected, inputMonitoringGranted]);
 
   const categoryOptions = useMemo(() => {
     const categories = Array.from(
@@ -2520,6 +2850,10 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       case "anythingllm": return <AnythingLLMPanel />;
       case "hermes": return <HermesCard />;
       case "custom-mcp": return <CustomMcpCard />;
+      case "krisp": return <KrispPanel
+        onConnected={() => setKrispConnected(true)}
+        onDisconnected={() => setKrispConnected(false)}
+      />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
@@ -2527,7 +2861,9 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       case "obsidian": return <ObsidianPanel
         onConnected={() => { notifyConnectionsUpdated(); fetchIntegrations(); }}
         onDisconnected={() => {
-          setIntegrations(prev => prev.map(i => i.id === "obsidian" ? { ...i, connected: false } : i));
+          // Don't optimistically flip the tile off — with multiple vaults the
+          // connection stays active until the last one is removed. The panel
+          // invalidated the cache, so this refetch reflects the true state.
           notifyConnectionsUpdated();
           fetchIntegrations();
         }}

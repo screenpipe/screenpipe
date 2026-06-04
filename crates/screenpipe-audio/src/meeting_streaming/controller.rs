@@ -390,6 +390,29 @@ async fn mark_live_covered_chunks(db: &Arc<DatabaseManager>, meeting_id: i64) {
             );
         }
     }
+
+    // Mirror the live finals into audio_transcriptions so the timeline, /search,
+    // pipes, activity-summary and the PII-redaction worker all see this meeting —
+    // not just the in-app Meeting view. No re-transcription; the already-computed
+    // text is copied onto the nearest covering chunk.
+    match db
+        .mirror_live_meeting_to_audio_transcriptions(meeting_id, LIVE_COVERAGE_WINDOW_SECS)
+        .await
+    {
+        Ok(0) => {}
+        Ok(n) => {
+            info!(
+                "meeting streaming: mirrored {} live segment(s) into audio_transcriptions (meeting_id={})",
+                n, meeting_id
+            );
+        }
+        Err(err) => {
+            warn!(
+                "meeting streaming: failed to mirror live segments to audio_transcriptions (meeting_id={}): {}",
+                meeting_id, err
+            );
+        }
+    }
 }
 
 async fn persist_live_final_with_retry(db: Arc<DatabaseManager>, event: MeetingTranscriptFinal) {

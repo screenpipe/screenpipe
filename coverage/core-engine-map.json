@@ -1,0 +1,630 @@
+{
+  "version": 1,
+  "platforms": ["windows", "macos", "linux"],
+  "enforceMappedIntegrationTests": true,
+  "enforceMappedSourceTests": true,
+  "trackedCrates": [
+    {
+      "crate": "screenpipe-engine",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    },
+    {
+      "crate": "screenpipe-db",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    },
+    {
+      "crate": "screenpipe-audio",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    },
+    {
+      "crate": "screenpipe-screen",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    },
+    {
+      "crate": "screenpipe-a11y",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    }
+  ],
+  "criticalFlows": [
+    {
+      "id": "settings-to-engine-config",
+      "label": "Settings to engine recording config",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["configuration"]
+    },
+    {
+      "id": "engine-health-lifecycle",
+      "label": "Engine health, sleep, and lifecycle",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["engine-lifecycle"]
+    },
+    {
+      "id": "capture-ocr-pipeline",
+      "label": "Capture, OCR, and frame persistence",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["vision-capture", "ocr"]
+    },
+    {
+      "id": "timeline-streaming",
+      "label": "Timeline frame and stream delivery",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["timeline"]
+    },
+    {
+      "id": "local-api-search",
+      "label": "Local API search and indexing",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "db-search"]
+    },
+    {
+      "id": "audio-record-transcribe",
+      "label": "Audio record, transcribe, and reconcile",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio", "transcription"]
+    },
+    {
+      "id": "audio-device-health",
+      "label": "Audio device and stream health",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio-device"]
+    },
+    {
+      "id": "meeting-live-notes",
+      "label": "Meeting detection and live transcript merge",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["meeting"]
+    },
+    {
+      "id": "privacy-and-redaction",
+      "label": "Privacy filters, DRM guards, and redaction",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["privacy"]
+    },
+    {
+      "id": "accessibility-ui-events",
+      "label": "Accessibility tree and UI event capture",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["accessibility", "ui-events"]
+    },
+    {
+      "id": "performance-liveness",
+      "label": "Performance, backpressure, and liveness",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["performance"]
+    }
+  ],
+  "suites": [
+    {
+      "id": "engine-config-lifecycle",
+      "label": "Engine config, health, sleep, and power lifecycle",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/recording_config.rs",
+        "src/schedule_monitor.rs",
+        "src/sleep_monitor.rs",
+        "src/logging.rs",
+        "src/power/profile.rs",
+        "src/power/manager.rs",
+        "src/power/monitor.rs",
+        "tests/consumer_sleep_test.rs",
+        "tests/health_debounce_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["configuration", "engine-lifecycle", "performance"],
+      "flows": ["settings-to-engine-config", "engine-health-lifecycle", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Fast logic coverage for the config bridge, tray health debounce, sleep/power policies, and queue backpressure."
+    },
+    {
+      "id": "engine-capture-timeline",
+      "label": "Engine capture, frame linking, HD, and timeline cache",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/event_driven_capture.rs",
+        "src/focus_aware_controller.rs",
+        "src/frame_linker.rs",
+        "src/frame_linker_actor.rs",
+        "src/hd_recorder.rs",
+        "src/high_fps_controller.rs",
+        "src/hot_frame_cache.rs",
+        "src/snapshot_compaction.rs",
+        "src/video_utils.rs",
+        "src/vision_manager/manager.rs",
+        "tests/audio_vision_integration_test.rs",
+        "tests/first_frames_test.rs",
+        "tests/frame_extraction_test.rs",
+        "tests/frame_linker_actor_integration.rs",
+        "tests/stream_frames_test.rs",
+        "tests/timeline_refresh_bug_test.rs",
+        "tests/video_cache_test.rs",
+        "tests/video_utils_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["vision-capture", "timeline", "storage", "performance"],
+      "flows": ["capture-ocr-pipeline", "timeline-streaming", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "mixed",
+      "notes": "Covers capture trigger logic, frame/audio linking, hot cache, timeline refresh regressions, fragmented MP4 extraction, and HD-mode control. Several real-data tests are intentionally ignored by default."
+    },
+    {
+      "id": "engine-api-routes",
+      "label": "Engine API route logic and stream contracts",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/routes/activity_summary.rs",
+        "src/routes/health.rs",
+        "src/routes/meetings.rs",
+        "src/routes/memories.rs",
+        "src/routes/retranscribe.rs",
+        "src/routes/search.rs",
+        "src/routes/streaming.rs",
+        "src/routes/time.rs",
+        "src/routes/timezone.rs",
+        "tests/tags_test.rs",
+        "tests/transcribe_test.rs",
+        "tests/websockets_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "timeline", "meeting", "transcription"],
+      "flows": ["local-api-search", "timeline-streaming", "meeting-live-notes", "audio-record-transcribe"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "mixed",
+      "notes": "Route/unit coverage for search, health, streaming, meetings, time/timezone, and transcription. Legacy endpoint/websocket tests require local data and remain ignored."
+    },
+    {
+      "id": "engine-local-api-search-integration",
+      "label": "Engine local API search route over indexed DB data",
+      "crate": "screenpipe-engine",
+      "files": [
+        "tests/endpoint_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "db-search"],
+      "flows": ["local-api-search"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "integration",
+      "notes": "Active /search route test builds an audio-disabled router, seeds captured-screen-shaped OCR data into an in-memory DB, and asserts the HTTP response and pagination."
+    },
+    {
+      "id": "engine-focus-os",
+      "label": "Engine focus and OS integration helpers",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/focus_tracker/darwin.rs",
+        "src/focus_tracker/windows.rs"
+      ],
+      "platforms": ["windows", "macos"],
+      "layers": ["engine-lifecycle", "os-integration"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "kind": "unit",
+      "notes": "Platform focus-tracker parsing/helpers. These files are cfg-gated and only execute on their target OS."
+    },
+    {
+      "id": "engine-meeting-privacy-sync",
+      "label": "Engine meetings, privacy, pipes, and sync units",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/calendar_speaker_id.rs",
+        "src/cli/install.rs",
+        "src/cli/mod.rs",
+        "src/cli/presets.rs",
+        "src/cli/search.rs",
+        "src/cli/store_file.rs",
+        "src/cli/team.rs",
+        "src/cloud_search.rs",
+        "src/connections_api.rs",
+        "src/drm_detector.rs",
+        "src/external_memory_sync.rs",
+        "src/mcp_servers_api.rs",
+        "src/meeting_detector.rs",
+        "src/meeting_export.rs",
+        "src/meeting_telemetry.rs",
+        "src/pipe_store.rs",
+        "src/privacy_filter.rs",
+        "src/sync_api.rs",
+        "src/sync_provider.rs",
+        "src/ui_recorder.rs",
+        "src/workflow_classifier.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["meeting", "privacy", "ui-events", "pipes", "sync"],
+      "flows": ["meeting-live-notes", "privacy-and-redaction", "accessibility-ui-events", "performance-liveness"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Unit-heavy coverage for meeting heuristics, privacy filter policy, UI recorder safety, pipes, sync helpers, and CLI parsing."
+    },
+    {
+      "id": "db-search-indexing",
+      "label": "Database OCR/accessibility search indexing",
+      "crate": "screenpipe-db",
+      "files": [
+        "src/text_normalizer.rs",
+        "src/text_similarity.rs",
+        "tests/fts_contention_test.rs",
+        "tests/fts_dots_test.rs",
+        "tests/keyword_search_accessibility_test.rs",
+        "tests/keyword_search_order_test.rs",
+        "tests/query_plan_test.rs",
+        "tests/search_ocr_snapshot_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["db-search", "ocr", "accessibility", "performance"],
+      "flows": ["local-api-search", "capture-ocr-pipeline", "accessibility-ui-events", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "FTS, tokenizer, OCR snapshot search, query planning, ordering, accessibility search, and contention coverage."
+    },
+    {
+      "id": "db-timeline-frames",
+      "label": "Database frames, timeline, and storage joins",
+      "crate": "screenpipe-db",
+      "files": [
+        "src/db.rs",
+        "src/types.rs",
+        "src/write_queue.rs",
+        "tests/db.rs",
+        "tests/frame_offset_sync_test.rs",
+        "tests/live_coverage_marker_test.rs",
+        "tests/suggestions_frames_table_test.rs",
+        "tests/timeline_performance_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "timeline", "storage", "performance"],
+      "flows": ["timeline-streaming", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Frame/audio joins, timeline query shape, suggestions frames, write queue, DB primitives, and timeline performance."
+    },
+    {
+      "id": "db-audio-meetings-speakers",
+      "label": "Database audio, live meetings, and speaker state",
+      "crate": "screenpipe-db",
+      "files": [
+        "tests/audio_duplicate_test.rs",
+        "tests/chunk_outcome_test.rs",
+        "tests/meeting_context_test.rs",
+        "tests/meeting_end_reason_test.rs",
+        "tests/meeting_transcript_dedup_test.rs",
+        "tests/output_audio_liveness_test.rs",
+        "tests/single_open_meeting_invariant_test.rs",
+        "tests/speaker_benchmark.rs",
+        "tests/speaker_reassignment_test.rs",
+        "tests/timeline_live_meeting_test.rs",
+        "tests/untranscribed_chunks_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "audio", "meeting", "speaker"],
+      "flows": ["audio-record-transcribe", "audio-device-health", "meeting-live-notes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "integration",
+      "notes": "Audio transcript dedupe, live meeting mirroring, open meeting invariants, liveness, and speaker reassignment coverage."
+    },
+    {
+      "id": "db-accessibility-ui-events",
+      "label": "Database accessibility elements and UI events",
+      "crate": "screenpipe-db",
+      "files": [
+        "tests/db_config_test.rs",
+        "tests/heavy_read_test.rs",
+        "tests/ocr_elements_bulk_test.rs",
+        "tests/on_screen_filter_test.rs",
+        "tests/ui_events_batch_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "configuration", "accessibility", "ui-events", "performance"],
+      "flows": ["settings-to-engine-config", "accessibility-ui-events", "performance-liveness"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "kind": "integration",
+      "notes": "Elements bulk insert, on-screen filtering, UI event batching, DB tier config, and ignored heavy-read real-DB probes."
+    },
+    {
+      "id": "audio-transcription-pipeline",
+      "label": "Audio transcription, batching, and result cleanup",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/core/engine.rs",
+        "src/core/run_record_and_transcribe.rs",
+        "src/transcription/deepgram/batch.rs",
+        "src/transcription/openai_compatible/batch.rs",
+        "src/transcription/transcription_result.rs",
+        "src/transcription/whisper/detect_language.rs",
+        "tests/accuracy_test.rs",
+        "tests/batch_deferral_test.rs",
+        "tests/core_tests.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio", "transcription", "performance"],
+      "flows": ["audio-record-transcribe", "meeting-live-notes", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "mixed",
+      "notes": "Batch deferral, cleanup, language detection, result normalization, and real recording/transcription tests. Hardware/model-heavy tests are ignored by default."
+    },
+    {
+      "id": "audio-device-stream-health",
+      "label": "Audio device, stream, and lag health",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/audio_manager/device_monitor.rs",
+        "src/audio_manager/manager.rs",
+        "src/core/device.rs",
+        "src/core/device_detection.rs",
+        "src/core/e2e_ghost_word_silent_room.rs",
+        "src/core/process_tap.rs",
+        "src/core/source_buffer.rs",
+        "src/core/stream.rs",
+        "src/idle_detector.rs",
+        "src/lib.rs",
+        "tests/bluetooth_gap_hallucination_test.rs",
+        "tests/channel_lag_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio-device", "audio", "performance"],
+      "flows": ["audio-device-health", "audio-record-transcribe", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Device monitor, stream buffering, source lag, Bluetooth gap/hallucination regressions, and process-tap/unit coverage."
+    },
+    {
+      "id": "audio-meetings-speakers-dedup",
+      "label": "Audio meetings, speakers, and transcript dedupe",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/audio_manager/reconciliation.rs",
+        "src/meeting_detector.rs",
+        "src/meeting_streaming/config.rs",
+        "src/meeting_streaming/controller.rs",
+        "src/meeting_streaming/deepgram_live.rs",
+        "src/meeting_streaming/selected_engine.rs",
+        "src/speaker/embedding_manager.rs",
+        "src/speaker/mod.rs",
+        "src/speaker/models.rs",
+        "src/speaker/segment.rs",
+        "tests/dedup_benchmark/fixtures.rs",
+        "tests/dedup_benchmark/integration.rs",
+        "tests/dedup_benchmark/metrics.rs",
+        "tests/dedup_benchmark/scenarios.rs",
+        "tests/dedup_benchmark/simulation.rs",
+        "tests/overlap_dedup_test.rs",
+        "tests/speaker_identification.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio", "meeting", "speaker", "transcription"],
+      "flows": ["audio-record-transcribe", "meeting-live-notes", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Meeting streaming config/controller logic, speaker embedding state, cross-device dedupe simulations, and overlap cleanup coverage."
+    },
+    {
+      "id": "audio-pipeline-benchmarks",
+      "label": "Audio pipeline benchmark and quality probes",
+      "crate": "screenpipe-audio",
+      "files": [
+        "tests/audio_pipeline_benchmark/audio_fixtures.rs",
+        "tests/audio_pipeline_benchmark/cross_device_benchmark.rs",
+        "tests/audio_pipeline_benchmark/ground_truth.rs",
+        "tests/audio_pipeline_benchmark/meeting_benchmark.rs",
+        "tests/audio_pipeline_benchmark/pipeline_benchmark.rs",
+        "tests/audio_pipeline_benchmark/quality_regression.rs",
+        "tests/audio_pipeline_benchmark/smart_mode_benchmark.rs",
+        "tests/audio_pipeline_benchmark/vad_benchmark.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio", "transcription", "performance"],
+      "flows": ["audio-record-transcribe", "meeting-live-notes", "performance-liveness"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "kind": "benchmark",
+      "notes": "Benchmark-backed regression probes for VAD, smart mode, meeting audio, quality, cross-device, and end-to-end pipeline timing."
+    },
+    {
+      "id": "audio-models-filtering",
+      "label": "Audio model download and music filtering",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/models/download.rs",
+        "src/utils/audio/music_detection.rs",
+        "tests/hf_tls_test.rs",
+        "tests/music_detection_real.rs",
+        "tests/onnx_model_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["audio", "transcription", "privacy"],
+      "flows": ["audio-record-transcribe", "privacy-and-redaction"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "kind": "mixed",
+      "notes": "Model-download/TLS guards, ONNX startup smoke, and music-versus-speech filtering."
+    },
+    {
+      "id": "screen-capture-windowing",
+      "label": "Screen capture windowing, filtering, retry, and snapshots",
+      "crate": "screenpipe-screen",
+      "files": [
+        "src/browser_utils/mod.rs",
+        "src/capture_screenshot_by_window.rs",
+        "src/frame_comparison.rs",
+        "src/monitor.rs",
+        "src/ocr_cache.rs",
+        "src/snapshot_writer.rs",
+        "src/utils.rs",
+        "tests/capture_error_test.rs",
+        "tests/capture_retry_test.rs",
+        "tests/empty_window_name_test.rs",
+        "tests/frame_window_mismatch_test.rs",
+        "tests/monitor_cache_test.rs",
+        "tests/url_timing_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["vision-capture", "timeline", "performance", "privacy"],
+      "flows": ["capture-ocr-pipeline", "timeline-streaming", "privacy-and-redaction", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Window filtering, empty-window regressions, retry policy, URL timing, monitor cache, OCR cache, snapshots, and image comparison."
+    },
+    {
+      "id": "screen-capture-ocr-contract",
+      "label": "Screen capture to OCR result contract",
+      "crate": "screenpipe-screen",
+      "files": [
+        "src/core.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["vision-capture", "ocr"],
+      "flows": ["capture-ocr-pipeline"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Cross-platform cached-OCR unit coverage for RawCaptureResult to CaptureResult metadata, browser URL, focus state, and window-to-screen OCR coordinate transformation."
+    },
+    {
+      "id": "screen-macos-ocr",
+      "label": "macOS native OCR",
+      "crate": "screenpipe-screen",
+      "files": [
+        "src/apple.rs",
+        "tests/apple_vision_test.rs"
+      ],
+      "platforms": ["macos"],
+      "layers": ["ocr", "vision-capture"],
+      "flows": ["capture-ocr-pipeline"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Apple Vision OCR source/unit coverage and fixture OCR assertions."
+    },
+    {
+      "id": "screen-windows-ocr",
+      "label": "Windows native OCR",
+      "crate": "screenpipe-screen",
+      "files": [
+        "tests/windows_vision_test.rs"
+      ],
+      "platforms": ["windows"],
+      "layers": ["ocr", "vision-capture"],
+      "flows": ["capture-ocr-pipeline"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "integration",
+      "notes": "Windows OCR fixture coverage plus an ignored continuous-capture probe that requires a live desktop."
+    },
+    {
+      "id": "screen-custom-ocr",
+      "label": "Custom OCR smoke",
+      "crate": "screenpipe-screen",
+      "files": [
+        "tests/custom_ocr_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["ocr"],
+      "flows": ["capture-ocr-pipeline"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "kind": "manual",
+      "notes": "Custom OCR tests are ignored by default and only contribute when explicitly run."
+    },
+    {
+      "id": "a11y-core-tree-cross-platform",
+      "label": "Accessibility tree, cache, budget, and incognito logic",
+      "crate": "screenpipe-a11y",
+      "files": [
+        "src/activity_feed.rs",
+        "src/budget.rs",
+        "src/config.rs",
+        "src/events.rs",
+        "src/incognito/mod.rs",
+        "src/incognito/titles.rs",
+        "src/lib.rs",
+        "src/tree/cache.rs",
+        "src/tree/electron_docs.rs",
+        "src/tree/enhanced_mode_cache.rs",
+        "src/tree/mod.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["accessibility", "ui-events", "privacy", "performance"],
+      "flows": ["accessibility-ui-events", "privacy-and-redaction", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Cross-platform accessibility config, tree normalization, cache, privacy title matching, events, budget, and activity feed units."
+    },
+    {
+      "id": "a11y-linux-tree",
+      "label": "Linux accessibility tree units",
+      "crate": "screenpipe-a11y",
+      "files": [
+        "src/incognito/linux.rs",
+        "src/platform/linux.rs",
+        "src/tree/linux.rs",
+        "src/tree/linux_lines.rs"
+      ],
+      "platforms": ["linux"],
+      "layers": ["accessibility", "privacy"],
+      "flows": ["accessibility-ui-events", "privacy-and-redaction"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Linux-specific accessibility/incognito normalization tests."
+    },
+    {
+      "id": "a11y-macos-tree",
+      "label": "macOS accessibility tree units and real app probes",
+      "crate": "screenpipe-a11y",
+      "files": [
+        "src/incognito/macos.rs",
+        "src/platform/macos.rs",
+        "src/tree/macos.rs",
+        "src/tree/macos_lines.rs",
+        "tests/e2e_obsidian.rs",
+        "tests/e2e_tree_walker.rs"
+      ],
+      "platforms": ["macos"],
+      "layers": ["accessibility", "privacy", "real-app", "performance"],
+      "flows": ["accessibility-ui-events", "privacy-and-redaction", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "kind": "mixed",
+      "notes": "macOS AX unit coverage plus real TextEdit/Finder/Obsidian probes. Obsidian tests are ignored by default because they require a local app install and AX permission."
+    },
+    {
+      "id": "a11y-windows-tree",
+      "label": "Windows accessibility tree and UIA units",
+      "crate": "screenpipe-a11y",
+      "files": [
+        "src/incognito/windows.rs",
+        "src/platform/windows.rs",
+        "src/platform/windows_uia.rs",
+        "src/platform/windows_uia_tests.rs",
+        "src/tree/windows.rs",
+        "src/tree/windows_lines.rs"
+      ],
+      "platforms": ["windows"],
+      "layers": ["accessibility", "privacy", "ui-events"],
+      "flows": ["accessibility-ui-events", "privacy-and-redaction"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Windows UIA/accessibility parsing and privacy matching; some UIA tests are ignored where they require a live desktop."
+    }
+  ]
+}

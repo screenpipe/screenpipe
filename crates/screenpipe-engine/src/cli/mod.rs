@@ -415,10 +415,10 @@ pub struct RecordArgs {
     pub async_pii_redaction: bool,
 
     /// Enable the async IMAGE-PII reconciliation worker. Independent
-    /// of `--async-pii-redaction` (text). Runs the rfdetr_v8 detector
+    /// of `--async-pii-redaction` (text). Runs the rfdetr_v11 detector
     /// over each captured frame, blacks out detected PII regions in
     /// the JPG (atomic overwrite of the source file). Requires
-    /// `rfdetr_v8.onnx` at `~/.screenpipe/models/` and the binary
+    /// `rfdetr_v11.onnx` at `~/.screenpipe/models/` and the binary
     /// built with one of the `onnx-*` cargo features. Off by default.
     #[arg(long, default_value_t = false)]
     pub async_image_pii_redaction: bool,
@@ -589,6 +589,13 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_clipboard_capture: bool,
 
+    /// Disable keyboard / typed-text capture entirely. The UI recorder will
+    /// not record what you type (`capture_text`) — the accessibility tree +
+    /// OCR still capture on-screen text. Useful when piping ~/.screenpipe
+    /// data into a remote LLM (secrets get typed).
+    #[arg(long, default_value_t = false)]
+    pub disable_keyboard_capture: bool,
+
     /// Require authentication for remote API access. When enabled, non-localhost
     /// requests must include Authorization: Bearer <SCREENPIPE_API_KEY>.
     /// Localhost requests are always allowed.
@@ -666,6 +673,7 @@ pub struct RecordArgSources {
     pub video_quality: bool,
     pub pause_on_drm_content: bool,
     pub disable_clipboard_capture: bool,
+    pub disable_keyboard_capture: bool,
     pub api_auth: bool,
     pub listen_on_lan: bool,
     pub encrypt_secrets: bool,
@@ -711,6 +719,7 @@ impl RecordArgSources {
             video_quality: from_command_line(record, "video_quality"),
             pause_on_drm_content: from_command_line(record, "pause_on_drm_content"),
             disable_clipboard_capture: from_command_line(record, "disable_clipboard_capture"),
+            disable_keyboard_capture: from_command_line(record, "disable_keyboard_capture"),
             api_auth: from_command_line(record, "api_auth"),
             listen_on_lan: from_command_line(record, "listen_on_lan"),
             encrypt_secrets: from_command_line(record, "encrypt_secrets"),
@@ -748,6 +757,7 @@ impl RecordArgSources {
             || self.video_quality
             || self.pause_on_drm_content
             || self.disable_clipboard_capture
+            || self.disable_keyboard_capture
             || self.api_auth
             || self.listen_on_lan
             || self.encrypt_secrets
@@ -789,6 +799,9 @@ impl RecordArgs {
             // `true` for both, so opting out has to be explicit.
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
+            // --disable-keyboard-capture drops the typed-text stream; the
+            // a11y tree + OCR still capture on-screen text.
+            capture_text: !self.disable_keyboard_capture,
             capture_on_keystroke: self
                 .capture_on_keystroke
                 .unwrap_or(defaults.capture_on_keystroke),
@@ -813,6 +826,9 @@ impl RecordArgs {
             port: self.port,
             disable_audio: self.disable_audio,
             disable_vision: self.disable_vision,
+            // CLI has no --disable-timeline flag; the desktop app drives this
+            // toggle. Default to enabled (timeline on) for the engine binary.
+            disable_timeline: false,
             use_pii_removal: self.use_pii_removal,
             async_pii_redaction: self.async_pii_redaction,
             async_image_pii_redaction: self.async_image_pii_redaction,
@@ -858,6 +874,7 @@ impl RecordArgs {
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
             disable_clipboard_capture: self.disable_clipboard_capture,
+            disable_keyboard_capture: self.disable_keyboard_capture,
             listen_on_lan: self.listen_on_lan,
             ..screenpipe_config::RecordingSettings::default()
         }
@@ -1019,6 +1036,18 @@ impl RecordArgs {
         if sources.use_system_default_audio {
             settings.use_system_default_audio = self.use_system_default_audio;
         }
+        // An explicit --audio-device or --use-system-default-audio means the
+        // user wants audio on, so it clears a persisted disable_audio:true
+        // (issue #3648). An explicit --disable-audio on the same command still
+        // wins, which the guard preserves.
+        if (sources.audio_device || sources.use_system_default_audio) && !sources.disable_audio {
+            if settings.disable_audio {
+                tracing::warn!(
+                    "audio was disabled in the persisted store; an explicit audio-input flag re-enabled it"
+                );
+            }
+            settings.disable_audio = false;
+        }
         if sources.experimental_coreaudio_system_audio {
             settings.experimental_coreaudio_system_audio = self.experimental_coreaudio_system_audio;
         }
@@ -1069,6 +1098,19 @@ impl RecordArgs {
         if sources.disable_vision {
             settings.disable_vision = self.disable_vision;
         }
+        // An explicit --monitor-id or --use-all-monitors means the user wants
+        // vision on, so it clears a persisted disable_vision:true (the #3648
+        // analog for screen capture: otherwise the monitor is set but vision
+        // stays off). An explicit --disable-vision on the same command still
+        // wins, which the guard preserves.
+        if (sources.monitor_id || sources.use_all_monitors) && !sources.disable_vision {
+            if settings.disable_vision {
+                tracing::warn!(
+                    "vision was disabled in the persisted store; an explicit monitor flag re-enabled it"
+                );
+            }
+            settings.disable_vision = false;
+        }
         if sources.ignored_windows {
             settings.ignored_windows = self.ignored_windows.clone();
         }
@@ -1098,6 +1140,9 @@ impl RecordArgs {
         }
         if sources.disable_clipboard_capture {
             settings.disable_clipboard_capture = self.disable_clipboard_capture;
+        }
+        if sources.disable_keyboard_capture {
+            settings.disable_keyboard_capture = self.disable_keyboard_capture;
         }
         if sources.api_auth {
             settings.api_auth = self.api_auth;
@@ -1960,6 +2005,177 @@ mod tests {
         assert!(
             !settings.use_pii_removal,
             "absent CLI defaults must not overwrite app settings"
+        );
+    }
+
+    #[test]
+    fn test_audio_device_flag_enables_audio_over_persisted_disable() {
+        // issue #3648: passing --audio-device must override a persisted
+        // disable_audio:true, otherwise the device is set but audio stays off.
+        let args = [
+            "screenpipe",
+            "record",
+            "--audio-device",
+            "MacBook Pro Microphone (input)",
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_audio: true,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            !settings.disable_audio,
+            "an explicit --audio-device must re-enable audio"
+        );
+        assert_eq!(
+            settings.audio_devices,
+            vec!["MacBook Pro Microphone (input)".to_string()]
+        );
+        assert!(!settings.use_system_default_audio);
+    }
+
+    #[test]
+    fn test_explicit_disable_audio_wins_over_audio_device() {
+        // An explicit --disable-audio on the same invocation still wins.
+        let args = [
+            "screenpipe",
+            "record",
+            "--audio-device",
+            "mic",
+            "--disable-audio",
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_audio: false,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            settings.disable_audio,
+            "explicit --disable-audio must override the implicit enable"
+        );
+    }
+
+    #[test]
+    fn test_no_audio_flags_preserve_persisted_disable_audio() {
+        // Without any audio flag, a persisted disable_audio:true is untouched.
+        let args = ["screenpipe", "record", "--port", "4040"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_audio: true,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            settings.disable_audio,
+            "absent audio flags must not flip a persisted disable_audio"
+        );
+    }
+
+    #[test]
+    fn test_monitor_id_flag_enables_vision_over_persisted_disable() {
+        // #3648 analog for vision: passing --monitor-id must override a
+        // persisted disable_vision:true, otherwise the monitor is set but
+        // screen capture stays off.
+        let args = ["screenpipe", "record", "--monitor-id", "5"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_vision: true,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            !settings.disable_vision,
+            "an explicit --monitor-id must re-enable vision"
+        );
+        assert_eq!(settings.monitor_ids, vec!["5".to_string()]);
+        assert!(!settings.use_all_monitors);
+    }
+
+    #[test]
+    fn test_explicit_disable_vision_wins_over_monitor_id() {
+        // An explicit --disable-vision on the same invocation still wins.
+        let args = [
+            "screenpipe",
+            "record",
+            "--monitor-id",
+            "5",
+            "--disable-vision",
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_vision: false,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            settings.disable_vision,
+            "explicit --disable-vision must override the implicit enable"
+        );
+    }
+
+    #[test]
+    fn test_no_vision_flags_preserve_persisted_disable_vision() {
+        // Without any monitor flag, a persisted disable_vision:true is untouched.
+        let args = ["screenpipe", "record", "--port", "4040"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            disable_vision: true,
+            ..Default::default()
+        };
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert!(
+            settings.disable_vision,
+            "absent vision flags must not flip a persisted disable_vision"
         );
     }
 }

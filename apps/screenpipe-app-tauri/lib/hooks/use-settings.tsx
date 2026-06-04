@@ -252,9 +252,6 @@ export type Settings = SettingsStore & {
 	filterMusic?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
 	batchMaxDurationSecs?: number;
-	/** Redact PII from screenpipe API responses before they reach the LLM.
-	 *  Pro-only; enforced client-side (UI hides the toggle for non-pro). */
-	piPrivacyFilter?: boolean;
 	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
 	pipeSuggestionsEnabled?: boolean;
 	/** Hours between pipe suggestion notifications (default: 24) */
@@ -265,8 +262,10 @@ export type Settings = SettingsStore & {
 	showRestartNotifications?: boolean;
 	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
-	/** Skip clipboard capture in the UI recorder (events + content). Recommended when piping ~/.screenpipe to a remote LLM since passwords / API keys often pass through the clipboard. */
+	/** Skip clipboard capture in the UI recorder (events + content). Defaults to true (clipboard capture OFF) — passwords / API keys often pass through the clipboard, so it's opt-in. */
 	disableClipboardCapture?: boolean;
+	/** Skip keyboard / typed-text capture in the UI recorder. Defaults to true (keyboard capture OFF) — the a11y tree + OCR still capture on-screen text, this only drops the raw keystroke stream where secrets get typed. */
+	disableKeyboardCapture?: boolean;
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
 	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
 	experimentalCoreaudioSystemAudio?: boolean;
@@ -349,6 +348,11 @@ export type Settings = SettingsStore & {
 	 */
 	listenOnLan?: boolean;
 	encryptStore?: boolean;
+	/** Global blanket permission: allow screenpipe to copy browser cookies
+	 *  into the owned browser so the agent can browse sites the user is
+	 *  logged into. Revocable from the owned-browser cookie menu.
+	 *  Undefined = not decided yet, false = disabled, true = enabled. */
+	browserCookieAccessGranted?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -564,6 +568,7 @@ let DEFAULT_SETTINGS: Settings = {
 			},
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
+			disableTimeline: false,
 			videoQuality: "balanced",
 			transcriptionMode: "batch",
 			cloudArchiveEnabled: false,
@@ -572,7 +577,8 @@ let DEFAULT_SETTINGS: Settings = {
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
 			pauseOnDrmContent: false,
-			disableClipboardCapture: false,
+			disableClipboardCapture: true,
+			disableKeyboardCapture: true,
 			experimentalCoreaudioSystemAudio: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
@@ -948,6 +954,15 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 					port: loadedSettings.port ?? 3030,
 					authEnabled: loadedSettings.apiAuth ?? true,
 				});
+
+				// Hydrate Rust's owned-browser runtime cache from persisted settings.
+				// This prevents the cookie-access prompt from reappearing after restart.
+				await commands
+					.setBrowserCookieAccessState(
+						loadedSettings.browserCookieAccessGranted === true,
+						loadedSettings.browserCookieAccessGranted === false,
+					)
+					.catch(() => {});
 			} catch (error) {
 				console.error("Failed to load settings:", error);
 				setLoadingError(error instanceof Error ? error.message : "Unknown error");

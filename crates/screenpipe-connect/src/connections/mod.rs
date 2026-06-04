@@ -45,6 +45,7 @@ pub mod n8n;
 pub mod notion;
 pub mod ntfy;
 pub mod obsidian;
+pub mod odoo;
 pub mod openclaw;
 pub mod otter;
 pub mod perplexity;
@@ -300,6 +301,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(sentry::Sentry),
         Box::new(vercel::Vercel),
         Box::new(pipedrive::Pipedrive),
+        Box::new(odoo::Odoo),
         Box::new(intercom::Intercom),
         Box::new(monday::Monday),
         Box::new(asana::Asana),

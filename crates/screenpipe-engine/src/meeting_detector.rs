@@ -194,6 +194,23 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     role: "AXButton",
                     name_contains: "end meeting",
                 },
+                // Screen-share rescue: while sharing, Zoom hides the leave/end
+                // buttons above and collapses controls into a floating share
+                // toolbar, so a call that STARTS already-sharing is never detected —
+                // the whole presentation is then captured only by the delayed
+                // background path (issue: 30+ min of a Zoom presentation transcribed
+                // by batch alone). "Stop Share" / "Pause Share" / "You are screen
+                // sharing" appear ONLY during an active share inside a live meeting
+                // (the idle home screen shows "Share Screen", not "Stop Share"), so
+                // they are safe standalone start signals. NameContains is role-agnostic
+                // so it matches whether Zoom exposes these on the toolbar button or a
+                // "Meeting" menu item.
+                // NOTE: Zoom's AX exposure while sharing is not yet verified against a
+                // live repro; if screen-share-only meetings still go undetected, capture
+                // Zoom's AX tree mid-share and adjust these strings.
+                CallSignal::NameContains("Stop Share"),
+                CallSignal::NameContains("Pause Share"),
+                CallSignal::NameContains("You are screen sharing"),
                 // Generic fallbacks for other Windows Zoom versions
                 CallSignal::AutomationIdContains("leave"),
                 CallSignal::KeyboardShortcut("Alt+Q"),
@@ -2581,15 +2598,16 @@ pub async fn run_meeting_detection_loop(
             // path (which checks audio only in `Ending`): there `advance_state`
             // always routes Active->Ending first, whereas here we keep an Active
             // meeting alive directly to avoid a needless Ending dip on a blip.
-            let has_output_audio = if matches!(
+            let keep_alive = if matches!(
                 state,
                 MeetingState::Active { .. } | MeetingState::Ending { .. }
             ) {
                 db.has_recent_output_audio(30).await.unwrap_or(false)
+                    || has_active_calendar_event(&calendar_events, Utc::now())
             } else {
                 false
             };
-            let (new_state, ended_id) = handle_no_apps_running(state, has_output_audio);
+            let (new_state, ended_id) = handle_no_apps_running(state, keep_alive);
             state = new_state;
             if let Some(meeting_id) = ended_id {
                 let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
@@ -2677,9 +2695,18 @@ pub async fn run_meeting_detection_loop(
         } else {
             false
         };
+        // A meeting also stays alive while a scheduled (non-all-day) calendar event
+        // is in progress: controls vanish during screen-share / minimize, but the
+        // event is strong evidence the meeting is still going. This only sustains an
+        // already-detected meeting (it never starts one), so a "Lunch" calendar
+        // entry can't trigger recording on its own. `has_output_audio` is kept
+        // separate so detection-decision telemetry stays audio-accurate.
+        let keep_alive = has_output_audio
+            || (matches!(state, MeetingState::Ending { .. })
+                && has_active_calendar_event(&calendar_events, Utc::now()));
 
         // 3. Advance state machine
-        let (new_state, action) = advance_state(state, &scan_results, has_output_audio);
+        let (new_state, action) = advance_state(state, &scan_results, keep_alive);
         state = new_state;
 
         // Adaptive interval based on state
@@ -3075,6 +3102,28 @@ fn find_overlapping_calendar_event(
     (None, None)
 }
 
+/// True if a non-all-day calendar event is happening at `now`. Used as a
+/// keep-alive signal so a detected meeting doesn't end while its scheduled event
+/// is still in progress (e.g. UI controls hidden during a screen-share). `now` is
+/// a parameter for deterministic testing. All-day events are excluded because the
+/// upstream stream already filters them, and they'd otherwise pin a meeting open
+/// all day.
+fn has_active_calendar_event(events: &[CalendarEventSignal], now: DateTime<Utc>) -> bool {
+    events.iter().any(|e| {
+        if e.is_all_day {
+            return false;
+        }
+        matches!(
+            (
+                DateTime::parse_from_rfc3339(&e.start),
+                DateTime::parse_from_rfc3339(&e.end),
+            ),
+            (Ok(start), Ok(end))
+                if start.with_timezone(&Utc) <= now && end.with_timezone(&Utc) >= now
+        )
+    })
+}
+
 /// Insert a new meeting into the database with optional calendar enrichment.
 /// Returns the meeting ID, or -1 on failure.
 async fn insert_new_meeting(
@@ -3292,6 +3341,79 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_zoom_screen_share_starts_detection() {
+        // A Zoom call that begins while screen-sharing hides the leave/end-meeting
+        // buttons (controls collapse into a floating share toolbar). "Stop Share" /
+        // "Pause Share" / "You are screen sharing" must still trigger detection so the
+        // live transcription path starts instead of relying on the delayed background
+        // path.
+        let profiles = load_detection_profiles();
+        let zoom = profiles
+            .iter()
+            .find(|p| p.app_identifiers.macos_app_names.contains(&"zoom.us"))
+            .expect("zoom profile should exist");
+
+        let matches_any = |role: &str, title: &str| {
+            zoom.call_signals
+                .iter()
+                .any(|s| check_signal_match(s, role, Some(title), None, None))
+        };
+
+        // Share controls present only during an active in-meeting share.
+        assert!(matches_any("AXButton", "Stop Share"));
+        assert!(matches_any("AXMenuItem", "Pause Share"));
+        assert!(matches_any("AXStaticText", "You are screen sharing"));
+
+        // The idle home-screen "Share Screen" button must NOT trigger detection —
+        // it exists without an active call.
+        assert!(!matches_any("AXButton", "Share Screen"));
+    }
+
+    #[test]
+    fn test_calendar_event_keep_alive() {
+        let now = Utc::now();
+        let rfc = |t: DateTime<Utc>| t.to_rfc3339();
+        let ev = |start, end, all_day| CalendarEventSignal {
+            title: "Standup".to_string(),
+            start: rfc(start),
+            end: rfc(end),
+            attendees: vec![],
+            is_all_day: all_day,
+        };
+
+        // Event in progress now → keep the meeting alive.
+        assert!(has_active_calendar_event(
+            &[ev(
+                now - chrono::Duration::minutes(5),
+                now + chrono::Duration::minutes(25),
+                false,
+            )],
+            now,
+        ));
+
+        // All-day event → must NOT pin a meeting open all day.
+        assert!(!has_active_calendar_event(
+            &[ev(
+                now - chrono::Duration::hours(2),
+                now + chrono::Duration::hours(10),
+                true,
+            )],
+            now,
+        ));
+
+        // Past event and no events → no keep-alive.
+        assert!(!has_active_calendar_event(
+            &[ev(
+                now - chrono::Duration::hours(2),
+                now - chrono::Duration::hours(1),
+                false,
+            )],
+            now,
+        ));
+        assert!(!has_active_calendar_event(&[], now));
     }
 
     // ── Signal matching tests ──────────────────────────────────────────

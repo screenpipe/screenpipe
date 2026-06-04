@@ -60,8 +60,8 @@ Don't jump to heavy `/search` calls. Escalate:
 Decision tree:
 - "What was I doing?" → Step 1 only
 - "Summarize my meeting" → Step 2 with `content_type=audio`, NO q param. Add `content_type=all` for screen context.
-- "How long on X?" → Step 1 (`/activity-summary` has `active_minutes`)
-- "Which apps today?" → Step 1 (do NOT use frame counts or SQL)
+- "How long on X?" → Step 1 (`/activity-summary` → `total_active_minutes` for the whole range, plus per-app/window `minutes`)
+- "Which apps today?" → Step 1 (do NOT use frame counts or raw SQLite)
 - "What button did I click?" → Step 3 (`/elements` with role=AXButton)
 - "Show me what I saw" → Step 2 (find frame_id) → Step 4
 
@@ -98,12 +98,15 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 ```
 
 Returns a rich overview with:
-- **apps**: usage with `active_minutes`, first/last seen
-- **windows**: every distinct window/tab with title, `browser_url`, and time spent — this is the most valuable field, it tells you exactly what the user was working on
+- **total_active_minutes**: authoritative total active screen time for the whole range (every app, idle gaps excluded). Use this as the grand total / denominator. Do NOT sum `windows[].minutes` (capped at 30) and do NOT open `db.sqlite` to recompute durations — this field already is the answer.
+- **apps**: per-app `minutes` (active time), first/last seen
+- **windows**: every distinct window/tab with title, `browser_url`, and `minutes` spent — the most valuable field for *what* the user worked on (top 30 by time)
 - **key_texts**: one representative text snippet per window context (user input fields prioritized over static page text)
 - **audio_summary.top_transcriptions**: actual transcription text with speaker and timestamp (not just counts)
 
 This is usually enough to answer "what was I doing?" without further searches. Only drill into `/search` if you need verbatim quotes or specific content.
+
+> **Building a pipe/automation?** Same rule: call this endpoint for time math. The numbers are computed server-side from frame timestamps — never recompute durations from raw frames, and never ask an LLM to sum minutes (it will drift). Let the model label activities; let this endpoint own the durations.
 
 ---
 

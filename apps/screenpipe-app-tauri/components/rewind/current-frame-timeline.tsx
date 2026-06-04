@@ -278,6 +278,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		navBarRef,
 		guardRefs,
 		adjacentFrames,
+		disabled: settings?.disableTimeline === true,
 	});
 
 	if (!frameId) {

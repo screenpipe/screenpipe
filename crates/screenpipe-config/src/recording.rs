@@ -140,6 +140,13 @@ pub struct RecordingSettings {
     #[serde(rename = "disableVision")]
     pub disable_vision: bool,
 
+    /// Disable the timeline / rewind feature. When true, the engine skips
+    /// timeline-only work: warming the hot frame cache from the DB at startup
+    /// and buffering captured frames/audio into the in-memory hot cache that
+    /// only the timeline streaming endpoint reads.
+    #[serde(rename = "disableTimeline", default)]
+    pub disable_timeline: bool,
+
     /// Specific monitor IDs to capture.
     #[serde(rename = "monitorIds")]
     pub monitor_ids: Vec<String>,
@@ -296,12 +303,21 @@ pub struct RecordingSettings {
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
 
-    /// Skip clipboard capture in the UI recorder. Off by default; recommended
-    /// when piping ~/.screenpipe data into a remote LLM or sharing it,
-    /// since passwords / API keys / private keys often pass through the
-    /// clipboard.
-    #[serde(rename = "disableClipboardCapture", default)]
+    /// Skip clipboard capture in the UI recorder. Defaults to `true`
+    /// (clipboard capture OFF) — passwords / API keys / private keys
+    /// frequently pass through the clipboard, so it's opt-in via the
+    /// "Capture clipboard" toggle.
+    #[serde(rename = "disableClipboardCapture", default = "default_true")]
     pub disable_clipboard_capture: bool,
+
+    /// Skip keyboard / typed-text capture in the UI recorder
+    /// (`UiCaptureConfig::capture_text`). Defaults to `true` (keyboard
+    /// capture OFF) — the raw keystroke stream is the highest-risk,
+    /// most-redundant signal (secrets get typed), and the accessibility
+    /// tree + OCR still capture on-screen text so Rewind/Ask keep working.
+    /// Opt-in via the "Capture keyboard" toggle.
+    #[serde(rename = "disableKeyboardCapture", default = "default_true")]
+    pub disable_keyboard_capture: bool,
 
     /// Continue recording audio when the screen is locked.
     /// Default: false (audio pauses when screen is locked to save resources).
@@ -527,6 +543,7 @@ impl Default for RecordingSettings {
             batch_max_duration_secs: None,
             vocabulary: vec![],
             disable_vision: false,
+            disable_timeline: false,
             monitor_ids: vec![],
             use_all_monitors: true,
             video_quality: "balanced".to_string(),
@@ -550,7 +567,8 @@ impl Default for RecordingSettings {
             ignored_urls: vec![],
             ignore_incognito_windows: true,
             pause_on_drm_content: false,
-            disable_clipboard_capture: false,
+            disable_clipboard_capture: true,
+            disable_keyboard_capture: true,
             record_while_locked: false,
             languages: vec![],
             use_pii_removal: false,

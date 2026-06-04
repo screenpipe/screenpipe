@@ -159,6 +159,45 @@ async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<
 }
 
 /**
+ * Apply enterprise-forced PII redaction settings to the local settings store so
+ * the recording engine honors them. The admin sets these in the workspace
+ * policy (lockedSettings.usePiiRemoval / piiBackend / piiRedactionLabels); we
+ * write them into `settings` the same way the AI-preset + app-update policies
+ * do, so the on-device ONNX + Tinfoil PII workers pick them up. The matching UI
+ * controls are disabled separately so the employee can't override a forced
+ * value. Keys map 1:1 to the engine's RecordingSettings fields
+ * (use_pii_removal, pii_backend, pii_redaction_labels).
+ */
+async function applyPiiPolicy(lockedSettings: Record<string, unknown>): Promise<void> {
+  const updates: Record<string, unknown> = {};
+
+  const master = lockedSettings.usePiiRemoval;
+  if (master === "true" || master === "false") {
+    updates.usePiiRemoval = master === "true";
+  }
+
+  const backend = lockedSettings.piiBackend;
+  if (backend === "local" || backend === "tinfoil") {
+    updates.piiBackend = backend;
+  }
+
+  const labels = lockedSettings.piiRedactionLabels;
+  if (Array.isArray(labels)) {
+    // canonical SpanLabel snake_case names; `secret` is always redacted
+    const clean = Array.from(new Set(labels.filter((l): l is string => typeof l === "string")));
+    if (!clean.includes("secret")) clean.push("secret");
+    updates.piiRedactionLabels = clean;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  const store = await getStore();
+  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+  await store.set("settings", { ...settings, ...updates });
+  await store.save();
+}
+
+/**
  * Fire-and-forget heartbeat to report device status to the enterprise API.
  * Called after a successful policy fetch. Never throws, never blocks.
  */
@@ -370,6 +409,17 @@ export function useEnterprisePolicy() {
         );
       } catch (e) {
         console.warn("[enterprise] failed to apply app update policy:", e);
+      }
+
+      // Apply enterprise-forced PII redaction (master / local-vs-cloud backend /
+      // categories) to the settings store so the recording engine honors them.
+      try {
+        await applyPiiPolicy(result.lockedSettings);
+        console.log(
+          `[enterprise] applied PII policy: locked=[${["usePiiRemoval", "piiBackend", "piiRedactionLabels"].filter((k) => k in result.lockedSettings).join(",")}]`
+        );
+      } catch (e) {
+        console.warn("[enterprise] failed to apply PII policy:", e);
       }
 
       // Fire-and-forget heartbeat

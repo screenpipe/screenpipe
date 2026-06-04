@@ -28,6 +28,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   obsidian: "Knowledge",
   notion: "Knowledge",
   linear: "Productivity",
+  krisp: "Meetings",
   perplexity: "Research",
   "custom-mcp": "AI",
 };

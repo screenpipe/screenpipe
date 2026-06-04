@@ -451,16 +451,18 @@ mod tests {
             .iter()
             .map(|row| row.transcript.as_str())
             .collect::<Vec<_>>();
-        // Background rows within ±15s of a live segment are now dropped so the
-        // UI/AI consumer sees one copy of each utterance instead of two. The
-        // "duplicate near live" row sits 5s after the live segment (inside
-        // the window) and is correctly suppressed; background rows outside
-        // the window (before/after) survive and cover the gaps.
+        // Background rows within ±15s of a live segment are dropped only when they
+        // share the live segment's DIRECTION (input vs output) — see #3776. The
+        // "duplicate near live" row is an OUTPUT capture while the live segment is
+        // INPUT, so it's a different participant and is correctly KEPT (not a
+        // duplicate of the user's own input). Same-direction near-live rows would be
+        // suppressed; background rows outside the window survive and cover the gaps.
         assert_eq!(
             transcripts,
             vec![
                 "background before live",
                 "live meeting text",
+                "background duplicate near live",
                 "background after live"
             ]
         );
@@ -476,13 +478,13 @@ mod tests {
         assert_eq!(rows[1].audio_chunk_id, None);
         assert_eq!(rows[1].speaker_name.as_deref(), Some("Louis"));
 
+        // The opposite-direction overlap row is KEPT (different participant), so it
+        // sits between the live segment and the later background row.
         assert_eq!(rows[2].source, "background");
-        assert_eq!(rows[2].audio_chunk_id, Some(after_chunk));
+        assert_eq!(rows[2].audio_chunk_id, Some(overlap_chunk));
 
-        // The overlap row is dropped by the read endpoint's live-coverage
-        // dedup — keep the local binding referenced so the compiler sees it
-        // and to document why it's NOT in `rows`.
-        let _suppressed_by_live_coverage = overlap_chunk;
+        assert_eq!(rows[3].source, "background");
+        assert_eq!(rows[3].audio_chunk_id, Some(after_chunk));
     }
 
     #[tokio::test]

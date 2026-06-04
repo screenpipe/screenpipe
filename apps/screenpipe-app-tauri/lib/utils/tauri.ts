@@ -229,6 +229,20 @@ async completeOnboarding() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Mark the current app run as explicitly cleared to read browser Safe Storage.
+ * Used by the owned-browser cookie menu's enable-and-retry action so the next
+ * navigate can proceed to the macOS Keychain prompt without showing a second
+ * in-app confirmation card.
+ */
+async confirmBrowserCookieAccessForSession() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("confirm_browser_cookie_access_for_session") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Copy a frame deeplink (screenpipe://frame/N) to clipboard. Native API only.
  */
 async copyDeeplinkToClipboard(frameId: number) : Promise<Result<null, string>> {
@@ -357,6 +371,25 @@ async e2eEmitPipeStream(pipeName: string, executionId: number, deltaCount: numbe
 async e2eMainOverlayVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_main_overlay_visible");
 },
+/**
+ * E2E-only probe: whether the owned-browser native webview is currently shown.
+ * Mirrors `e2e_main_overlay_visible` — internal visibility state stays hidden
+ * in production binaries and is only exposed under the `e2e` feature. Used by
+ * `zz-owned-browser-background-nav.spec.ts` to assert a background agent/pipe
+ * navigation does not reveal the browser over a non-chat view.
+ */
+async e2eOwnedBrowserVisible() : Promise<boolean> {
+    return await TAURI_INVOKE("e2e_owned_browser_visible");
+},
+/**
+ * E2E helper: report whether the shortcut reminder overlay is visibly shown.
+ *
+ * The reminder window is hidden rather than destroyed, so WebDriver can keep a
+ * stale handle after users disable it from Settings > Display.
+ */
+async e2eShortcutReminderVisible() : Promise<boolean> {
+    return await TAURI_INVOKE("e2e_shortcut_reminder_visible");
+},
 async enableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("enable_keychain_encryption") };
@@ -428,6 +461,12 @@ async forceRegenerateSuggestions() : Promise<Result<CachedSuggestions, string>> 
 async getAppIdentifier() : Promise<string> {
     return await TAURI_INVOKE("get_app_identifier");
 },
+/**
+ * Get the app-local focus/notification server port.
+ */
+async getAppServerConfig() : Promise<JsonValue> {
+    return await TAURI_INVOKE("get_app_server_config");
+},
 async getAudioDevices() : Promise<Result<AudioDeviceInfo[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_audio_devices") };
@@ -444,6 +483,14 @@ async getAudioDevices() : Promise<Result<AudioDeviceInfo[], string>> {
  */
 async getBootPhase() : Promise<BootPhaseSnapshot> {
     return await TAURI_INVOKE("get_boot_phase");
+},
+/**
+ * Read the current runtime value of the global cookie-access flag.
+ * Frontend calls this on startup to hydrate the AtomicBool from the
+ * persisted store value.
+ */
+async getBrowserCookieAccessGranted() : Promise<boolean> {
+    return await TAURI_INVOKE("get_browser_cookie_access_granted");
 },
 /**
  * Returns per-browser automation permission status for all installed Chromium browsers.
@@ -960,6 +1007,19 @@ async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Clear all browsing data for the owned-browser webview: cookies, injected
+ * cookies, site storage, and cache. This resets the current shared owned
+ * browser slate; per-chat isolation belongs to the follow-up PR.
+ */
+async ownedBrowserClearBrowsingData() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_clear_browsing_data") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Hide the embedded webview without destroying it. Equivalent to calling
  * `set_bounds` with zero dimensions, but more explicit at the call site.
  */
@@ -972,9 +1032,10 @@ async ownedBrowserHide() : Promise<Result<null, string>> {
 }
 },
 /**
- * Navigate the embedded webview to `url`. Used by the agent (via
- * `POST /connections/browsers/owned-default/eval`) and by the sidebar
- * when restoring per-chat state.
+ * Navigate the embedded webview to `url`. Used by the sidebar when restoring
+ * per-chat state or on user reload — i.e. always an action of the chat that's
+ * on screen, so it carries no owner (`None`) and the frontend always honors
+ * it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
  */
 async ownedBrowserNavigate(url: string) : Promise<Result<null, string>> {
     try {
@@ -1557,6 +1618,31 @@ async setApiAuthKey(key: string) : Promise<Result<null, string>> {
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Persist the global browser cookie-access permission. Called from the
+ * frontend when the user clicks "Use browser session" in the prompt card
+ * or toggles the setting in the settings page.
+ */
+async setBrowserCookieAccessGranted(granted: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_browser_cookie_access_granted", { granted }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Hydrate/update the complete browser cookie access state. `granted=false`
+ * with `disabled=false` means first-run unknown: prompt once if cookies exist.
+ */
+async setBrowserCookieAccessState(granted: boolean, disabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_browser_cookie_access_state", { granted, disabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2245,6 +2331,13 @@ vocabularyWords?: VocabEntry[];
  */
 disableVision: boolean;
 /**
+ * Disable the timeline / rewind feature. When true, the engine skips
+ * timeline-only work: warming the hot frame cache from the DB at startup
+ * and buffering captured frames/audio into the in-memory hot cache that
+ * only the timeline streaming endpoint reads.
+ */
+disableTimeline?: boolean;
+/**
  * Specific monitor IDs to capture.
  */
 monitorIds: string[];
@@ -2384,12 +2477,21 @@ ignoreIncognitoWindows: boolean;
  */
 pauseOnDrmContent?: boolean;
 /**
- * Skip clipboard capture in the UI recorder. Off by default; recommended
- * when piping ~/.screenpipe data into a remote LLM or sharing it,
- * since passwords / API keys / private keys often pass through the
- * clipboard.
+ * Skip clipboard capture in the UI recorder. Defaults to `true`
+ * (clipboard capture OFF) — passwords / API keys / private keys
+ * frequently pass through the clipboard, so it's opt-in via the
+ * "Capture clipboard" toggle.
  */
 disableClipboardCapture?: boolean;
+/**
+ * Skip keyboard / typed-text capture in the UI recorder
+ * (`UiCaptureConfig::capture_text`). Defaults to `true` (keyboard
+ * capture OFF) — the raw keystroke stream is the highest-risk,
+ * most-redundant signal (secrets get typed), and the accessibility
+ * tree + OCR still capture on-screen text so Rewind/Ask keep working.
+ * Opt-in via the "Capture keyboard" toggle.
+ */
+disableKeyboardCapture?: boolean;
 /**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).

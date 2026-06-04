@@ -9,14 +9,19 @@
 
 const DENY_RULE = "Api(POST /notify)";
 const DENY_RULE_PATTERN = /^-\s*Api\(\s*(\*)?\s*POST\s+\/notify\s*\)/i;
+const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---/;
+
+function detectEol(rawContent: string): "\n" | "\r\n" {
+  return rawContent.includes("\r\n") ? "\r\n" : "\n";
+}
 
 /**
  * Check if notifications are denied in the pipe's raw content.
  */
 export function isNotificationsDenied(rawContent: string): boolean {
-  const match = rawContent.match(/^---\n([\s\S]*?)\n---/);
+  const match = rawContent.match(FRONTMATTER_PATTERN);
   if (!match) return false;
-  const lines = match[1].split("\n");
+  const lines = match[1].split(/\r?\n/);
   let inDeny = false;
   for (const line of lines) {
     const trimmed = line.trim();
@@ -45,19 +50,20 @@ export function toggleNotificationInContent(
   rawContent: string,
   enabled: boolean
 ): string {
-  const frontmatterMatch = rawContent.match(/^---\n([\s\S]*?)\n---/);
+  const frontmatterMatch = rawContent.match(FRONTMATTER_PATTERN);
+  const eol = detectEol(rawContent);
 
   if (!frontmatterMatch) {
     // No frontmatter
     if (!enabled) {
-      return `---\npermissions:\n  deny:\n    - ${DENY_RULE}\n---\n\n${rawContent}`;
+      return `---${eol}permissions:${eol}  deny:${eol}    - ${DENY_RULE}${eol}---${eol}${eol}${rawContent}`;
     }
     return rawContent; // nothing to remove
   }
 
   const yaml = frontmatterMatch[1];
   const body = rawContent.slice(frontmatterMatch[0].length);
-  let lines = yaml.split("\n");
+  let lines = yaml.split(/\r?\n/);
 
   if (!enabled) {
     // === DISABLE notifications: add deny rule ===
@@ -119,11 +125,11 @@ export function toggleNotificationInContent(
   const trimmedYaml = lines.join("\n").trim();
   if (!trimmedYaml) {
     // Frontmatter is completely empty after cleanup — remove it entirely
-    const trimmedBody = body.replace(/^\n+/, "");
+    const trimmedBody = body.replace(/^\r?\n+/, "");
     return trimmedBody || rawContent;
   }
 
-  return `---\n${trimmedYaml}\n---${body}`;
+  return `---${eol}${lines.join(eol).trim()}${eol}---${body}`;
 }
 
 /**

@@ -33,8 +33,9 @@
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
@@ -114,6 +115,23 @@ struct OwnedBrowserStateEvent {
     url: Option<String>,
     title: Option<String>,
     loading: Option<bool>,
+    /// Conversation/session that issued the navigation currently in flight.
+    /// See [`OwnedBrowserNavigateEvent::owner`]. `None` for the sidebar's own
+    /// restore/reload; the frontend always honors those.
+    owner: Option<String>,
+}
+
+/// Payload of [`NAVIGATE_EVENT`]. `owner` is the chat/session id that drove the
+/// navigation — `sid` for a chat agent (equals the frontend `conversationId`),
+/// `pipe:<name>` for a background pipe, `None` for the sidebar's own
+/// restore/reload. The owned browser is a singleton broadcast to every window,
+/// so the frontend uses `owner` to ignore navigations that belong to a chat
+/// other than the one on screen.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnedBrowserNavigateEvent {
+    url: String,
+    owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -128,6 +146,10 @@ struct BrowserSessionAccessRequestPayload {
     request_id: String,
     url: String,
     host: String,
+    already_granted: bool,
+    /// Owner of the navigation that triggered this prompt — see
+    /// [`OwnedBrowserNavigateEvent::owner`].
+    owner: Option<String>,
 }
 
 #[cfg(target_os = "windows")]
@@ -142,27 +164,34 @@ struct V20CookieBlockPayload {
     /// "v20" = app-bound encryption blocked decrypt; "locked" = browser running, DB inaccessible
     #[serde(default)]
     reason: String,
+    /// Owner of the navigation that triggered this block — see
+    /// [`OwnedBrowserNavigateEvent::owner`].
+    owner: Option<String>,
 }
 
 static SESSION_ACCESS_PENDING: OnceLock<
     Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>>,
 > = OnceLock::new();
-/// Hosts the user allowed this app session (`Use browser session`). Cleared on
-/// restart. We never remember "continue logged out" — deny is per navigation.
-static SESSION_ACCESS_ALLOWED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-static SESSION_ACCESS_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// Global flag: user has granted blanket cookie-access permission.
+/// Persisted to the frontend store (`browserCookieAccessGranted`);
+/// this AtomicBool is the runtime cache so every navigate avoids
+/// an async store read. Set via `set_browser_cookie_access_granted`.
+static GLOBAL_SESSION_ACCESS_GRANTED: AtomicBool = AtomicBool::new(false);
+/// User explicitly disabled browser cookie access. When true, do not prompt
+/// and do not read cookies. User can re-enable from the cookie menu.
+static GLOBAL_SESSION_ACCESS_DISABLED: AtomicBool = AtomicBool::new(false);
+/// Guards against showing duplicate prompt cards when multiple
+/// navigations fire before the user answers the first one.
+static SESSION_ACCESS_PROMPT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+/// macOS-only UX guard: after app launch, even if global cookie access is
+/// already persisted, show Screenpipe's own warning before the first Keychain
+/// Safe Storage read can trigger an OS prompt. Explicit menu enable/retry or
+/// prompt allow primes this for the current process.
+static SESSION_ACCESS_PRIMED_THIS_RUN: AtomicBool = AtomicBool::new(false);
 
 fn pending_session_access(
 ) -> &'static Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>> {
     SESSION_ACCESS_PENDING.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn session_access_allowed() -> &'static Mutex<HashSet<String>> {
-    SESSION_ACCESS_ALLOWED.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-fn session_access_in_flight() -> &'static Mutex<HashSet<String>> {
-    SESSION_ACCESS_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// Normalize host keys so `www.example.com` and `example.com` share one decision.
@@ -172,13 +201,6 @@ fn session_host_key(host: &str) -> String {
         .strip_prefix("www.")
         .map(|rest| rest.to_string())
         .unwrap_or(lower)
-}
-
-async fn remember_session_access_allow(host: &str) {
-    session_access_allowed()
-        .lock()
-        .await
-        .insert(session_host_key(host));
 }
 
 #[specta::specta]
@@ -201,6 +223,62 @@ pub async fn owned_browser_resolve_session_access(
         .map_err(|_| "session access request was already closed".to_string())
 }
 
+/// Persist the global browser cookie-access permission. Called from the
+/// frontend when the user clicks "Use browser session" in the prompt card
+/// or toggles the setting in the settings page.
+#[specta::specta]
+#[tauri::command]
+pub async fn set_browser_cookie_access_granted(granted: bool) -> Result<(), String> {
+    GLOBAL_SESSION_ACCESS_GRANTED.store(granted, Ordering::SeqCst);
+    if granted {
+        GLOBAL_SESSION_ACCESS_DISABLED.store(false, Ordering::SeqCst);
+    } else {
+        SESSION_ACCESS_PRIMED_THIS_RUN.store(false, Ordering::SeqCst);
+    }
+    info!(
+        granted,
+        "owned-browser: global cookie access permission updated"
+    );
+    Ok(())
+}
+
+/// Hydrate/update the complete browser cookie access state. `granted=false`
+/// with `disabled=false` means first-run unknown: prompt once if cookies exist.
+#[specta::specta]
+#[tauri::command]
+pub async fn set_browser_cookie_access_state(granted: bool, disabled: bool) -> Result<(), String> {
+    GLOBAL_SESSION_ACCESS_GRANTED.store(granted, Ordering::SeqCst);
+    GLOBAL_SESSION_ACCESS_DISABLED.store(disabled && !granted, Ordering::SeqCst);
+    if !granted {
+        SESSION_ACCESS_PRIMED_THIS_RUN.store(false, Ordering::SeqCst);
+    }
+    info!(
+        granted,
+        disabled, "owned-browser: global cookie access state updated"
+    );
+    Ok(())
+}
+
+/// Mark the current app run as explicitly cleared to read browser Safe Storage.
+/// Used by the owned-browser cookie menu's enable-and-retry action so the next
+/// navigate can proceed to the macOS Keychain prompt without showing a second
+/// in-app confirmation card.
+#[specta::specta]
+#[tauri::command]
+pub async fn confirm_browser_cookie_access_for_session() -> Result<(), String> {
+    SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Read the current runtime value of the global cookie-access flag.
+/// Frontend calls this on startup to hydrate the AtomicBool from the
+/// persisted store value.
+#[specta::specta]
+#[tauri::command]
+pub async fn get_browser_cookie_access_granted() -> bool {
+    GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst)
+}
+
 // ---------------------------------------------------------------------------
 // Native webview state
 // ---------------------------------------------------------------------------
@@ -216,6 +294,15 @@ struct OwnedBrowserInner {
 struct OwnedBrowserState {
     inner: Mutex<OwnedBrowserInner>,
     last_title: StdMutex<String>,
+    /// Owner (chat/session id) of the most recent navigation. Set by
+    /// `prepare_navigation` and read by the native page-state / cookie event
+    /// emitters, which fire from sync callbacks that don't carry the owner.
+    /// `StdMutex` (not the async `inner`) so those sync paths can read it
+    /// without an executor. Best-effort: the owned browser is a singleton, so
+    /// concurrent navigations from two sources can race this — the
+    /// authoritative tag is the `owner` passed directly into the navigate
+    /// event; this only backs the follow-up state/cookie events.
+    pending_owner: StdMutex<Option<String>>,
 }
 
 impl OwnedBrowserState {
@@ -223,7 +310,21 @@ impl OwnedBrowserState {
         Self {
             inner: Mutex::new(OwnedBrowserInner::default()),
             last_title: StdMutex::new(String::new()),
+            pending_owner: StdMutex::new(None),
         }
+    }
+
+    fn set_pending_owner(&self, owner: Option<String>) {
+        if let Ok(mut guard) = self.pending_owner.lock() {
+            *guard = owner;
+        }
+    }
+
+    fn pending_owner(&self) -> Option<String> {
+        self.pending_owner
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     fn record_title(&self, title: String) {
@@ -278,6 +379,10 @@ fn emit_state_event(
         url,
         title,
         loading,
+        // Native page-load/title callbacks don't know which navigation they
+        // belong to; tag with the owner of the most recent navigate so the
+        // frontend can drop state for a chat other than the one on screen.
+        owner: browser_state().pending_owner(),
     };
     if let Err(e) = app.emit(STATE_EVENT, payload) {
         debug!("owned-browser: failed to emit state event: {e}");
@@ -363,6 +468,32 @@ struct TauriOwnedHandle {
     eval_lock: Mutex<()>,
 }
 
+/// Reveal the native child webview just long enough to run a *background*
+/// `eval`, returning whether it actually showed it.
+///
+/// macOS/WKWebView runs `evaluateJavaScript` while the webview is hidden — the
+/// same reason `TauriOwnedHandle::navigate` loads a page while hidden — so this
+/// is a no-op there and a background snapshot/eval never flashes the browser
+/// over whatever section (Timeline, Live notes, …) the user is currently on.
+/// Windows/WebView2 will not execute script against a hidden controller, so
+/// there we still show it for the duration of the eval; the caller hides it
+/// again afterwards. (Parking the Windows webview off-screen so it runs script
+/// without painting over the user is a tracked follow-up.)
+#[allow(unused_variables)]
+async fn show_native_for_background_eval(active: &Webview<Wry>, state: &OwnedBrowserState) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = active.show();
+        state.set_visible(true).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        true
+    }
+}
+
 #[async_trait]
 impl OwnedWebviewHandle for TauriOwnedHandle {
     async fn eval(
@@ -381,7 +512,9 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         };
 
         if let Some(parsed) = &target_url {
-            prepare_navigation(&self.app, &self.state, parsed).await;
+            // eval-with-url (snapshot) navigations aren't owner-tagged — the
+            // owner travels with the dedicated navigate path below.
+            prepare_navigation(&self.app, &self.state, parsed, None).await;
         }
 
         let active = match self.state.active().await {
@@ -394,16 +527,20 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             None => return Err("owned-browser child webview not attached".to_string()),
         };
 
-        // A hidden WebView2 window can accept `eval()` without actually
-        // executing the script. Make sure the native webview is live before
-        // code-only evals. URL navigations defer showing until after the
-        // optional session-access prompt, so the sidebar can explain the
-        // request before any native webview covers it.
+        // Background reads (snapshot / code-only eval) must NOT reveal the
+        // native webview over whatever section the user is on — a pipe working
+        // in the background must never flash the browser over Timeline / Live
+        // notes / etc. `show_native_for_background_eval` is a no-op on macOS
+        // (WKWebView evals while hidden) and only shows on Windows, where a
+        // hidden WebView2 controller no-ops the script. `shown_for_eval` records
+        // whether we revealed it, so we only hide afterwards on the platform
+        // that actually showed it. URL navigations still defer showing until
+        // after the optional session-access prompt so the sidebar can explain
+        // the request before any native webview covers it.
         let was_visible = self.state.is_visible().await;
+        let mut shown_for_eval = false;
         if !was_visible && target_url.is_none() {
-            let _ = active.show();
-            self.state.set_visible(true).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            shown_for_eval = show_native_for_background_eval(&active, &self.state).await;
         }
 
         // If a target URL was supplied, navigate via Tauri's native navigate
@@ -414,9 +551,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         if let Some(parsed) = target_url {
             inject_cookies_for_url(&self.app, &parsed).await;
             if !was_visible {
-                let _ = active.show();
-                self.state.set_visible(true).await;
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                shown_for_eval = show_native_for_background_eval(&active, &self.state).await;
             }
             active
                 .navigate(parsed)
@@ -472,7 +607,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         let start = Instant::now();
         let result_json = loop {
             if start.elapsed() >= timeout {
-                if !was_visible && url.is_none() {
+                if shown_for_eval && url.is_none() {
                     let _ = active.hide();
                     self.state.set_visible(false).await;
                 }
@@ -493,7 +628,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // tab labels in any embedding UI) doesn't keep our marker.
         let restore_lit = serde_json::to_string(&original_title).unwrap_or_else(|_| "\"\"".into());
         let _ = active.eval(format!("document.title = {restore_lit};"));
-        if !was_visible && url.is_none() {
+        if shown_for_eval && url.is_none() {
             let _ = active.hide();
             self.state.set_visible(false).await;
         }
@@ -536,7 +671,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
     /// `document.title` marker that real-world pages clobber with their
     /// own titles. The frontend sidebar listens for `NAVIGATE_EVENT` and
     /// reveals/positions the webview itself.
-    async fn navigate(&self, url: &str) -> Result<(), String> {
+    async fn navigate(&self, url: &str, owner: Option<&str>) -> Result<(), String> {
         let parsed: url::Url = normalize_url(url)?;
 
         // Push the user's real-browser cookies for this host into
@@ -547,14 +682,21 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // hook the agent always lands on the logged-out version of the
         // site even though the Tauri-command-driven sidebar restore
         // path was injecting correctly.
-        prepare_navigation(&self.app, &self.state, &parsed).await;
+        prepare_navigation(&self.app, &self.state, &parsed, owner).await;
         inject_cookies_for_url(&self.app, &parsed).await;
 
         if let Some(active) = self.state.active().await {
-            if !self.state.is_visible().await {
-                let _ = active.show();
-                self.state.set_visible(true).await;
-            }
+            // Do NOT force the native webview visible here. Whether the panel is
+            // on screen is a frontend concern — the chat layer that hosts
+            // `<BrowserSidebar />` is `display:none` whenever the user is on
+            // Meeting notes / Timeline / Settings / etc. The sidebar reveals and
+            // positions the webview via `owned_browser_set_bounds` only when its
+            // host is actually visible, and hides it otherwise (the
+            // `offsetParent === null` guard in browser-sidebar.tsx). A
+            // background agent/pipe navigate that called `show()` here would pop
+            // the native browser over whatever the user is looking at. The
+            // navigate still loads while hidden, so the page is ready when the
+            // sidebar next reveals it.
             active
                 .navigate(parsed)
                 .map_err(|e| format!("webview.navigate failed: {e}"))?;
@@ -709,12 +851,29 @@ async fn ensure_child_bounds(
     Ok(child)
 }
 
-async fn prepare_navigation(app: &AppHandle, state: &OwnedBrowserState, parsed: &url::Url) {
+async fn prepare_navigation(
+    app: &AppHandle,
+    state: &OwnedBrowserState,
+    parsed: &url::Url,
+    owner: Option<&str>,
+) {
+    // Record the owner before emitting anything so the provisional state event
+    // below — and the native page-load/title callbacks that follow — carry the
+    // same tag. `owner` is the chat/session that issued this navigation; the
+    // frontend uses it to keep a background pipe's page out of whatever chat is
+    // on screen.
+    state.set_pending_owner(owner.map(|s| s.to_string()));
     // Provisional omnibox URL while a top-level navigation is in flight
     // (agent or sidebar initiated). Committed URL comes from `webview.url()`
     // on main-document load finish / title change.
     emit_state_event(app, Some(parsed.as_str().to_string()), None, Some(true));
-    let _ = app.emit(NAVIGATE_EVENT, parsed.as_str());
+    let _ = app.emit(
+        NAVIGATE_EVENT,
+        OwnedBrowserNavigateEvent {
+            url: parsed.as_str().to_string(),
+            owner: owner.map(|s| s.to_string()),
+        },
+    );
     state.store_pending_url(parsed.clone()).await;
 }
 
@@ -855,22 +1014,23 @@ mod normalize_url_tests {
     }
 }
 
-/// Navigate the embedded webview to `url`. Used by the agent (via
-/// `POST /connections/browsers/owned-default/eval`) and by the sidebar
-/// when restoring per-chat state.
+/// Navigate the embedded webview to `url`. Used by the sidebar when restoring
+/// per-chat state or on user reload — i.e. always an action of the chat that's
+/// on screen, so it carries no owner (`None`) and the frontend always honors
+/// it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
 #[specta::specta]
 #[tauri::command]
 pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
     let state = browser_state();
     let parsed: url::Url = normalize_url(&url)?;
 
-    prepare_navigation(&app, &state, &parsed).await;
+    prepare_navigation(&app, &state, &parsed, None).await;
     inject_cookies_for_url(&app, &parsed).await;
     if let Some(active) = state.active().await {
-        if !state.is_visible().await {
-            active.show().map_err(|e| e.to_string())?;
-            state.set_visible(true).await;
-        }
+        // Visibility is owned by the frontend sidebar — never force-show here
+        // (see the matching note in `TauriOwnedHandle::navigate`). Force-showing
+        // pops the browser over non-chat views when a background agent/pipe
+        // navigates while the user is on Meeting notes, Timeline, etc.
         active.navigate(parsed).map_err(|e| e.to_string())?;
         state.clear_pending_url().await;
     }
@@ -889,6 +1049,38 @@ pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
     }
     state.set_visible(false).await;
     Ok(())
+}
+
+/// Clear all browsing data for the owned-browser webview: cookies, injected
+/// cookies, site storage, and cache. This resets the current shared owned
+/// browser slate; per-chat isolation belongs to the follow-up PR.
+#[specta::specta]
+#[tauri::command]
+pub async fn owned_browser_clear_browsing_data(app: AppHandle) -> Result<(), String> {
+    let _ = app;
+    let state = browser_state();
+    let Some(active) = state.active().await else {
+        return Err("owned-browser child webview not attached".to_string());
+    };
+    active
+        .clear_all_browsing_data()
+        .map_err(|e| format!("owned-browser clear browsing data failed: {e}"))?;
+    info!("owned-browser: cleared browsing data");
+    Ok(())
+}
+
+/// E2E-only probe: whether the owned-browser native webview is currently shown.
+/// Mirrors `e2e_main_overlay_visible` — internal visibility state stays hidden
+/// in production binaries and is only exposed under the `e2e` feature. Used by
+/// `zz-owned-browser-background-nav.spec.ts` to assert a background agent/pipe
+/// navigation does not reveal the browser over a non-chat view.
+#[specta::specta]
+#[tauri::command]
+pub async fn e2e_owned_browser_visible() -> bool {
+    if !cfg!(feature = "e2e") {
+        return false;
+    }
+    browser_state().is_visible().await
 }
 
 /// Cross-platform cookie pre-navigate hook. Resolves the URL's host,
@@ -958,6 +1150,7 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
                         v20_count: block.v20_count,
                         sources: block.sources,
                         reason: "v20".to_string(),
+                        owner: browser_state().pending_owner(),
                     };
                     if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
                         warn!("owned-browser cookies: failed to emit v20 block event: {e}");
@@ -1176,6 +1369,7 @@ async fn browser_session_decision_for_url(
                 v20_count: 0,
                 sources: block.sources,
                 reason: "locked".to_string(),
+                owner: browser_state().pending_owner(),
             };
             if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
                 warn!("owned-browser: failed to emit locked-browser event: {e}");
@@ -1184,46 +1378,83 @@ async fn browser_session_decision_for_url(
         return BrowserSessionDecision::ContinueLoggedOut;
     }
 
-    if session_access_allowed().lock().await.contains(&host_key) {
-        return BrowserSessionDecision::UseBrowserSession;
+    if GLOBAL_SESSION_ACCESS_DISABLED.load(Ordering::SeqCst) {
+        info!(
+            host = host_key.as_str(),
+            "owned-browser cookies: disabled by user — navigating without real-browser session"
+        );
+        return BrowserSessionDecision::ContinueLoggedOut;
     }
+
+    let already_granted = GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst);
 
     // On Windows there is no OS-level permission dialog (unlike macOS Keychain),
     // so we don't need an explicit consent step. DPAPI cookies inject silently;
     // if they are v20-encrypted inject_cookies_for_url will show the single
     // "Browser login is protected" card which already acts as consent + setup.
-    // SESSION_ACCESS_ALLOWED is a macOS-only concept (remembers "user clicked
-    // allow" to skip the Keychain consent dialog next time) — we don't store
-    // anything on Windows because there is no dialog to skip.
     #[cfg(target_os = "windows")]
     return BrowserSessionDecision::UseBrowserSession;
 
-    // Agent may navigate the same host repeatedly while the first prompt is open.
-    let wait_deadline = Instant::now() + SESSION_ACCESS_TIMEOUT;
-    loop {
-        if session_access_allowed().lock().await.contains(&host_key) {
+    // macOS: a persisted app-level grant is not enough to avoid surprise.
+    // The first Safe Storage read after app launch can still trigger a macOS
+    // Keychain prompt, so require an in-app confirmation once per process
+    // before reading Keychain.
+    #[cfg(target_os = "macos")]
+    if already_granted {
+        if SESSION_ACCESS_PRIMED_THIS_RUN.load(Ordering::SeqCst) {
             return BrowserSessionDecision::UseBrowserSession;
         }
-        let in_flight = session_access_in_flight().lock().await;
-        if !in_flight.contains(&host_key) {
-            drop(in_flight);
-            break;
+        if !crate::owned_browser_cookies::safe_storage_likely_prompts_for_host(&host_key).await {
+            SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+            return BrowserSessionDecision::UseBrowserSession;
         }
-        drop(in_flight);
-        if Instant::now() >= wait_deadline {
-            warn!(
-                host = host_key.as_str(),
-                "owned-browser session access: timed out waiting for in-flight prompt"
-            );
-            return BrowserSessionDecision::ContinueLoggedOut;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    session_access_in_flight()
-        .lock()
-        .await
-        .insert(host_key.clone());
+    // If a prompt is already on screen (concurrent navigations), wait for it
+    // instead of spawning a second card. compare_exchange makes prompt ownership
+    // atomic so two parallel navigations can't both show cards.
+    loop {
+        #[cfg(target_os = "macos")]
+        if GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst) {
+            if SESSION_ACCESS_PRIMED_THIS_RUN.load(Ordering::SeqCst) {
+                return BrowserSessionDecision::UseBrowserSession;
+            }
+            if !crate::owned_browser_cookies::safe_storage_likely_prompts_for_host(&host_key).await
+            {
+                SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+                return BrowserSessionDecision::UseBrowserSession;
+            }
+        }
+        if SESSION_ACCESS_PROMPT_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            break;
+        }
+        let wait_deadline = Instant::now() + SESSION_ACCESS_TIMEOUT;
+        while SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst) {
+            #[cfg(target_os = "macos")]
+            if GLOBAL_SESSION_ACCESS_GRANTED.load(Ordering::SeqCst) {
+                if SESSION_ACCESS_PRIMED_THIS_RUN.load(Ordering::SeqCst) {
+                    return BrowserSessionDecision::UseBrowserSession;
+                }
+                if !crate::owned_browser_cookies::safe_storage_likely_prompts_for_host(&host_key)
+                    .await
+                {
+                    SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+                    return BrowserSessionDecision::UseBrowserSession;
+                }
+            }
+            if Instant::now() >= wait_deadline {
+                warn!(
+                    host = host_key.as_str(),
+                    "owned-browser session access: timed out waiting for in-flight prompt"
+                );
+                return BrowserSessionDecision::ContinueLoggedOut;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 
     let state = browser_state();
     if let Some(active) = state.active().await {
@@ -1242,11 +1473,13 @@ async fn browser_session_decision_for_url(
         request_id: request_id.clone(),
         url: url.as_str().to_string(),
         host: host_key.clone(),
+        already_granted,
+        owner: browser_state().pending_owner(),
     };
 
     if let Err(e) = app.emit(SESSION_ACCESS_REQUEST_EVENT, payload) {
         pending_session_access().lock().await.remove(&request_id);
-        session_access_in_flight().lock().await.remove(&host_key);
+        SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
         warn!("owned-browser session access: failed to emit request: {e}");
         return BrowserSessionDecision::ContinueLoggedOut;
     }
@@ -1264,9 +1497,18 @@ async fn browser_session_decision_for_url(
         }
     };
 
-    session_access_in_flight().lock().await.remove(&host_key);
+    SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
     if decision == BrowserSessionDecision::UseBrowserSession {
-        remember_session_access_allow(&host_key).await;
+        // Set the global runtime flag — frontend is responsible for
+        // persisting to the store and calling set_browser_cookie_access_granted.
+        GLOBAL_SESSION_ACCESS_GRANTED.store(true, Ordering::SeqCst);
+        GLOBAL_SESSION_ACCESS_DISABLED.store(false, Ordering::SeqCst);
+        SESSION_ACCESS_PRIMED_THIS_RUN.store(true, Ordering::SeqCst);
+    } else {
+        // First-time "Continue logged out" is a real preference: don't keep
+        // prompting. User can enable cookies later from the cookie menu.
+        GLOBAL_SESSION_ACCESS_GRANTED.store(false, Ordering::SeqCst);
+        GLOBAL_SESSION_ACCESS_DISABLED.store(true, Ordering::SeqCst);
     }
     decision
 }

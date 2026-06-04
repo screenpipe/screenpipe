@@ -180,8 +180,9 @@ pub struct PipeConfig {
     /// parties (Slack, Notion, Google Docs, etc.).
     ///
     /// NOTE: the front-matter field parses but the pipe runner does NOT
-    /// yet read it into the spawned Pi env. Wire-up is pending — tracked
-    /// separately from the chat-side feature which is already live.
+    /// yet read it into the spawned Pi env. Wire-up is pending. The
+    /// chat-side toggle that used to set this env was removed once PII
+    /// redaction moved to the at-rest redact worker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub privacy_filter: bool,
 
@@ -210,6 +211,11 @@ where
 {
     use serde::de;
 
+    fn normalized_preset(s: &str) -> Option<String> {
+        let trimmed = s.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
     struct PresetVisitor;
 
     impl<'de> de::Visitor<'de> for PresetVisitor {
@@ -220,11 +226,7 @@ where
         }
 
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Vec<String>, E> {
-            if v.is_empty() {
-                Ok(vec![])
-            } else {
-                Ok(vec![v.to_string()])
-            }
+            Ok(normalized_preset(v).into_iter().collect())
         }
 
         fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
@@ -238,7 +240,7 @@ where
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
             let mut result = Vec::new();
             while let Some(s) = seq.next_element::<String>()? {
-                if !s.is_empty() {
+                if let Some(s) = normalized_preset(&s) {
                     result.push(s);
                 }
             }
@@ -2158,6 +2160,11 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
+                    // Owner tag: a pipe's owned-browser navigations are
+                    // `pipe:<name>`, which never matches an open chat's
+                    // conversationId, so they stay out of whatever chat is on
+                    // screen. See screenpipe-core::agents::bash_env.
+                    Some(format!("pipe:{pipe_name}").as_str()),
                 ),
             )
             .await;
@@ -2639,6 +2646,11 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
+                    // Owner tag: a pipe's owned-browser navigations are
+                    // `pipe:<name>`, which never matches an open chat's
+                    // conversationId, so they stay out of whatever chat is on
+                    // screen. See screenpipe-core::agents::bash_env.
+                    Some(format!("pipe:{name}").as_str()),
                 ),
             )
             .await;
@@ -3807,6 +3819,8 @@ impl PipeManager {
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
+                                // Owner tag — see run_pipe_with_trigger.
+                                Some(format!("pipe:{pipe_name}").as_str()),
                             ),
                         )
                         .await;
@@ -5072,6 +5086,14 @@ mod tests {
         assert_eq!(config.model, "auto");
         assert!(config.enabled);
         assert!(config.provider.is_none());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_trims_preset_ids() {
+        let content = "---\nschedule: every 1h\nenabled: true\npreset:\n  - \" primary \"\n  - \"   \"\n  - \"fallback  \"\n---\n\nBody";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.preset, vec!["primary", "fallback"]);
+        assert_eq!(body, "Body");
     }
 
     #[test]

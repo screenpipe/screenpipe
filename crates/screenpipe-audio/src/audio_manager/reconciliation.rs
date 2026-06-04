@@ -24,6 +24,11 @@ static BACKFILL_LAST_TRIGGERED_MS: AtomicU64 = AtomicU64::new(0);
 
 const BACKFILL_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const BACKFILL_MAX_CHUNKS_PER_PASS: usize = 12;
+/// Max gap between a live meeting segment's timestamp and an identified
+/// audio_transcriptions row when mapping the segment to a global speaker_id.
+/// The mirrored live row shares the segment's exact timestamp, so this only
+/// needs slack for clock jitter.
+const MEETING_SEGMENT_SPEAKER_WINDOW_SECS: f64 = 15.0;
 const RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
 const RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
 const RECONCILIATION_CHUNKS_PER_SWEEP: i64 = 50;
@@ -543,6 +548,28 @@ pub async fn reconcile_untranscribed(
                 "reconciliation: backfilled {} rows with speaker ids",
                 backfilled
             );
+        }
+
+        // Map live meeting-transcript segments onto the global speaker ids the
+        // chunk backfill just resolved (reuses the same identities — no second
+        // embedding path). Pure DB; the mirrored live row shares each segment's
+        // timestamp so it matches first.
+        match db
+            .backfill_meeting_segment_speakers(
+                chrono::Utc::now() - chrono::Duration::hours(24),
+                MEETING_SEGMENT_SPEAKER_WINDOW_SECS,
+            )
+            .await
+        {
+            Ok(n) if n > 0 => info!(
+                "reconciliation: mapped {} live meeting segment(s) to global speaker ids",
+                n
+            ),
+            Ok(_) => {}
+            Err(e) => warn!(
+                "reconciliation: meeting-segment speaker mapping failed: {}",
+                e
+            ),
         }
     }
 

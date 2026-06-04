@@ -509,6 +509,18 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
     fallback_local_api_config(crate::store::resolved_api_auth_key())
 }
 
+/// Get the app-local focus/notification server port.
+#[tauri::command]
+#[specta::specta]
+pub fn get_app_server_config() -> serde_json::Value {
+    let port = std::env::var("SCREENPIPE_FOCUS_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(11435);
+
+    serde_json::json!({ "port": port })
+}
+
 /// Pure JSON shape used by the cold-spawn fallback. Extracted so the contract
 /// is covered by a unit test without needing a tauri::AppHandle. Port is the
 /// well-known default because the server hasn't bound yet — the UI will refresh
@@ -1018,6 +1030,23 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// E2E helper: report whether the shortcut reminder overlay is visibly shown.
+///
+/// The reminder window is hidden rather than destroyed, so WebDriver can keep a
+/// stale handle after users disable it from Settings > Display.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_shortcut_reminder_visible(app_handle: tauri::AppHandle) -> bool {
+    if !cfg!(feature = "e2e") {
+        return false;
+    }
+
+    app_handle
+        .get_webview_window("shortcut-reminder")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
+}
+
 #[derive(serde::Serialize, specta::Type)]
 pub struct E2eAgentStreamResult {
     pub emitted_deltas: u32,
@@ -1276,6 +1305,17 @@ pub fn update_show_screenpipe_shortcut(
     if let Err(e) = app_handle.global_shortcut().on_shortcut(
         show_window_shortcut,
         move |app_handle, _event, _shortcut| {
+            // The "show" shortcut only opens the timeline/rewind overlay, so
+            // ignore it when the timeline is disabled (checked at press time).
+            if crate::store::SettingsStore::get(app_handle)
+                .unwrap_or_default()
+                .unwrap_or_default()
+                .recording
+                .disable_timeline
+            {
+                info!("timeline disabled: ignoring show shortcut");
+                return;
+            }
             #[cfg(target_os = "macos")]
             {
                 use crate::window::MAIN_PANEL_SHOWN;
@@ -2093,6 +2133,19 @@ pub async fn show_shortcut_reminder(
     let label = "shortcut-reminder";
 
     info!("show_shortcut_reminder called");
+
+    // The screenpipe shortcut only opens the timeline/rewind overlay, so the
+    // reminder is pointless when the timeline is disabled. Suppress it here so
+    // every caller (startup, settings toggles, shortcut edits) is covered.
+    let timeline_disabled = crate::store::SettingsStore::get(&app_handle)
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .recording
+        .disable_timeline;
+    if timeline_disabled {
+        info!("timeline disabled: skipping shortcut reminder overlay");
+        return Ok(());
+    }
 
     let shortcut_overlay_size = crate::store::SettingsStore::get(&app_handle)
         .unwrap_or_default()

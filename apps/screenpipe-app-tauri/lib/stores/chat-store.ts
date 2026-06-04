@@ -47,6 +47,21 @@ export type SessionStatus =
  */
 export type StoredMessage = unknown;
 export type StoredContentBlock = unknown;
+// Opaque shapes for the per-session composer draft. The store doesn't
+// know what an attachment or extracted-doc actually contains — the chat
+// panel narrows these at the read site. Same isolation pattern as
+// StoredMessage. Drafts are in-memory only (never persisted to disk) so
+// a relaunch starts with empty composers — mirrors how `messages` /
+// `streamingText` are stored.
+export type StoredPastedImage = unknown;
+export type StoredAttachedDoc = unknown;
+export type StoredPendingDoc = unknown;
+export interface SessionDraft {
+  input: string;
+  pastedImages: StoredPastedImage[];
+  attachedDocs: StoredAttachedDoc[];
+  pendingDocs: StoredPendingDoc[];
+}
 
 export interface SessionRecord {
   /** Pi `session_id` — also the uuid used by `commands.piStart`. */
@@ -134,6 +149,15 @@ export interface SessionRecord {
    *  the disk round-trip when the user comes back to a session that's
    *  been live in the store. */
   hydratedAt?: number;
+  /** Per-conversation composer draft — what the user had typed +
+   *  staged but not yet sent. Snapshotted on chat switch, restored on
+   *  return. In-memory only; never persisted to disk. Cleared when the
+   *  draft is actually sent (sendMessage already calls setInput("") etc).
+   *  See loadConversation / startNewConversation in use-chat-conversations.ts.
+   *  Named `composerDraft` (not `draft`) to avoid collision with the
+   *  pre-existing boolean `draft` flag above which marks empty
+   *  sidebar-hidden sessions. */
+  composerDraft?: SessionDraft;
 
   // ── Conversation kind + pipe metadata ──────────────────────────────
   // Splits sessions into chat / pipe-watch / pipe-run so the sidebar
@@ -257,6 +281,9 @@ interface ChatStoreActions {
       isLoading: boolean;
     }
   ) => void;
+  /** Write (or clear) the composer draft for a session. Pass
+   *  `undefined` to drop the draft entirely (e.g. on successful send). */
+  setComposerDraft: (id: string, draft: SessionDraft | undefined) => void;
 }
 
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
@@ -558,6 +585,32 @@ export const useChatStore = create<ChatStore>((set) => ({
             },
           },
         };
+      }),
+
+    setComposerDraft: (id, draft) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        // Treat an "empty" draft as no draft so the store doesn't
+        // accumulate stale objects for every chat the user ever opened.
+        // The composer always re-initializes to empty on switch when
+        // there's no saved draft, so dropping == restoring-empty.
+        const isEmpty =
+          !draft ||
+          (draft.input === "" &&
+            (draft.pastedImages?.length ?? 0) === 0 &&
+            (draft.attachedDocs?.length ?? 0) === 0 &&
+            (draft.pendingDocs?.length ?? 0) === 0);
+        if (isEmpty && !existing.composerDraft) return {};
+        const next = isEmpty ? undefined : draft;
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: { ...existing, composerDraft: next },
+          },
+        };
+        // No updatedAt bump — typing a draft is not user-visible
+        // activity for the sidebar's recency sort.
       }),
   },
 }));

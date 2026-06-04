@@ -79,7 +79,11 @@ import {
 } from "@/components/ui/tooltip";
 
 type MainSection = "home" | "timeline" | "memories" | "pipes" | "artifacts" | "connections" | "meetings" | "help";
-type ConnectionFocusRequest = { id: string | null; requestId: number };
+type ConnectionFocusRequest = {
+  id: string | null;
+  category: string | null;
+  requestId: number;
+};
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
@@ -163,6 +167,14 @@ function HomeContent() {
     const fallback = ["home", "timeline", "pipes"].find((s) => !isSectionHidden(s));
     setActiveSection(fallback ?? "home");
   }, [activeSection, isSectionHidden, setActiveSection]);
+
+  // Timeline can be turned off in Display settings. When it is, the nav item is
+  // gone, so bounce out of the (now unreachable) timeline section to chat.
+  useEffect(() => {
+    if ((settings.disableTimeline ?? false) && activeSection === "timeline") {
+      setActiveSection("home");
+    }
+  }, [settings.disableTimeline, activeSection, setActiveSection]);
 
   // Mount the Pi event router once, app-wide. Listens for `pi_event` /
   // `pi_session_evicted` outside any chat-component lifecycle and mirrors
@@ -721,6 +733,9 @@ function HomeContent() {
   const openSettings = useCallback((section: string = "general") => {
     router.push(`/settings?section=${section}`);
   }, [router]);
+  const clearConnectionFocusRequest = useCallback(() => {
+    setConnectionFocusRequest(null);
+  }, []);
 
   // Listen for open-settings events from child components (e.g. connections strip)
   useEffect(() => {
@@ -731,6 +746,7 @@ function HomeContent() {
       if (section === "connections") {
         setConnectionFocusRequest({
           id: typeof detail?.connectionId === "string" ? detail.connectionId : null,
+          category: typeof detail?.category === "string" ? detail.category : null,
           requestId: Date.now(),
         });
         setActiveSection("connections");
@@ -758,6 +774,10 @@ function HomeContent() {
         // means the case branch falls through to the always-mounted chat.
         return null;
       case "timeline":
+        // Timeline can be disabled in Display settings; when it is, fall through
+        // to chat (the redirect effect also resets activeSection to "home"). This
+        // avoids a flash of the disabled placeholder on reload.
+        if (settings.disableTimeline) return null;
         return <Timeline embedded />;
       case "memories":
         return <MemoriesSection />;
@@ -769,7 +789,9 @@ function HomeContent() {
         return (
           <ConnectionsSection
             focusConnectionId={connectionFocusRequest?.id ?? null}
+            focusCategory={connectionFocusRequest?.category ?? null}
             focusRequestId={connectionFocusRequest?.requestId ?? 0}
+            onFocusRequestConsumed={clearConnectionFocusRequest}
           />
         );
       case "meetings":
@@ -815,7 +837,11 @@ function HomeContent() {
     { id: "meetings", label: "Meeting notes", icon: <NotebookPen className="h-3.5 w-3.5" /> },
     { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
-  ].filter((s) => !isSectionHidden(s.id));
+  ]
+    .filter((s) => !isSectionHidden(s.id))
+    // Timeline can be turned off in Display settings — when it is, drop it from
+    // the sidebar entirely (the "Timeline Disabled" placeholder was poor UX).
+    .filter((s) => !(s.id === "timeline" && (settings.disableTimeline ?? false)));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
   useEffect(() => {

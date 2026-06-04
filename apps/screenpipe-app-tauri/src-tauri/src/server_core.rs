@@ -242,8 +242,9 @@ impl ServerCore {
             msg
         })?;
 
-        // Wire audio → hot cache
-        {
+        // Wire audio → hot cache (only the timeline reads this cache, so skip
+        // the per-transcript buffering when the timeline is disabled).
+        if !config.disable_timeline {
             let cache = hot_frame_cache.clone();
             let rt = tokio::runtime::Handle::current();
             audio_manager.set_on_transcription_insert(Arc::new(move |info| {
@@ -308,6 +309,7 @@ impl ServerCore {
         server.vision_metrics = vision_metrics.clone();
         server.audio_metrics = audio_manager.metrics.clone();
         server.hot_frame_cache = Some(hot_frame_cache.clone());
+        server.timeline_disabled = config.disable_timeline;
         server.power_manager = Some(power_manager.clone());
         server.manual_meeting = Some(manual_meeting.clone());
         server.api_auth = config.api_auth;

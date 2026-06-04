@@ -68,6 +68,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::{ffi::c_void, ptr};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::OnceLock;
 
@@ -149,6 +151,26 @@ pub async fn has_cookies_for_host(host: &str) -> bool {
         return false;
     }
     has_cookies_for_host_impl(host).await
+}
+
+/// macOS UX preflight: returns true when reading the browser Safe Storage
+/// key is likely to trigger a Keychain prompt, or when we cannot prove it
+/// will not. It inspects Keychain ACL metadata without requesting password
+/// bytes; unknown = prompt to keep OS prompts from surprising users.
+#[cfg(target_os = "macos")]
+pub async fn safe_storage_likely_prompts_for_host(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let host_owned = host.to_string();
+    tokio::task::spawn_blocking(move || safe_storage_likely_prompts_for_host_impl(&host_owned))
+        .await
+        .unwrap_or(true)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn safe_storage_likely_prompts_for_host(_host: &str) -> bool {
+    false
 }
 
 #[cfg(target_os = "windows")]
@@ -939,6 +961,234 @@ fn has_cookie_rows(source: &KeychainEntry, host: &str) -> Result<bool, String> {
     rows.next()
         .map(|row| row.is_some())
         .map_err(|e| format!("row: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+type OSStatus = i32;
+#[cfg(target_os = "macos")]
+type CFTypeRef = *const c_void;
+#[cfg(target_os = "macos")]
+type CFArrayRef = *const c_void;
+#[cfg(target_os = "macos")]
+type CFStringRef = *const c_void;
+#[cfg(target_os = "macos")]
+type CFDataRef = *const c_void;
+#[cfg(target_os = "macos")]
+type SecKeychainItemRef = *mut c_void;
+#[cfg(target_os = "macos")]
+type SecAccessRef = *mut c_void;
+#[cfg(target_os = "macos")]
+type SecACLRef = *const c_void;
+#[cfg(target_os = "macos")]
+type SecTrustedApplicationRef = *mut c_void;
+
+#[cfg(target_os = "macos")]
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    fn SecKeychainFindGenericPassword(
+        keychain_or_array: CFTypeRef,
+        service_name_length: u32,
+        service_name: *const i8,
+        account_name_length: u32,
+        account_name: *const i8,
+        password_length: *mut u32,
+        password_data: *mut *mut c_void,
+        item_ref: *mut SecKeychainItemRef,
+    ) -> OSStatus;
+    fn SecKeychainItemCopyAccess(item_ref: SecKeychainItemRef, access: *mut SecAccessRef)
+        -> OSStatus;
+    fn SecAccessCopyACLList(access: SecAccessRef, acl_list: *mut CFArrayRef) -> OSStatus;
+    fn SecACLCopyContents(
+        acl: SecACLRef,
+        application_list: *mut CFArrayRef,
+        description: *mut CFStringRef,
+        prompt_selector: *mut u32,
+    ) -> OSStatus;
+    fn SecTrustedApplicationCreateFromPath(
+        path: *const i8,
+        app: *mut SecTrustedApplicationRef,
+    ) -> OSStatus;
+    fn SecTrustedApplicationCopyData(app_ref: SecTrustedApplicationRef, data: *mut CFDataRef)
+        -> OSStatus;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFArrayGetCount(array: CFArrayRef) -> isize;
+    fn CFArrayGetValueAtIndex(array: CFArrayRef, idx: isize) -> *const c_void;
+    fn CFDataGetLength(data: CFDataRef) -> isize;
+    fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
+    fn CFRelease(value: *const c_void);
+}
+
+#[cfg(target_os = "macos")]
+struct CfOwned<T>(*const T);
+
+#[cfg(target_os = "macos")]
+impl<T> Drop for CfOwned<T> {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0.cast()) };
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn safe_storage_likely_prompts_for_host_impl(host: &str) -> bool {
+    let mut checked_any = false;
+    for source in SOURCES {
+        match has_cookie_rows(source, host) {
+            Ok(true) => {
+                checked_any = true;
+                match safe_storage_entry_trusts_current_app(source) {
+                    Ok(true) => {
+                        debug!(
+                            source = source.name,
+                            host,
+                            "owned-browser cookies: Safe Storage ACL preflight trusted"
+                        );
+                    }
+                    Ok(false) => {
+                        info!(
+                            source = source.name,
+                            host,
+                            "owned-browser cookies: Safe Storage ACL preflight would prompt"
+                        );
+                        return true;
+                    }
+                    Err(e) => {
+                        info!(
+                            source = source.name,
+                            host,
+                            "owned-browser cookies: Safe Storage ACL preflight unknown — {e}"
+                        );
+                        return true;
+                    }
+                }
+            }
+            Ok(false) => {}
+            Err(e) => debug!(
+                source = source.name,
+                host,
+                "owned-browser cookies: Safe Storage ACL preflight row skip — {e}"
+            ),
+        }
+    }
+    !checked_any
+}
+
+#[cfg(target_os = "macos")]
+fn safe_storage_entry_trusts_current_app(source: &KeychainEntry) -> Result<bool, String> {
+    let current_app_data = current_trusted_application_data()?;
+    let mut item: SecKeychainItemRef = ptr::null_mut();
+    let status = unsafe {
+        SecKeychainFindGenericPassword(
+            ptr::null(),
+            source.keychain_service.len() as u32,
+            source.keychain_service.as_ptr().cast(),
+            source.keychain_account.len() as u32,
+            source.keychain_account.as_ptr().cast(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut item,
+        )
+    };
+    if status != 0 || item.is_null() {
+        return Err(format!("find keychain item: status {status}"));
+    }
+    let _item = CfOwned(item.cast_const());
+
+    let mut access: SecAccessRef = ptr::null_mut();
+    let status = unsafe { SecKeychainItemCopyAccess(item, &mut access) };
+    if status != 0 || access.is_null() {
+        return Err(format!("copy access: status {status}"));
+    }
+    let _access = CfOwned(access.cast_const());
+
+    let mut acl_list: CFArrayRef = ptr::null();
+    let status = unsafe { SecAccessCopyACLList(access, &mut acl_list) };
+    if status != 0 || acl_list.is_null() {
+        return Err(format!("copy acl list: status {status}"));
+    }
+    let _acl_list = CfOwned(acl_list);
+
+    let count = unsafe { CFArrayGetCount(acl_list) };
+    for idx in 0..count {
+        let acl = unsafe { CFArrayGetValueAtIndex(acl_list, idx) } as SecACLRef;
+        if acl.is_null() {
+            continue;
+        }
+        if acl_trusts_current_app(acl, &current_app_data)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn current_trusted_application_data() -> Result<Vec<u8>, String> {
+    let mut app: SecTrustedApplicationRef = ptr::null_mut();
+    let status = unsafe { SecTrustedApplicationCreateFromPath(ptr::null(), &mut app) };
+    if status != 0 || app.is_null() {
+        return Err(format!("current trusted app: status {status}"));
+    }
+    let _app = CfOwned(app.cast_const());
+    trusted_application_data(app)
+}
+
+#[cfg(target_os = "macos")]
+fn acl_trusts_current_app(acl: SecACLRef, current_app_data: &[u8]) -> Result<bool, String> {
+    let mut app_list: CFArrayRef = ptr::null();
+    let mut description: CFStringRef = ptr::null();
+    let mut prompt_selector = 0u32;
+    let status = unsafe {
+        SecACLCopyContents(
+            acl,
+            &mut app_list,
+            &mut description,
+            &mut prompt_selector,
+        )
+    };
+    if status != 0 {
+        return Err(format!("copy acl contents: status {status}"));
+    }
+    let _description = CfOwned(description);
+    if app_list.is_null() {
+        return Ok(false);
+    }
+    let _app_list = CfOwned(app_list);
+
+    let count = unsafe { CFArrayGetCount(app_list) };
+    for idx in 0..count {
+        let app = unsafe { CFArrayGetValueAtIndex(app_list, idx) } as SecTrustedApplicationRef;
+        if app.is_null() {
+            continue;
+        }
+        if trusted_application_data(app)? == current_app_data {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn trusted_application_data(app: SecTrustedApplicationRef) -> Result<Vec<u8>, String> {
+    let mut data: CFDataRef = ptr::null();
+    let status = unsafe { SecTrustedApplicationCopyData(app, &mut data) };
+    if status != 0 || data.is_null() {
+        return Err(format!("trusted app data: status {status}"));
+    }
+    let _data = CfOwned(data);
+    let len = unsafe { CFDataGetLength(data) };
+    if len < 0 {
+        return Err("trusted app data has negative length".to_string());
+    }
+    let ptr = unsafe { CFDataGetBytePtr(data) };
+    if ptr.is_null() {
+        return Err("trusted app data pointer is null".to_string());
+    }
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len as usize) }.to_vec())
 }
 
 /// Synchronous worker — runs inside spawn_blocking. Returns Vec on

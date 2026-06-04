@@ -165,9 +165,11 @@ impl VisionManager {
         }
     }
 
-    /// Set the hot frame cache so captures push frames into it.
-    pub fn with_hot_frame_cache(mut self, cache: Arc<HotFrameCache>) -> Self {
-        self.hot_frame_cache = Some(cache);
+    /// Set the hot frame cache so captures push frames into it. Pass `None` to
+    /// disable frame buffering (e.g. when the timeline feature is disabled — the
+    /// hot cache is only consumed by the timeline streaming endpoint).
+    pub fn with_hot_frame_cache(mut self, cache: Option<Arc<HotFrameCache>>) -> Self {
+        self.hot_frame_cache = cache;
         self
     }
 

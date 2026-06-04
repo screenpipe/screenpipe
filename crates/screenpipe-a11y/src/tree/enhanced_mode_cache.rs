@@ -117,6 +117,36 @@ impl EnhancedModeCache {
         }
     }
 
+    /// Set-ONCE variant: returns `true` only the *first* time a pid is seen,
+    /// and `false` on every subsequent call for as long as the pid keeps being
+    /// seen (each call refreshes the liveness timestamp so a still-focused pid
+    /// is never evicted, hence never re-poked). The pid is only re-enabled after
+    /// it disappears for `EVICT_AFTER_TTLS × ttl`.
+    ///
+    /// Unlike [`Self::should_enable`], this never re-asserts enhanced mode on an
+    /// already-latched renderer. Re-asserting forces Chromium/Electron to
+    /// synchronously rebuild its AX tree, and if a composition / autocomplete /
+    /// dictation buffer is pending at that instant the rebuild commits (and
+    /// often duplicates) it into the focused field — the "phantom text" bug.
+    /// Chromium latches the mode after one set, so one poke per focus is enough.
+    pub fn should_enable_once(&self, pid: i32) -> bool {
+        self.should_enable_once_at(pid, Instant::now())
+    }
+
+    /// Test hook for [`Self::should_enable_once`] with a caller-supplied clock.
+    pub(crate) fn should_enable_once_at(&self, pid: i32, now: Instant) -> bool {
+        let mut map = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Self::evict_older_than(&mut map, now, self.ttl * EVICT_AFTER_TTLS);
+        let first_time = !map.contains_key(&pid);
+        // Always refresh liveness so a continuously-focused pid is kept alive
+        // (and therefore never re-poked) until it actually goes away.
+        map.insert(pid, now);
+        first_time
+    }
+
     /// Drop the cached entry for `pid`. Next [`Self::should_enable`] for that
     /// pid returns `true`. Safe to call for pids that aren't in the cache.
     pub fn forget(&self, pid: i32) {
@@ -302,5 +332,33 @@ mod tests {
         let cache = EnhancedModeCache::new(Duration::from_secs(60));
         assert!(cache.should_enable(-1));
         assert!(!cache.should_enable(-1));
+    }
+
+    #[test]
+    fn should_enable_once_never_reasserts_while_present() {
+        let cache = EnhancedModeCache::new(Duration::from_secs(60));
+        let t0 = Instant::now();
+        // First time: poke.
+        assert!(cache.should_enable_once_at(1234, t0));
+        // Seen regularly thereafter (each gap < eviction window) → never
+        // re-poked, even long past the 60s TTL at which `should_enable` would
+        // have re-asserted. This is the key difference: continuous presence
+        // keeps the entry alive, so set-once stays "once".
+        let mut t = t0;
+        for _ in 0..20 {
+            t += Duration::from_secs(60); // 60s..1200s, all < EVICT_AFTER_TTLS×ttl (300s) per gap
+            assert!(!cache.should_enable_once_at(1234, t));
+        }
+    }
+
+    #[test]
+    fn should_enable_once_reenables_after_pid_disappears() {
+        let cache = EnhancedModeCache::new(Duration::from_secs(1));
+        let t0 = Instant::now();
+        assert!(cache.should_enable_once_at(42, t0));
+        // Gone long enough to be evicted (not seen for > EVICT_AFTER_TTLS × ttl),
+        // then re-focused → poke once more.
+        let t_back = t0 + Duration::from_secs(1) * EVICT_AFTER_TTLS + Duration::from_secs(1);
+        assert!(cache.should_enable_once_at(42, t_back));
     }
 }

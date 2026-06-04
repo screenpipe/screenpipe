@@ -1500,6 +1500,14 @@ pub async fn pi_start_inner(
         }
     }
 
+    // Tag this chat's local API calls with its session id so the owned-browser
+    // sidebar reveals the agent's browser only in the chat that launched it.
+    // `sid` equals the frontend `conversationId`; the bash shim forwards it as
+    // x-screenpipe-session and the navigate handler rides it to the frontend.
+    // If the user switches to another chat mid-run, this agent's later
+    // navigations no longer match the on-screen conversation and stay hidden.
+    cmd.env("SCREENPIPE_SESSION_ID", &sid);
+
     // Chat session ID for per-session artifact isolation
     cmd.env("SCREENPIPE_CHAT_SESSION_ID", &sid);
 
@@ -1508,26 +1516,6 @@ pub async fn pi_start_inner(
     // screenpipe-core.
     if let Ok(p) = screenpipe_core::agents::bash_env::ensure_wrapper_in_default_dir() {
         cmd.env("BASH_ENV", p);
-    }
-
-    // Privacy filter: if the user enabled the toggle in chat, set the env
-    // var the shim reads so every `curl .../search*` gets rewritten with
-    // `filter_pii=1`. Pro-gated client-side — non-pro can't flip the UI
-    // toggle so this branch won't fire for them.
-    if let Some(home) = dirs::home_dir() {
-        let store_path = home.join(".screenpipe").join("store.bin");
-        if let Ok(data) = std::fs::read_to_string(&store_path) {
-            if let Ok(store) = serde_json::from_str::<serde_json::Value>(&data) {
-                let settings = store.get("settings").unwrap_or(&store);
-                if settings
-                    .get("piPrivacyFilter")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    cmd.env("SCREENPIPE_FILTER_PII", "1");
-                }
-            }
-        }
     }
 
     // Pass the user's API key as env var for non-screenpipe providers

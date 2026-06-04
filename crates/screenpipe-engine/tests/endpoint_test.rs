@@ -12,12 +12,12 @@ mod tests {
     use chrono::{Duration, Utc};
     use screenpipe_audio::audio_manager::AudioManagerBuilder;
     use screenpipe_db::{ContentType, DatabaseManager, SearchResult};
+    use screenpipe_engine::routes::search::SearchResponse;
     use screenpipe_engine::SCServer;
     use screenpipe_engine::{ContentItem, PaginatedResponse};
     use screenpipe_screen::OcrEngine; // Adjust this import based on your actual module structure
     use serde::Deserialize;
     use std::net::SocketAddr;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use tower::ServiceExt; // for `oneshot` and `ready`
 
@@ -32,6 +32,15 @@ mod tests {
     }
 
     async fn setup_test_app() -> (Router, Arc<DatabaseManager>) {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let screenpipe_dir = std::env::temp_dir().join(format!(
+            "screenpipe-endpoint-test-{}-{unique_suffix}",
+            std::process::id()
+        ));
+
         let db = Arc::new(
             DatabaseManager::new("sqlite::memory:", Default::default())
                 .await
@@ -40,7 +49,8 @@ mod tests {
 
         let audio_manager = Arc::new(
             AudioManagerBuilder::new()
-                .output_path("/tmp/screenpipe".into())
+                .is_disabled(true)
+                .output_path(screenpipe_dir.join("audio"))
                 .build(db.clone())
                 .await
                 .unwrap(),
@@ -49,7 +59,7 @@ mod tests {
         let app = SCServer::new(
             db.clone(),
             SocketAddr::from(([127, 0, 0, 1], 23948)),
-            PathBuf::from(""),
+            screenpipe_dir,
             false,
             false,
             audio_manager,
@@ -60,6 +70,72 @@ mod tests {
         let router = app.create_router().await;
         init();
         (router, db)
+    }
+
+    #[tokio::test]
+    async fn test_search_route_returns_indexed_ocr_result() {
+        let (app, db) = setup_test_app().await;
+
+        let device_name = "endpoint-test-device";
+        db.insert_video_chunk("endpoint-local-api-search.mp4", device_name)
+            .await
+            .unwrap();
+
+        let frame_id = db
+            .insert_frame(
+                device_name,
+                Some(Utc::now()),
+                Some("https://docs.example/search"),
+                Some("SearchFixtureApp"),
+                Some("Search Fixture Window"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        assert_ne!(frame_id, 0, "test frame should attach to the video chunk");
+
+        db.insert_ocr_text(
+            frame_id,
+            "A user can find the local api sentinel exactmatch from visible OCR text",
+            "[]",
+            Arc::new(OcrEngine::Tesseract.into()),
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/search?q=local%20api%20sentinel%20exactmatch&content_type=ocr&limit=5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let search_response: SearchResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(search_response.pagination.total, 1);
+        assert_eq!(search_response.data.len(), 1);
+
+        match &search_response.data[0] {
+            ContentItem::OCR(ocr) => {
+                assert_eq!(ocr.frame_id, frame_id);
+                assert!(ocr.text.contains("local api sentinel exactmatch"));
+                assert_eq!(ocr.app_name, "SearchFixtureApp");
+                assert_eq!(ocr.window_name, "Search Fixture Window");
+                assert_eq!(
+                    ocr.browser_url.as_deref(),
+                    Some("https://docs.example/search")
+                );
+                assert_eq!(ocr.device_name, device_name);
+                assert_eq!(ocr.focused, Some(true));
+            }
+            other => panic!("expected OCR search result, got {other:?}"),
+        }
     }
 
     #[tokio::test]

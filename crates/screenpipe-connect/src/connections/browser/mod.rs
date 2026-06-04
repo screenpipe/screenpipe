@@ -97,6 +97,19 @@ pub trait Browser: Send + Sync {
         .await
         .map(|_| ())
     }
+
+    /// Like [`navigate`](Self::navigate) but tags the navigation with the
+    /// chat/session that issued it. `owner` flows to the frontend navigate
+    /// event so the embedded owned-browser sidebar — a singleton shared by
+    /// every chat and background pipe — can ignore navigations that belong to a
+    /// conversation other than the one on screen. Default impl ignores `owner`
+    /// and behaves exactly like `navigate`; only the owned browser, whose
+    /// webview is user-visible, overrides it. `owner` formats: a chat session
+    /// id (equals the frontend `conversationId`) or `pipe:<name>` for a
+    /// background pipe; `None` means "the chat on screen" and is always honored.
+    async fn navigate_with_owner(&self, url: &str, _owner: Option<&str>) -> Result<(), EvalError> {
+        self.navigate(url).await
+    }
 }
 
 // ---------------------------------------------------------------------------

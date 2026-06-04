@@ -247,6 +247,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
           </div>
         </div>
 
+
         <div className="px-4 py-2 bg-muted/50 border-t border-border">
           <p className="text-xs text-muted-foreground">
             if a browser was denied, toggle it on manually in System Settings →
