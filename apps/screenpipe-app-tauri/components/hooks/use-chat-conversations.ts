@@ -33,6 +33,7 @@ import {
   searchConversations,
   migrateFromStoreBin,
   CHAT_HISTORY_INITIAL_LIMIT,
+  conversationDedupKey,
   type ConversationMeta,
 } from "@/lib/chat-storage";
 
@@ -218,6 +219,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
       titleSource: conversation.titleSource,
+      dedupKey: conversationDedupKey(conversation) ?? undefined,
     };
 
     setFileConversations((prev) => {
