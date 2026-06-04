@@ -2714,15 +2714,18 @@ mod tests {
 
     fn ics_test_router(dir: &TempDir) -> Router<()> {
         let screenpipe_dir = dir.path().to_path_buf();
-        let cm = Arc::new(ConnectionManager::new(screenpipe_dir.clone(), None));
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            None,
+        )));
         let wa = Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone())));
         router(
             cm,
             wa,
             screenpipe_dir,
             None,
-            Arc::new(crate::routes::browser::BrowserBridge::new()),
-            Arc::new(BrowserRegistry::new()),
+            crate::routes::browser::BrowserBridge::new(),
+            BrowserRegistry::new(),
             None,
         )
     }
