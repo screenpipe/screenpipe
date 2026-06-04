@@ -104,6 +104,24 @@ async function findClaudeExeOnWindows(): Promise<string | null> {
   return null;
 }
 
+async function findCursorExeOnWindows(): Promise<string | null> {
+  try {
+    const home = await homeDir();
+    const localAppData = await join(home, "AppData", "Local");
+    const candidates = [
+      await join(localAppData, "Programs", "Cursor", "Cursor.exe"),
+      await join(localAppData, "cursor", "Cursor.exe"),
+      await join(localAppData, "Microsoft", "WindowsApps", "Cursor.exe"),
+    ];
+    for (const p of candidates) {
+      try {
+        if (await exists(p)) return p;
+      } catch { continue; }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 async function openWindowsShellTarget(target: string): Promise<void> {
   await commands.openWindowsShellTarget(target);
 }
@@ -694,7 +712,24 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
 
 function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void }) {
   const [state, setState] = useState<"idle" | "installing" | "installed">("idle");
-  useEffect(() => { isCursorMcpInstalled().then(ok => { if (ok) setState("installed"); }); }, []);
+  const [cursorAppInstalled, setCursorAppInstalled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    isCursorMcpInstalled().then(ok => { if (ok) setState("installed"); }).catch(() => {});
+
+    const os = platform();
+    if (os === "windows") {
+      findCursorExeOnWindows()
+        .then((exe) => setCursorAppInstalled(!!exe))
+        .catch(() => setCursorAppInstalled(false));
+    } else if (os === "macos") {
+      Command.create("sh", ["-c", "test -d '/Applications/Cursor.app' || test -d \"$HOME/Applications/Cursor.app\""]).execute()
+        .then((r) => setCursorAppInstalled(r.code === 0))
+        .catch(() => setCursorAppInstalled(false));
+    } else {
+      setCursorAppInstalled(false);
+    }
+  }, []);
 
   const handleConnect = async () => {
     try {
@@ -741,9 +776,15 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
             {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />installing...</>) : (<><Download className="h-3 w-3" />connect</>)}
           </Button>
         )}
-        <Button variant="outline" onClick={openCursor} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          <ExternalLink className="h-3 w-3" />open cursor
-        </Button>
+        {cursorAppInstalled === false ? (
+          <Button variant="outline" onClick={() => openUrl("https://cursor.com/download")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <ExternalLink className="h-3 w-3" />get cursor
+          </Button>
+        ) : (
+          <Button variant="outline" onClick={openCursor} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <ExternalLink className="h-3 w-3" />open cursor
+          </Button>
+        )}
       </div>
     </div>
   );
