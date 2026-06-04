@@ -114,7 +114,7 @@ export function IcsCalendarCard() {
   const fetchEvents = useCallback(async () => {
     setIsLoadingEvents(true);
     try {
-      const upcomingRes = await commands.icsCalendarGetUpcoming();
+      const upcomingRes = await commands.icsCalendarGetUpcoming(0, 8);
       if (upcomingRes.status === "error") throw new Error(upcomingRes.error);
       const events = upcomingRes.data;
       setUpcomingEvents(events.filter((e) => !e.isAllDay).slice(0, 5));
