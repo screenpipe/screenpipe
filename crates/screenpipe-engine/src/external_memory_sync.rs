@@ -25,23 +25,21 @@
 //! deliberately — same start/stop/metrics/snapshot contract — so an
 //! operator who knows one knows the other.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use screenpipe_connect::connections::{honcho as honcho_conn, load_connection, SavedConnection};
 use screenpipe_core::memories::external_sync::{
     render_block_body, render_digest, write_atomic, write_atomic_full, Destination, MemoryEntry,
     SyncOutcome,
 };
 use screenpipe_db::DatabaseManager;
-use screenpipe_honcho::{
-    HonchoClient, HonchoClientConfig, MessagePayload, SessionPeerConfig, MEMORIES_SESSION_ID,
-};
 use screenpipe_secrets::SecretStore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -427,6 +425,198 @@ fn select_new_entries<'a>(entries: &'a [MemoryEntry], cursor: Option<&str>) -> V
         .collect()
 }
 
+// ── Honcho REST client ───────────────────────────────────────────────────────
+// Honcho is the one network sink (the file destinations just write to disk), so
+// its minimal HTTP delivery lives here next to the orchestration that uses it
+// rather than in a separate crate/module. Three calls: create_peer,
+// create_session, add_messages. Uses `reqwest` directly — no official Rust SDK.
+// Reference: <https://docs.honcho.dev/v3/api-reference/introduction>
+
+/// Stable session that screenpipe writes all curated memories into. These are
+/// durable facts, not time-series activity, so there is no daily rotation —
+/// one session for the lifetime of the workspace.
+const MEMORIES_SESSION_ID: &str = "screenpipe-memories";
+
+/// Configuration for connecting to a Honcho instance.
+#[derive(Clone, Debug)]
+struct HonchoClientConfig {
+    api_url: String,
+    api_key: String,
+    workspace: String,
+}
+
+/// Lightweight HTTP client for the Honcho REST API.
+#[derive(Clone, Debug)]
+struct HonchoClient {
+    http: reqwest::Client,
+    config: HonchoClientConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePeerRequest {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configuration: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Peer {
+    #[allow(dead_code)]
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateSessionRequest {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peers: Option<HashMap<String, SessionPeerConfig>>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct SessionPeerConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observe_others: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observe_me: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Session {
+    #[allow(dead_code)]
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MessagePayload {
+    peer_id: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AddMessagesRequest {
+    messages: Vec<MessagePayload>,
+}
+
+impl HonchoClient {
+    fn new(config: HonchoClientConfig) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("failed to build reqwest client");
+        Self { http, config }
+    }
+
+    fn base_url(&self) -> String {
+        format!(
+            "{}/v3/workspaces/{}",
+            self.config.api_url.trim_end_matches('/'),
+            self.config.workspace
+        )
+    }
+
+    fn auth_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if !self.config.api_key.is_empty() {
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.config.api_key)
+                    .parse()
+                    .expect("invalid api key header"),
+            );
+        }
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        headers
+    }
+
+    /// Get or create a peer by ID (idempotent).
+    async fn create_peer(
+        &self,
+        id: &str,
+        configuration: Option<serde_json::Value>,
+    ) -> Result<Peer> {
+        let url = format!("{}/peers", self.base_url());
+        let body = CreatePeerRequest {
+            id: id.to_string(),
+            configuration,
+        };
+
+        let resp = self
+            .http
+            .post(&url)
+            .headers(self.auth_headers())
+            .json(&body)
+            .send()
+            .await
+            .context("failed to create peer")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("create_peer failed ({}): {}", status, text);
+        }
+
+        resp.json().await.context("failed to parse peer response")
+    }
+
+    /// Get or create a session by ID (idempotent), with peers attached inline.
+    async fn create_session(
+        &self,
+        id: &str,
+        peers: Option<HashMap<String, SessionPeerConfig>>,
+    ) -> Result<Session> {
+        let url = format!("{}/sessions", self.base_url());
+        let body = CreateSessionRequest {
+            id: id.to_string(),
+            peers,
+        };
+
+        let resp = self
+            .http
+            .post(&url)
+            .headers(self.auth_headers())
+            .json(&body)
+            .send()
+            .await
+            .context("failed to create session")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("create_session failed ({}): {}", status, text);
+        }
+
+        resp.json()
+            .await
+            .context("failed to parse session response")
+    }
+
+    /// Post messages to a session.
+    async fn add_messages(&self, session_id: &str, messages: Vec<MessagePayload>) -> Result<()> {
+        let url = format!("{}/sessions/{}/messages", self.base_url(), session_id);
+        let body = AddMessagesRequest { messages };
+
+        let resp = self
+            .http
+            .post(&url)
+            .headers(self.auth_headers())
+            .json(&body)
+            .send()
+            .await
+            .context("failed to add messages")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("add_messages failed ({}): {}", status, text);
+        }
+
+        Ok(())
+    }
+}
+
 /// Push newly-updated memories to Honcho. Unlike the file destinations this is
 /// a network sink with *append* semantics, so it delivers incrementally off a
 /// high-water cursor instead of rewriting a whole file each tick.
@@ -492,7 +682,7 @@ async fn sync_honcho_inner(
     // Model 1 (default): facts are authored as the *user* peer's own messages
     // (`observe_me`). To experiment with Model 2 (screenpipe as an observer
     // peer) the user changes `peer_name` and wires the observe directionality
-    // in Honcho — no code change. See crates/screenpipe-honcho/README.md.
+    // in Honcho — no code change.
     client
         .create_peer(&peer_name, Some(serde_json::json!({ "observe_me": true })))
         .await?;
@@ -843,6 +1033,51 @@ mod tests {
     }
 
     // ── Honcho sink ─────────────────────────────────────────────────────────
+
+    fn honcho_client(api_url: &str, workspace: &str) -> HonchoClient {
+        HonchoClient::new(HonchoClientConfig {
+            api_url: api_url.to_string(),
+            api_key: String::new(),
+            workspace: workspace.to_string(),
+        })
+    }
+
+    #[test]
+    fn base_url_is_versioned_and_workspace_scoped() {
+        let c = honcho_client("http://localhost:8000", "screenpipe");
+        assert_eq!(c.base_url(), "http://localhost:8000/v3/workspaces/screenpipe");
+    }
+
+    #[test]
+    fn base_url_trims_trailing_slash() {
+        // A user pasting "http://localhost:8000/" must not produce a double
+        // slash before the version segment.
+        let c = honcho_client("http://localhost:8000/", "screenpipe");
+        assert_eq!(c.base_url(), "http://localhost:8000/v3/workspaces/screenpipe");
+    }
+
+    #[test]
+    fn no_auth_header_when_api_key_blank() {
+        // Self-hosted (local) Honcho needs no bearer token; we must not send
+        // an empty `Authorization` header.
+        let c = honcho_client("http://localhost:8000", "screenpipe");
+        let headers = c.auth_headers();
+        assert!(!headers.contains_key(reqwest::header::AUTHORIZATION));
+    }
+
+    #[test]
+    fn auth_header_present_when_api_key_set() {
+        let c = HonchoClient::new(HonchoClientConfig {
+            api_url: "https://api.honcho.dev".to_string(),
+            api_key: "sk-test".to_string(),
+            workspace: "screenpipe".to_string(),
+        });
+        let headers = c.auth_headers();
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer sk-test"
+        );
+    }
 
     fn entry_at(content: &str, updated_at: &str) -> MemoryEntry {
         MemoryEntry {

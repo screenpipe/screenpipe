@@ -11270,7 +11270,6 @@ dependencies = [
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",
- "screenpipe-honcho",
  "screenpipe-redact",
  "screenpipe-screen",
  "screenpipe-secrets",
@@ -11310,18 +11309,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "screenpipe-honcho"
-version = "0.3.350"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest 0.13.3",
- "serde",
- "serde_json",
  "tracing",
 ]
 

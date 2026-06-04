@@ -10,8 +10,8 @@
 //! enable/disable toggle, and `test()`. The actual HTTP delivery and cursor
 //! bookkeeping live in `screenpipe-engine::external_memory_sync`.
 //!
-//! Deliberately does **not** depend on `screenpipe-honcho`: `test()` issues a
-//! minimal inline `reqwest` call so the connect crate stays free of the client.
+//! Deliberately carries no HTTP client: `test()` issues a minimal inline
+//! `reqwest` call so the connect crate stays free of the delivery logic.
 
 use super::{Category, FieldDef, Integration, IntegrationDef};
 use anyhow::Result;
@@ -65,8 +65,9 @@ static DEF: IntegrationDef = IntegrationDef {
 };
 
 /// Resolved Honcho connection settings, defaults applied. Kept free of any
-/// `screenpipe-honcho` types so this crate doesn't depend on the client — the
-/// orchestrator maps this into `screenpipe_honcho::HonchoClientConfig`.
+/// HTTP-client types so this crate stays decoupled from delivery — the
+/// orchestrator in `screenpipe-engine::external_memory_sync` maps this into its
+/// own Honcho client config.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HonchoConfig {
     pub api_url: String,
