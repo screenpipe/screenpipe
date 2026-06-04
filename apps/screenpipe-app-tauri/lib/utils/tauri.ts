@@ -713,9 +713,9 @@ async icsCalendarGetEntries() : Promise<Result<IcsCalendarEntry[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async icsCalendarGetUpcoming() : Promise<Result<CalendarEventItem[], string>> {
+async icsCalendarGetUpcoming(hoursBack: number | null, hoursAhead: number | null) : Promise<Result<CalendarEventItem[], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming") };
+    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming", { hoursBack, hoursAhead }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

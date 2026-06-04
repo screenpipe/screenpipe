@@ -657,7 +657,20 @@ pub async fn render_context(
         }
     }
 
-    if cred_connected.is_empty() && oauth_connected.is_empty() {
+    let ics_settings =
+        crate::ics_calendar::load_ics_calendar_settings_from_store(screenpipe_dir).ok();
+    let ics_enabled: Vec<_> = ics_settings
+        .as_ref()
+        .map(|settings| {
+            settings
+                .entries
+                .iter()
+                .filter(|entry| entry.enabled)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if cred_connected.is_empty() && oauth_connected.is_empty() && ics_enabled.is_empty() {
         return String::new();
     }
 
@@ -709,6 +722,25 @@ pub async fn render_context(
         } else {
             // OAuth without proxy — still don't expose the token
             out.push_str("  (connected via OAuth — use the endpoints listed above; no raw token is exposed)\n");
+        }
+    }
+
+    if !ics_enabled.is_empty() {
+        out.push_str("\n### ICS Calendar\n");
+        out.push_str(
+            "Read-only access to subscribed ICS/webcal calendar feeds. \
+             Use GET /connections/ics-calendar/events?hours_back=0&hours_ahead=72 \
+             to list upcoming events, and GET /connections/ics-calendar/status for feed status. \
+             Feed URLs are private and are not exposed.\n",
+        );
+        out.push_str(&format!("  connected feeds: {}\n", ics_enabled.len()));
+        let names = ics_enabled
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            out.push_str(&format!("  feed names: {}\n", names.join(", ")));
         }
     }
 

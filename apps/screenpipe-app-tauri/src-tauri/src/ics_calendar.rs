@@ -165,7 +165,12 @@ fn is_all_day(dpt: &DatePerhapsTime) -> bool {
     matches!(dpt, DatePerhapsTime::Date(_))
 }
 
-fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem> {
+fn parse_ics_to_events(
+    ics_text: &str,
+    feed_name: &str,
+    hours_back: i64,
+    hours_ahead: i64,
+) -> Vec<CalendarEventItem> {
     let calendar = match Calendar::from_str(ics_text) {
         Ok(cal) => cal,
         Err(e) => {
@@ -175,8 +180,8 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
     };
 
     let now = Utc::now();
-    let window_start = now - chrono::Duration::hours(1);
-    let window_end = now + chrono::Duration::hours(48);
+    let window_start = now - chrono::Duration::hours(hours_back.max(0));
+    let window_end = now + chrono::Duration::hours(hours_ahead.max(0));
 
     let mut items = Vec::new();
 
@@ -314,13 +319,15 @@ fn extract_meeting_url(text: Option<&str>) -> Option<String> {
 async fn fetch_and_parse_feed(
     client: &reqwest::Client,
     entry: &IcsCalendarEntry,
+    hours_back: i64,
+    hours_ahead: i64,
 ) -> Vec<CalendarEventItem> {
     let url = entry.url.replace("webcal://", "https://");
 
     match client.get(&url).send().await {
         Ok(resp) => match resp.text().await {
             Ok(body) => {
-                let events = parse_ics_to_events(&body, &entry.name);
+                let events = parse_ics_to_events(&body, &entry.name, hours_back, hours_ahead);
                 debug!(
                     "ics_calendar: fetched {} events from '{}'",
                     events.len(),
@@ -361,7 +368,7 @@ pub async fn start_ics_calendar_poller(app: AppHandle) {
             if !enabled_entries.is_empty() {
                 let fetches = futures::stream::iter(enabled_entries.into_iter().map(|entry| {
                     let client = client.clone();
-                    async move { fetch_and_parse_feed(&client, &entry).await }
+                    async move { fetch_and_parse_feed(&client, &entry, 1, 48).await }
                 }))
                 .buffer_unordered(10)
                 .collect::<Vec<_>>()
@@ -420,13 +427,19 @@ pub async fn ics_calendar_test_url(url: String) -> Result<u32, String> {
         .text()
         .await
         .map_err(|e| format!("failed to read body: {}", e))?;
-    let events = parse_ics_to_events(&body, "test");
+    let events = parse_ics_to_events(&body, "test", 1, 48);
     Ok(events.len() as u32)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEventItem>, String> {
+pub async fn ics_calendar_get_upcoming(
+    app: AppHandle,
+    hours_back: Option<i64>,
+    hours_ahead: Option<i64>,
+) -> Result<Vec<CalendarEventItem>, String> {
+    let hours_back = hours_back.unwrap_or(0).max(0);
+    let hours_ahead = hours_ahead.unwrap_or(8).max(0);
     let store = IcsCalendarSettingsStore::get(&app)?;
     let entries = store.map(|s| s.entries).unwrap_or_default();
     let enabled: Vec<_> = entries.into_iter().filter(|e| e.enabled).collect();
@@ -438,7 +451,7 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     let client = reqwest::Client::new();
     let fetches = futures::stream::iter(enabled.into_iter().map(|entry| {
         let client = client.clone();
-        async move { fetch_and_parse_feed(&client, &entry).await }
+        async move { fetch_and_parse_feed(&client, &entry, hours_back, hours_ahead).await }
     }))
     .buffer_unordered(10)
     .collect::<Vec<_>>()
@@ -452,15 +465,15 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     }
     let mut all_events: Vec<_> = unique_events.into_values().collect();
 
-    // Filter to next 8 hours only
     let now = Utc::now();
-    let cutoff = now + chrono::Duration::hours(8);
+    let window_start = now - chrono::Duration::hours(hours_back);
+    let cutoff = now + chrono::Duration::hours(hours_ahead);
     all_events.retain(|e| {
         if let Ok(end) = DateTime::parse_from_rfc3339(&e.end) {
             let end_utc: DateTime<Utc> = end.into();
             if let Ok(start) = DateTime::parse_from_rfc3339(&e.start) {
                 let start_utc: DateTime<Utc> = start.into();
-                return end_utc > now && start_utc < cutoff;
+                return end_utc > window_start && start_utc < cutoff;
             }
         }
         false
@@ -488,8 +501,8 @@ mod tests {
 
         let ics_data = format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Zimbra\r\nBEGIN:VEVENT\r\nUID:12345\r\nDTSTAMP:20241010T101010Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Test Event\r\nEND:VEVENT\r\nEND:VCALENDAR", start_str, end_str);
 
-        let events1 = parse_ics_to_events(&ics_data, "feed1");
-        let events2 = parse_ics_to_events(&ics_data, "feed2");
+        let events1 = parse_ics_to_events(&ics_data, "feed1", 1, 48);
+        let events2 = parse_ics_to_events(&ics_data, "feed2", 1, 48);
 
         assert_eq!(events1.len(), 1);
         assert_eq!(events2.len(), 1);
@@ -519,7 +532,7 @@ mod tests {
             end.format("%Y%m%dT%H%M%SZ")
         );
 
-        let events = parse_ics_to_events(&ics_data, "feed");
+        let events = parse_ics_to_events(&ics_data, "feed", 1, 48);
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].meeting_url.as_deref(),

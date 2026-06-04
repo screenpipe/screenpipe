@@ -479,7 +479,7 @@ async fn fetch_fresh_calendar_events(app: &AppHandle) -> Vec<CalendarEventSignal
         Err(err) => debug!("meeting live notes: native calendar refresh failed: {err}"),
     }
 
-    match crate::ics_calendar::ics_calendar_get_upcoming(app.clone()).await {
+    match crate::ics_calendar::ics_calendar_get_upcoming(app.clone(), Some(1), Some(1)).await {
         Ok(items) => events.extend(items.into_iter().map(CalendarEventSignal::from)),
         Err(err) => debug!("meeting live notes: ICS calendar refresh failed: {err}"),
     }

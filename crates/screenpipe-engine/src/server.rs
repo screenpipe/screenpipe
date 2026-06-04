@@ -915,6 +915,7 @@ impl SCServer {
             crate::connections_api::router(
                 cm,
                 wa,
+                self.screenpipe_dir.clone(),
                 self.secret_store.clone(),
                 app_state.browser_bridge.clone(),
                 app_state.browser_registry.clone(),
