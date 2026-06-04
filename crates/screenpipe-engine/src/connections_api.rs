@@ -2691,7 +2691,7 @@ mod tests {
     use serde_json::json;
 
     use axum::body::{to_bytes, Body};
-    use axum::http::Request;
+    use axum::http::{header, Request};
     use screenpipe_connect::connections::ConnectionManager;
     use screenpipe_connect::whatsapp::WhatsAppGateway;
     use std::sync::Arc;
@@ -2730,6 +2730,23 @@ mod tests {
         )
     }
 
+    async fn spawn_ics_feed(body: String) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/feed.ics",
+            get(move || {
+                let body = body.clone();
+                async move { ([(header::CONTENT_TYPE, "text/calendar")], body) }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        (format!("http://{addr}/feed.ics"), server)
+    }
+
     #[tokio::test]
     async fn connections_lists_ics_calendar_when_feed_enabled() {
         let dir = TempDir::new().unwrap();
@@ -2751,7 +2768,7 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
-        let connections = payload.as_array().expect("connections array");
+        let connections = payload["data"].as_array().expect("connections data array");
         let ics = connections
             .iter()
             .find(|entry| entry["id"] == "ics-calendar")
@@ -2767,16 +2784,42 @@ mod tests {
     #[tokio::test]
     async fn ics_calendar_events_honors_hours_ahead_query() {
         let dir = TempDir::new().unwrap();
+        let now = chrono::Utc::now();
+        let starts_at = now + chrono::Duration::hours(24);
+        let ends_at = now + chrono::Duration::hours(25);
+        let ics_body = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:route-window-test\r\nDTSTAMP:20241010T101010Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Route Window Test\r\nEND:VEVENT\r\nEND:VCALENDAR",
+            starts_at.format("%Y%m%dT%H%M%SZ"),
+            ends_at.format("%Y%m%dT%H%M%SZ")
+        );
+        let (feed_url, feed_server) = spawn_ics_feed(ics_body).await;
+
         write_ics_store(
             &dir,
             json!([{
                 "name": "Work",
-                "url": "https://calendar.example/secret.ics",
+                "url": feed_url,
                 "enabled": true
             }]),
         );
 
         let app = ics_test_router(&dir);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/ics-calendar/events?hours_back=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert!(events.is_empty());
+
         let response = app
             .oneshot(
                 Request::builder()
@@ -2789,7 +2832,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let _: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        let events: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["title"], "Route Window Test");
+
+        feed_server.abort();
     }
 
     #[test]
