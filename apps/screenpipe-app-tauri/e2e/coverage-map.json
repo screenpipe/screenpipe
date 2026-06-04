@@ -183,6 +183,16 @@
       "notes": "Synthetic chat event regression for duplicate sidebar rows."
     },
     {
+      "spec": "chat-sidebar-stub-dedup.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Listener-order regression for metadata-only sidebar stubs gaining dedup keys."
+    },
+    {
       "spec": "chat-parallel-jobs-duplicate.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],

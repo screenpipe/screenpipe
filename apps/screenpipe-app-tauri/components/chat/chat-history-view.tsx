@@ -287,6 +287,7 @@ export function ChatHistoryView({
           draft: false,
           kind: meta.kind,
           pipeContext: meta.pipeContext,
+          dedupKey: meta.dedupKey,
         });
       }
       store.actions.patch(id, patch);

@@ -59,6 +59,7 @@ vi.mock("@/lib/chat-storage", () => ({
   markConversationFileChanged: vi.fn(() => undefined),
   searchConversations: vi.fn(async () => []),
   migrateFromStoreBin: vi.fn(async () => undefined),
+  conversationDedupKey: vi.fn(() => null),
   CHAT_HISTORY_INITIAL_LIMIT: 50,
 }));
 
@@ -148,8 +149,8 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
     // messages must go under A's id, not the ref's B. Pre-fix the save
     // wrote A's messages under B's file, silently corrupting B.
     const aMessages = [
-      { id: "u1", role: "user", content: "what's my codename?", timestamp: 1 },
-      { id: "a1", role: "assistant", content: "you said it's BANANA", timestamp: 2 },
+      { id: "u1", role: "user" as const, content: "what's my codename?", timestamp: 1 },
+      { id: "a1", role: "assistant" as const, content: "you said it's BANANA", timestamp: 2 },
     ];
 
     const { result } = renderHook(() =>
@@ -180,7 +181,7 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
     // During startNewConversation, setConversationId(null) → …setConversationId(newSid).
     // In the brief null window, the fallback must still pick the ref
     // so the save doesn't mint a fresh uuid and duplicate the conv.
-    const messages = [{ id: "u1", role: "user", content: "hello", timestamp: 1 }];
+    const messages = [{ id: "u1", role: "user" as const, content: "hello", timestamp: 1 }];
 
     const { result } = renderHook(() =>
       useHarness({

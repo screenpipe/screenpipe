@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 40
-- Declared test blocks: 142
-- Weighted coverage points: 113.2
+- Mapped specs: 41
+- Declared test blocks: 143
+- Weighted coverage points: 113.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 33 | 131 | 109.8 | 14 | 39 | 92% |
-| macos | 37 | 112 | 87.4 | 14 | 40 | 89% |
-| linux | 28 | 100 | 83.9 | 12 | 36 | 86% |
+| windows | 34 | 132 | 110.3 | 14 | 39 | 92% |
+| macos | 38 | 113 | 87.9 | 14 | 40 | 89% |
+| linux | 29 | 101 | 84.3 | 12 | 36 | 86% |
 
 ## Runtime Results
 
@@ -35,7 +35,7 @@ pass/fail/skip counts.
 | --- | --- | --- | --- |
 | audio-device | 2 specs / 22 tests / 17.8 pts | 1 specs / 1 tests / 0.3 pts | - |
 | capture-ocr | 2 specs / 9 tests / 3.6 pts | 2 specs / 3 tests / 1.2 pts | 1 specs / 2 tests / 0.8 pts |
-| chat-ai | 6 specs / 6 tests / 3.4 pts | 8 specs / 9 tests / 4.3 pts | 6 specs / 6 tests / 3.4 pts |
+| chat-ai | 7 specs / 7 tests / 3.9 pts | 9 specs / 10 tests / 4.8 pts | 7 specs / 7 tests / 3.9 pts |
 | local-api | 10 specs / 72 tests / 62.5 pts | 9 specs / 51 tests / 45.1 pts | 8 specs / 50 tests / 44.7 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts |
@@ -98,6 +98,7 @@ pass/fail/skip counts.
 | chat-newchat-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Synthetic chat event regression for duplicate sidebar rows. |
 | chat-parallel-jobs-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Parallel auto-send prefill dedupe regression. |
 | chat-prefill-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-prefill | medium | partial | synthetic | 1 | Cross-window prefill duplicate regression. |
+| chat-sidebar-stub-dedup.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Listener-order regression for metadata-only sidebar stubs gaining dedup keys. |
 | chat-streaming-performance.spec.ts | macos | chat-ai, performance | chat, chat-streaming | medium | conditional | performance | 2 | macOS-only chat streaming responsiveness. |
 | chat-switch-context-loss.spec.ts | windows, macos, linux | chat-ai | chat, chat-context | medium | partial | synthetic | 1 | Switching conversations during streaming must not corrupt state. |
 | chat-window.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, window-lifecycle | high | strong | real-user-flow | 1 | Opens Chat and focuses the composer for typing. |
