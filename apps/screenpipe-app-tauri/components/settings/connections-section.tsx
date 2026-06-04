@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { CONNECTION_CATEGORY_BY_ID } from "@/lib/constants/connections";
@@ -284,7 +285,7 @@ export function IntegrationIcon({
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
-    honcho: <img src="/images/honcho.svg" alt="Honcho" className="w-5 h-5 rounded" />,
+    honcho: <img src="/images/honcho.svg" alt="Honcho" className="w-7 h-7 rounded" />,
     warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
     telegram: (
@@ -508,6 +509,26 @@ type ConnectionSort = "default" | "alphabetical";
 const ALL_CONNECTION_CATEGORIES = "All";
 
 const SINGLE_INSTANCE_INTEGRATIONS = new Set<string>(["honcho"]);
+
+// The fixed Honcho session screenpipe writes curated memories into. Mirrors
+// MEMORIES_SESSION_ID in the screenpipe-honcho crate.
+const HONCHO_MEMORIES_SESSION = "screenpipe-memories";
+
+// Build a deep link to the Honcho web explorer for the synced session. Only
+// hosted Honcho has app.honcho.dev, so we return null for self-hosted/local
+// instances (blank api_url means the hosted default). No secret goes in the URL.
+function honchoExploreUrl(creds: Record<string, string>): string | null {
+  const apiUrl = (creds.api_url || "").trim();
+  const isHosted = apiUrl === "" || /honcho\.dev/i.test(apiUrl);
+  if (!isHosted) return null;
+  const workspace = (creds.workspace || "").trim() || "screenpipe";
+  const qs = new URLSearchParams({
+    workspace,
+    view: "sessions",
+    session: HONCHO_MEMORIES_SESSION,
+  });
+  return `https://app.honcho.dev/explore?${qs.toString()}`;
+}
 
 // Curated row shown above the search bar. Order is editorial — high-activation
 // AI surfaces first, then communication, then write-back knowledge tools. We
@@ -2192,6 +2213,80 @@ interface InstanceData {
   credentials: Record<string, string>;
 }
 
+// Honcho-specific actions: a "sync now" trigger and (for hosted Honcho) a
+// link to view the synced session in the Honcho web explorer.
+function HonchoActions({ creds }: { creds: Record<string, string> }) {
+  const { toast } = useToast();
+  const [syncing, setSyncing] = useState(false);
+  const exploreUrl = honchoExploreUrl(creds);
+
+  const syncNow = async () => {
+    setSyncing(true);
+    try {
+      const res = await localFetch("/memories/sync-external", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "sync failed");
+
+      // The endpoint returns per-destination outcomes; pull out Honcho's.
+      const me = (data?.results || []).find((r: any) => r.destination_id === "honcho");
+      if (me && !me.outcome?.ok) {
+        throw new Error(me.outcome?.error || "sync failed");
+      }
+      const result = me?.outcome?.result;
+      let description = "synced";
+      if (result?.pushed) {
+        const n = result.pushed.entries;
+        description = `pushed ${n} ${n === 1 ? "memory" : "memories"}`;
+      } else if (result?.skipped) {
+        description = `up to date · ${result.skipped.reason}`;
+      }
+      toast({
+        title: "honcho sync",
+        description,
+        action: exploreUrl ? (
+          <ToastAction altText="View in Honcho" onClick={() => openUrl(exploreUrl)}>
+            view
+          </ToastAction>
+        ) : undefined,
+      });
+    } catch (e: any) {
+      toast({
+        title: "honcho sync failed",
+        description: e?.message || "sync failed",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-border pt-3 flex items-center gap-2">
+      <Button
+        onClick={syncNow}
+        disabled={syncing}
+        variant="outline"
+        size="sm"
+        className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+      >
+        {syncing ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+        {syncing ? "syncing…" : "sync now"}
+      </Button>
+      {exploreUrl && (
+        <Button
+          onClick={() => openUrl(exploreUrl)}
+          variant="ghost"
+          size="sm"
+          className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+        >
+          view in honcho
+          <ExternalLink className="h-3 w-3" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function ApiIntegrationPanel({ integration, onRefresh }: {
   integration: IntegrationInfo;
   onRefresh: () => void;
@@ -2289,6 +2384,11 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
           onDisconnect={() => refreshAll(true)}
         />
       </div>
+
+      {/* Honcho: sync-now + view-in-Honcho actions (only once connected). */}
+      {integration.id === "honcho" && integration.connected && (
+        <HonchoActions creds={defaultCreds} />
+      )}
 
       {/* Named instances — hidden for single-instance integrations whose
           backend only reads the default connection. */}
