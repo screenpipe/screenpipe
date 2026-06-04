@@ -28,11 +28,20 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
+  FileText,
+  FileJson,
+  Image,
+  File,
+  FolderOpen,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import { localFetch } from "@/lib/api";
+import { useOutputs, type Output } from "@/lib/hooks/use-outputs";
+import { useArtifacts, type Artifact } from "@/lib/hooks/use-artifacts";
+import { commands } from "@/lib/utils/tauri";
+import { invoke } from "@tauri-apps/api/core";
 
 interface MemoryRecord {
   id: number;
@@ -51,6 +60,107 @@ interface MemoryListResponse {
 }
 
 const PAGE_SIZE = 20;
+
+// ---------------------------------------------------------------------------
+// Artifact display helpers (ported from artifacts-library.tsx)
+// ---------------------------------------------------------------------------
+
+type DisplayItem =
+  | { type: "output"; data: Output }
+  | { type: "artifact"; data: Artifact };
+
+function artifactItemKey(item: DisplayItem): string {
+  return item.type === "output"
+    ? `output:${item.data.id}`
+    : `artifact:${item.data.pipe_name}:${item.data.path}`;
+}
+
+function artifactItemTitle(item: DisplayItem): string {
+  return item.data.title;
+}
+
+function artifactItemKind(item: DisplayItem): string {
+  return item.data.kind;
+}
+
+function artifactItemSource(item: DisplayItem): string {
+  if (item.type === "output") {
+    return item.data.source_type === "chat" ? "chat" : item.data.source;
+  }
+  return item.data.pipe_name;
+}
+
+function artifactItemPath(item: DisplayItem): string {
+  return item.type === "output" ? item.data.output_path : item.data.path;
+}
+
+function artifactItemPreview(item: DisplayItem): string | null | undefined {
+  return item.data.preview;
+}
+
+function artifactItemSize(item: DisplayItem): number | null | undefined {
+  return item.data.size_bytes;
+}
+
+function artifactItemDate(item: DisplayItem): string | null | undefined {
+  return item.type === "output" ? item.data.updated_at : item.data.modified_at;
+}
+
+function mergeArtifactItems(
+  outputs: Output[],
+  artifacts: Artifact[],
+  deletedPaths: Set<string>,
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
+  const registeredPaths = new Set<string>();
+  for (const o of outputs) {
+    registeredPaths.add(o.output_path);
+    if (o.original_path) registeredPaths.add(o.original_path);
+  }
+  for (const o of outputs) {
+    items.push({ type: "output", data: o });
+  }
+  for (const a of artifacts) {
+    if (registeredPaths.has(a.path)) continue;
+    if (deletedPaths.has(a.path)) continue;
+    items.push({ type: "artifact", data: a });
+  }
+  items.sort((a, b) => {
+    const da = artifactItemDate(a) ?? "";
+    const db = artifactItemDate(b) ?? "";
+    return db.localeCompare(da);
+  });
+  return items;
+}
+
+function kindIcon(kind: string) {
+  switch (kind) {
+    case "markdown":
+      return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "json":
+      return <FileJson className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "image":
+      return <Image className="h-3.5 w-3.5 text-muted-foreground" />;
+    default:
+      return <File className="h-3.5 w-3.5 text-muted-foreground" />;
+  }
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// ---------------------------------------------------------------------------
+// Unified item type for interleaved list
+// ---------------------------------------------------------------------------
+
+type UnifiedItem =
+  | { kind: "memory"; data: MemoryRecord; sortDate: string }
+  | { kind: "artifact"; data: DisplayItem; sortDate: string };
+
+type TypeFilter = "all" | "memories" | "artifacts";
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -123,6 +233,19 @@ export function MemoriesSection() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+
+  // artifact data
+  const {
+    outputs,
+    isLoading: outputsLoading,
+    deleteOutput,
+  } = useOutputs();
+  const {
+    artifacts,
+    isLoading: artifactsLoading,
+  } = useArtifacts();
+  const [deletedArtifactPaths, setDeletedArtifactPaths] = useState<Set<string>>(new Set());
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
 
   // expanded content rows
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -442,6 +565,67 @@ export function MemoriesSection() {
     }
   };
 
+  // Build the unified interleaved list
+  const unifiedItems: UnifiedItem[] = React.useMemo(() => {
+    const items: UnifiedItem[] = [];
+
+    // Add memories (unless filtered to artifacts-only)
+    if (typeFilter !== "artifacts") {
+      for (const m of memories) {
+        items.push({ kind: "memory", data: m, sortDate: m.created_at });
+      }
+    }
+
+    // Add artifacts (unless filtered to memories-only or importance sort is active)
+    if (typeFilter !== "memories" && sortField !== "importance") {
+      const merged = mergeArtifactItems(outputs, artifacts, deletedArtifactPaths);
+      let filtered = debouncedQuery
+        ? merged.filter((item) => {
+            const q = debouncedQuery.toLowerCase();
+            return (
+              artifactItemTitle(item).toLowerCase().includes(q) ||
+              (artifactItemPreview(item) ?? "").toLowerCase().includes(q) ||
+              artifactItemSource(item).toLowerCase().includes(q)
+            );
+          })
+        : merged;
+      if (activeTag) {
+        filtered = filtered.filter((item) => artifactItemSource(item) === activeTag);
+      }
+      for (const item of filtered) {
+        const date = artifactItemDate(item) ?? "";
+        items.push({ kind: "artifact", data: item, sortDate: date });
+      }
+    }
+
+    // Sort all by date descending
+    items.sort((a, b) => b.sortDate.localeCompare(a.sortDate));
+    return items;
+  }, [memories, outputs, artifacts, deletedArtifactPaths, typeFilter, activeTag, sortField, debouncedQuery]);
+
+  const artifactSources = React.useMemo(() => {
+    const merged = mergeArtifactItems(outputs, artifacts, deletedArtifactPaths);
+    return [...new Set(merged.map(artifactItemSource))];
+  }, [outputs, artifacts, deletedArtifactPaths]);
+
+  const combinedTags = React.useMemo(() => {
+    const set = new Set([...allTags, ...artifactSources]);
+    return [...set];
+  }, [allTags, artifactSources]);
+
+  const handleDeleteArtifact = useCallback(
+    async (output: Output) => {
+      setDeletedArtifactPaths((prev) => {
+        const next = new Set(prev);
+        next.add(output.output_path);
+        if (output.original_path) next.add(output.original_path);
+        return next;
+      });
+      await deleteOutput(output.id);
+    },
+    [deleteOutput],
+  );
+
   // Stale warning: use the background-polled newest timestamp so it auto-clears
   // without disrupting the displayed list.
   const staleDays =
@@ -453,7 +637,7 @@ export function MemoriesSection() {
   return (
     <div className="space-y-4 h-full flex flex-col">
       <p className="text-muted-foreground text-sm mb-4">
-        facts and preferences the AI has learned from your activity
+        what the AI has learned from your activity and what it has generated for you
       </p>
 
       {/* stale memories warning */}
@@ -461,15 +645,8 @@ export function MemoriesSection() {
         <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
-            memories haven&apos;t updated in {staleDays} day{staleDays !== 1 ? "s" : ""}.
-            check that a memory-writing pipe is installed and enabled —{" "}
-            <a
-              href="?section=pipes&tab=discover&q=memory"
-              className="underline hover:opacity-80 transition-opacity"
-            >
-              browse memory pipes
-            </a>
-            .
+            hasn&apos;t updated in {staleDays} day{staleDays !== 1 ? "s" : ""}.
+            check that a memory-writing or artifact-writing pipe is installed and enabled.
           </span>
         </div>
       )}
@@ -479,7 +656,7 @@ export function MemoriesSection() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
-            placeholder="search memories..."
+            placeholder="search memories, files, entities, or dates..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8 h-8 text-sm"
@@ -577,19 +754,39 @@ export function MemoriesSection() {
 
       {/* filters row */}
       <div className="flex items-center gap-2 flex-wrap">
-        {loading ? (
+        {loading && outputsLoading && artifactsLoading ? (
           <Skeleton className="h-6 w-16 rounded-full" />
-        ) : total > 0 ? (
+        ) : (
           <Badge variant="secondary" className="text-xs">
-            {total} {total === 1 ? "memory" : "memories"}
+            {unifiedItems.length} {unifiedItems.length === 1 ? "item" : "items"}
           </Badge>
-        ) : null}
+        )}
+
+        {/* type filter */}
+        {(
+          [
+            { value: "all", label: "all" },
+            { value: "memories", label: "memories" },
+            { value: "artifacts", label: "outputs" },
+          ] as { value: TypeFilter; label: string }[]
+        ).map(({ value, label }) => (
+          <button
+            key={value}
+            onClick={() => setTypeFilter(value)}
+            className={`inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
+              typeFilter === value
+                ? "bg-foreground text-background border-foreground"
+                : "border-border text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
 
         {/* tag filter pills */}
-        {allTags.length > 0 && (
+        {combinedTags.length > 0 && (
           <>
-            <div className="w-px h-4 bg-border" />
-            {(showAllTags ? allTags : allTags.slice(0, 6)).map((tag) => (
+            {(showAllTags ? combinedTags : combinedTags.slice(0, 6)).map((tag) => (
               <button
                 key={tag}
                 onClick={() =>
@@ -606,12 +803,12 @@ export function MemoriesSection() {
                 <span className="truncate">{tag}</span>
               </button>
             ))}
-            {allTags.length > 6 && (
+            {combinedTags.length > 6 && (
               <button
                 onClick={() => setShowAllTags((v) => !v)}
                 className="inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border border-dashed border-border text-muted-foreground hover:bg-muted transition-colors"
               >
-                {showAllTags ? "show less" : `+${allTags.length - 6} more`}
+                {showAllTags ? "show less" : `+${combinedTags.length - 6} more`}
               </button>
             )}
           </>
@@ -646,7 +843,7 @@ export function MemoriesSection() {
       </div>
 
       {/* batch delete bar — only visible when items are selected */}
-      {memories.length > 0 && (
+      {unifiedItems.length > 0 && (
         <div className="flex items-center gap-2 text-xs">
           <Checkbox
             checked={selectedIds.size === memories.length && memories.length > 0}
@@ -675,16 +872,20 @@ export function MemoriesSection() {
         </div>
       )}
 
-      {loading ? (
+      {loading && (outputsLoading || artifactsLoading) ? (
         <MemoriesSkeleton />
-      ) : memories.length === 0 ? (
+      ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
           <p>
             {debouncedQuery || activeTag
-              ? "no memories match your search"
-              : "no memories yet"}
+              ? "no items match your search"
+              : typeFilter === "memories"
+                ? "no memories yet"
+                : typeFilter === "artifacts"
+                  ? "no artifacts yet"
+                  : "no memories or artifacts yet"}
           </p>
-          {!debouncedQuery && !activeTag && (
+          {!debouncedQuery && !activeTag && typeFilter !== "artifacts" && (
             <>
               <p className="text-xs">
                 memories are automatically created by pipes that learn from your
@@ -708,12 +909,96 @@ export function MemoriesSection() {
           ref={scrollRef}
           className="space-y-1.5 flex-1 overflow-y-auto pr-1"
         >
-          {memories.map((memory) => {
+          {unifiedItems.map((item) => {
+            if (item.kind === "artifact") {
+              const artItem = item.data;
+              const artPath = artifactItemPath(artItem);
+              const artPreview = artifactItemPreview(artItem);
+              const artSize = artifactItemSize(artItem);
+              const artDate = artifactItemDate(artItem);
+
+              return (
+                <div
+                  key={artifactItemKey(artItem)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => void commands.openViewerWindow(artPath)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      void commands.openViewerWindow(artPath);
+                    }
+                  }}
+                  className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30 cursor-pointer"
+                >
+                  <div className="mt-0.5 shrink-0">{kindIcon(artifactItemKind(artItem))}</div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium truncate block">
+                      {artifactItemTitle(artItem)}
+                    </span>
+                    {artPreview && (
+                      <p className="text-xs text-muted-foreground/70 mt-0.5 line-clamp-1">
+                        {artPreview}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      {artDate && (
+                        <span className="text-xs text-muted-foreground">
+                          {timeAgo(artDate)}
+                        </span>
+                      )}
+                      <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal">
+                        {artifactItemSource(artItem)}
+                      </Badge>
+                      <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
+                        output
+                      </span>
+                      {artSize != null && (
+                        <span className="text-[10px] text-muted-foreground/50">
+                          {formatBytes(artSize)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void invoke("reveal_in_default_browser", { path: artPath });
+                      }}
+                      title="reveal in finder"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                    {artItem.type === "output" && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleDeleteArtifact(artItem.data);
+                        }}
+                        title="delete"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            // Memory card (unchanged from original)
+            const memory = item.data;
             const isDeleting = deletingId === memory.id;
 
             return (
               <div
-                key={memory.id}
+                key={`mem-${memory.id}`}
                 className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
               >
                 <Checkbox
@@ -831,6 +1116,9 @@ export function MemoriesSection() {
                     >
                       {memory.source}
                     </Badge>
+                    <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
+                      memory
+                    </span>
                     {editingId === memory.id ? (
                       <>
                         {editTags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (

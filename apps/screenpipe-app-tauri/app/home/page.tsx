@@ -8,6 +8,7 @@ import {
   Settings as SettingsIcon,
   Workflow,
   Plus,
+  Brain,
   Clock,
   Gift,
   HelpCircle,
@@ -20,11 +21,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
-  Sparkles,
   Phone,
   Plug,
   NotebookPen,
-  FileBox,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import { useChatStore, type SessionStatus } from "@/lib/stores/chat-store";
@@ -39,7 +38,6 @@ import { PipeStoreView } from "@/components/pipe-store";
 import { MemoriesSection } from "@/components/settings/memories-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
-import { ArtifactsLibrary } from "@/components/artifacts-library";
 import { StandaloneChat } from "@/components/standalone-chat";
 import {
   ChatSidebar,
@@ -78,7 +76,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type MainSection = "home" | "timeline" | "memories" | "pipes" | "artifacts" | "connections" | "meetings" | "help";
+type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
   id: string | null;
   category: string | null;
@@ -87,8 +85,9 @@ type ConnectionFocusRequest = {
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "artifacts", "help", "memories", "connections", "meetings", "history",
+  "home", "timeline", "pipes", "help", "memories", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
+  "artifacts", // backwards compat → maps to "memories"
 ];
 
 // Settings sections that should redirect to /settings
@@ -109,6 +108,7 @@ function HomeContent() {
     defaultValue: "home",
     parse: (value) => {
       if (value === "feedback") return "help"; // backwards compat
+      if (value === "artifacts") return "memories"; // backwards compat — artifacts merged into memories
       // Settings sections redirect to /settings page
       if (SETTINGS_SECTIONS.has(value)) return value; // handled by redirect effect below
       return ALL_SECTIONS.includes(value) ? value : "home";
@@ -783,8 +783,6 @@ function HomeContent() {
         return <MemoriesSection />;
       case "pipes":
         return <PipeStoreView />;
-      case "artifacts":
-        return <ArtifactsLibrary />;
       case "connections":
         return (
           <ConnectionsSection
@@ -832,10 +830,9 @@ function HomeContent() {
     // rows are not reused — that felt like opening an old recent).
     { id: "home", label: "New chat", icon: <Plus className="h-3.5 w-3.5" /> },
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
-    { id: "artifacts", label: "Artifacts", icon: <FileBox className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
     { id: "meetings", label: "Meeting notes", icon: <NotebookPen className="h-3.5 w-3.5" /> },
-    { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
+    { id: "memories", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   ]
     .filter((s) => !isSectionHidden(s.id))
