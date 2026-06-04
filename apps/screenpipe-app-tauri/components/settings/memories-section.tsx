@@ -28,11 +28,8 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
-  FileText,
-  FileJson,
-  Image,
-  File,
   FolderOpen,
+  Eye,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { MemoizedReactMarkdown } from "@/components/markdown";
@@ -42,6 +39,7 @@ import { useOutputs, type Output } from "@/lib/hooks/use-outputs";
 import { useArtifacts, type Artifact } from "@/lib/hooks/use-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 
 interface MemoryRecord {
   id: number;
@@ -77,10 +75,6 @@ function artifactItemKey(item: DisplayItem): string {
 
 function artifactItemTitle(item: DisplayItem): string {
   return item.data.title;
-}
-
-function artifactItemKind(item: DisplayItem): string {
-  return item.data.kind;
 }
 
 function artifactItemSource(item: DisplayItem): string {
@@ -131,19 +125,6 @@ function mergeArtifactItems(
     return db.localeCompare(da);
   });
   return items;
-}
-
-function kindIcon(kind: string) {
-  switch (kind) {
-    case "markdown":
-      return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "json":
-      return <FileJson className="h-3.5 w-3.5 text-muted-foreground" />;
-    case "image":
-      return <Image className="h-3.5 w-3.5 text-muted-foreground" />;
-    default:
-      return <File className="h-3.5 w-3.5 text-muted-foreground" />;
-  }
 }
 
 function formatBytes(n: number): string {
@@ -256,52 +237,38 @@ export function MemoriesSection() {
       return n;
     });
 
+  // expanded artifact rows + file content cache
+  const [expandedArtifactKeys, setExpandedArtifactKeys] = useState<Set<string>>(new Set());
+  const [artifactContents, setArtifactContents] = useState<Map<string, string>>(new Map());
+
+  const toggleArtifactExpanded = async (key: string, path: string) => {
+    setExpandedArtifactKeys((prev) => {
+      const n = new Set(prev);
+      n.has(key) ? n.delete(key) : n.add(key);
+      return n;
+    });
+    if (!artifactContents.has(key)) {
+      try {
+        const text = await readTextFile(path);
+        setArtifactContents((prev) => new Map(prev).set(key, text));
+      } catch {}
+    }
+  };
+
   // show all tag filter pills
   const [showAllTags, setShowAllTags] = useState(false);
 
   // batch selection
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
 
-  const toggleSelected = (id: number) => {
+  const toggleSelected = (key: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedIds.size === memories.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(memories.map((m) => m.id)));
-    }
-  };
-
-  const batchDelete = async () => {
-    if (selectedIds.size === 0) return;
-    setBatchDeleting(true);
-    try {
-      await Promise.all(
-        Array.from(selectedIds).map((id) =>
-          localFetch(`/memories/${id}`, { method: "DELETE" })
-        )
-      );
-      setMemories((prev) => prev.filter((m) => !selectedIds.has(m.id)));
-      setTotal((prev) => prev - selectedIds.size);
-      toast({ title: `deleted ${selectedIds.size} memories` });
-      setSelectedIds(new Set());
-    } catch (err) {
-      toast({
-        title: "failed to delete some memories",
-        description: String(err),
-        variant: "destructive",
-      });
-    } finally {
-      setBatchDeleting(false);
-    }
   };
 
   // search, filter & sort
@@ -626,6 +593,66 @@ export function MemoriesSection() {
     [deleteOutput],
   );
 
+  const toggleSelectAll = () => {
+    if (selectedIds.size === unifiedItems.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(
+        new Set(
+          unifiedItems.map((item) =>
+            item.kind === "memory"
+              ? `mem:${(item.data as MemoryRecord).id}`
+              : artifactItemKey(item.data as DisplayItem)
+          )
+        )
+      );
+    }
+  };
+
+  const batchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setBatchDeleting(true);
+    try {
+      const memKeys: string[] = [];
+      const artKeys: string[] = [];
+      for (const key of selectedIds) {
+        if (key.startsWith("mem:")) memKeys.push(key);
+        else artKeys.push(key);
+      }
+
+      // delete memories
+      const memIds = memKeys.map((k) => Number(k.slice(4)));
+      const memIdSet = new Set(memIds);
+      await Promise.all(
+        memIds.map((id) =>
+          localFetch(`/memories/${id}`, { method: "DELETE" })
+        )
+      );
+      setMemories((prev) => prev.filter((m) => !memIdSet.has(m.id)));
+      setTotal((prev) => prev - memIds.length);
+
+      // delete output-type artifacts
+      for (const key of artKeys) {
+        if (!key.startsWith("output:")) continue;
+        const outputId = Number(key.slice(7));
+        const match = outputs.find((o) => o.id === outputId);
+        if (match) await handleDeleteArtifact(match);
+      }
+
+      const deletedCount = memIds.length + artKeys.filter((k) => k.startsWith("output:")).length;
+      toast({ title: `deleted ${deletedCount} items` });
+      setSelectedIds(new Set());
+    } catch (err) {
+      toast({
+        title: "failed to delete some items",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
+
   // Stale warning: use the background-polled newest timestamp so it auto-clears
   // without disrupting the displayed list.
   const staleDays =
@@ -772,7 +799,19 @@ export function MemoriesSection() {
         ).map(({ value, label }) => (
           <button
             key={value}
-            onClick={() => setTypeFilter(value)}
+            onClick={() => {
+              setTypeFilter(value);
+              // clear active tag if it won't be visible in the new filter
+              if (activeTag) {
+                const nextTags =
+                  value === "memories"
+                    ? allTags
+                    : value === "artifacts"
+                      ? artifactSources
+                      : combinedTags;
+                if (!nextTags.includes(activeTag)) setActiveTag(null);
+              }
+            }}
             className={`inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
               typeFilter === value
                 ? "bg-foreground text-background border-foreground"
@@ -783,38 +822,49 @@ export function MemoriesSection() {
           </button>
         ))}
 
-        {/* tag filter pills */}
-        {combinedTags.length > 0 && (
-          <>
-            {(showAllTags ? combinedTags : combinedTags.slice(0, 6)).map((tag) => (
-              <button
-                key={tag}
-                onClick={() =>
-                  setActiveTag((prev) => (prev === tag ? null : tag))
-                }
-                className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border transition-colors max-w-[150px] ${
-                  activeTag === tag
-                    ? "bg-foreground text-background border-foreground"
-                    : "border-border text-muted-foreground hover:bg-muted"
-                }`}
-                title={tag.length > 20 ? tag : undefined}
-              >
-                <Tag className="h-2.5 w-2.5 shrink-0" />
-                <span className="truncate">{tag}</span>
-              </button>
-            ))}
-            {combinedTags.length > 6 && (
-              <button
-                onClick={() => setShowAllTags((v) => !v)}
-                className="inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border border-dashed border-border text-muted-foreground hover:bg-muted transition-colors"
-              >
-                {showAllTags ? "show less" : `+${combinedTags.length - 6} more`}
-              </button>
-            )}
-          </>
-        )}
+        {/* divider between type filters and tag chips */}
+        {(() => {
+          const visibleTags =
+            typeFilter === "memories"
+              ? allTags
+              : typeFilter === "artifacts"
+                ? artifactSources
+                : combinedTags;
+          if (visibleTags.length === 0) return null;
+          return (
+            <>
+              <div className="h-4 w-px bg-border shrink-0" />
+              {(showAllTags ? visibleTags : visibleTags.slice(0, 6)).map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() =>
+                    setActiveTag((prev) => (prev === tag ? null : tag))
+                  }
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border transition-colors max-w-[150px] ${
+                    activeTag === tag
+                      ? "bg-foreground text-background border-foreground"
+                      : "border-border text-muted-foreground hover:bg-muted"
+                  }`}
+                  title={tag.length > 20 ? tag : undefined}
+                >
+                  <Tag className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{tag}</span>
+                </button>
+              ))}
+              {visibleTags.length > 6 && (
+                <button
+                  onClick={() => setShowAllTags((v) => !v)}
+                  className="inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border border-dashed border-border text-muted-foreground hover:bg-muted transition-colors"
+                >
+                  {showAllTags ? "show less" : `+${visibleTags.length - 6} more`}
+                </button>
+              )}
+            </>
+          );
+        })()}
 
-        {/* sort controls */}
+        {/* sort controls — temporarily hidden */}
+        {false && (
         <div className="ml-auto flex items-center gap-1">
           {(
             [
@@ -840,13 +890,14 @@ export function MemoriesSection() {
             </button>
           ))}
         </div>
+        )}
       </div>
 
       {/* batch delete bar — only visible when items are selected */}
       {unifiedItems.length > 0 && (
         <div className="flex items-center gap-2 text-xs">
           <Checkbox
-            checked={selectedIds.size === memories.length && memories.length > 0}
+            checked={selectedIds.size === unifiedItems.length && unifiedItems.length > 0}
             onCheckedChange={toggleSelectAll}
             className="h-3.5 w-3.5"
           />
@@ -917,30 +968,100 @@ export function MemoriesSection() {
               const artSize = artifactItemSize(artItem);
               const artDate = artifactItemDate(artItem);
 
+              const artKey = artifactItemKey(artItem);
+              const fullContent = artifactContents.get(artKey);
+              const isArtExpanded = expandedArtifactKeys.has(artKey);
+              const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
+              const TRUNCATE_LEN = 150;
+              const isLong = (fullContent ?? artPreview ?? "").length > TRUNCATE_LEN;
+              const displayContent = !isArtExpanded && rawContent.length > TRUNCATE_LEN
+                ? rawContent.slice(0, TRUNCATE_LEN) + "\u2026"
+                : rawContent;
+
               return (
                 <div
-                  key={artifactItemKey(artItem)}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => void commands.openViewerWindow(artPath)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      void commands.openViewerWindow(artPath);
-                    }
-                  }}
-                  className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30 cursor-pointer"
+                  key={artKey}
+                  className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
                 >
-                  <div className="mt-0.5 shrink-0">{kindIcon(artifactItemKind(artItem))}</div>
+                  <Checkbox
+                    checked={selectedIds.has(artKey)}
+                    onCheckedChange={() => toggleSelected(artKey)}
+                    className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
+                      selectedIds.size === 0
+                        ? "opacity-0 group-hover:opacity-100"
+                        : "opacity-100"
+                    }`}
+                  />
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium truncate block">
-                      {artifactItemTitle(artItem)}
-                    </span>
-                    {artPreview && (
-                      <p className="text-xs text-muted-foreground/70 mt-0.5 line-clamp-1">
-                        {artPreview}
-                      </p>
-                    )}
+                    <div className="text-sm text-foreground">
+                      <MemoizedReactMarkdown
+                        className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          h1({ children }) {
+                            return <p className="text-base font-semibold mb-1">{children}</p>;
+                          },
+                          h2({ children }) {
+                            return <p className="text-sm font-semibold mb-1">{children}</p>;
+                          },
+                          h3({ children }) {
+                            return <p className="text-xs font-semibold mb-0.5">{children}</p>;
+                          },
+                          h4({ children }) {
+                            return <p className="text-xs font-medium mb-0.5">{children}</p>;
+                          },
+                          p({ children }) {
+                            return <p className="mb-1 last:mb-0">{children}</p>;
+                          },
+                          a({ href, children }) {
+                            return (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline hover:text-foreground/70 transition-colors"
+                              >
+                                {children}
+                              </a>
+                            );
+                          },
+                          code({ className, children, ...props }) {
+                            const isInline = !className;
+                            if (isInline) {
+                              return (
+                                <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              </pre>
+                            );
+                          },
+                        }}
+                      >
+                        {displayContent}
+                      </MemoizedReactMarkdown>
+                      {isLong && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void toggleArtifactExpanded(artKey, artPath);
+                          }}
+                          className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
+                        >
+                          {isArtExpanded ? (
+                            <><ChevronUp className="h-2.5 w-2.5" /> show less</>
+                          ) : (
+                            <><ChevronDown className="h-2.5 w-2.5" /> show more</>
+                          )}
+                        </button>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                       {artDate && (
                         <span className="text-xs text-muted-foreground">
@@ -965,10 +1086,16 @@ export function MemoriesSection() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void invoke("reveal_in_default_browser", { path: artPath });
-                      }}
+                      onClick={() => void commands.openViewerWindow(artPath)}
+                      title="open viewer"
+                    >
+                      <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
                       title="reveal in finder"
                     >
                       <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
@@ -978,10 +1105,7 @@ export function MemoriesSection() {
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDeleteArtifact(artItem.data);
-                        }}
+                        onClick={() => void handleDeleteArtifact(artItem.data)}
                         title="delete"
                       >
                         <Trash2 className="h-3.5 w-3.5 text-destructive" />
@@ -1002,8 +1126,8 @@ export function MemoriesSection() {
                 className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
               >
                 <Checkbox
-                  checked={selectedIds.has(memory.id)}
-                  onCheckedChange={() => toggleSelected(memory.id)}
+                  checked={selectedIds.has(`mem:${memory.id}`)}
+                  onCheckedChange={() => toggleSelected(`mem:${memory.id}`)}
                   className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
                     selectedIds.size === 0
                       ? "opacity-0 group-hover:opacity-100"
@@ -1049,6 +1173,18 @@ export function MemoriesSection() {
                           className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
                           remarkPlugins={[remarkGfm]}
                           components={{
+                            h1({ children }) {
+                              return <p className="text-sm font-semibold mb-1">{children}</p>;
+                            },
+                            h2({ children }) {
+                              return <p className="text-sm font-semibold mb-1">{children}</p>;
+                            },
+                            h3({ children }) {
+                              return <p className="text-xs font-semibold mb-0.5">{children}</p>;
+                            },
+                            h4({ children }) {
+                              return <p className="text-xs font-medium mb-0.5">{children}</p>;
+                            },
                             p({ children }) {
                               return <p className="mb-1 last:mb-0">{children}</p>;
                             },
