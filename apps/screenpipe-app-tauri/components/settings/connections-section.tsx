@@ -511,7 +511,7 @@ const ALL_CONNECTION_CATEGORIES = "All";
 const SINGLE_INSTANCE_INTEGRATIONS = new Set<string>(["honcho"]);
 
 // The fixed Honcho session screenpipe writes curated memories into. Mirrors
-// MEMORIES_SESSION_ID in the screenpipe-honcho crate.
+// MEMORIES_SESSION_ID in screenpipe-engine::external_memory_sync.
 const HONCHO_MEMORIES_SESSION = "screenpipe-memories";
 
 // Build a deep link to the Honcho web explorer for the synced session. Only

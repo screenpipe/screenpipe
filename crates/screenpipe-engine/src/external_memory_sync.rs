@@ -677,12 +677,8 @@ async fn sync_honcho_inner(
         workspace: cfg.workspace,
     });
 
-    // Idempotently ensure the peer and the single stable session exist.
-    //
-    // Model 1 (default): facts are authored as the *user* peer's own messages
-    // (`observe_me`). To experiment with Model 2 (screenpipe as an observer
-    // peer) the user changes `peer_name` and wires the observe directionality
-    // in Honcho — no code change.
+    // Idempotently ensure the peer and the single stable session exist. Facts
+    // are authored as the user peer's own messages (`observe_me`).
     client
         .create_peer(&peer_name, Some(serde_json::json!({ "observe_me": true })))
         .await?;

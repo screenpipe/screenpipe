@@ -28,8 +28,7 @@ static DEF: IntegrationDef = IntegrationDef {
         workspace so other AI agents can query a modeled understanding of you. Defaults to \
         hosted Honcho (api.honcho.dev — set an api_key); point api_url at a local instance \
         to self-host instead. Only importance-filtered memories are sent; never raw screen \
-        or audio. By default the facts are authored as your own peer (Model 1); set a \
-        different peer_name to model screenpipe as an observer instead. Setup guide: \
+        or audio. Setup guide: \
         https://honcho.dev/docs/v3/guides/integrations/screenpipe",
     fields: &[
         // api_url defaults to HOSTED Honcho; point it at a localhost instance to self-host.
