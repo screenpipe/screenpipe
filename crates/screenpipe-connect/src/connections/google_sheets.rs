@@ -20,6 +20,8 @@ static DEF: IntegrationDef = IntegrationDef {
         GET {spreadsheetId} — get spreadsheet metadata and sheet names. \
         GET {spreadsheetId}/values/{range} — read cell values (e.g. Sheet1!A1:Z100). \
         POST {spreadsheetId}/values/{range}:append — append rows to a sheet. \
+        Uses drive.file scope — only spreadsheets the user explicitly opens with screenpipe \
+        or that screenpipe creates are visible (intentional privacy design, mirrors google-docs). \
         Multi-account: when more than one Google account is connected, append `?instance=<email>` \
         to any proxy URL to pick which one (the `?` becomes `&` if the path already has a query string).",
     fields: &[],
@@ -31,13 +33,16 @@ static OAUTH: OAuthConfig = OAuthConfig {
     extra_auth_params: &[
         (
             "scope",
-            // drive.metadata.readonly is needed to list spreadsheets (e.g. the
-            // list-sheets pipe calling drive/v3/files?q=mimeType=spreadsheet).
-            // Without it, file listing fails with ACCESS_TOKEN_SCOPE_INSUFFICIENT
-            // and users have to re-authorize. Read/write of cells inside a
-            // *known* sheet still only needs the spreadsheets scope.
+            // drive.file is a non-restricted scope: grants access only to
+            // files the user explicitly opens with screenpipe or that
+            // screenpipe creates — mirrors the privacy design of google-docs.
+            // drive/v3/files?q=mimeType=spreadsheet returns the subset of
+            // spreadsheets the user has interacted with via screenpipe.
+            // drive.metadata.readonly was removed: it is a restricted scope
+            // requiring Google verification and exposes metadata of ALL Drive
+            // files, which is broader than needed.
             "https://www.googleapis.com/auth/spreadsheets \
-             https://www.googleapis.com/auth/drive.metadata.readonly \
+             https://www.googleapis.com/auth/drive.file \
              https://www.googleapis.com/auth/userinfo.email",
         ),
         ("access_type", "offline"),

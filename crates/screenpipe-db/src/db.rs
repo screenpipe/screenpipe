@@ -624,6 +624,18 @@ impl DatabaseManager {
                 match tokio::time::timeout(Duration::from_secs(3), self.write_pool.acquire()).await
                 {
                     Ok(Ok(conn)) => conn,
+                    Ok(Err(e))
+                        if attempt < max_retries
+                            && crate::sqlite_error::should_recycle_sqlite_connection(&e) =>
+                    {
+                        warn!(
+                            "write pool acquire connection error (attempt {}/{}), retrying: {}",
+                            attempt, max_retries, e
+                        );
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
                     Ok(Err(e)) => return Err(e),
                     Err(_) => return Err(sqlx::Error::PoolTimedOut),
                 };
@@ -674,6 +686,19 @@ impl DatabaseManager {
                     last_error = Some(e);
                     tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
                 }
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "BEGIN IMMEDIATE connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -705,13 +730,7 @@ impl DatabaseManager {
 
     /// Check if a sqlx error is a SQLite BUSY variant (code 5, 517, etc.)
     fn is_busy_error(e: &sqlx::Error) -> bool {
-        match e {
-            sqlx::Error::Database(db_err) => {
-                let msg = db_err.message().to_lowercase();
-                msg.contains("database is locked") || msg.contains("busy")
-            }
-            _ => false,
-        }
+        crate::sqlite_error::is_sqlite_busy_error(e)
     }
 
     /// Mark records as synced via the write coalescing queue.
@@ -8732,44 +8751,134 @@ LIMIT ? OFFSET ?
     }
 
     pub async fn has_active_meeting(&self) -> Result<bool, SqlxError> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM meetings WHERE meeting_end IS NULL")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(row.0 > 0)
+        let max_retries = 3;
+        let mut last_error = None;
+        for attempt in 1..=max_retries {
+            let mut conn = self.pool.acquire().await?;
+            match sqlx::query_as::<_, (i64,)>(
+                "SELECT COUNT(*) FROM meetings WHERE meeting_end IS NULL",
+            )
+            .fetch_one(&mut *conn)
+            .await
+            {
+                Ok(row) => return Ok(row.0 > 0),
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "db: has_active_meeting read connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut))
     }
 
     pub async fn get_active_meeting_by_id(
         &self,
         id: i64,
     ) -> Result<Option<MeetingRecord>, SqlxError> {
-        let meeting = sqlx::query_as::<_, MeetingRecord>(
-            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
-             detection_source, created_at FROM meetings WHERE id = ?1 AND meeting_end IS NULL",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(meeting)
+        let max_retries = 3;
+        let mut last_error = None;
+        for attempt in 1..=max_retries {
+            let mut conn = self.pool.acquire().await?;
+            match sqlx::query_as::<_, MeetingRecord>(
+                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
+                 detection_source, created_at FROM meetings WHERE id = ?1 AND meeting_end IS NULL",
+            )
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await
+            {
+                Ok(meeting) => return Ok(meeting),
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "db: get_active_meeting_by_id read connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut))
     }
 
     pub async fn get_most_recent_active_meeting_id(&self) -> Result<Option<i64>, SqlxError> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT id FROM meetings WHERE meeting_end IS NULL ORDER BY id DESC LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(|r| r.0))
+        let max_retries = 3;
+        let mut last_error = None;
+        for attempt in 1..=max_retries {
+            let mut conn = self.pool.acquire().await?;
+            match sqlx::query_as::<_, (i64,)>(
+                "SELECT id FROM meetings WHERE meeting_end IS NULL ORDER BY id DESC LIMIT 1",
+            )
+            .fetch_optional(&mut *conn)
+            .await
+            {
+                Ok(row) => return Ok(row.map(|r| r.0)),
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "db: get_most_recent_active_meeting_id read connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut))
     }
 
     pub async fn get_most_recent_active_meeting(&self) -> Result<Option<MeetingRecord>, SqlxError> {
-        let meeting = sqlx::query_as::<_, MeetingRecord>(
-            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
-             detection_source, created_at FROM meetings WHERE meeting_end IS NULL \
-             ORDER BY id DESC LIMIT 1",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(meeting)
+        let max_retries = 3;
+        let mut last_error = None;
+        for attempt in 1..=max_retries {
+            let mut conn = self.pool.acquire().await?;
+            match sqlx::query_as::<_, MeetingRecord>(
+                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
+                 detection_source, created_at FROM meetings WHERE meeting_end IS NULL \
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .fetch_optional(&mut *conn)
+            .await
+            {
+                Ok(meeting) => return Ok(meeting),
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "db: get_most_recent_active_meeting read connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut))
     }
 
     pub async fn list_meetings(
@@ -8799,32 +8908,75 @@ LIMIT ? OFFSET ?
         }
         sql.push_str(" ORDER BY meeting_start DESC LIMIT ? OFFSET ?");
 
-        let mut q = sqlx::query_as::<_, MeetingRecord>(&sql);
-        if let Some(st) = start_time {
-            q = q.bind(st);
-        }
-        if let Some(et) = end_time {
-            q = q.bind(et);
-        }
-        if let Some(qs) = query {
-            let pattern = format!("%{}%", qs.to_lowercase());
-            q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
-        }
-        q = q.bind(limit).bind(offset);
+        let max_retries = 3;
+        let mut last_error = None;
+        for attempt in 1..=max_retries {
+            let mut q = sqlx::query_as::<_, MeetingRecord>(&sql);
+            if let Some(st) = start_time {
+                q = q.bind(st);
+            }
+            if let Some(et) = end_time {
+                q = q.bind(et);
+            }
+            if let Some(qs) = query {
+                let pattern = format!("%{}%", qs.to_lowercase());
+                q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
+            }
+            q = q.bind(limit).bind(offset);
 
-        let meetings = q.fetch_all(&self.pool).await?;
-        Ok(meetings)
+            let mut conn = self.pool.acquire().await?;
+            match q.fetch_all(&mut *conn).await {
+                Ok(meetings) => return Ok(meetings),
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "db: list_meetings read connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut))
     }
 
     pub async fn get_meeting_by_id(&self, id: i64) -> Result<MeetingRecord, SqlxError> {
-        let meeting = sqlx::query_as::<_, MeetingRecord>(
-            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
-             detection_source, created_at FROM meetings WHERE id = ?1",
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(meeting)
+        let max_retries = 3;
+        let mut last_error = None;
+        for attempt in 1..=max_retries {
+            let mut conn = self.pool.acquire().await?;
+            match sqlx::query_as::<_, MeetingRecord>(
+                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
+                 detection_source, created_at FROM meetings WHERE id = ?1",
+            )
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await
+            {
+                Ok(meeting) => return Ok(meeting),
+                Err(e) if crate::sqlite_error::should_recycle_sqlite_connection(&e) => {
+                    warn!(
+                        "db: get_meeting_by_id read connection error (attempt {}/{}), detaching connection: {}",
+                        attempt, max_retries, e
+                    );
+                    let _raw = conn.detach();
+                    if attempt < max_retries {
+                        last_error = Some(e);
+                        tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut))
     }
 
     #[allow(clippy::too_many_arguments)]

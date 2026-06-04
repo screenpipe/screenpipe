@@ -160,7 +160,9 @@ jobs:
           path: /tmp/meeting-eval/
 
       - name: Post sticky PR comment
-        if: github.event_name == 'pull_request'
+        # Skip on fork PRs: the default GITHUB_TOKEN is read-only for forks, so
+        # gh pr comment can never succeed there and would fail the whole job.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
