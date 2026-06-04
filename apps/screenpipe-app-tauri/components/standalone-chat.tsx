@@ -2674,7 +2674,8 @@ export function StandaloneChat({
   const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const activePresetIdRef = useRef<string | null>(null);
-  const handlePiRestartRef = useRef<(preset: AIPreset) => void>(() => {});
+  type PiRestartOpts = { fromRestore?: boolean };
+  const handlePiRestartRef = useRef<(preset: AIPreset, opts?: PiRestartOpts) => void>(() => {});
   const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
@@ -3026,7 +3027,18 @@ export function StandaloneChat({
         (presetId ? presets.find((p) => p.id === presetId) : undefined) ?? fallback;
       if (!match) return;
       setActivePreset(match);
-      handlePiRestartRef.current(match);
+      // Lazy Pi start on first send — don't spawn or hot-swap when browsing
+      // history for a cold session (PR review: restore must not piStart).
+      void (async () => {
+        const sid = piSessionIdRef.current;
+        try {
+          const info = await commands.piInfo(sid);
+          if (info.status !== "ok" || !info.data.running) return;
+          handlePiRestartRef.current(match, { fromRestore: true });
+        } catch {
+          // Session not in the Pi pool yet — activePreset is set; send will start Pi.
+        }
+      })();
     },
     [activePipeExecution, isSettingsLoaded, settings.aiPresets],
   );
@@ -4498,8 +4510,8 @@ export function StandaloneChat({
   //   and models.json, so the subprocess has to be respawned to see them.
   //
   // Called directly from the AIPresetsSelector onPresetSaved callback.
-  const handlePiRestart = useCallback((preset: AIPreset) => {
-    if (isStreamingRef.current) {
+  const handlePiRestart = useCallback((preset: AIPreset, opts?: { fromRestore?: boolean }) => {
+    if (!opts?.fromRestore && isStreamingRef.current) {
       pendingPresetRef.current = preset;
       toast({ title: "model will switch after this response finishes" });
       return;
@@ -4552,6 +4564,10 @@ export function StandaloneChat({
           await commands.piSetModel(piSessionIdRef.current, providerConfig);
           setRunningConfigFromProviderConfig(providerConfig);
         } catch (e) {
+          if (opts?.fromRestore) {
+            // Restore path: cold pool race — lazy start on send owns Pi spawn.
+            return;
+          }
           console.error("[Pi] Hot-swap failed, falling back to full restart:", e);
           try {
             await restartCurrentPiSession(providerConfig);

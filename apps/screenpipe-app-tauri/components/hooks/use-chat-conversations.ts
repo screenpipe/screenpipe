@@ -23,6 +23,7 @@ import {
 } from "@/lib/utils/chat-title";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
+import { useChatStore } from "@/lib/stores/chat-store";
 import {
   saveConversationFile,
   loadConversationFile,
@@ -130,7 +131,7 @@ interface SaveConversationOptions {
 const aiTitleAttempted = new Set<string>();
 
 function snapshotOutgoingPresetId(
-  store: { sessions: Record<string, { presetId?: string }>; actions: { patch: (id: string, patch: { presetId?: string }) => void } },
+  store: ReturnType<typeof useChatStore.getState>,
   outgoingSid: string,
   activePresetIdRef?: MutableRefObject<string | null | undefined>,
 ) {
