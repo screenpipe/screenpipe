@@ -48,6 +48,11 @@ rusqlite = { version = "0.29", features = ["bundled"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
+# Window-server queries (CGWindowListCopyWindowInfo) for frontmost-app
+# resolution — same versions as screenpipe-screen. cidre's cg module does not
+# bind the window-list API.
+core-foundation = "0.10"
+core-graphics = "0.24"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native Windows APIs - no rdev dependency

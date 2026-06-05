@@ -2081,6 +2081,22 @@ fn get_focused_app_name_lightweight() -> Option<String> {
 fn query_frontmost_app_name_uncached() -> Option<String> {
     use cidre::{ax, ns, objc};
 
+    // Window server first: `get_frontmost_pid` does a fresh
+    // CGWindowListCopyWindowInfo query on every call. The NSWorkspace scan
+    // below freezes at process start on threads that never pump the main
+    // AppKit run loop (all of this daemon's threads), and the AX query goes
+    // stale on Chromium/Electron apps that haven't enabled accessibility.
+    if let Some(pid) = screenpipe_screen::capture_screenshot_by_window::get_frontmost_pid() {
+        let from_ws = objc::ar_pool(|| {
+            ns::RunningApp::with_pid(pid)
+                .and_then(|app| app.localized_name())
+                .map(|s| s.to_string())
+        });
+        if from_ws.as_deref().is_some_and(|n| !n.is_empty()) {
+            return from_ws;
+        }
+    }
+
     // Wrapped in an autorelease pool because `running_apps()` returns
     // autoreleased NSRunningApplication objects; without draining they
     // leak across polls (same precedent as get_frontmost_pid in

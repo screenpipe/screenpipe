@@ -388,11 +388,25 @@ struct WindowData {
 /// agree on which app is focused. Without this, each window.is_focused() call
 /// independently queries NSWorkspace, and the active app can change mid-iteration
 /// causing multiple apps to appear as "focused" simultaneously.
+///
+/// Sourced from the window server (first layer-0 window in front-to-back
+/// z-order) rather than NSWorkspace: `NSRunningApplication.is_active` is
+/// refreshed only when the main thread pumps an AppKit run loop, which never
+/// happens in this daemon — the NSWorkspace answer freezes at whatever app
+/// was frontmost at process start. The window-server query is fresh on every
+/// call. NSWorkspace is kept as a fallback for the (near-impossible) case
+/// where the window-list query fails.
 #[cfg(target_os = "macos")]
-fn get_frontmost_pid() -> Option<i32> {
-    // Wrap in autorelease pool — running_apps() returns autoreleased
-    // NSRunningApplication objects that accumulate on Rust threads
-    // (no automatic drain), causing ~800MB+ leak over hours.
+pub fn get_frontmost_pid() -> Option<i32> {
+    let (cg_windows, _) = get_cg_window_list();
+    if let Some(w) = cg_windows.iter().find(|w| w.layer == 0) {
+        return Some(w.pid);
+    }
+
+    // Fallback: NSWorkspace active-app scan (stale in long-running daemon
+    // threads — see doc comment). Wrap in autorelease pool — running_apps()
+    // returns autoreleased NSRunningApplication objects that accumulate on
+    // Rust threads (no automatic drain), causing ~800MB+ leak over hours.
     cidre::objc::ar_pool(|| {
         let workspace = cidre::ns::Workspace::shared();
         let apps = workspace.running_apps();

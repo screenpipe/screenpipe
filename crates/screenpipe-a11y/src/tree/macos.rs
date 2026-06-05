@@ -1407,22 +1407,145 @@ fn get_bool_attr(elem: &ax::UiElement, attr: &ax::Attr) -> Option<bool> {
     })
 }
 
+/// Frontmost application pid straight from the window server.
+///
+/// `CGWindowListCopyWindowInfo` performs a fresh window-server query on every
+/// call. That matters because the two obvious alternatives are both broken
+/// here:
+///
+/// - `NSWorkspace`/`NSRunningApplication.is_active` state is refreshed only
+///   when the **main thread** pumps an AppKit run loop. This daemon's main
+///   thread is a tokio runtime that never does, so those values freeze at
+///   whatever was frontmost at process start.
+/// - The system-wide `AXFocusedApplication` query goes stale on
+///   Chromium/Electron apps that haven't enabled accessibility yet (they
+///   never register with the AX server), so it keeps returning the
+///   previously focused app.
+///
+/// The frontmost app is the owner of the first layer-0 window in the
+/// front-to-back z-order. Layer 0 is the normal application-window layer;
+/// everything else (menu bar, Dock, overlays, notifications) sits on other
+/// layers. Works without Screen Recording permission — window *names* are
+/// redacted without it, but owner pid and layer are always present.
+fn frontmost_pid_via_window_server() -> Option<i32> {
+    use core_foundation::base::TCFType;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::{
+        copy_window_info, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly,
+    };
+
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let window_list = copy_window_info(options, kCGNullWindowID)?;
+    let count =
+        unsafe { core_foundation::array::CFArrayGetCount(window_list.as_concrete_TypeRef()) };
+    for i in 0..count {
+        unsafe {
+            let dict_ref = core_foundation::array::CFArrayGetValueAtIndex(
+                window_list.as_concrete_TypeRef(),
+                i,
+            );
+            if dict_ref.is_null() {
+                continue;
+            }
+            let dict = dict_ref as core_foundation::dictionary::CFDictionaryRef;
+
+            // Only layer-0 (normal app) windows count toward frontmost.
+            let layer_key = CFString::new("kCGWindowLayer");
+            let mut layer_val = std::ptr::null();
+            if core_foundation::dictionary::CFDictionaryGetValueIfPresent(
+                dict,
+                layer_key.as_concrete_TypeRef() as *const _,
+                &mut layer_val,
+            ) == 0
+                || layer_val.is_null()
+            {
+                continue;
+            }
+            let layer =
+                CFNumber::wrap_under_get_rule(layer_val as core_foundation::number::CFNumberRef)
+                    .to_i64()
+                    .unwrap_or(-1);
+            if layer != 0 {
+                continue;
+            }
+
+            let pid_key = CFString::new("kCGWindowOwnerPID");
+            let mut pid_val = std::ptr::null();
+            if core_foundation::dictionary::CFDictionaryGetValueIfPresent(
+                dict,
+                pid_key.as_concrete_TypeRef() as *const _,
+                &mut pid_val,
+            ) == 0
+                || pid_val.is_null()
+            {
+                continue;
+            }
+            if let Some(pid) =
+                CFNumber::wrap_under_get_rule(pid_val as core_foundation::number::CFNumberRef)
+                    .to_i64()
+            {
+                return Some(pid as i32);
+            }
+        }
+    }
+    None
+}
+
+/// Localized app name for a pid. `NSRunningApplication` objects created
+/// per-pid carry current launch-services info; the name is static for the
+/// process lifetime, so no staleness concern here (unlike `is_active`).
+fn app_name_for_pid(pid: i32) -> String {
+    ns::RunningApp::with_pid(pid)
+        .and_then(|app| app.localized_name())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
 fn resolve_focused_ax_app() -> Option<(Retained<ax::UiElement>, i32, String)> {
+    // Resolve the real frontmost app from the window server first and use it
+    // to validate the AX answer. If the AX query is trusted unconditionally,
+    // a Chromium/Electron app that hasn't enabled accessibility yet is
+    // mis-resolved to the previously focused app: the walk produces frames
+    // attributed to the wrong app (or dedup-drops them entirely), and — worse
+    // — the AXManualAccessibility enable poke goes to the wrong pid, so the
+    // app never builds its tree and stays invisible forever.
+    let ws_pid = frontmost_pid_via_window_server();
+
     let sys = ax::UiElement::sys_wide();
     if let Ok(focused_app) = sys.focused_app() {
         if let Ok(pid) = focused_app.pid() {
-            let app_name = ns::RunningApp::with_pid(pid)
-                .and_then(|app| app.localized_name())
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            return Some((focused_app, pid, app_name));
+            if let Some(ws) = ws_pid {
+                if ws != pid {
+                    let app_name = app_name_for_pid(ws);
+                    debug!(
+                        "focused AX app stale: AX pid={} vs window-server pid={} app={}; using window server",
+                        pid, ws, app_name
+                    );
+                    return Some((ax::UiElement::with_app_pid(ws), ws, app_name));
+                }
+            }
+            return Some((focused_app, pid, app_name_for_pid(pid)));
         }
     }
 
-    // Electron apps can return no AXFocusedApplication even while NSWorkspace
-    // correctly reports them active. Build the app AX element from the active
-    // process pid so Obsidian/Discord can still be walked instead of falling
-    // straight to OCR.
+    // AX returned nothing (Electron apps can return no AXFocusedApplication
+    // even while genuinely frontmost) — the window-server pid alone is enough
+    // to build the app element and walk it instead of falling straight to OCR.
+    if let Some(ws) = ws_pid {
+        let app_name = app_name_for_pid(ws);
+        debug!(
+            "focused AX app fallback via window server: pid={} app={}",
+            ws, app_name
+        );
+        return Some((ax::UiElement::with_app_pid(ws), ws, app_name));
+    }
+
+    // Last resort: NSWorkspace active-app scan. Known limitation: this state
+    // freezes at process start on threads that never pump the main run loop,
+    // so it is kept only for the case where the window-server query itself
+    // failed (should be near-impossible in a GUI session).
     let workspace = ns::Workspace::shared();
     for app in workspace.running_apps().iter() {
         if !app.is_active() {
