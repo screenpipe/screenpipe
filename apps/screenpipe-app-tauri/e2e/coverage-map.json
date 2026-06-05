@@ -340,7 +340,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Seeds and opens a long meeting note, then clicks the bottom editor line."
+      "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
     },
     {
       "spec": "notification-viewer-link.spec.ts",

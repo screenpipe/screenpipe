@@ -13,6 +13,7 @@ import {
 test("createScreenpipeTauriClient invokes the plugin commands", async () => {
   const calls = [];
   const client = createScreenpipeTauriClient({
+    telemetry: false,
     async invoke(command, payload) {
       calls.push([command, payload]);
       if (command === DEFAULT_TAURI_COMMANDS.permissions) {
@@ -42,6 +43,7 @@ test("createScreenpipeTauriClient invokes the plugin commands", async () => {
 test("eventNames forwards the plugin events command", async () => {
   const calls = [];
   const client = createScreenpipeTauriClient({
+    telemetry: false,
     async invoke(command) {
       calls.push(command);
       if (command === DEFAULT_TAURI_COMMANDS.events) {
@@ -70,6 +72,7 @@ test("onEvent dispatches filtered Tauri events to the callback", async () => {
   };
 
   const client = createScreenpipeTauriClient({
+    telemetry: false,
     async invoke() {},
     listen: fakeListen,
   });
@@ -103,6 +106,7 @@ test("onEvent dispatches filtered Tauri events to the callback", async () => {
 
 test("snapshot decodes jpegBase64 into Uint8Array", async () => {
   const client = createScreenpipeTauriClient({
+    telemetry: false,
     async invoke() {
       return {
         recording: false,

@@ -130,6 +130,73 @@ await session.setFilters({ ignoredUrls: ["chase", "wellsfargo.com"] });
 
 Audio is not muxed into the MP4 in v0.1.0.
 
+## Telemetry & user identification
+
+The session wrapper reports a small, PII-scrubbed set of crash and usage
+events to screenpipe so we can keep the SDK healthy in the wild. Pass a
+`userId` and that identifier is attached to every event, so a specific end
+user of your app shows up in screenpipe's Sentry (crashes) and PostHog
+(usage) dashboards.
+
+```ts
+import { createScreenpipeSession } from "@screenpipe/sdk/session";
+
+const session = createScreenpipeSession({
+  userId: currentUser.id, // identifies this user in screenpipe's dashboards
+  appName: "acme-recorder", // optional segmentation tag
+});
+```
+
+- **What is sent.** Crashes/errors go to Sentry (with the error message).
+  Usage goes to PostHog: `recording_started`, `recording_stopped`
+  (frame/byte/duration counts only), `recording_paused`/`recording_resumed`
+  (with the enum reason), `permissions_changed`, plus one
+  `session_initialized` ping. Window titles, app names, URLs and output
+  file paths are never sent to PostHog.
+- **What is NOT sent.** No screen content, no audio, no clipboard, no
+  `app_switched` stream, no `frames_progress` ticks.
+- **Opt out.** Set `telemetry: false` in the options, or set the env var
+  `SCREENPIPE_SDK_TELEMETRY=0` (also honors `DO_NOT_TRACK=1` and
+  `SCREENPIPE_DISABLE_ANALYTICS=1`). When off, the SDK makes no network
+  calls.
+
+Without a `userId`, events fall back to a per-session anonymous id, so set
+`userId` if you want stable identification across sessions.
+
+### Per-surface usage
+
+All four surfaces accept the same `userId` / `appName` / `telemetry` knobs.
+
+**Electron** (via the session passed to `registerScreenpipeIpc`):
+
+```ts
+registerScreenpipeIpc({ ipcMain, app, sessionOptions: { userId: currentUser.id } });
+```
+
+**Swift** (forwarded to the bundled Node bridge as env vars):
+
+```swift
+let config = ScreenpipeClient.Configuration(
+  sdkRoot: sdkRoot,
+  userId: currentUser.id,        // identifies this user in screenpipe's dashboards
+  appName: "acme-recorder",      // optional
+  telemetryEnabled: true         // set false to disable
+)
+let client = try ScreenpipeClient(configuration: config)
+```
+
+**Tauri** (the webview wrapper taps the plugin's event channel):
+
+```ts
+const client = createScreenpipeTauriClient({ userId: currentUser.id });
+```
+
+Tauri note: the webview sends via `fetch`. If your app sets a strict
+Content-Security-Policy, allow `connect-src` to the PostHog and Sentry hosts
+(or set `telemetry: false`); a blocking CSP silently disables telemetry. The
+native-Rust plugin itself does not emit telemetry; reporting is done from the
+webview.
+
 ## Development
 
 ```bash

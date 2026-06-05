@@ -290,11 +290,14 @@ mod imp {
                         continue;
                     }
                     // Truncate text_content aggressively — full keylog
-                    // streams blow the token budget. 200 chars is enough
-                    // for "what was typed" without leaking essays.
+                    // streams blow the token budget. ~200 bytes is enough
+                    // for "what was typed" without leaking essays. Round the
+                    // cut to a UTF-8 char boundary — a raw `&t[..200]` panics
+                    // when byte 200 lands inside a multi-byte char (e.g. Polish
+                    // `ł`), which crashed the sync worker for non-ASCII users.
                     let text_content = i.text_content.map(|t| {
                         if t.len() > 200 {
-                            format!("{}…", &t[..200])
+                            format!("{}…", ee_sync::truncate_on_char_boundary(&t, 200))
                         } else {
                             t
                         }

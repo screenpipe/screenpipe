@@ -3999,8 +3999,7 @@ impl PipeManager {
     pub fn install_builtin_pipes(&self) -> Result<()> {
         // Manual pipes are bundled as templates. Scheduled pipes (idea-tracker,
         // obsidian-sync) are available from the pipe store instead.
-        #[allow(unused_mut)]
-        let mut builtins = vec![
+        let builtins = vec![
             (
                 "day-recap",
                 include_str!("../../assets/pipes/day-recap/pipe.md"),

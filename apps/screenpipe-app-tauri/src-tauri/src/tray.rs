@@ -48,6 +48,7 @@ struct TrayMenuData {
     cloud_subscribed: bool,
     has_permission_issue: bool,
     app_ui_hidden: bool,
+    disable_timeline: bool,
 }
 
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
@@ -108,6 +109,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
     }
 
     let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
+    let disable_timeline = settings.recording.disable_timeline;
 
     let app_ui_hidden = is_app_ui_hidden();
 
@@ -133,6 +135,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         cloud_subscribed,
         has_permission_issue,
         app_ui_hidden,
+        disable_timeline,
     }
 }
 
@@ -588,7 +591,7 @@ fn create_dynamic_menu(
         }
         menu_builder = menu_builder.item(&item.build(app)?);
     }
-    if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") {
+    if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") && !data.disable_timeline {
         let mut item = MenuItemBuilder::with_id("show", "Timeline");
         if !show_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(show_shortcut));

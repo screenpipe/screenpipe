@@ -2879,7 +2879,7 @@ export function StandaloneChat({
   const lastUserMessageRef = useRef<string>("");
 
   // Ref to sendMessage so useEffect callbacks can call it without stale closures
-  const sendMessageRef = useRef<(msg: string, displayLabel?: string) => Promise<void>>();
+  const sendMessageRef = useRef<(msg: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>>();
   // Bypass guard for auto-send from chat-prefill (Pi confirmed running but React state stale)
   const autoSendBypassRef = useRef(false);
 
@@ -3386,8 +3386,9 @@ export function StandaloneChat({
 
   // Listen for chat-prefill events from search modal and pipe creation
   useEffect(() => {
-    const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
-      const { context, prompt, displayLabel, frameId, autoSend, source, targetWindow } = event.payload;
+    const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; images?: string[]; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
+      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow } = event.payload;
+      const prefillImages = normalizeImageDataUrls(images);
 
       // Route to exactly one window. An autoSend prefill with no targetWindow
       // would otherwise be claimed by BOTH the home and overlay panels — each
@@ -3408,7 +3409,8 @@ export function StandaloneChat({
         (async () => {
           try {
             // Cross-window dedup: compete for the right to handle this prefill.
-            const dedupKey = fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200);
+            const imageKey = prefillImages.map((img) => img.slice(0, 96)).join("|");
+            const dedupKey = `${fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200)}|images:${imageKey}`;
             const myWindowLabel = getCurrentWindow().label;
             const myNonce = Math.random().toString(36).slice(2, 10);
             const myClaim = { windowLabel: myWindowLabel, timestamp: Date.now(), nonce: myNonce };
@@ -3462,7 +3464,7 @@ export function StandaloneChat({
             autoSendBypassRef.current = true;
             await new Promise(r => setTimeout(r, 200));
             if (sendMessageRef.current) {
-              await sendMessageRef.current(fullMessage, displayLabel);
+              await sendMessageRef.current(fullMessage, displayLabel, prefillImages);
               setInput("");
               if (inputRef.current) inputRef.current.style.height = "auto";
             }
@@ -3480,6 +3482,9 @@ export function StandaloneChat({
       setPrefillSource(source || "search");
       if (frameId) {
         setPrefillFrameId(frameId);
+      }
+      if (prefillImages.length > 0) {
+        setPastedImages(prefillImages);
       }
       if (prompt) {
         setInput(prompt);
@@ -5953,6 +5958,15 @@ export function StandaloneChat({
     return images;
   }
 
+  function normalizeImageDataUrls(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is string =>
+        typeof item === "string" && /^data:image\/[^;]+;base64,/.test(item),
+      )
+      .slice(0, 8);
+  }
+
   function queuedPreviewForText(text: string) {
     return Array.from(text).slice(0, 200).join("");
   }
@@ -5999,18 +6013,19 @@ export function StandaloneChat({
     return takeQueuedDisplayById(sessionId, match[0]);
   }
 
-  async function enqueuePiMessage(userMessage: string, displayLabel?: string) {
+  async function enqueuePiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
     if (!piInfo?.running) {
       // No Pi running → fall back to the normal start-and-send path.
-      return sendPiMessage(userMessage, displayLabel);
+      return sendPiMessage(userMessage, displayLabel, imageDataUrls);
     }
 
     // Convert any data-URL pastes to the Pi image-content shape (same format
     // used by the normal send path further down in this file).
-    const piImages = imageDataUrlsToPiImages(pastedImages);
-    const queuedImageDataUrls = pastedImages.length > 0 ? [...pastedImages] : [];
+    const outgoingImages = imageDataUrls ?? pastedImages;
+    const piImages = imageDataUrlsToPiImages(outgoingImages);
+    const queuedImageDataUrls = outgoingImages.length > 0 ? [...outgoingImages] : [];
     const prevInput = input;
-    const hadPastedImages = pastedImages.length > 0;
+    const hadPastedImages = imageDataUrls == null && pastedImages.length > 0;
     // Snapshot whatever sendMessage stashed for us. Consumed here so it
     // doesn't leak into a later turn if this enqueue races with another.
     const queuedAttachments = consumePendingAttachments();
@@ -6620,11 +6635,12 @@ export function StandaloneChat({
     }
   }
 
-  async function sendMessage(userMessage: string, displayLabel?: string) {
+  async function sendMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
     const trimmed = userMessage.trim();
+    const outgoingImages = imageDataUrls ?? pastedImages;
     const queuedDocs = attachedDocsRef.current;
-    if (!trimmed && pastedImages.length === 0 && queuedDocs.length === 0) return;
+    if (!trimmed && outgoingImages.length === 0 && queuedDocs.length === 0) return;
 
     // Fold any attached documents into the outgoing turn. The extracted
     // text rides in `content` (what the model sees, kept for
@@ -6667,7 +6683,7 @@ export function StandaloneChat({
     // normal turn), otherwise user bubbles can drift.
     if (forceQueueModeRef.current || sendDispatchInFlightRef.current || piMessageIdRef.current || isLoading || isStreaming) {
       try {
-        return await enqueuePiMessage(outgoingMessage, outgoingDisplay);
+        return await enqueuePiMessage(outgoingMessage, outgoingDisplay, imageDataUrls);
       } catch (e) {
         restoreDocsOnError(e);
       }
@@ -6676,7 +6692,7 @@ export function StandaloneChat({
     sendDispatchInFlightRef.current = true;
     try {
       // All providers route through Pi agent
-      return await sendPiMessage(outgoingMessage, outgoingDisplay);
+      return await sendPiMessage(outgoingMessage, outgoingDisplay, imageDataUrls);
     } catch (e) {
       restoreDocsOnError(e);
     } finally {

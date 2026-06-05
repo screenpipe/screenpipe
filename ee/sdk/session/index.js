@@ -9,6 +9,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const { createTelemetry } = require("./telemetry");
+
 function loadNative() {
   return require("..");
 }
@@ -148,6 +150,18 @@ function createScreenpipeSession(options = {}) {
     ...(options.eventIntervals || {}),
   };
 
+  // SDK telemetry — crash reports -> Sentry, usage -> PostHog, tagged with
+  // `options.userId` so a specific end user shows up in screenpipe's
+  // dashboards. ON by default; `telemetry: false` or the SCREENPIPE_SDK_TELEMETRY
+  // / DO_NOT_TRACK env vars turn it off. See ./telemetry.js.
+  const telemetry = createTelemetry({
+    userId: options.userId,
+    telemetry: options.telemetry,
+    appName: options.appName,
+    release: options.release,
+    transport: options.telemetryTransport,
+  });
+
   let recorder = null;
   let previewRecorder = null;
   let output = null;
@@ -180,6 +194,11 @@ function createScreenpipeSession(options = {}) {
     if (typeof options.onEvent === "function") {
       options.onEvent(event, payload);
     }
+    // Telemetry is a passive tap on the event stream — wrapped so a
+    // telemetry bug can never disrupt event delivery to the host.
+    try {
+      telemetry.track(event, payload);
+    } catch {}
   }
 
   function emitError(component, error, { fatal = false } = {}) {
@@ -492,6 +511,10 @@ function createScreenpipeSession(options = {}) {
       previewRecorder = null;
       lastPermissions = null;
       permissionsBootstrapped = false;
+      // Give in-flight telemetry a chance to land before the host exits.
+      try {
+        await telemetry.flush();
+      } catch {}
     }
   }
 
@@ -609,6 +632,11 @@ function createScreenpipeSession(options = {}) {
       return await runSerialized(dispose);
     },
   };
+
+  // Adoption/identify ping — one per session. No-op when telemetry is off.
+  try {
+    telemetry.initialized();
+  } catch {}
 
   return session;
 }

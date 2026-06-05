@@ -175,7 +175,7 @@ impl Worker {
                 // doesn't hold us through tokio teardown.
                 let result = match shutdown.as_ref() {
                     Some(n) => tokio::select! {
-                        r = self.process_table(*table) => Some(r),
+                        _r = self.process_table(*table) => Some(_r),
                         _ = n.notified() => None,
                     },
                     None => Some(self.process_table(*table).await),

@@ -47,6 +47,7 @@ pub mod sleep_monitor;
 pub mod snapshot_compaction;
 mod sync_api;
 pub mod sync_provider;
+pub mod telemetry_context;
 pub mod ui_recorder;
 // Exposed publicly so the commercial `screenpipe-sdk` (screenpipe/sdk repo)
 // can wrap `start_ffmpeg_process` / `write_frame_to_ffmpeg` /

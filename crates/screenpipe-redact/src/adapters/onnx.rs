@@ -100,10 +100,6 @@ impl OnnxConfig {
         self.model_dir.join("tokenizer.json")
     }
 
-    fn config_path(&self) -> PathBuf {
-        self.model_dir.join("config.json")
-    }
-
     /// HuggingFace repo where the canonical v45 phase 3 ONNX artifacts
     /// live. Pinned to `main` so a model bump goes through a deliberate
     /// code change (URL + expected SHA-256 + [`ONNX_REDACTOR_VERSION`]

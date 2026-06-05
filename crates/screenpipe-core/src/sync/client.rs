@@ -510,7 +510,6 @@ impl SyncClient {
 
         if !response.status().is_success() {
             let error_body: ApiError = response.json().await.unwrap_or(ApiError {
-                success: false,
                 error: Some("unknown error".to_string()),
                 code: None,
             });
@@ -544,7 +543,6 @@ impl SyncClient {
 
         if !response.status().is_success() {
             let error_body: ApiError = response.json().await.unwrap_or(ApiError {
-                success: false,
                 error: Some("unknown error".to_string()),
                 code: None,
             });
@@ -658,7 +656,6 @@ impl SyncClient {
         if status == StatusCode::FORBIDDEN {
             // Could be quota or subscription issue
             let error_body: ApiError = response.json().await.unwrap_or(ApiError {
-                success: false,
                 error: Some("forbidden".to_string()),
                 code: None,
             });
@@ -1009,8 +1006,6 @@ pub struct SyncDevice {
 
 #[derive(Debug, Deserialize)]
 struct ApiError {
-    #[allow(dead_code)]
-    success: bool,
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]

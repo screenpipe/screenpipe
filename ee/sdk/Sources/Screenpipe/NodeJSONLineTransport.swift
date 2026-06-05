@@ -216,6 +216,18 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
     if let outputDirectory = configuration.outputDirectory {
       environment["SCREENPIPE_OUTPUT_DIR"] = outputDirectory.path
     }
+    // Telemetry identification — the bridge reads these and passes them to
+    // createScreenpipeSession so this user shows up in screenpipe's Sentry
+    // and PostHog. Opt-out flips SCREENPIPE_SDK_TELEMETRY off.
+    if let userId = configuration.userId, !userId.isEmpty {
+      environment["SCREENPIPE_SDK_USER_ID"] = userId
+    }
+    if let appName = configuration.appName, !appName.isEmpty {
+      environment["SCREENPIPE_SDK_APP_NAME"] = appName
+    }
+    if !configuration.telemetryEnabled {
+      environment["SCREENPIPE_SDK_TELEMETRY"] = "0"
+    }
     return environment
   }
 

@@ -9206,7 +9206,10 @@ LIMIT ? OFFSET ?
         // is ~80 chunks), then matched in memory — avoids a per-segment query. We
         // pull file_path because chunk audio is single-device and the device is
         // encoded in the filename ("<name> (input|output)_<ts>.mp4"), which is the
-        // only place a chunk records its device.
+        // only place a chunk records its device. Never fall back to a different
+        // device: mic and system audio are separate tracks, and mirroring a remote
+        // speaker segment onto a mic chunk makes later playback/search look like the
+        // wrong source was recorded.
         let chunk_rows = sqlx::query(
             "SELECT id, timestamp, file_path FROM audio_chunks \
              WHERE timestamp IS NOT NULL \
@@ -9241,9 +9244,9 @@ LIMIT ? OFFSET ?
             // Match the SAME physical device's chunk so an input (mic) segment can't
             // inherit a remote speaker from a System Audio (output) chunk, and vice
             // versa. The device string is sanitized the same way the recorder names
-            // files (only '/' and '\\' replaced). Fall back to nearest-any within the
-            // window if no same-device chunk exists (legacy/odd naming) — never worse
-            // than before.
+            // files (only '/' and '\\' replaced). If no same-device chunk exists,
+            // skip the mirror and leave the chunk pending for backfill rather than
+            // corrupting source attribution.
             let device_key = format!(
                 "{} ({})",
                 s.device_name,
@@ -9254,13 +9257,7 @@ LIMIT ? OFFSET ?
             let pick = chunks
                 .iter()
                 .filter(|c| (c.1 - seg_ms).abs() <= window_ms && c.2.contains(device_key.as_str()))
-                .min_by_key(|c| (c.1 - seg_ms).abs())
-                .or_else(|| {
-                    chunks
-                        .iter()
-                        .filter(|c| (c.1 - seg_ms).abs() <= window_ms)
-                        .min_by_key(|c| (c.1 - seg_ms).abs())
-                });
+                .min_by_key(|c| (c.1 - seg_ms).abs());
             let Some(chunk) = pick else {
                 continue;
             };

@@ -14,7 +14,13 @@ const { createScreenpipeSession, SCREENPIPE_EVENTS } = requireFromSdk("./session
 
 const outputDir = process.env.SCREENPIPE_OUTPUT_DIR || undefined;
 const permissionTimeoutMs = Number(process.env.SCREENPIPE_PERMISSION_TIMEOUT_MS || 0) || undefined;
-const session = createScreenpipeSession({ outputDir, permissionTimeoutMs });
+// Telemetry identification — Swift/Tauri-native hosts pass these via env
+// when spawning the bridge. `userId` tags this user in screenpipe's
+// Sentry/PostHog; opt-out rides on SCREENPIPE_SDK_TELEMETRY (read inside
+// the session's telemetry layer).
+const userId = process.env.SCREENPIPE_SDK_USER_ID || undefined;
+const appName = process.env.SCREENPIPE_SDK_APP_NAME || undefined;
+const session = createScreenpipeSession({ outputDir, permissionTimeoutMs, userId, appName });
 
 function write(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);

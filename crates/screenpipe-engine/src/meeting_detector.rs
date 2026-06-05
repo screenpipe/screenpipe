@@ -995,6 +995,30 @@ impl PrecomputedSignal {
     }
 }
 
+/// Compare AX role strings across backends.
+///
+/// macOS (cidre) gives `AXButton`; Windows UIA gives `"button"` (lowercase,
+/// localized, may contain spaces e.g. `"menu item"`). Normalise by stripping
+/// any `AX` prefix and whitespace, then case-insensitive compare.
+#[cfg(any(target_os = "windows", test))]
+fn role_matches(actual: &str, expected: &str) -> bool {
+    fn normalise(s: &str) -> String {
+        let trimmed = s
+            .strip_prefix("AX")
+            .or_else(|| s.strip_prefix("ax"))
+            .unwrap_or(s);
+        trimmed
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    if actual.eq_ignore_ascii_case(expected) {
+        return true;
+    }
+    normalise(actual) == normalise(expected)
+}
+
 /// Check if a [`CallSignal`] matches the given element properties.
 ///
 /// `title` and `desc` are expected to be raw (not lowercased) for the original
@@ -1025,7 +1049,9 @@ fn check_signal_match(
             role: r,
             name_contains,
         } => {
-            if role != *r {
+            // Profile roles are macOS-style (`AXButton`); Windows UIA roles are
+            // lowercase/localized. Use role_matches, not strict `!=`.
+            if !role_matches(role, r) {
                 return false;
             }
             let name_lower = name_contains.to_lowercase();
@@ -1034,8 +1060,8 @@ fn check_signal_match(
             in_title || in_desc
         }
         CallSignal::MenuBarItem { title_contains } => {
-            // Match AXMenuBarItem by title (Zoom's "Meeting" menu bar item)
-            if role != "AXMenuBarItem" {
+            // Match AXMenuBarItem by title (Zoom's "Meeting" menu bar item).
+            if !role_matches(role, "AXMenuBarItem") {
                 return false;
             }
             let needle = title_contains.to_lowercase();
@@ -1043,7 +1069,7 @@ fn check_signal_match(
         }
         CallSignal::MenuItemId(expected_id) => {
             // Match AXMenuItem by automation ID (Zoom's "onMuteAudio:" etc.)
-            if role != "AXMenuItem" {
+            if !role_matches(role, "AXMenuItem") {
                 return false;
             }
             identifier == Some(*expected_id)
@@ -1277,8 +1303,12 @@ fn windows_enumerate_window_titles() -> Vec<(i32, String)> {
         EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
     };
 
-    let results: Arc<Mutex<Vec<(i32, String)>>> = Arc::new(Mutex::new(Vec::new()));
-    let results_clone = results.clone();
+    // Stack-pinned Mutex passed as LPARAM. Do NOT use Arc here: the previous
+    // implementation kept a second strong ref alive across the call, which
+    // made `Arc::try_unwrap` always return Err, and the trailing
+    // `unwrap_or_default()` silently replaced the collected results with an
+    // empty Vec — killing every browser meeting detection on Windows.
+    let results: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
 
     unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let results = &*(lparam.0 as *const Mutex<Vec<(i32, String)>>);
@@ -1301,14 +1331,11 @@ fn windows_enumerate_window_titles() -> Vec<(i32, String)> {
     unsafe {
         let _ = EnumWindows(
             Some(enum_callback),
-            LPARAM(&*results_clone as *const Mutex<Vec<(i32, String)>> as isize),
+            LPARAM(&results as *const Mutex<Vec<(i32, String)>> as isize),
         );
     }
 
-    Arc::try_unwrap(results)
-        .unwrap_or_default()
-        .into_inner()
-        .unwrap_or_default()
+    results.into_inner().unwrap_or_default()
 }
 
 /// Enumerate visible windows belonging to a specific PID.
@@ -1477,60 +1504,59 @@ fn windows_scan_process_uia(
                 };
 
                 if let Ok(results) = element.FindAll(TreeScope_Descendants, &search_condition) {
-                    if let Ok(len) = results.Length() {
-                        for i in 0..len {
-                            if found.len() >= min_required {
-                                break;
-                            }
-                            if let Ok(el) = results.GetElement(i) {
-                                let name = el.CurrentName().ok().map(|s| s.to_string());
-                                let auto_id = el.CurrentAutomationId().ok().map(|s| s.to_string());
-                                let role = el
-                                    .CurrentLocalizedControlType()
-                                    .ok()
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_default();
+                    let len = results.Length().unwrap_or(0);
+                    // Observability: distinguishes "UIA returned nothing"
+                    // from "UIA returned candidates but none re-verified".
+                    if len > 0 {
+                        info!(
+                            "meeting scanner (windows): UIA FindAll pid={} hwnd={:?} returned {} candidate(s) (signals={})",
+                            pid,
+                            hwnd.0,
+                            len,
+                            signals.len()
+                        );
+                    } else {
+                        debug!(
+                            "meeting scanner (windows): UIA FindAll pid={} hwnd={:?} returned 0 candidates (signals={}) -- if a browser meeting is live the Chromium AX tree may not be materialised",
+                            pid,
+                            hwnd.0,
+                            signals.len()
+                        );
+                    }
+                    for i in 0..len {
+                        if found.len() >= min_required {
+                            break;
+                        }
+                        if let Ok(el) = results.GetElement(i) {
+                            let name = el.CurrentName().ok().map(|s| s.to_string());
+                            let auto_id = el.CurrentAutomationId().ok().map(|s| s.to_string());
+                            let role = el
+                                .CurrentLocalizedControlType()
+                                .ok()
+                                .map(|s| s.to_string())
+                                .unwrap_or_default();
+                            debug!(
+                                "meeting scanner: UIA candidate pid={} role={:?} name={:?} auto_id={:?}",
+                                pid, role, name, auto_id
+                            );
 
-                                // Verify this element actually matches one of our signals
-                                for signal in signals {
-                                    if check_signal_match(
-                                        signal,
-                                        &role,
-                                        name.as_deref(),
-                                        None,
-                                        auto_id.as_deref(),
-                                    ) {
-                                        let label = format_signal_match(
-                                            signal,
-                                            &role,
-                                            name.as_deref(),
-                                            None,
-                                        );
-                                        if !found.contains(&label) {
-                                            found.push(label);
-                                        }
-                                        break;
+                            // Single pass — check_signal_match (via role_matches)
+                            // now accepts both `AXButton` and `button`, so the
+                            // historical AX-prefix retry is no longer needed.
+                            for signal in signals {
+                                if check_signal_match(
+                                    signal,
+                                    &role,
+                                    name.as_deref(),
+                                    None,
+                                    auto_id.as_deref(),
+                                ) {
+                                    let label =
+                                        format_signal_match(signal, &role, name.as_deref(), None);
+                                    if !found.contains(&label) {
+                                        found.push(label);
                                     }
-                                    // Also check with AX prefix for cross-platform compat
-                                    let ax_role = format!("AX{}", role);
-                                    if check_signal_match(
-                                        signal,
-                                        &ax_role,
-                                        name.as_deref(),
-                                        None,
-                                        auto_id.as_deref(),
-                                    ) {
-                                        let label = format_signal_match(
-                                            signal,
-                                            &role,
-                                            name.as_deref(),
-                                            None,
-                                        );
-                                        if !found.contains(&label) {
-                                            found.push(label);
-                                        }
-                                        break;
-                                    }
+                                    break;
                                 }
                             }
                         }
@@ -1625,6 +1651,31 @@ const ENDING_TIMEOUT_BROWSER: Duration = Duration::from_secs(300); // 5 minutes
 /// ticking during transient visibility, so genuine end-of-call still fires
 /// after `ENDING_TIMEOUT` of true silence.
 const REENTRY_HYSTERESIS_SCANS: u8 = 2;
+
+/// Match a browser window title against a `browser_title_patterns` entry.
+///
+/// Accepts either exact equality (Arc titles its window just `"Meet"`) or a
+/// prefix at position 0 followed by a non-alphanumeric separator
+/// (`"Meet - abc - Google Chrome"`, `"Meet — Mozilla Firefox"`). The anchor +
+/// separator rule is what keeps `"Meeting reminders"` and
+/// `"Join with Google Meet - Calendar"` from triggering detection.
+///
+/// `title_lower` must already be lowercased — hot path, called per window.
+fn browser_title_matches_pattern(title_lower: &str, pattern: &str) -> bool {
+    let p_lower = pattern.to_lowercase();
+    if p_lower.is_empty() {
+        return false;
+    }
+    if title_lower == p_lower {
+        return true;
+    }
+    if title_lower.len() <= p_lower.len() || !title_lower.starts_with(&p_lower[..]) {
+        return false;
+    }
+    // ASCII alnum check is sufficient: multi-byte separators (U+2014 em dash,
+    // U+200B zero-width space) have non-ASCII leading bytes.
+    !(title_lower.as_bytes()[p_lower.len()] as char).is_ascii_alphanumeric()
+}
 
 /// Check if an app name is a known browser.
 fn is_browser_app(app_name: &str) -> bool {
@@ -2154,6 +2205,64 @@ pub fn find_running_meeting_apps(
         "vivaldi.exe",
     ];
 
+    // Per-scan diagnostic dump. Three slices so one log line tells us which
+    // stage failed:
+    //   (b) windows whose title looks meet-shaped, with their resolved exe
+    //       — if exe is missing or not in the allow-list, that's the bug.
+    //   (c) windows whose owning PID maps to a known browser exe.
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let total = window_titles.len();
+        let proc_name_of = |pid: i32| -> Option<String> {
+            process_map
+                .iter()
+                .find(|p| p.pid == pid as u32)
+                .map(|p| p.name.clone())
+        };
+
+        // (b) meet-shaped titles, unfiltered by browser — surfaces broken
+        // exe lookups.
+        let meet_shaped: Vec<_> = window_titles
+            .iter()
+            .filter(|(_, t)| {
+                let lt = t.to_lowercase();
+                lt.starts_with("meet") || lt.contains(" - meet ") || lt.contains("meet.google.com")
+            })
+            .map(|(pid, t)| {
+                let exe = proc_name_of(*pid).unwrap_or_else(|| "<pid not in snapshot>".into());
+                format!("pid={} exe={:?} title={:?}", pid, exe, t)
+            })
+            .collect();
+        if !meet_shaped.is_empty() {
+            info!(
+                "meeting detector (windows): {} meet-shaped window(s) currently visible: {:?}",
+                meet_shaped.len(),
+                meet_shaped
+            );
+        }
+
+        // (c) the browser-filtered set the matching loop actually consumes.
+        let browser_windows: Vec<_> = window_titles
+            .iter()
+            .filter(|(pid, _)| {
+                proc_name_of(*pid)
+                    .map(|n| n.to_lowercase())
+                    .is_some_and(|n| browser_process_names.iter().any(|b| n == *b))
+            })
+            .collect();
+        debug!(
+            "meeting detector (windows): EnumWindows saw {} top-level visible window(s); {} classified as browser windows: {:?}",
+            total,
+            browser_windows.len(),
+            browser_windows
+                .iter()
+                .map(|(pid, t)| {
+                    let exe = proc_name_of(*pid).unwrap_or_else(|| "<unknown>".into());
+                    format!("pid={} exe={:?} title={:?}", pid, exe, t)
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
     for (idx, profile) in profiles.iter().enumerate() {
         if profile.app_identifiers.browser_url_patterns.is_empty()
             && profile.app_identifiers.browser_title_patterns.is_empty()
@@ -2184,12 +2293,26 @@ pub fn find_running_meeting_apps(
                 .browser_url_patterns
                 .iter()
                 .any(|p| title_lower.contains(&p.to_lowercase()));
+            // See `browser_title_matches_pattern` for the matching rules.
             let title_match = profile
                 .app_identifiers
                 .browser_title_patterns
                 .iter()
-                .any(|p| title_lower == p.to_lowercase());
+                .any(|p| browser_title_matches_pattern(&title_lower, p));
             if url_match || title_match {
+                // Confirms screenpipe saw the meeting window; pairs with the
+                // scanner's UIA scan line via pid + profile_idx. DEBUG, not
+                // INFO: titles can contain sensitive context (URLs, attendee
+                // names) and users routinely share logs for support.
+                debug!(
+                    "meeting detector (windows): profile_idx={} MATCHED browser window pid={} proc={:?} title={:?} (url_match={} title_match={})",
+                    idx,
+                    pid,
+                    proc_name.as_deref().unwrap_or("?"),
+                    title,
+                    url_match,
+                    title_match
+                );
                 results.push(RunningMeetingApp {
                     pid: *pid,
                     app_name: proc_name.unwrap_or_default(),
@@ -2198,8 +2321,43 @@ pub fn find_running_meeting_apps(
                 });
                 seen_pids.insert(*pid);
                 break;
+            } else if !profile.app_identifiers.browser_title_patterns.is_empty()
+                || !profile.app_identifiers.browser_url_patterns.is_empty()
+            {
+                // Per (profile × window) miss. Cardinality is high — keep at
+                // TRACE. Useful for diagnosing localized title formats.
+                tracing::trace!(
+                    "meeting detector (windows): profile_idx={} no match pid={} proc={:?} title={:?} (url_patterns={:?} title_patterns={:?})",
+                    idx,
+                    pid,
+                    proc_name.as_deref().unwrap_or("?"),
+                    title,
+                    profile.app_identifiers.browser_url_patterns,
+                    profile.app_identifiers.browser_title_patterns,
+                );
             }
         }
+    }
+
+    if results.is_empty() {
+        debug!(
+            "meeting detector (windows): find_running_meeting_apps returned 0 matches across {} profile(s)",
+            profiles.len()
+        );
+    } else {
+        // DEBUG, not INFO: `browser_url` carries the window title which can
+        // include URLs / attendee names. Users share logs for support.
+        debug!(
+            "meeting detector (windows): find_running_meeting_apps returning {} match(es): {:?}",
+            results.len(),
+            results
+                .iter()
+                .map(|r| format!(
+                    "pid={} app={} profile_idx={} url={:?}",
+                    r.pid, r.app_name, r.profile_index, r.browser_url
+                ))
+                .collect::<Vec<_>>()
+        );
     }
 
     results
@@ -2273,14 +2431,13 @@ async fn db_find_browser_meetings(
                         let p_lower = p.to_lowercase();
                         window_lower.contains(&p_lower) || url_lower.contains(&p_lower)
                     });
-            // Check title patterns as exact match against window_name
-            // (e.g. window title "Meet" matches pattern "Meet")
+            // See `browser_title_matches_pattern` for the matching rules.
             let title_match = has_title_patterns
                 && profile
                     .app_identifiers
                     .browser_title_patterns
                     .iter()
-                    .any(|p| window_lower == p.to_lowercase());
+                    .any(|p| browser_title_matches_pattern(&window_lower, p));
             if url_match || title_match {
                 #[cfg(target_os = "macos")]
                 let pid = cidre::objc::ar_pool(|| -> i32 {
@@ -5142,6 +5299,286 @@ mod tests {
                 title
             );
         }
+    }
+
+    // ── browser_title_matches_pattern + Google Meet on Windows ─────────────────
+    //
+    // These guard the historical bug where Google Meet auto-recording silently
+    // failed in Chrome/Edge/Firefox/Brave on Windows. The original matching was
+    // strict equality (`title_lower == "meet"`), which only worked for Arc.
+    // See `browser_title_matches_pattern` doc comment for the rules.
+
+    #[test]
+    fn browser_title_pattern_matches_arc_bare_title() {
+        // Arc shows just "Meet" as the window title.
+        assert!(browser_title_matches_pattern("meet", "Meet"));
+    }
+
+    #[test]
+    fn browser_title_pattern_matches_chromium_browser_suffix() {
+        // Chrome, Edge, Brave all use " - <Browser>" suffix on Windows.
+        // The page title "Meet" sits at the start with a hyphen after it.
+        //
+        // The Edge case with "and N more page" is a real captured fixture from
+        // an AX inspector dump on Windows: Edge appends " and N more page(s)"
+        // to the active tab title whenever the window has additional tabs open
+        // in the same tab group. This was the exact title that failed detection
+        // in the field while the meeting was live.
+        for title in [
+            "meet - abc-defg-hij - google chrome",
+            "meet - microsoft\u{200b} edge",
+            "meet - abc-defg-hij - brave",
+            "meet - opera",
+            "meet - vivaldi",
+            // Real Edge title captured from AX inspector during a live meeting:
+            // "Meet - test-meet and 1 more page - Personal - Microsoft Edge".
+            "meet - test-meet and 1 more page - personal - microsoft edge",
+            // Same shape with multiple extra tabs (plural "pages").
+            "meet - standup and 3 more pages - work - microsoft edge",
+        ] {
+            assert!(
+                browser_title_matches_pattern(title, "Meet"),
+                "title {:?} should match pattern 'Meet'",
+                title
+            );
+        }
+    }
+
+    #[test]
+    fn browser_title_pattern_matches_firefox_em_dash_suffix() {
+        // Firefox uses an em dash (U+2014) instead of a hyphen.
+        assert!(browser_title_matches_pattern(
+            "meet \u{2014} mozilla firefox",
+            "Meet"
+        ));
+    }
+
+    #[test]
+    fn browser_title_pattern_rejects_non_prefix_and_word_continuations() {
+        // The matcher is anchored at the start AND requires a non-alphanumeric
+        // separator after the pattern. These are real-world false positives
+        // the strict-equality version implicitly avoided and that a naive
+        // contains() would re-introduce.
+        for title in [
+            // Pattern at position 0 but continues into a larger word —
+            // separator check fails.
+            "meeting reminders - gmail - google chrome",
+            "meetup.com - upcoming events - firefox",
+            // Pattern appears mid-string, never at the start — the actual
+            // bug-bait case (Google Calendar event popup mentioning Meet).
+            "join with google meet - calendar - google chrome",
+            "submeeting notes - notion",
+            "unmeet\u{2019}d topics - obsidian",
+            "inbox - meeting reminders - gmail",
+        ] {
+            assert!(
+                !browser_title_matches_pattern(title, "Meet"),
+                "title {:?} should NOT match pattern 'Meet'",
+                title
+            );
+        }
+    }
+
+    #[test]
+    fn browser_title_pattern_empty_pattern_never_matches() {
+        assert!(!browser_title_matches_pattern("meet", ""));
+        assert!(!browser_title_matches_pattern("", ""));
+    }
+
+    #[test]
+    fn browser_title_pattern_case_insensitive() {
+        assert!(browser_title_matches_pattern(
+            "meet - google chrome",
+            "MEET"
+        ));
+        assert!(browser_title_matches_pattern(
+            "meet - google chrome",
+            "mEeT"
+        ));
+    }
+
+    #[test]
+    fn test_google_meet_browser_titles_match_on_all_browsers() {
+        // End-to-end regression test for the Windows bug. Exercises the same
+        // matching predicate that `find_running_meeting_apps` and
+        // `db_find_browser_meetings` now use against the Google Meet profile.
+        let profiles = load_detection_profiles();
+        let meet = profiles
+            .iter()
+            .find(|p| {
+                p.app_identifiers
+                    .browser_url_patterns
+                    .contains(&"meet.google.com")
+            })
+            .expect("Google Meet profile not found");
+
+        // Real window-title strings observed on Windows during a live Meet call.
+        // None of these contain "meet.google.com" (Chrome/Edge/Firefox/Brave do
+        // not put the URL in the window title), so detection must rely on
+        // `browser_title_patterns` ("Meet").
+        let live_meet_titles = [
+            "Meet - abc-defg-hij - Google Chrome",
+            "Meet - abc-defg-hij - Microsoft\u{200b} Edge",
+            "Meet \u{2014} Mozilla Firefox",
+            "Meet - abc-defg-hij - Brave",
+            "Meet", // Arc
+        ];
+
+        for title in &live_meet_titles {
+            let title_lower = title.to_lowercase();
+            let url_match = meet
+                .app_identifiers
+                .browser_url_patterns
+                .iter()
+                .any(|p| title_lower.contains(&p.to_lowercase()));
+            let title_match = meet
+                .app_identifiers
+                .browser_title_patterns
+                .iter()
+                .any(|p| browser_title_matches_pattern(&title_lower, p));
+            assert!(
+                url_match || title_match,
+                "Live Google Meet title {:?} should match the Google Meet profile \
+                 via url_patterns OR title_patterns (got url_match={}, title_match={})",
+                title,
+                url_match,
+                title_match
+            );
+        }
+    }
+
+    #[test]
+    fn test_non_meet_titles_do_not_match_google_meet_profile() {
+        // Negative cases: pages that look superficially like Meet must NOT
+        // trigger detection. Without word-bounded matching these regressed
+        // (e.g. "Meeting reminders" would match a bare "Meet" pattern).
+        let profiles = load_detection_profiles();
+        let meet = profiles
+            .iter()
+            .find(|p| {
+                p.app_identifiers
+                    .browser_url_patterns
+                    .contains(&"meet.google.com")
+            })
+            .expect("Google Meet profile not found");
+
+        let non_meet_titles = [
+            "Meeting reminders - Gmail - Google Chrome",
+            "Meetup.com - Upcoming events - Firefox",
+            "Join with Google Meet - Calendar - Google Chrome",
+            "Google Calendar - Week of March 16, 2026",
+            "Inbox (3) - user@example.com - Gmail",
+        ];
+
+        for title in &non_meet_titles {
+            let title_lower = title.to_lowercase();
+            let url_match = meet
+                .app_identifiers
+                .browser_url_patterns
+                .iter()
+                .any(|p| title_lower.contains(&p.to_lowercase()));
+            let title_match = meet
+                .app_identifiers
+                .browser_title_patterns
+                .iter()
+                .any(|p| browser_title_matches_pattern(&title_lower, p));
+            assert!(
+                !(url_match || title_match),
+                "Non-Meet title {:?} should NOT match Google Meet profile \
+                 (got url_match={}, title_match={})",
+                title,
+                url_match,
+                title_match
+            );
+        }
+    }
+
+    // ── role_matches cross-platform tolerance ──────────────────────────────────
+    //
+    // Profiles declare roles as macOS PascalCase (`AXButton`, `AXMenuItem`,
+    // `AXMenuBarItem`). On Windows, `IUIAutomationElement::CurrentLocalizedControlType`
+    // returns a lowercase localised string (`"button"`, `"menu item"`,
+    // `"menu bar item"`). The old `role != *r` strict equality silently rejected
+    // every Windows match — only `NameContains` signals were actually firing,
+    // which is why Google Meet still missed on Edge even after the title-matcher
+    // fix. These cases pin the matrix.
+
+    #[test]
+    fn test_role_matches_macos_pascalcase_identity() {
+        // macOS path: cidre returns exact `AXButton` — strict equality must work.
+        assert!(role_matches("AXButton", "AXButton"));
+        assert!(role_matches("AXMenuItem", "AXMenuItem"));
+        assert!(role_matches("AXMenuBarItem", "AXMenuBarItem"));
+    }
+
+    #[test]
+    fn test_role_matches_windows_localized_lowercase() {
+        // Windows path: CurrentLocalizedControlType returns lowercase, no AX prefix.
+        // This was the silently-broken case for every Chromium browser meeting.
+        assert!(role_matches("button", "AXButton"));
+        assert!(role_matches("menu item", "AXMenuItem"));
+        assert!(role_matches("menu bar item", "AXMenuBarItem"));
+    }
+
+    #[test]
+    fn test_role_matches_windows_ax_prefix_mash() {
+        // The pre-fix caller also tried `format!("AX{}", role)` to bridge to
+        // macOS naming — that produced "AXbutton" (lowercase tail). role_matches
+        // must accept that pseudo-prefix form too, otherwise existing on-the-wire
+        // call sites would regress.
+        assert!(role_matches("AXbutton", "AXButton"));
+        assert!(role_matches("AXmenu item", "AXMenuItem"));
+    }
+
+    #[test]
+    fn test_role_matches_rejects_unrelated_roles() {
+        // Sanity: a Text/Image/Pane element must not be accepted as a Button just
+        // because both pass through the normaliser. The Google Meet profile
+        // requires `AXButton`-shaped signals — false positives here would let
+        // any element on the page with `name == "leave call"` trip detection.
+        assert!(!role_matches("text", "AXButton"));
+        assert!(!role_matches("AXStaticText", "AXButton"));
+        assert!(!role_matches("image", "AXMenuBarItem"));
+        assert!(!role_matches("pane", "AXButton"));
+    }
+
+    #[test]
+    fn test_check_signal_match_role_with_name_matches_windows_button() {
+        // End-to-end: the Google Meet "Leave call" button as observed on Edge.
+        // From the AX inspector dump: ControlType=Button,
+        // LocalizedControlType="button", Name="Leave call". The profile signal
+        // is RoleWithName { role: "AXButton", name_contains: "leave call" }.
+        // This is the exact predicate that silently returned false before the
+        // fix and made Windows detection rely entirely on the NameContains
+        // fallback.
+        let signal = CallSignal::RoleWithName {
+            role: "AXButton",
+            name_contains: "leave call",
+        };
+        assert!(check_signal_match(
+            &signal,
+            "button",
+            Some("Leave call"),
+            None,
+            None,
+        ));
+        // AX-prefixed lowercase form (caller used to try both) must also match.
+        assert!(check_signal_match(
+            &signal,
+            "AXbutton",
+            Some("Leave call"),
+            None,
+            None,
+        ));
+        // Wrong role must still be rejected — a Text element named "Leave call"
+        // (e.g. a tooltip label) must NOT count as the button.
+        assert!(!check_signal_match(
+            &signal,
+            "text",
+            Some("Leave call"),
+            None,
+            None,
+        ));
     }
 }
 

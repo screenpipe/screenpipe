@@ -1128,12 +1128,23 @@ async fn main() {
             // Attach non-sensitive settings to all future Sentry events
             if !telemetry_disabled {
                 sentry::configure_scope(|scope| {
-                    // Set user.id to the persistent analytics UUID
-                    // This links Sentry errors to PostHog sessions and feedback reports
+                    // Set user.id to the persistent analytics UUID. Support
+                    // context env vars are attached as tags so managed
+                    // deployments can be filtered without replacing the app id.
                     scope.set_user(Some(sentry::protocol::User {
                         id: Some(store.recording.analytics_id.clone()),
                         ..Default::default()
                     }));
+                    let telemetry_context = screenpipe_engine::telemetry_context::TelemetryContext::from_env();
+                    for (key, value) in telemetry_context.pairs() {
+                        scope.set_tag(key, value);
+                    }
+                    if !telemetry_context.is_empty() {
+                        scope.set_context(
+                            "screenpipe_support",
+                            sentry::protocol::Context::Other(telemetry_context.to_json_map()),
+                        );
+                    }
                     scope.set_context("app_settings", sentry::protocol::Context::Other({
                         let mut map = std::collections::BTreeMap::new();
                         map.insert("audio_chunk_duration".into(), serde_json::json!(store.recording.audio_chunk_duration));
