@@ -114,7 +114,6 @@ futures = "0.3.30"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
-chrono-tz = "0.10"
 tauri-plugin-opener = "2.5.3"
 uuid = { version = "1.0", features = ["v4"] }
 urlencoding = "2"
@@ -148,7 +147,6 @@ screenpipe-events = { path = "../../../crates/screenpipe-events" }
 screenpipe-redact = { path = "../../../crates/screenpipe-redact", features = ["onnx-coreml", "opf-text"] }
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 image = "0.25.5"
-icalendar = "0.17"
 
 # Used only by the path-included `ee/desktop-rust/enterprise_sync.rs`. Gated
 # behind enterprise-build via the `dep:thiserror` syntax in [features] so
