@@ -42,7 +42,7 @@ import rehypeRaw from "rehype-raw";
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { save as saveDialog, open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { writeTextFile, readFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile, readFile, mkdir } from "@tauri-apps/plugin-fs";
 import {
   extractDocument,
   docsToPromptText,
@@ -174,6 +174,14 @@ const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 const CONNECTION_SUGGESTION_LIMIT = 3;
 const VISIBLE_SUGGESTION_LIMIT = 2;
+const LARGE_CONTEXT_CHAR_THRESHOLD = 160_000;
+const LARGE_CONTEXT_CHUNK_CHARS = 24_000;
+const LARGE_CONTEXT_PREVIEW_HEAD_CHARS = 3_000;
+const LARGE_CONTEXT_PREVIEW_TAIL_CHARS = 1_500;
+const LARGE_CONTEXT_PROMPT_TAG = "screenpipe-large-context";
+const PASTED_TEXT_ATTACHMENT_CHAR_THRESHOLD = 8_000;
+const PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS = 20_000;
+const PASTED_TEXT_DOC_BASE_NAME = "Pasted text";
 
 type ConnectedIntegration = {
   id: string;
@@ -675,6 +683,161 @@ type PendingSteerBatchItem = {
 };
 
 const TURN_INTENT_LEDGER_TTL_MS = 10 * 60 * 1000;
+
+function isPastedTextDoc(doc: Pick<ExtractedDoc, "name" | "ext">) {
+  return doc.ext === "txt" && new RegExp(`^${PASTED_TEXT_DOC_BASE_NAME}(?: \\d+)?$`).test(doc.name);
+}
+
+function pastedTextDocName(existingDocs: ExtractedDoc[]) {
+  const existingCount = existingDocs.filter(isPastedTextDoc).length;
+  return existingCount === 0
+    ? PASTED_TEXT_DOC_BASE_NAME
+    : `${PASTED_TEXT_DOC_BASE_NAME} ${existingCount + 1}`;
+}
+
+function makePastedTextDoc(text: string, name: string): ExtractedDoc {
+  return {
+    name,
+    ext: "txt",
+    text,
+    truncated: false,
+    charCount: text.length,
+  };
+}
+
+function estimateLargeContextTokens(text: string) {
+  // Claude tokenizes repeated short tokens like "x " much denser than the
+  // usual chars/4 rule. Use a conservative estimate for preflight only.
+  return Math.ceil(text.length / 2);
+}
+
+function sanitizeLargeContextFilePart(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "pasted-context";
+}
+
+function extractLargeContextTask(text: string) {
+  const trimmed = text.trim();
+  const paragraphs = trimmed
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const lastParagraph = paragraphs[paragraphs.length - 1] ?? "";
+  const lastParagraphTask = lastParagraph.replace(/<\/attached file>\s*$/i, "").trim();
+  if (
+    lastParagraphTask.length > 0 &&
+    lastParagraphTask.length <= 2_000 &&
+    trimmed.length - lastParagraphTask.length > LARGE_CONTEXT_CHAR_THRESHOLD
+  ) {
+    return lastParagraphTask;
+  }
+
+  const tail = trimmed.slice(-1_200).replace(/<\/attached file>\s*$/i, "").trim();
+  if (
+    tail &&
+    /\b(summarize|summarise|analyze|analyse|explain|extract|find|review|debug|fix|compare|list|what|why|how|tell|write|create|convert|translate)\b/i.test(tail)
+  ) {
+    return tail;
+  }
+
+  return "Use the attached large context to answer the user's request.";
+}
+
+function buildLargeContextPreview(text: string) {
+  if (text.length <= LARGE_CONTEXT_PREVIEW_HEAD_CHARS + LARGE_CONTEXT_PREVIEW_TAIL_CHARS) {
+    return text;
+  }
+
+  const omittedChars = text.length - LARGE_CONTEXT_PREVIEW_HEAD_CHARS - LARGE_CONTEXT_PREVIEW_TAIL_CHARS;
+  return [
+    text.slice(0, LARGE_CONTEXT_PREVIEW_HEAD_CHARS),
+    "",
+    `[... ${omittedChars} characters omitted; full input is stored on disk ...]`,
+    "",
+    text.slice(-LARGE_CONTEXT_PREVIEW_TAIL_CHARS),
+  ].join("\n");
+}
+
+async function externalizeLargeContextIfNeeded(
+  text: string,
+  sessionId: string | null,
+  taskHint?: string,
+) {
+  if (text.length <= LARGE_CONTEXT_CHAR_THRESHOLD) return null;
+
+  const task = taskHint?.trim() || extractLargeContextTask(text);
+  const createdAt = new Date().toISOString().replace(/[:.]/g, "-");
+  const sessionPart = sanitizeLargeContextFilePart(sessionId || "chat");
+  const filePart = sanitizeLargeContextFilePart(task.slice(0, 60));
+  const contextDirName = `${createdAt}-${filePart}`;
+  const fileName = "full.txt";
+  const home = await homeDir();
+  const dir = await join(home, ".screenpipe", "pi-chat", "large-context", sessionPart, contextDirName);
+  await mkdir(dir, { recursive: true });
+  const filePath = await join(dir, fileName);
+  await writeTextFile(filePath, text);
+
+  const chunksDir = await join(dir, "chunks");
+  await mkdir(chunksDir, { recursive: true });
+  const chunkCount = Math.ceil(text.length / LARGE_CONTEXT_CHUNK_CHARS);
+  const chunkDigits = Math.max(4, String(chunkCount).length);
+  const chunkPaths: string[] = [];
+  for (let i = 0; i < chunkCount; i++) {
+    const start = i * LARGE_CONTEXT_CHUNK_CHARS;
+    const end = Math.min(text.length, start + LARGE_CONTEXT_CHUNK_CHARS);
+    const chunkName = `chunk-${String(i + 1).padStart(chunkDigits, "0")}.txt`;
+    const chunkPath = await join(chunksDir, chunkName);
+    await writeTextFile(chunkPath, text.slice(start, end));
+    chunkPaths.push(chunkPath);
+  }
+
+  const estimatedTokens = estimateLargeContextTokens(text);
+  const firstChunkPath = chunkPaths[0] ?? "";
+  const lastChunkPath = chunkPaths[chunkPaths.length - 1] ?? firstChunkPath;
+  const preview = buildLargeContextPreview(text);
+  const prompt = [
+    `<${LARGE_CONTEXT_PROMPT_TAG}>`,
+    "[INPUT OFFLOADED]",
+    "The user-provided input was too large to send inline. The full input was saved to local text files and replaced with this file reference, following the same offload pattern used by agent CLIs for oversized context.",
+    `full_path: ${filePath}`,
+    `chunk_dir: ${chunksDir}`,
+    `chunk_file_format: chunk-${"1".padStart(chunkDigits, "0")}.txt through chunk-${String(chunkCount).padStart(chunkDigits, "0")}.txt`,
+    `first_chunk_path: ${firstChunkPath}`,
+    `last_chunk_path: ${lastChunkPath}`,
+    `chunk_count: ${chunkCount}`,
+    `chunk_chars: ${LARGE_CONTEXT_CHUNK_CHARS}`,
+    `characters: ${text.length}`,
+    `estimated_tokens: ${estimatedTokens}`,
+    `</${LARGE_CONTEXT_PROMPT_TAG}>`,
+    "",
+    "Inline preview:",
+    "```text",
+    preview,
+    "```",
+    "",
+    "User request:",
+    task,
+    "",
+    "Use ordinary file or shell operations on these files, not custom tools:",
+    "1. For search, use bounded grep/rg commands against full_path or chunk_dir.",
+    "2. For summaries, read chunk files one or a few at a time and combine partial summaries.",
+    "3. Do not cat or read the full_path into the conversation in one shot.",
+  ].join("\n");
+
+  return {
+    prompt,
+    displayLabel: task.length <= 240 ? task : `Large context: ${fileName}`,
+    attachment: {
+      name: "large-context.txt",
+      ext: "txt",
+      charCount: text.length,
+      truncated: false,
+    } satisfies ChatAttachment,
+  };
+}
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -3143,6 +3306,36 @@ export function StandaloneChat({
     await extractAndAttach(name, async () => new Uint8Array(await file.arrayBuffer()));
   }, [extractAndAttach]);
 
+  const attachPastedText = useCallback((text: string) => {
+    const normalized = text.replace(/\r\n/g, "\n");
+    if (normalized.length < PASTED_TEXT_ATTACHMENT_CHAR_THRESHOLD) return false;
+    setAttachedDocs((prev) => [
+      ...prev,
+      makePastedTextDoc(normalized, pastedTextDocName(prev)),
+    ]);
+    return true;
+  }, []);
+
+  const showPastedTextInField = useCallback((doc: ExtractedDoc, index: number) => {
+    if (doc.text.length > PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS) return;
+
+    setInput((prev) => {
+      if (!prev) return doc.text;
+      const separator = prev.endsWith("\n") ? "\n" : "\n\n";
+      return `${prev}${separator}${doc.text}`;
+    });
+    setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index));
+    setShowMentionDropdown(false);
+    setMentionFilter("");
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+      if (inputRef.current) {
+        inputRef.current.style.height = "auto";
+        inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
+      }
+    }, 0);
+  }, []);
+
   // Handle file picker — images and documents
   const handleFilePicker = useCallback(async () => {
     const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
@@ -3206,12 +3399,11 @@ export function StandaloneChat({
     const items = e.clipboardData?.items;
     const files = e.clipboardData?.files;
 
-    // Walk both surfaces (`items` for the common path, `files` as a
+    // Walk both file surfaces (`items` for the common path, `files` as a
     // fallback for browsers that don't expose Finder/Explorer pastes
     // through items). Images take the existing fast path; documents
     // route through processDocFile, which mirrors the drag-drop flow
-    // including pending-chip rendering. Non-file clipboard content
-    // (plain text, html) is ignored — the default paste handles it.
+    // including pending-chip rendering.
     const handled = new Set<File>();
     const tryDispatch = (file: File | null | undefined) => {
       if (!file || handled.has(file)) return false;
@@ -3243,8 +3435,16 @@ export function StandaloneChat({
         if (tryDispatch(files[i])) didDispatch = true;
       }
     }
-    if (didDispatch) e.preventDefault();
-  }, [processImageFile, processDocFile]);
+    if (didDispatch) {
+      e.preventDefault();
+      return;
+    }
+
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    if (attachPastedText(text)) {
+      e.preventDefault();
+    }
+  }, [processImageFile, processDocFile, attachPastedText]);
 
   // Signal that this chat window is ready to receive prefill events.
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
@@ -6673,10 +6873,41 @@ export function StandaloneChat({
     // pastedImages restore-on-error contract in enqueuePiMessage/sendPiMessage:
     // a failed dispatch must not silently swallow the user's attachments.
     const restoreDocsOnError = (e: unknown) => {
-      if (snapshotDocs.length === 0) return;
-      setAttachedDocs((prev) => prev.length === 0 ? snapshotDocs : prev);
+      if (snapshotDocs.length > 0) {
+        setAttachedDocs((prev) => prev.length === 0 ? snapshotDocs : prev);
+      }
       throw e;
     };
+
+    try {
+      const taskHint = snapshotDocs.length > 0 && trimmed.length > 0 && trimmed.length <= 2_000
+        ? trimmed
+        : undefined;
+      const largeContext = await externalizeLargeContextIfNeeded(
+        outgoingMessage,
+        piSessionIdRef.current,
+        taskHint,
+      );
+      if (largeContext) {
+        outgoingMessage = largeContext.prompt;
+        outgoingDisplay = outgoingDisplay ?? largeContext.displayLabel;
+        pendingAttachmentsRef.current = [
+          ...pendingAttachmentsRef.current,
+          largeContext.attachment,
+        ];
+        toast({
+          title: "large context saved as file",
+          description: "Pi will use local chunk files instead of sending the full text inline.",
+        });
+      }
+    } catch (e) {
+      toast({
+        title: "failed to save large context",
+        description: "The message was not sent because the pasted input is too large to send inline.",
+        variant: "destructive",
+      });
+      restoreDocsOnError(e);
+    }
 
     // Guard the tiny gap between submit and React's loading state update.
     // During this window, rapid Enter presses must queue (not start a second
@@ -8575,6 +8806,7 @@ export function StandaloneChat({
             the spinner promote in-place to a resolved chip, then resolved
             docs, then images). */}
         {(attachedDocs.length > 0 || pendingDocs.length > 0 || pastedImages.length > 0) && (
+          <TooltipProvider delayDuration={150}>
           <div className="px-5 sm:px-6 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
             {pendingDocs.map((doc) => {
               const badge = attachmentBadge(doc.ext);
@@ -8597,6 +8829,8 @@ export function StandaloneChat({
             })}
             {attachedDocs.map((doc, i) => {
               const badge = attachmentBadge(doc.ext);
+              const isPastedText = isPastedTextDoc(doc);
+              const canShowInField = doc.text.length <= PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS;
               return (
                 <div
                   key={`doc-${doc.name}-${i}`}
@@ -8608,9 +8842,32 @@ export function StandaloneChat({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
-                    <div className="truncate text-[10px] text-muted-foreground">
-                      {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
-                    </div>
+                    {isPastedText ? (
+                      canShowInField ? (
+                        <button
+                          type="button"
+                          onClick={() => showPastedTextInField(doc, i)}
+                          className="inline-flex max-w-full items-center gap-0.5 truncate text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                        >
+                          <span className="truncate">Show in text field</span>
+                          <ChevronRight className="h-3 w-3 shrink-0" />
+                        </button>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex max-w-full cursor-not-allowed items-center gap-0.5 truncate text-[10px] text-muted-foreground/70 underline decoration-dotted underline-offset-2">
+                              <span className="truncate">Show in text field</span>
+                              <ChevronRight className="h-3 w-3 shrink-0" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Too long to show in text field</TooltipContent>
+                        </Tooltip>
+                      )
+                    ) : (
+                      <div className="truncate text-[10px] text-muted-foreground">
+                        {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -8646,6 +8903,7 @@ export function StandaloneChat({
               </div>
             ))}
           </div>
+          </TooltipProvider>
         )}
 
         <form
