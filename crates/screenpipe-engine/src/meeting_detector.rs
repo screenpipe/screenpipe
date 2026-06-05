@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 // ============================================================================
 // Detection Profiles
@@ -995,17 +995,12 @@ impl PrecomputedSignal {
     }
 }
 
-/// Check if a [`CallSignal`] matches the given element properties.
-///
-/// `title` and `desc` are expected to be raw (not lowercased) for the original
-/// `check_signal_match` entry point. For the optimized hot path, use
-/// `check_signal_match_precomputed` with pre-lowercased values.
-#[cfg(any(target_os = "windows", test))]
 /// Compare AX role strings across backends.
 ///
 /// macOS (cidre) gives `AXButton`; Windows UIA gives `"button"` (lowercase,
 /// localized, may contain spaces e.g. `"menu item"`). Normalise by stripping
 /// any `AX` prefix and whitespace, then case-insensitive compare.
+#[cfg(any(target_os = "windows", test))]
 fn role_matches(actual: &str, expected: &str) -> bool {
     fn normalise(s: &str) -> String {
         let trimmed = s
@@ -1024,6 +1019,12 @@ fn role_matches(actual: &str, expected: &str) -> bool {
     normalise(actual) == normalise(expected)
 }
 
+/// Check if a [`CallSignal`] matches the given element properties.
+///
+/// `title` and `desc` are expected to be raw (not lowercased) for the original
+/// `check_signal_match` entry point. For the optimized hot path, use
+/// `check_signal_match_precomputed` with pre-lowercased values.
+#[cfg(any(target_os = "windows", test))]
 fn check_signal_match(
     signal: &CallSignal,
     role: &str,
@@ -2299,10 +2300,11 @@ pub fn find_running_meeting_apps(
                 .iter()
                 .any(|p| browser_title_matches_pattern(&title_lower, p));
             if url_match || title_match {
-                // The one log line a user needs to confirm screenpipe saw the
-                // meeting window. Pairs with the scanner's UIA scan line via
-                // pid + profile_idx.
-                info!(
+                // Confirms screenpipe saw the meeting window; pairs with the
+                // scanner's UIA scan line via pid + profile_idx. DEBUG, not
+                // INFO: titles can contain sensitive context (URLs, attendee
+                // names) and users routinely share logs for support.
+                debug!(
                     "meeting detector (windows): profile_idx={} MATCHED browser window pid={} proc={:?} title={:?} (url_match={} title_match={})",
                     idx,
                     pid,
@@ -2324,7 +2326,7 @@ pub fn find_running_meeting_apps(
             {
                 // Per (profile × window) miss. Cardinality is high — keep at
                 // TRACE. Useful for diagnosing localized title formats.
-                trace!(
+                tracing::trace!(
                     "meeting detector (windows): profile_idx={} no match pid={} proc={:?} title={:?} (url_patterns={:?} title_patterns={:?})",
                     idx,
                     pid,
@@ -2343,7 +2345,9 @@ pub fn find_running_meeting_apps(
             profiles.len()
         );
     } else {
-        info!(
+        // DEBUG, not INFO: `browser_url` carries the window title which can
+        // include URLs / attendee names. Users share logs for support.
+        debug!(
             "meeting detector (windows): find_running_meeting_apps returning {} match(es): {:?}",
             results.len(),
             results
