@@ -71,6 +71,15 @@ fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     Ok(store.to_recording_config(data_dir))
 }
 
+fn require_app_entitlement(store: &SettingsStore) -> Result<(), String> {
+    if store.app_entitled_or_dev() {
+        return Ok(());
+    }
+
+    crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
+    Err("subscription_required: active screenpipe plan required to start recording".to_string())
+}
+
 pub fn notify_audio_engine_fallback(store: &SettingsStore) {
     if store.recording.disable_audio {
         return;
@@ -386,6 +395,8 @@ pub async fn start_capture(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     info!("Starting capture session");
+    let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
+    require_app_entitlement(&store)?;
 
     // Race guard: short-circuit duplicate invocations.
     //
@@ -573,6 +584,11 @@ pub async fn spawn_screenpipe(
     }
 
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
+    if let Err(err) = require_app_entitlement(&store) {
+        state.is_starting.store(false, Ordering::SeqCst);
+        state.is_starting_capture.store(false, Ordering::SeqCst);
+        return Err(err);
+    }
     let port = store.recording.port;
     let health_url = format!("http://localhost:{}/health", port);
 
@@ -945,6 +961,9 @@ async fn start_capture_internal(
     state: &RecordingState,
     app: &tauri::AppHandle,
 ) -> Result<(), String> {
+    let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
+    require_app_entitlement(&store)?;
+
     let mut capture_guard = state.capture.lock().await;
     if capture_guard.is_some() {
         // A concurrent start_capture beat us to it.

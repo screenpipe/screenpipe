@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -32,6 +33,7 @@ pub type SharedWhatsAppGateway = Arc<Mutex<WhatsAppGateway>>;
 pub struct ConnectionsState {
     pub cm: SharedConnectionManager,
     pub wa: SharedWhatsAppGateway,
+    pub screenpipe_dir: PathBuf,
     pub secret_store: Option<Arc<SecretStore>>,
     pub browser_bridge: Arc<BrowserBridge>,
     pub browser_registry: Arc<BrowserRegistry>,
@@ -304,6 +306,40 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
             ),
             "fields": [],
             "connected": cal_available,
+        }));
+
+        let (ics_feed_count, ics_enabled_count, ics_error) =
+            match screenpipe_connect::ics_calendar::load_ics_calendar_settings_from_store(
+                &state.screenpipe_dir,
+            ) {
+                Ok(settings) => {
+                    let feed_count = settings.entries.len();
+                    let enabled_count = settings
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.enabled)
+                        .count();
+                    (feed_count, enabled_count, None)
+                }
+                Err(err) => {
+                    tracing::warn!("ics-calendar: failed to read settings for /connections: {err}");
+                    (0, 0, Some(err))
+                }
+            };
+        arr.push(json!({
+            "id": "ics-calendar",
+            "name": "ICS Calendar",
+            "icon": "ics-calendar",
+            "category": "calendar",
+            "description": "Read-only access to subscribed ICS/webcal calendar feeds. \
+                Query events via GET /connections/ics-calendar/events?hours_back=0&hours_ahead=72. \
+                Check feed status via GET /connections/ics-calendar/status. \
+                Feed URLs are private and are never exposed through this listing.",
+            "fields": [],
+            "connected": ics_enabled_count > 0,
+            "feed_count": ics_feed_count,
+            "enabled_feed_count": ics_enabled_count,
+            "error": ics_error,
         }));
 
         arr.push(json!({
@@ -657,6 +693,91 @@ fn is_native_calendar_available() -> bool {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn is_native_calendar_available() -> bool {
     false
+}
+
+// ---------------------------------------------------------------------------
+// ICS calendar routes
+// ---------------------------------------------------------------------------
+
+fn ics_feed_summaries(
+    settings: &screenpipe_connect::ics_calendar::IcsCalendarSettings,
+) -> Vec<Value> {
+    settings
+        .entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "name": entry.name.as_str(),
+                "enabled": entry.enabled,
+            })
+        })
+        .collect()
+}
+
+/// GET /connections/ics-calendar/status — check subscribed ICS feeds.
+async fn ics_calendar_status(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
+    match screenpipe_connect::ics_calendar::load_ics_calendar_settings_from_store(
+        &state.screenpipe_dir,
+    ) {
+        Ok(settings) => {
+            let enabled_count = settings
+                .entries
+                .iter()
+                .filter(|entry| entry.enabled)
+                .count();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "connected": enabled_count > 0,
+                    "feedCount": settings.entries.len(),
+                    "enabledFeedCount": enabled_count,
+                    "feeds": ics_feed_summaries(&settings),
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "connected": false, "error": e })),
+        ),
+    }
+}
+
+/// GET /connections/ics-calendar/events — fetch subscribed ICS feed events.
+async fn ics_calendar_events(
+    State(state): State<ConnectionsState>,
+    Query(params): Query<CalendarEventsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let settings = match screenpipe_connect::ics_calendar::load_ics_calendar_settings_from_store(
+        &state.screenpipe_dir,
+    ) {
+        Ok(settings) => settings,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e })),
+            )
+        }
+    };
+
+    let enabled: Vec<_> = settings
+        .entries
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .collect();
+    if enabled.is_empty() {
+        return (StatusCode::OK, Json(json!([])));
+    }
+
+    let client = reqwest::Client::new();
+    let events = screenpipe_connect::ics_calendar::fetch_ics_calendar_events(
+        &client,
+        &enabled,
+        params.hours_back.unwrap_or(0),
+        params.hours_ahead.unwrap_or(8),
+    )
+    .await;
+
+    (StatusCode::OK, Json(json!(events)))
 }
 
 // ---------------------------------------------------------------------------
@@ -2473,6 +2594,7 @@ async fn browser_run_eval(
 pub fn router<S>(
     cm: SharedConnectionManager,
     wa: SharedWhatsAppGateway,
+    screenpipe_dir: PathBuf,
     secret_store: Option<Arc<SecretStore>>,
     browser_bridge: Arc<BrowserBridge>,
     browser_registry: Arc<BrowserRegistry>,
@@ -2484,6 +2606,7 @@ where
     let state = ConnectionsState {
         cm,
         wa,
+        screenpipe_dir,
         secret_store,
         browser_bridge,
         browser_registry,
@@ -2516,6 +2639,9 @@ where
         // Calendar routes (must be before /:id to avoid conflict)
         .route("/calendar/events", get(calendar_events))
         .route("/calendar/status", get(calendar_status))
+        // ICS Calendar routes (must be before /:id to avoid conflict)
+        .route("/ics-calendar/events", get(ics_calendar_events))
+        .route("/ics-calendar/status", get(ics_calendar_status))
         // Google Calendar routes (must be before /:id to avoid conflict)
         .route("/google-calendar/events", get(gcal_events))
         .route("/google-calendar/status", get(gcal_status))
@@ -2563,6 +2689,171 @@ mod tests {
     use super::*;
     use screenpipe_connect::connections::ProxyAuth;
     use serde_json::json;
+
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Request};
+    use screenpipe_connect::connections::ConnectionManager;
+    use screenpipe_connect::whatsapp::WhatsAppGateway;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+    use tower::ServiceExt;
+
+    fn write_ics_store(dir: &TempDir, entries: serde_json::Value) {
+        let store = json!({
+            "ics_calendars": {
+                "entries": entries
+            }
+        });
+        std::fs::write(
+            dir.path().join("store.bin"),
+            serde_json::to_vec(&store).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn ics_test_router(dir: &TempDir) -> Router<()> {
+        let screenpipe_dir = dir.path().to_path_buf();
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            None,
+        )));
+        let wa = Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone())));
+        router(
+            cm,
+            wa,
+            screenpipe_dir,
+            None,
+            crate::routes::browser::BrowserBridge::new(),
+            BrowserRegistry::new(),
+            None,
+        )
+    }
+
+    async fn spawn_ics_feed(body: String) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/feed.ics",
+            get(move || {
+                let body = body.clone();
+                async move { ([(header::CONTENT_TYPE, "text/calendar")], body) }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        (format!("http://{addr}/feed.ics"), server)
+    }
+
+    #[tokio::test]
+    async fn connections_lists_ics_calendar_when_feed_enabled() {
+        let dir = TempDir::new().unwrap();
+        write_ics_store(
+            &dir,
+            json!([{
+                "name": "Work",
+                "url": "https://calendar.example/secret.ics",
+                "enabled": true
+            }]),
+        );
+
+        let app = ics_test_router(&dir);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let connections = payload["data"].as_array().expect("connections data array");
+        let ics = connections
+            .iter()
+            .find(|entry| entry["id"] == "ics-calendar")
+            .expect("ics-calendar entry");
+        assert_eq!(ics["connected"], true);
+        assert_eq!(ics["enabled_feed_count"], 1);
+
+        let serialized = body.to_vec();
+        let body_text = String::from_utf8_lossy(&serialized);
+        assert!(!body_text.contains("secret.ics"));
+    }
+
+    #[tokio::test]
+    async fn ics_calendar_events_honors_hours_ahead_query() {
+        let dir = TempDir::new().unwrap();
+        let now = chrono::Utc::now();
+        let starts_at = now + chrono::Duration::hours(24);
+        let ends_at = now + chrono::Duration::hours(25);
+        let ics_body = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:route-window-test\r\nDTSTAMP:20241010T101010Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Route Window Test\r\nEND:VEVENT\r\nEND:VCALENDAR",
+            starts_at.format("%Y%m%dT%H%M%SZ"),
+            ends_at.format("%Y%m%dT%H%M%SZ")
+        );
+        let (feed_url, feed_server) = spawn_ics_feed(ics_body).await;
+
+        write_ics_store(
+            &dir,
+            json!([{
+                "name": "Work",
+                "url": feed_url,
+                "enabled": true
+            }]),
+        );
+
+        let app = ics_test_router(&dir);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/ics-calendar/events?hours_back=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert!(events.is_empty());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ics-calendar/events?hours_back=0&hours_ahead=72")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["title"], "Route Window Test");
+
+        feed_server.abort();
+    }
+
+    #[test]
+    fn ics_feed_summaries_never_include_urls() {
+        let settings = screenpipe_connect::ics_calendar::IcsCalendarSettings {
+            entries: vec![screenpipe_connect::ics_calendar::IcsCalendarEntry {
+                name: "Work".to_string(),
+                url: "https://calendar.example/secret.ics".to_string(),
+                enabled: true,
+            }],
+        };
+        let summaries = ics_feed_summaries(&settings);
+        let serialized = serde_json::to_string(&summaries).unwrap();
+        assert!(!serialized.contains("secret.ics"));
+        assert_eq!(summaries[0]["name"], "Work");
+        assert_eq!(summaries[0]["enabled"], true);
+    }
 
     #[test]
     fn google_calendar_meeting_url_prefers_conference_video() {

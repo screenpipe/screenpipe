@@ -45,6 +45,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
 
+mod telemetry;
+use telemetry::Telemetry;
+
 // ─── events ────────────────────────────────────────────────────────────
 
 /// Tauri event channel the plugin emits every screenpipe session event
@@ -142,6 +145,13 @@ struct ErrorPayload {
 }
 
 fn emit_event<R: Runtime, T: Clone + Serialize>(app: &AppHandle<R>, event: &'static str, data: T) {
+    // Telemetry is a passive tap on the same event stream the renderer sees.
+    // The plugin reports natively (no webview fetch / CSP), so we route here
+    // before emitting to the channel. Fetched from managed state by handle so
+    // every emit_event call site stays unchanged.
+    if let Some(state) = app.try_state::<Arc<ScreenpipeState>>() {
+        state.telemetry.track(event, &data);
+    }
     let _ = app.emit(SCREENPIPE_EVENT_CHANNEL, EventEnvelope { event, data });
 }
 
@@ -158,6 +168,17 @@ pub struct ScreenpipeConfig {
     /// Default filename prefix when the frontend doesn't pass a `filename`.
     /// Defaults to `"screenpipe"`.
     pub filename_prefix: Option<String>,
+    /// Stable identifier for the host app's end user. When set, the plugin
+    /// tags its telemetry (crashes -> Sentry, usage -> PostHog) with this id
+    /// so the user is identifiable in screenpipe's dashboards. The JS client
+    /// can also set this at runtime via `screenpipe_identify`.
+    pub user_id: Option<String>,
+    /// Optional app name attached to telemetry for segmentation.
+    pub app_name: Option<String>,
+    /// Master switch for SDK telemetry. `None` (default) means ON; `Some(false)`
+    /// disables it. Env vars `SCREENPIPE_SDK_TELEMETRY=0` / `DO_NOT_TRACK=1` /
+    /// `SCREENPIPE_DISABLE_ANALYTICS=1` also force it off.
+    pub telemetry_enabled: Option<bool>,
 }
 
 impl ScreenpipeConfig {
@@ -168,6 +189,21 @@ impl ScreenpipeConfig {
 
     pub fn filename_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.filename_prefix = Some(prefix.into());
+        self
+    }
+
+    pub fn user_id(mut self, id: impl Into<String>) -> Self {
+        self.user_id = Some(id.into());
+        self
+    }
+
+    pub fn app_name(mut self, name: impl Into<String>) -> Self {
+        self.app_name = Some(name.into());
+        self
+    }
+
+    pub fn telemetry(mut self, enabled: bool) -> Self {
+        self.telemetry_enabled = Some(enabled);
         self
     }
 }
@@ -204,6 +240,17 @@ impl From<ScreenpipeTauriError> for String {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOptions {
     pub timeout_ms: Option<u64>,
+}
+
+/// Identity supplied by the JS client (`createScreenpipeTauriClient`) once on
+/// creation. Drives telemetry user identification + on/off for the plugin.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentifyOptions {
+    pub user_id: Option<String>,
+    pub app_name: Option<String>,
+    pub release: Option<String>,
+    pub telemetry: Option<bool>,
 }
 
 /// Options accepted by the `start` Tauri command. Mirrors the napi
@@ -355,6 +402,7 @@ pub struct ScreenpipeSnapshot {
 pub struct ScreenpipeState {
     config: ScreenpipeConfig,
     session: Mutex<SessionInner>,
+    telemetry: Telemetry,
 }
 
 #[derive(Default)]
@@ -389,9 +437,15 @@ impl SessionInner {
 
 impl ScreenpipeState {
     pub fn new(config: ScreenpipeConfig) -> Self {
+        let telemetry = Telemetry::new(
+            config.user_id.clone(),
+            config.app_name.clone(),
+            config.telemetry_enabled,
+        );
         Self {
             config,
             session: Mutex::new(SessionInner::default()),
+            telemetry,
         }
     }
 }
@@ -963,6 +1017,23 @@ async fn screenpipe_events() -> Result<Vec<&'static str>, String> {
     Ok(SCREENPIPE_EVENTS.to_vec())
 }
 
+/// Apply telemetry identity from the JS client. Called once on
+/// `createScreenpipeTauriClient` creation. Sets the userId (so events are
+/// attributable in screenpipe's dashboards), optional app name / release,
+/// and the on/off switch, then fires the one-shot `session_initialized`
+/// ping. Returns whether telemetry is active.
+#[tauri::command]
+async fn screenpipe_identify(
+    state: State<'_, Arc<ScreenpipeState>>,
+    options: Option<IdentifyOptions>,
+) -> Result<bool, String> {
+    let o = options.unwrap_or_default();
+    state
+        .telemetry
+        .identify(o.user_id, o.app_name, o.release, o.telemetry);
+    Ok(state.telemetry.enabled())
+}
+
 // ─── plugin builder ────────────────────────────────────────────────────
 
 /// Build the Tauri v2 plugin. Register on your `tauri::Builder` and
@@ -978,6 +1049,7 @@ pub fn init<R: Runtime>(config: ScreenpipeConfig) -> TauriPlugin<R> {
             screenpipe_reveal,
             screenpipe_dispose,
             screenpipe_events,
+            screenpipe_identify,
         ])
         .setup(move |app, _api| {
             app.manage(Arc::new(ScreenpipeState::new(config.clone())));
@@ -1112,6 +1184,7 @@ mod tests {
         let cfg = ScreenpipeConfig {
             output_dir: Some(dir.path().to_path_buf()),
             filename_prefix: prefix.map(String::from),
+            ..Default::default()
         };
         (cfg, dir)
     }
@@ -1135,6 +1208,7 @@ mod tests {
         let cfg = ScreenpipeConfig {
             output_dir: None,
             filename_prefix: Some("ignored".into()),
+            ..Default::default()
         };
         let opts = default_start();
         let err = resolve_output(&cfg, &opts, 42).unwrap_err();

@@ -44,7 +44,7 @@ pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), Stri
 
     let url = format!("/viewer?path={}", urlencoding::encode(&path));
 
-    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(PathBuf::from(url)))
+    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(PathBuf::from(url)))
         .title(viewer_title(&path))
         .inner_size(720.0, 600.0)
         .min_inner_size(400.0, 300.0)
@@ -53,9 +53,7 @@ pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), Stri
         .focused(true);
 
     #[cfg(target_os = "macos")]
-    {
-        builder = builder.hidden_title(true);
-    }
+    let builder = builder.hidden_title(true);
 
     builder
         .build()

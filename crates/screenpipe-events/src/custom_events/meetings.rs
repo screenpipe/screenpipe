@@ -89,7 +89,7 @@ fn extract_join_url(event: &CalendarEventSignal) -> Option<String> {
         let trimmed = raw
             .trim()
             .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
-            .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'));
+            .trim_end_matches([')', ']', ',', '.', ';']);
         if trimmed.is_empty() || !known(trimmed) {
             return None;
         }

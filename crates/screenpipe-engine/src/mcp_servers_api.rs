@@ -239,9 +239,7 @@ async fn delete_server(State(state): State<McpServersState>, Path(id): Path<Stri
 fn validate_headers(headers: &[McpHeader]) -> Result<(), String> {
     for h in headers {
         if h.name.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
-            return Err(format!(
-                "header name contains a CR/LF/NUL byte — refusing to send"
-            ));
+            return Err("header name contains a CR/LF/NUL byte — refusing to send".to_string());
         }
         if h.value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
             return Err(format!(

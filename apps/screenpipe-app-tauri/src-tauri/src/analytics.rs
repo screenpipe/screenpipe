@@ -4,6 +4,7 @@
 
 use log::{error, info, warn};
 use reqwest::Client;
+use screenpipe_engine::telemetry_context::TelemetryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
@@ -244,6 +245,10 @@ impl AnalyticsManager {
             if let Some(payload_props) = payload["properties"].as_object_mut() {
                 payload_props.extend(props.as_object().unwrap_or(&serde_json::Map::new()).clone());
             }
+        }
+
+        if let Some(payload_props) = payload["properties"].as_object_mut() {
+            TelemetryContext::from_env().insert_posthog_properties(payload_props);
         }
 
         let response = self.client.post(posthog_url).json(&payload).send().await?;

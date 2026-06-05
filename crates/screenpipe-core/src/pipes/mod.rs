@@ -4114,8 +4114,7 @@ impl PipeManager {
     pub fn install_builtin_pipes(&self) -> Result<()> {
         // Manual pipes are bundled as templates. Scheduled pipes (idea-tracker,
         // obsidian-sync) are available from the pipe store instead.
-        #[allow(unused_mut)]
-        let mut builtins = vec![
+        let builtins = vec![
             (
                 "day-recap",
                 include_str!("../../assets/pipes/day-recap/pipe.md"),
@@ -4503,8 +4502,8 @@ pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
 }
 
 /// Parse human-readable schedules like "every day at 9am", "every monday at 6pm".
-/// Times are interpreted as local time and converted to UTC for the cron expression,
-/// since the cron library evaluates against UTC.
+/// Times are interpreted as the user's local time. Schedules are evaluated in local
+/// time (see `cron_should_fire`), so the local hour is encoded directly.
 fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
     let s = s.to_lowercase();
     let s = s.strip_prefix("every").unwrap_or(&s).trim();
@@ -4518,34 +4517,48 @@ fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
         return None;
     };
 
-    // Convert local hour to UTC using current system timezone offset
-    let utc_hour = local_hour_to_utc(local_hour);
-
-    // "day" → every day at that hour
-    // "monday", "tuesday", etc. → specific weekday
+    // Schedules are evaluated against the user's local timezone (see
+    // `cron_should_fire`), so encode the local hour directly — no UTC shift.
+    // "day" → every day at that hour; "monday".. → specific weekday.
     let cron_str = match prefix {
-        "day" => format!("0 0 {} * * * *", utc_hour),
-        "daily" => format!("0 0 {} * * * *", utc_hour),
-        "monday" | "mon" => format!("0 0 {} * * 1 *", utc_hour),
-        "tuesday" | "tue" => format!("0 0 {} * * 2 *", utc_hour),
-        "wednesday" | "wed" => format!("0 0 {} * * 3 *", utc_hour),
-        "thursday" | "thu" => format!("0 0 {} * * 4 *", utc_hour),
-        "friday" | "fri" => format!("0 0 {} * * 5 *", utc_hour),
-        "saturday" | "sat" => format!("0 0 {} * * 6 *", utc_hour),
-        "sunday" | "sun" => format!("0 0 {} * * 0 *", utc_hour),
+        "day" => format!("0 0 {} * * * *", local_hour),
+        "daily" => format!("0 0 {} * * * *", local_hour),
+        "monday" | "mon" => format!("0 0 {} * * 1 *", local_hour),
+        "tuesday" | "tue" => format!("0 0 {} * * 2 *", local_hour),
+        "wednesday" | "wed" => format!("0 0 {} * * 3 *", local_hour),
+        "thursday" | "thu" => format!("0 0 {} * * 4 *", local_hour),
+        "friday" | "fri" => format!("0 0 {} * * 5 *", local_hour),
+        "saturday" | "sat" => format!("0 0 {} * * 6 *", local_hour),
+        "sunday" | "sun" => format!("0 0 {} * * 0 *", local_hour),
         _ => return None,
     };
 
     CronSchedule::from_str(&cron_str).ok()
 }
 
-/// Convert a local hour (0-23) to UTC hour using the system's current timezone offset.
-fn local_hour_to_utc(local_hour: u32) -> u32 {
-    let now = chrono::Local::now();
-    let offset_secs = now.offset().local_minus_utc(); // positive = east of UTC
-    let offset_hours = offset_secs / 3600;
-    // local_hour - offset = utc_hour, wrapped to 0-23
-    ((local_hour as i32 - offset_hours).rem_euclid(24)) as u32
+/// Decide whether a cron-scheduled pipe should fire now, evaluating the cron
+/// expression in the timezone of `now`. Production passes `Local::now()` so
+/// schedules resolve against the user's LOCAL time (e.g. "0 7 * * *" means 07:00
+/// local, not 07:00 UTC — issue #3851). Generic over the timezone so tests can
+/// pin a deterministic zone. Preserves the catch-up/grace window behaviour.
+fn cron_should_fire<Tz>(cron: &CronSchedule, last_run: DateTime<Utc>, now: DateTime<Tz>) -> bool
+where
+    Tz: chrono::TimeZone,
+    Tz::Offset: Copy,
+{
+    // Anchor the catch-up search window in the same timezone as `now`.
+    let search_from = if last_run == DateTime::<Utc>::UNIX_EPOCH {
+        now - CRON_GRACE_WINDOW
+    } else {
+        std::cmp::max(
+            last_run.with_timezone(&now.timezone()),
+            now - CRON_CATCHUP_WINDOW,
+        )
+    };
+    match cron.after(&search_from).next() {
+        Some(next) => now >= next,
+        None => false,
+    }
 }
 
 /// Parse "9am", "12pm", "6pm", "14", "9" into a 24-hour number.
@@ -4659,22 +4672,12 @@ fn should_run(schedule: &str, last_run: DateTime<Utc>) -> bool {
                 >= interval
         }
         Some(ParsedSchedule::Cron(cron)) => {
-            let now = Utc::now();
-            // For pipes that have never run (last_run = epoch), anchor the search
-            // to a recent window so stale past slots don't fire immediately on install.
-            // For previously-run pipes, allow catch-up within CRON_CATCHUP_WINDOW so a
-            // slot missed while the app was offline (e.g., "every day at 7am" pipe, app
-            // starts at 7:12am) fires immediately. Slots older than 12h are skipped —
-            // after extended downtime just wait for the next scheduled occurrence.
-            let search_from = if last_run == DateTime::UNIX_EPOCH {
-                now - CRON_GRACE_WINDOW
-            } else {
-                std::cmp::max(last_run, now - CRON_CATCHUP_WINDOW)
-            };
-            match cron.after(&search_from).next() {
-                Some(next) => now >= next,
-                None => false,
-            }
+            // Evaluate the cron expression against the user's LOCAL timezone so a
+            // schedule like "0 7 * * *" (or "every day at 7am") fires at 07:00 local
+            // rather than 07:00 UTC (issue #3851). The catch-up/grace window behaviour
+            // (fire a slot missed while offline within CRON_CATCHUP_WINDOW; don't fire
+            // stale past slots on fresh install) is preserved inside `cron_should_fire`.
+            cron_should_fire(&cron, last_run, Local::now())
         }
         Some(ParsedSchedule::Once(run_at)) => {
             // Fire if we've reached the timestamp AND haven't run since
@@ -5016,6 +5019,35 @@ mod tests {
     }
 
     // -- parse_error_type ---------------------------------------------------
+
+    #[test]
+    fn human_schedule_encodes_local_hour_not_utc() {
+        use chrono::{TimeZone, Timelike};
+        // "every day at 7am" must encode hour 7 directly (local), with no
+        // timezone shift baked into the cron expression (issue #3851).
+        let cron = parse_human_schedule("every day at 7am").expect("should parse");
+        let from = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 0, 0, 0).unwrap();
+        let next = cron.after(&from).next().unwrap();
+        assert_eq!(
+            next.hour(),
+            7,
+            "human schedule must encode the local hour, not a UTC-shifted hour"
+        );
+    }
+
+    #[test]
+    fn cron_fires_relative_to_scheduled_time() {
+        use chrono::TimeZone;
+        // Evaluated in the timezone of `now` (production passes Local::now()).
+        let cron = parse_human_schedule("every day at 7am").unwrap();
+        let last = chrono::Utc.with_ymd_and_hms(2026, 6, 4, 7, 0, 0).unwrap();
+        // 07:01 — just past today's 07:00 slot — should fire.
+        let after = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 7, 1, 0).unwrap();
+        assert!(cron_should_fire(&cron, last, after));
+        // 06:59 — before today's slot — should not fire yet.
+        let before = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 6, 59, 0).unwrap();
+        assert!(!cron_should_fire(&cron, last, before));
+    }
 
     #[test]
     fn test_parse_error_type_rate_limited_429() {
@@ -5376,12 +5408,19 @@ mod tests {
     }
 
     #[test]
-    fn test_local_hour_to_utc() {
-        // Just verify it returns valid hours and doesn't panic
-        for h in 0..24 {
-            let utc = local_hour_to_utc(h);
-            assert!(utc < 24, "local_hour_to_utc({}) returned {}", h, utc);
-        }
+    fn human_schedule_pm_hour_is_local() {
+        use chrono::{TimeZone, Timelike};
+        // "every monday at 6pm" must encode local hour 18 (no UTC shift baked into
+        // the cron expression) — issue #3851. (Weekday-number mapping is a separate
+        // concern tracked outside this fix.)
+        let cron = parse_human_schedule("every monday at 6pm").expect("should parse");
+        let from = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        let next = cron.after(&from).next().unwrap();
+        assert_eq!(
+            next.hour(),
+            18,
+            "6pm must encode local hour 18, not a shifted hour"
+        );
     }
 
     #[test]

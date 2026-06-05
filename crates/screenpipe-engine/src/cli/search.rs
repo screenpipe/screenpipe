@@ -196,7 +196,7 @@ fn print_text(items: &[ContentItem]) {
 
 fn one_line(s: &str) -> String {
     // Collapse newlines so each result stays on one terminal line.
-    s.replace('\n', " ").replace('\r', " ")
+    s.replace(['\n', '\r'], " ")
 }
 
 #[cfg(test)]

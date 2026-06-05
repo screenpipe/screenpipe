@@ -63,7 +63,9 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // Override with `SCREENPIPE_E2E_SEED=onboarding` (or any custom value) when
 // running on a host that DOES have TCC granted and you want to exercise the
 // real capture pipeline. Add `no-audio` when a lane only needs vision/OCR and
-// should not boot Whisper. `cloud-audio-fallback` is an opt-in macOS seed that
+// should not boot Whisper. Add `event-trigger-capture` for the Windows
+// key/clipboard/window-focus trigger lane; raw key and clipboard rows stay
+// disabled unless an explicit DB-capture seed opts them in. `cloud-audio-fallback` is an opt-in macOS seed that
 // leaves audio UI enabled, disables vision, and saves Screenpipe Cloud while
 // logged out so the fallback UX can be asserted. The same env var is read by
 // specs (e.g. timeline) to skip when recording is off.

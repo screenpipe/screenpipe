@@ -234,6 +234,8 @@ pub async fn sync_init(
     let pipe_sync_dir = state.screenpipe_dir.clone();
     let pipe_sync_manager = runtime_state.manager.clone();
     let pipe_sync_pipe_manager = state.pipe_manager.clone();
+    let connection_sync_manager = runtime_state.manager.clone();
+    let connection_secret_store = state.secret_store.clone();
     // Memories sync shares the same SyncManager (same encrypted upload pipe)
     // and the same screenpipe_dir for the toggle file, but it talks to the
     // db directly rather than the disk-backed pipe manager.
@@ -361,6 +363,17 @@ pub async fn sync_init(
                     &pipe_sync_dir,
                     &download_machine_id,
                     &pipe_sync_db,
+                )
+                .await;
+            }
+
+            // -- Connections sync (independent toggle) --
+            if is_connections_sync_enabled(&pipe_sync_dir) {
+                run_background_connections_sync(
+                    &connection_sync_manager,
+                    &pipe_sync_dir,
+                    &download_machine_id,
+                    connection_secret_store.as_deref(),
                 )
                 .await;
             }
@@ -554,6 +567,9 @@ pub async fn sync_download(
     let provider = ScreenpipeSyncProvider::new(state.db.clone(), runtime.machine_id.clone());
 
     for blob in blobs {
+        if blob.blob_type == BlobType::ConnectionConfig {
+            continue;
+        }
         // Deserialize the chunk
         let chunk: SyncChunk = match serde_json::from_slice(&blob.data) {
             Ok(c) => c,
@@ -599,6 +615,275 @@ pub async fn sync_download(
         blobs_downloaded,
         records_imported,
     }))
+}
+
+// ============================================================================
+// Connections Sync Endpoints
+// ============================================================================
+
+/// Response from connections sync operations.
+#[derive(Debug, Serialize, Deserialize, OaSchema)]
+pub struct ConnectionsSyncResponse {
+    pub success: bool,
+    pub actions: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+/// Push local connections manifest to cloud (merge with remote first).
+#[oasgen]
+pub async fn sync_connections_push(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<ConnectionsSyncResponse>, (StatusCode, JsonResponse<Value>)> {
+    use screenpipe_core::connections::sync::*;
+
+    let sync_state = state.sync_state.read().await;
+    let runtime = sync_state.as_ref().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({"error": "sync not initialized"})),
+        )
+    })?;
+
+    let machine_id = &runtime.machine_id;
+    let local = build_connections_local_manifest(
+        &state.screenpipe_dir,
+        machine_id,
+        state.secret_store.as_deref(),
+    )
+    .await;
+    let remote = download_connection_manifest(&runtime.manager).await;
+    let (merged, actions) = merge_manifests(&local, &remote, machine_id);
+
+    let action_strs: Vec<String> = actions.iter().map(connection_action_str).collect();
+    let errors = upload_connection_manifest(&runtime.manager, &merged).await;
+
+    info!(
+        "connections sync push: local={}, remote={}; merged {} connections, {} tombstones",
+        local.connections.len(),
+        remote.connections.len(),
+        merged.connections.len(),
+        merged.tombstones.len()
+    );
+
+    Ok(JsonResponse(ConnectionsSyncResponse {
+        success: errors.is_empty(),
+        actions: action_strs,
+        errors,
+    }))
+}
+
+/// Pull connections manifest from cloud, merge with local, apply locally, then upload merged copy.
+#[oasgen]
+pub async fn sync_connections_pull(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<ConnectionsSyncResponse>, (StatusCode, JsonResponse<Value>)> {
+    use screenpipe_core::connections::sync::*;
+
+    let sync_state = state.sync_state.read().await;
+    let runtime = sync_state.as_ref().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({"error": "sync not initialized"})),
+        )
+    })?;
+
+    let machine_id = &runtime.machine_id;
+    let remote = download_connection_manifest(&runtime.manager).await;
+    let local = build_connections_local_manifest(
+        &state.screenpipe_dir,
+        machine_id,
+        state.secret_store.as_deref(),
+    )
+    .await;
+    let (merged, actions) = merge_manifests(&local, &remote, machine_id);
+    let action_strs: Vec<String> = actions.iter().map(connection_action_str).collect();
+
+    let disk_errors = apply_connections_manifest_to_disk(
+        &merged,
+        &actions,
+        &state.screenpipe_dir,
+        state.secret_store.as_deref(),
+    )
+    .await;
+    let mut errors = disk_errors;
+
+    // Confirmed deletes are now applied locally, so clear the pending tombstones.
+    if has_deleted_connection_action(&actions) {
+        clear_connection_tombstones(&state.screenpipe_dir, &actions);
+    }
+
+    let upload_errors = upload_connection_manifest(&runtime.manager, &merged).await;
+    errors.extend(upload_errors);
+
+    info!(
+        "connections sync pull: remote={}, merged {} connections, {} actions, {} errors",
+        remote.connections.len(),
+        merged.connections.len(),
+        action_strs.len(),
+        errors.len()
+    );
+
+    Ok(JsonResponse(ConnectionsSyncResponse {
+        success: errors.is_empty(),
+        actions: action_strs,
+        errors,
+    }))
+}
+
+async fn download_connection_manifest(
+    manager: &Arc<screenpipe_core::sync::SyncManager>,
+) -> screenpipe_core::connections::sync::ConnectionSyncManifest {
+    use screenpipe_core::connections::sync::ConnectionSyncManifest;
+    use screenpipe_core::sync::BlobType;
+
+    let end = chrono::Utc::now();
+    let start = end - chrono::Duration::days(365);
+
+    match manager
+        .download_by_time_range(
+            Some(start.to_rfc3339()),
+            Some(end.to_rfc3339()),
+            Some(vec![BlobType::ConnectionConfig]),
+            Some(1),
+        )
+        .await
+    {
+        Ok(blobs) if !blobs.is_empty() => {
+            match serde_json::from_slice::<ConnectionSyncManifest>(&blobs[0].data) {
+                Ok(manifest) => {
+                    info!(
+                        "connections sync: downloaded manifest with {} entries, {} tombstones",
+                        manifest.connections.len(),
+                        manifest.tombstones.len()
+                    );
+                    manifest
+                }
+                Err(e) => {
+                    warn!("connections sync: failed to deserialize manifest: {}", e);
+                    ConnectionSyncManifest::empty("unknown")
+                }
+            }
+        }
+        Ok(_) => {
+            info!("connections sync: no manifest in cloud yet");
+            ConnectionSyncManifest::empty("unknown")
+        }
+        Err(e) => {
+            warn!("connections sync: failed to download manifest: {}", e);
+            ConnectionSyncManifest::empty("unknown")
+        }
+    }
+}
+
+async fn upload_connection_manifest(
+    manager: &Arc<screenpipe_core::sync::SyncManager>,
+    manifest: &screenpipe_core::connections::sync::ConnectionSyncManifest,
+) -> Vec<String> {
+    use screenpipe_core::sync::BlobType;
+
+    let data = match serde_json::to_vec(manifest) {
+        Ok(d) => d,
+        Err(e) => {
+            return vec![format!("serialize manifest failed: {}", e)];
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    match manager
+        .upload(&data, BlobType::ConnectionConfig, &now, &now, None)
+        .await
+    {
+        Ok(_) => vec![],
+        Err(e) => vec![format!("upload manifest failed: {}", e)],
+    }
+}
+
+async fn build_connections_local_manifest(
+    screenpipe_dir: &std::path::Path,
+    machine_id: &str,
+    secret_store: Option<&screenpipe_secrets::SecretStore>,
+) -> screenpipe_core::connections::sync::ConnectionSyncManifest {
+    screenpipe_core::connections::sync::build_local_manifest(
+        screenpipe_dir,
+        machine_id,
+        secret_store,
+    )
+    .await
+}
+
+async fn apply_connections_manifest_to_disk(
+    manifest: &screenpipe_core::connections::sync::ConnectionSyncManifest,
+    actions: &[screenpipe_core::connections::sync::ConnectionSyncAction],
+    screenpipe_dir: &std::path::Path,
+    secret_store: Option<&screenpipe_secrets::SecretStore>,
+) -> Vec<String> {
+    screenpipe_core::connections::sync::apply_manifest_to_disk(
+        manifest,
+        actions,
+        screenpipe_dir,
+        secret_store,
+    )
+    .await
+}
+
+fn has_deleted_connection_action(
+    actions: &[screenpipe_core::connections::sync::ConnectionSyncAction],
+) -> bool {
+    actions.iter().any(|action| {
+        matches!(
+            action,
+            screenpipe_core::connections::sync::ConnectionSyncAction::Deleted(_)
+        )
+    })
+}
+
+fn connection_action_str(
+    action: &screenpipe_core::connections::sync::ConnectionSyncAction,
+) -> String {
+    use screenpipe_core::connections::sync::ConnectionSyncAction;
+    match action {
+        ConnectionSyncAction::Imported(key) => format!("imported: {}", key),
+        ConnectionSyncAction::Updated(key) => format!("updated: {}", key),
+        ConnectionSyncAction::Deleted(key) => format!("deleted: {}", key),
+        ConnectionSyncAction::Skipped(key) => format!("skipped: {}", key),
+    }
+}
+
+async fn run_background_connections_sync(
+    manager: &Arc<screenpipe_core::sync::SyncManager>,
+    screenpipe_dir: &std::path::Path,
+    machine_id: &str,
+    secret_store: Option<&screenpipe_secrets::SecretStore>,
+) {
+    use screenpipe_core::connections::sync::*;
+
+    let remote = download_connection_manifest(manager).await;
+    let local = build_connections_local_manifest(screenpipe_dir, machine_id, secret_store).await;
+    let (merged, actions) = merge_manifests(&local, &remote, machine_id);
+
+    let mut all_errors =
+        apply_connections_manifest_to_disk(&merged, &actions, screenpipe_dir, secret_store).await;
+    if has_deleted_connection_action(&actions) {
+        clear_connection_tombstones(screenpipe_dir, &actions);
+    }
+    all_errors.extend(upload_connection_manifest(manager, &merged).await);
+
+    for err in all_errors.iter() {
+        warn!("connections sync background: {}", err);
+    }
+
+    let changed = actions
+        .iter()
+        .filter(|a| !matches!(a, ConnectionSyncAction::Skipped(_)))
+        .count();
+    if changed > 0 {
+        info!(
+            "connections sync background: {} changes applied ({} connections total)",
+            changed,
+            merged.connections.len()
+        );
+    }
 }
 
 // ============================================================================
@@ -831,6 +1116,11 @@ fn is_pipe_sync_enabled(screenpipe_dir: &std::path::Path) -> bool {
 /// Check if memories sync is enabled by reading store.bin → settings.memoriesSyncEnabled.
 fn is_memories_sync_enabled(screenpipe_dir: &std::path::Path) -> bool {
     is_settings_bool_enabled(screenpipe_dir, "memoriesSyncEnabled")
+}
+
+/// Check if connections sync is enabled by reading store.bin → settings.connectionsSyncEnabled.
+fn is_connections_sync_enabled(screenpipe_dir: &std::path::Path) -> bool {
+    is_settings_bool_enabled(screenpipe_dir, "connectionsSyncEnabled")
 }
 
 /// Read `settings.<key>` as a bool from `<screenpipe_dir>/store.bin`.

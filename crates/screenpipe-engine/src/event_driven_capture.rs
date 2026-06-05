@@ -19,7 +19,7 @@ use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::{get_excluded_sck_window_ids, WindowFilters};
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
-use screenpipe_screen::monitor::SafeMonitor;
+use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::utils::capture_monitor_image;
 use std::collections::HashMap;
@@ -49,20 +49,24 @@ pub struct CaptureParams<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CaptureTrigger {
     /// User switched to a different application
-    AppSwitch { app_name: String },
+    AppSwitch {
+        app_name: String,
+        target: Option<(i32, i32)>,
+    },
     /// Window focus changed within the same app
-    WindowFocus { window_name: String },
+    WindowFocus {
+        window_name: String,
+        target: Option<(i32, i32)>,
+    },
     /// Mouse click detected
-    Click,
+    Click { x: i32, y: i32 },
     /// User stopped typing (pause after keyboard activity)
     TypingPause,
     /// User stopped scrolling
     ScrollStop,
-    /// A non-printable key was pressed (Arrow / Enter / Tab / Esc, or
-    /// modifier combo like Ctrl+S) while `capture_keystrokes=true`.
-    /// Only fires when `capture_on_keystroke=true` — off by default
-    /// to avoid the capture-per-keystroke storm that would otherwise
-    /// happen during heavy keyboard use.
+    /// A keyboard event was observed while key-event listening is enabled.
+    /// Raw key/text DB persistence is controlled separately by the recorder.
+    /// Only fires when `capture_on_keystroke=true`.
     KeyPress,
     /// Clipboard content changed
     Clipboard,
@@ -152,18 +156,19 @@ fn drain_pending_corr_ids(
 
 /// Reduce a batch of drained triggers to (kind, correlation_ids).
 ///
-/// - `kind` is the most recent non-skipped trigger (most recent context
-///   wins for capture).
+/// - `kind` is the most recent workflow checkpoint trigger, if present.
+///   Otherwise it is the most recent non-skipped trigger. This keeps
+///   clipboard/key/focus checkpoints from being swallowed by trailing click or
+///   visual noise in the same drain.
 /// - `correlation_ids` accumulates every non-skipped corr id, so when
 ///   the capture lands every triggering event row gets linked.
-/// - Skipped kinds (Clipboard/KeyPress under their off gates) drop
-///   both their corr id and their kind from consideration. This
-///   matters for mixed-kind drains: a tail Clipboard with the gate
-///   off must NOT clear the corr ids of valid earlier triggers.
+/// - The legacy skip booleans are ignored for key/clipboard privacy: those
+///   events may be trigger-only, but their workflow checkpoints should still
+///   land even when DB row/content storage is disabled.
 fn reduce_drained_triggers<I>(
     msgs: I,
-    skip_clipboard: bool,
-    skip_keypress: bool,
+    _skip_clipboard: bool,
+    _skip_keypress: bool,
 ) -> (
     Option<CaptureTrigger>,
     Vec<crate::frame_linker::CorrelationId>,
@@ -174,20 +179,24 @@ where
     let mut trigger: Option<CaptureTrigger> = None;
     let mut correlation_ids = Vec::new();
     for msg in msgs {
-        let should_skip = match &msg.trigger {
-            CaptureTrigger::Clipboard => skip_clipboard,
-            CaptureTrigger::KeyPress => skip_keypress,
-            _ => false,
-        };
-        if should_skip {
-            continue;
-        }
         if let Some(corr) = msg.correlation_id {
             correlation_ids.push(corr);
         }
-        trigger = Some(msg.trigger);
+        let candidate_priority = trigger_reduce_priority(&msg.trigger);
+        let current_priority = trigger.as_ref().map(trigger_reduce_priority).unwrap_or(0);
+        if trigger.is_none() || candidate_priority >= current_priority {
+            trigger = Some(msg.trigger);
+        }
     }
     (trigger, correlation_ids)
+}
+
+fn trigger_reduce_priority(trigger: &CaptureTrigger) -> u8 {
+    if is_workflow_checkpoint_trigger(trigger) {
+        2
+    } else {
+        1
+    }
 }
 
 impl CaptureTrigger {
@@ -196,7 +205,7 @@ impl CaptureTrigger {
         match self {
             CaptureTrigger::AppSwitch { .. } => "app_switch",
             CaptureTrigger::WindowFocus { .. } => "window_focus",
-            CaptureTrigger::Click => "click",
+            CaptureTrigger::Click { .. } => "click",
             CaptureTrigger::TypingPause => "typing_pause",
             CaptureTrigger::ScrollStop => "scroll_stop",
             CaptureTrigger::KeyPress => "key_press",
@@ -204,6 +213,21 @@ impl CaptureTrigger {
             CaptureTrigger::VisualChange => "visual_change",
             CaptureTrigger::Idle => "idle",
             CaptureTrigger::Manual => "manual",
+        }
+    }
+
+    fn target_point(&self) -> Option<(i32, i32)> {
+        match self {
+            CaptureTrigger::AppSwitch {
+                target: Some((x, y)),
+                ..
+            }
+            | CaptureTrigger::WindowFocus {
+                target: Some((x, y)),
+                ..
+            } => Some((*x, *y)),
+            CaptureTrigger::Click { x, y } => Some((*x, *y)),
+            _ => None,
         }
     }
 }
@@ -219,18 +243,12 @@ pub struct EventDrivenCaptureConfig {
     pub jpeg_quality: u8,
     /// Whether to capture on clicks.
     pub capture_on_click: bool,
-    /// Whether to capture on non-printable keypresses when the a11y
-    /// layer has `capture_keystrokes=true`. Off by default — turning
-    /// this on can fire dozens of captures during a fast typing burst.
+    /// Whether to capture on key events when the a11y layer has
+    /// `capture_keystrokes=true`. Raw key/text DB persistence is
+    /// controlled separately by the recorder.
     pub capture_on_keystroke: bool,
-    /// Whether to capture on clipboard changes. **Off by default**:
-    /// taking a full paired capture (screenshot + tree walk + OCR) on
-    /// every Ctrl+C/X/V costs 250–800ms of blocking work and tends to
-    /// saturate the thread pool, causing visible input lag on USB HID
-    /// devices. The clipboard text is already stored in `ui_events`
-    /// via the input event batch — only the frame would be missing.
-    /// When this is false, Clipboard rows leave `frame_id` as NULL.
-    /// Flip to true to opt into linkage and accept the latency.
+    /// Whether to capture on clipboard changes. Clipboard row/content
+    /// persistence is controlled separately by the UI recorder.
     pub capture_on_clipboard: bool,
     /// Interval (ms) between visual-change checks (screenshot + frame diff).
     /// Set to 0 to disable visual change detection.
@@ -246,8 +264,8 @@ impl Default for EventDrivenCaptureConfig {
             idle_capture_interval_ms: 30_000, // 30 seconds
             jpeg_quality: 80,
             capture_on_click: true,
-            capture_on_keystroke: false,
-            capture_on_clipboard: false,
+            capture_on_keystroke: true,
+            capture_on_clipboard: true,
             visual_check_interval_ms: 3_000, // check every 3 seconds
             visual_change_threshold: 0.05,   // ~5% difference triggers capture
         }
@@ -264,15 +282,19 @@ pub struct EventDrivenCapture {
     config: EventDrivenCaptureConfig,
     /// Time of last capture
     last_capture: Instant,
+    /// Time reference for periodic idle captures.
+    last_idle_reference: Instant,
     /// Last known idle_ms from ActivityFeed
     last_idle_ms: u64,
 }
 
 impl EventDrivenCapture {
     pub fn new(config: EventDrivenCaptureConfig) -> Self {
+        let now = Instant::now();
         Self {
             config,
-            last_capture: Instant::now(),
+            last_capture: now,
+            last_idle_reference: now,
             last_idle_ms: 0,
         }
     }
@@ -284,12 +306,26 @@ impl EventDrivenCapture {
 
     /// Record that a capture just happened.
     pub fn mark_captured(&mut self) {
-        self.last_capture = Instant::now();
+        let now = Instant::now();
+        self.last_capture = now;
+        self.last_idle_reference = now;
+    }
+
+    /// Phase the next idle capture without changing the normal debounce clock.
+    pub fn phase_next_idle_capture(&mut self, delay: Duration) {
+        let idle_interval = Duration::from_millis(self.config.idle_capture_interval_ms);
+        let now = Instant::now();
+        self.last_idle_reference = if delay >= idle_interval {
+            now
+        } else {
+            now.checked_sub(idle_interval - delay).unwrap_or(now)
+        };
     }
 
     /// Check if we need an idle capture (no capture for too long).
     pub fn needs_idle_capture(&self) -> bool {
-        self.last_capture.elapsed() >= Duration::from_millis(self.config.idle_capture_interval_ms)
+        self.last_idle_reference.elapsed()
+            >= Duration::from_millis(self.config.idle_capture_interval_ms)
     }
 
     /// Poll activity state and return a trigger if a capture should happen.
@@ -424,6 +460,59 @@ pub(crate) fn should_release_on_pause_entry(was_paused: bool, is_paused: bool) -
     is_paused && !was_paused
 }
 
+type MonitorBounds = (i32, i32, i32, i32);
+
+fn monitor_bounds(monitor: &SafeMonitor) -> MonitorBounds {
+    let left = monitor.x();
+    let top = monitor.y();
+    let right = left.saturating_add(monitor.width() as i32);
+    let bottom = top.saturating_add(monitor.height() as i32);
+
+    (left, top, right, bottom)
+}
+
+fn point_in_bounds((left, top, right, bottom): MonitorBounds, x: i32, y: i32) -> bool {
+    x >= left && x < right && y >= top && y < bottom
+}
+
+fn trigger_applies_to_monitor(
+    trigger: &CaptureTrigger,
+    monitor: &SafeMonitor,
+    all_monitor_bounds: &[MonitorBounds],
+) -> bool {
+    let Some((x, y)) = trigger.target_point() else {
+        return true;
+    };
+
+    if !all_monitor_bounds
+        .iter()
+        .any(|bounds| point_in_bounds(*bounds, x, y))
+    {
+        return true;
+    }
+
+    point_in_bounds(monitor_bounds(monitor), x, y)
+}
+
+fn idle_phase_delay(
+    monitor: &SafeMonitor,
+    monitors: &[SafeMonitor],
+    idle_interval_ms: u64,
+) -> Duration {
+    let monitor_count = monitors.len().max(1);
+    let mut ordered_monitors = monitors.iter().collect::<Vec<_>>();
+    ordered_monitors.sort_by_key(|monitor| (monitor.x(), monitor.y(), monitor.id()));
+
+    let monitor_index = ordered_monitors
+        .iter()
+        .position(|candidate| candidate.id() == monitor.id())
+        .unwrap_or_else(|| (monitor.id() as usize) % monitor_count);
+    let delay_ms =
+        idle_interval_ms.saturating_mul((monitor_index + 1) as u64) / monitor_count as u64;
+
+    Duration::from_millis(delay_ms.max(1))
+}
+
 /// Main event-driven capture loop for a single monitor.
 ///
 /// This replaces `continuous_capture` for event-driven mode.
@@ -479,6 +568,22 @@ pub async fn event_driven_capture_loop(
     // need a modest tick to detect typing-pause / idle timers.
     let poll_interval = Duration::from_millis(250);
     let mut trigger_channel_closed = false;
+    let current_monitors = list_monitors().await;
+    let all_monitor_bounds = current_monitors
+        .iter()
+        .map(monitor_bounds)
+        .collect::<Vec<_>>();
+    let idle_phase_delay = idle_phase_delay(
+        &monitor,
+        &current_monitors,
+        state.config.idle_capture_interval_ms,
+    );
+    info!(
+        "idle capture phase for monitor {}: next idle in {}ms across {} monitor(s)",
+        monitor_id,
+        idle_phase_delay.as_millis(),
+        current_monitors.len().max(1)
+    );
 
     // Adaptive accessibility throttle: tracks per-app walk cost and backs off
     // for expensive apps (e.g., Electron apps whose UIA providers block the UI thread).
@@ -602,6 +707,7 @@ pub async fn event_driven_capture_loop(
             monitor_id
         );
     }
+    state.phase_next_idle_capture(idle_phase_delay);
 
     // Cache sorted excluded SCK window IDs to avoid recreating the persistent
     // SCK stream every time a transient window (tooltip, popup, badge) appears
@@ -990,6 +1096,10 @@ pub async fn event_driven_capture_loop(
                 trigger_channel_closed = true;
             }
 
+            drained.retain(|msg| {
+                trigger_applies_to_monitor(&msg.trigger, &monitor, &all_monitor_bounds)
+            });
+
             let (reduced_trigger, reduced_corr_ids) = reduce_drained_triggers(
                 drained,
                 !state.config.capture_on_clipboard,
@@ -1065,12 +1175,22 @@ pub async fn event_driven_capture_loop(
                 last_elements_cache.remove(&device_name);
             }
 
-            if state.can_capture() {
+            let can_capture = state.can_capture();
+            let debounce_exempt = is_workflow_checkpoint_trigger(&trigger);
+            if can_capture || debounce_exempt {
+                if !can_capture && debounce_exempt {
+                    debug!(
+                        "event capture bypassing debounce (trigger={}, monitor={})",
+                        trigger.as_str(),
+                        monitor_id
+                    );
+                }
+
                 // Pre-capture DRM gate: check BEFORE any SCK call.
                 // Uses AX APIs only — prevents even a single leaked frame.
                 {
                     let trigger_app = match &trigger {
-                        CaptureTrigger::AppSwitch { app_name } => Some(app_name.as_str()),
+                        CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.as_str()),
                         _ => None,
                     };
                     if crate::drm_detector::pre_capture_drm_check(pause_on_drm_content, trigger_app)
@@ -1435,6 +1555,7 @@ fn resolve_capture_metadata(
     match trigger {
         CaptureTrigger::AppSwitch {
             app_name: trigger_app_name,
+            ..
         } if !trigger_app_name.is_empty() => {
             if app_name.as_deref() != Some(trigger_app_name.as_str()) {
                 debug!(
@@ -1446,6 +1567,7 @@ fn resolve_capture_metadata(
         }
         CaptureTrigger::WindowFocus {
             window_name: trigger_window_name,
+            ..
         } if !trigger_window_name.is_empty() => {
             if window_name.as_deref() != Some(trigger_window_name.as_str()) {
                 debug!(
@@ -1520,13 +1642,41 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
 ///   hash dedup would otherwise drop. While HD is on we capture every change
 ///   at the HD interval and let the visual-change trigger + `min_capture_
 ///   interval_ms` debounce be the only rate limiters.
-/// - `Idle`/`Manual` triggers: fallback captures that must always write so the
-///   timeline is never completely empty.
+/// - semantic workflow-boundary triggers: focus changes, typing/scroll stops,
+///   clipboard actions, and shortcut keypresses must leave a durable checkpoint
+///   even when visible text is unchanged.
 /// - the 30s time-floor has elapsed: forces a write even if the hash matches.
 fn dedup_applies(trigger: &CaptureTrigger, hd_active: bool, since_last_db_write: Duration) -> bool {
     !hd_active
-        && !matches!(trigger, CaptureTrigger::Idle | CaptureTrigger::Manual)
+        && !is_workflow_checkpoint_trigger(trigger)
         && since_last_db_write < Duration::from_secs(30)
+}
+
+fn is_workflow_checkpoint_trigger(trigger: &CaptureTrigger) -> bool {
+    matches!(
+        trigger,
+        CaptureTrigger::AppSwitch { .. }
+            | CaptureTrigger::WindowFocus { .. }
+            | CaptureTrigger::TypingPause
+            | CaptureTrigger::ScrollStop
+            | CaptureTrigger::KeyPress
+            | CaptureTrigger::Clipboard
+            | CaptureTrigger::Idle
+            | CaptureTrigger::Manual
+    )
+}
+
+fn bypasses_capture_throttles(trigger: &CaptureTrigger) -> bool {
+    matches!(
+        trigger,
+        CaptureTrigger::AppSwitch { .. }
+            | CaptureTrigger::WindowFocus { .. }
+            | CaptureTrigger::TypingPause
+            | CaptureTrigger::ScrollStop
+            | CaptureTrigger::KeyPress
+            | CaptureTrigger::Clipboard
+            | CaptureTrigger::Manual
+    )
 }
 
 /// Perform a single event-driven capture.
@@ -1538,6 +1688,7 @@ fn dedup_applies(trigger: &CaptureTrigger, hd_active: bool, since_last_db_write:
 ///
 /// `hd_active` bypasses content dedup entirely for this capture — see
 /// [`dedup_applies`].
+#[allow(clippy::too_many_arguments)]
 async fn do_capture(
     params: &CaptureParams<'_>,
     trigger: &CaptureTrigger,
@@ -1549,6 +1700,7 @@ async fn do_capture(
     hd_active: bool,
 ) -> Result<CaptureOutput> {
     let captured_at = Utc::now();
+    let bypass_capture_throttles = bypasses_capture_throttles(trigger);
 
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
     // excludes them from the capture buffer (zero overhead, pixel-perfect).
@@ -1598,7 +1750,7 @@ async fn do_capture(
     // we do a lightweight AX query to get the focused app. This ensures the
     // walk budget applies to ALL captures, not just app switches.
     let trigger_app = match trigger {
-        CaptureTrigger::AppSwitch { app_name } => Some(app_name.clone()),
+        CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
         _ => {
             #[cfg(target_os = "macos")]
             {
@@ -1616,22 +1768,30 @@ async fn do_capture(
     // every few seconds in an active terminal, so cap to 1 capture per 30s per app.
     if let Some(ref app) = trigger_app {
         if terminal_ocr_throttled(app) {
-            debug!(
-                "terminal OCR throttle: skipping {} capture (within 30s of previous)",
-                app
-            );
-            return Ok(CaptureOutput {
-                result: None,
-                image,
-                elements_deduped: false,
-            });
+            if bypass_capture_throttles {
+                debug!(
+                    "terminal OCR throttle: allowing checkpoint {} capture for {}",
+                    trigger.as_str(),
+                    app
+                );
+            } else {
+                debug!(
+                    "terminal OCR throttle: skipping {} capture (within 30s of previous)",
+                    app
+                );
+                return Ok(CaptureOutput {
+                    result: None,
+                    image,
+                    elements_deduped: false,
+                });
+            }
         }
     }
 
     use screenpipe_a11y::tree::TreeWalkResult;
     if let Some(ref app) = trigger_app {
         let decision = walk_budget.should_walk(app);
-        if !decision.walk {
+        if !decision.walk && !bypass_capture_throttles {
             debug!(
                 "walk budget: throttling tree walk for {} (tier={:?}) — skipping capture",
                 app, decision.tier
@@ -1646,6 +1806,13 @@ async fn do_capture(
                 image,
                 elements_deduped: false,
             });
+        } else if !decision.walk {
+            debug!(
+                "walk budget: allowing checkpoint {} capture for {} despite tier={:?}",
+                trigger.as_str(),
+                app,
+                decision.tier
+            );
         }
         config.max_nodes_override = Some(decision.max_nodes);
         config.walk_timeout_override = Some(decision.timeout);
@@ -1993,16 +2160,56 @@ mod tests {
     fn test_capture_trigger_as_str() {
         assert_eq!(
             CaptureTrigger::AppSwitch {
-                app_name: "Safari".to_string()
+                app_name: "Safari".to_string(),
+                target: None,
             }
             .as_str(),
             "app_switch"
         );
-        assert_eq!(CaptureTrigger::Click.as_str(), "click");
+        assert_eq!(CaptureTrigger::Click { x: 10, y: 20 }.as_str(), "click");
+        assert_eq!(
+            CaptureTrigger::WindowFocus {
+                window_name: "Inbox".to_string(),
+                target: None,
+            }
+            .as_str(),
+            "window_focus"
+        );
         assert_eq!(CaptureTrigger::TypingPause.as_str(), "typing_pause");
+        assert_eq!(CaptureTrigger::ScrollStop.as_str(), "scroll_stop");
+        assert_eq!(CaptureTrigger::KeyPress.as_str(), "key_press");
+        assert_eq!(CaptureTrigger::Clipboard.as_str(), "clipboard");
         assert_eq!(CaptureTrigger::VisualChange.as_str(), "visual_change");
         assert_eq!(CaptureTrigger::Idle.as_str(), "idle");
         assert_eq!(CaptureTrigger::Manual.as_str(), "manual");
+    }
+
+    #[test]
+    fn workflow_checkpoint_trigger_classification() {
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::AppSwitch {
+            app_name: "Code".into(),
+            target: None,
+        }));
+        assert!(is_workflow_checkpoint_trigger(
+            &CaptureTrigger::WindowFocus {
+                window_name: "main.rs".into(),
+                target: None,
+            }
+        ));
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::TypingPause));
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::ScrollStop));
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::KeyPress));
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::Clipboard));
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::Idle));
+        assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::Manual));
+
+        assert!(!is_workflow_checkpoint_trigger(&CaptureTrigger::Click {
+            x: 10,
+            y: 20,
+        }));
+        assert!(!is_workflow_checkpoint_trigger(
+            &CaptureTrigger::VisualChange
+        ));
     }
 
     #[test]
@@ -2012,13 +2219,41 @@ mod tests {
 
         // Baseline: a change-driven trigger within the 30s floor → dedup applies.
         assert!(dedup_applies(&CaptureTrigger::VisualChange, false, recent));
-        assert!(dedup_applies(&CaptureTrigger::Click, false, recent));
+        assert!(dedup_applies(
+            &CaptureTrigger::Click { x: 10, y: 20 },
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::AppSwitch {
+                app_name: "Code".into(),
+                target: None,
+            },
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::WindowFocus {
+                window_name: "main.rs".into(),
+                target: None,
+            },
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(&CaptureTrigger::TypingPause, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::ScrollStop, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::KeyPress, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::Clipboard, false, recent));
 
         // HD active → dedup is bypassed even for an otherwise-eligible trigger.
         // This is the fix: video/demo replay moves pixels but not AX text, so
         // the hash would dedup it away without this bypass.
         assert!(!dedup_applies(&CaptureTrigger::VisualChange, true, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Click, true, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::Click { x: 10, y: 20 },
+            true,
+            recent
+        ));
 
         // Idle/Manual are always dedup-exempt (timeline floor), HD or not.
         assert!(!dedup_applies(&CaptureTrigger::Idle, false, recent));
@@ -2026,6 +2261,37 @@ mod tests {
 
         // 30s time-floor: once it elapses, write through regardless.
         assert!(!dedup_applies(&CaptureTrigger::VisualChange, false, stale));
+    }
+
+    #[test]
+    fn capture_throttle_bypass_classification() {
+        assert!(bypasses_capture_throttles(&CaptureTrigger::AppSwitch {
+            app_name: "Code".into(),
+            target: None,
+        }));
+        assert!(bypasses_capture_throttles(&CaptureTrigger::WindowFocus {
+            window_name: "main.rs".into(),
+            target: None,
+        }));
+        assert!(bypasses_capture_throttles(&CaptureTrigger::TypingPause));
+        assert!(bypasses_capture_throttles(&CaptureTrigger::ScrollStop));
+        assert!(bypasses_capture_throttles(&CaptureTrigger::KeyPress));
+        assert!(bypasses_capture_throttles(&CaptureTrigger::Clipboard));
+        assert!(bypasses_capture_throttles(&CaptureTrigger::Manual));
+
+        assert!(!bypasses_capture_throttles(&CaptureTrigger::Click {
+            x: 10,
+            y: 20,
+        }));
+        assert!(!bypasses_capture_throttles(&CaptureTrigger::VisualChange));
+        assert!(!bypasses_capture_throttles(&CaptureTrigger::Idle));
+    }
+
+    #[test]
+    fn default_config_captures_key_and_clipboard_triggers() {
+        let config = EventDrivenCaptureConfig::default();
+        assert!(config.capture_on_keystroke);
+        assert!(config.capture_on_clipboard);
     }
 
     #[test]
@@ -2054,7 +2320,7 @@ mod tests {
         assert!(!state.needs_idle_capture());
 
         // Simulate waiting
-        state.last_capture = Instant::now()
+        state.last_idle_reference = Instant::now()
             .checked_sub(Duration::from_millis(150))
             .unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
@@ -2068,7 +2334,7 @@ mod tests {
         };
         let mut state = EventDrivenCapture::new(config);
 
-        state.last_capture = Instant::now()
+        state.last_idle_reference = Instant::now()
             .checked_sub(Duration::from_millis(150))
             .unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
@@ -2081,16 +2347,23 @@ mod tests {
     fn test_trigger_channel() {
         let (tx, mut rx) = trigger_channel();
 
-        tx.send(CaptureTriggerMsg::new(CaptureTrigger::Click))
-            .unwrap();
+        tx.send(CaptureTriggerMsg::new(CaptureTrigger::Click {
+            x: 10,
+            y: 20,
+        }))
+        .unwrap();
         tx.send(CaptureTriggerMsg::new(CaptureTrigger::AppSwitch {
             app_name: "Code".to_string(),
+            target: None,
         }))
         .unwrap();
 
-        assert_eq!(rx.try_recv().unwrap().trigger, CaptureTrigger::Click);
+        assert!(matches!(
+            rx.try_recv().unwrap().trigger,
+            CaptureTrigger::Click { x: 10, y: 20 }
+        ));
         match rx.try_recv().unwrap().trigger {
-            CaptureTrigger::AppSwitch { app_name } => assert_eq!(app_name, "Code"),
+            CaptureTrigger::AppSwitch { app_name, .. } => assert_eq!(app_name, "Code"),
             _ => panic!("expected AppSwitch"),
         }
     }
@@ -2101,81 +2374,108 @@ mod tests {
         let mut rx2 = tx.subscribe();
 
         tx.send(CaptureTriggerMsg::with_correlation(
-            CaptureTrigger::Click,
+            CaptureTrigger::Click { x: 10, y: 20 },
             42,
         ))
         .unwrap();
 
         let m1 = rx1.try_recv().unwrap();
         let m2 = rx2.try_recv().unwrap();
-        assert_eq!(m1.trigger, CaptureTrigger::Click);
+        assert!(matches!(m1.trigger, CaptureTrigger::Click { x: 10, y: 20 }));
         assert_eq!(m1.correlation_id, Some(42));
-        assert_eq!(m2.trigger, CaptureTrigger::Click);
+        assert!(matches!(m2.trigger, CaptureTrigger::Click { x: 10, y: 20 }));
         assert_eq!(m2.correlation_id, Some(42));
     }
 
     #[test]
-    fn reduce_drained_picks_last_kind_and_collects_corr_ids() {
+    fn reduce_drained_picks_latest_checkpoint_and_collects_corr_ids() {
         let drained = vec![
-            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 1),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click { x: 10, y: 20 }, 1),
             CaptureTriggerMsg::with_correlation(
                 CaptureTrigger::AppSwitch {
                     app_name: "Code".into(),
+                    target: None,
                 },
                 2,
             ),
             CaptureTriggerMsg::with_correlation(
                 CaptureTrigger::WindowFocus {
                     window_name: "main".into(),
+                    target: None,
                 },
                 3,
             ),
         ];
         let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
-        // Last kind wins.
+        // Last workflow checkpoint wins.
         assert!(matches!(trigger, Some(CaptureTrigger::WindowFocus { .. })));
         // All three corr ids accumulate.
         assert_eq!(corrs, vec![1, 2, 3]);
     }
 
     #[test]
-    fn reduce_drained_skipped_clipboard_does_not_clear_earlier_corr_ids() {
-        // The exact regression: a Clipboard tail with the gate OFF used
-        // to clear valid Click corr_ids that drained alongside it.
+    fn reduce_drained_keeps_checkpoint_over_trailing_click() {
         let drained = vec![
-            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 10),
-            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 11),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 1),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click { x: 10, y: 20 }, 2),
+        ];
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
+        assert_eq!(trigger, Some(CaptureTrigger::Clipboard));
+        assert_eq!(corrs, vec![1, 2]);
+    }
+
+    #[test]
+    fn reduce_drained_latest_checkpoint_wins_among_checkpoints() {
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 1),
+            CaptureTriggerMsg::with_correlation(
+                CaptureTrigger::WindowFocus {
+                    window_name: "main.rs".into(),
+                    target: None,
+                },
+                2,
+            ),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 3),
+        ];
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
+        assert_eq!(trigger, Some(CaptureTrigger::KeyPress));
+        assert_eq!(corrs, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn reduce_drained_clipboard_checkpoint_wins_even_when_legacy_gate_off() {
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click { x: 10, y: 20 }, 10),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click { x: 11, y: 21 }, 11),
             CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 12),
         ];
         let (trigger, corrs) =
             reduce_drained_triggers(drained, /*skip_clipboard*/ true, false);
-        // Clipboard dropped from kind decision — most recent non-skipped wins.
-        assert_eq!(trigger, Some(CaptureTrigger::Click));
-        // Only the two valid Click corr ids survive.
-        assert_eq!(corrs, vec![10, 11]);
+        assert_eq!(trigger, Some(CaptureTrigger::Clipboard));
+        assert_eq!(corrs, vec![10, 11, 12]);
     }
 
     #[test]
-    fn reduce_drained_skipped_keypress_filters_in_mixed_drain() {
+    fn reduce_drained_keypress_checkpoint_wins_even_when_legacy_gate_off() {
         let drained = vec![
             CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 20),
-            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 21),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click { x: 10, y: 20 }, 21),
             CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 22),
         ];
         let (trigger, corrs) = reduce_drained_triggers(drained, false, /*skip_keypress*/ true);
-        assert_eq!(trigger, Some(CaptureTrigger::Click));
-        assert_eq!(corrs, vec![21]);
+        assert_eq!(trigger, Some(CaptureTrigger::KeyPress));
+        assert_eq!(corrs, vec![20, 21, 22]);
     }
 
     #[test]
-    fn reduce_drained_all_skipped_returns_none() {
+    fn reduce_drained_legacy_gates_do_not_skip_key_or_clipboard() {
         let drained = vec![
             CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 1),
             CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 2),
         ];
         let (trigger, corrs) = reduce_drained_triggers(drained, true, true);
-        assert!(trigger.is_none());
-        assert!(corrs.is_empty());
+        assert_eq!(trigger, Some(CaptureTrigger::KeyPress));
+        assert_eq!(corrs, vec![1, 2]);
     }
 
     #[test]
@@ -2193,10 +2493,13 @@ mod tests {
     #[tokio::test]
     async fn test_trigger_receiver_recv_async() {
         let (tx, mut rx) = trigger_channel();
-        tx.send(CaptureTriggerMsg::new(CaptureTrigger::Click))
-            .unwrap();
+        tx.send(CaptureTriggerMsg::new(CaptureTrigger::Click {
+            x: 10,
+            y: 20,
+        }))
+        .unwrap();
         let got = rx.recv().await.unwrap();
-        assert_eq!(got.trigger, CaptureTrigger::Click);
+        assert_eq!(got.trigger, CaptureTrigger::Click { x: 10, y: 20 });
     }
 
     #[test]
@@ -2206,14 +2509,8 @@ mod tests {
         assert_eq!(config.idle_capture_interval_ms, 30_000);
         assert_eq!(config.jpeg_quality, 80);
         assert!(config.capture_on_click);
-        assert!(
-            !config.capture_on_clipboard,
-            "off by default — HID latency trade-off; opt in for frame_id linkage"
-        );
-        assert!(
-            !config.capture_on_keystroke,
-            "off by default — capture-per-keystroke would be a storm during typing"
-        );
+        assert!(config.capture_on_clipboard);
+        assert!(config.capture_on_keystroke);
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
     }

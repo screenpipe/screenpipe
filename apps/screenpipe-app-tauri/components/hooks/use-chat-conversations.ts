@@ -33,6 +33,7 @@ import {
   searchConversations,
   migrateFromStoreBin,
   CHAT_HISTORY_INITIAL_LIMIT,
+  conversationDedupKey,
   type ConversationMeta,
 } from "@/lib/chat-storage";
 
@@ -218,6 +219,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
       titleSource: conversation.titleSource,
+      dedupKey: conversationDedupKey(conversation) ?? undefined,
     };
 
     setFileConversations((prev) => {
@@ -702,6 +704,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // plain chat (kind/pipeContext dropped on disk).
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+      ...(existing?.pinned ? { pinned: existing.pinned } : {}),
+      ...(existing?.hidden ? { hidden: existing.hidden } : {}),
       // Preserve sort key across reloads. Source of truth: the in-memory
       // chat-store, which is bumped exactly once per user-send.
       ...(await (async () => {

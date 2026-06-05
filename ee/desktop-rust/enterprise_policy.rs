@@ -194,6 +194,7 @@ pub fn set_sync_streams(
 /// machine on every tick. Returns the defaults (all-true) if the lock is
 /// poisoned — fail-open here mirrors the centralized-data master-switch
 /// behavior: the ingest endpoint will still enforce policy server-side.
+#[cfg(test)]
 pub fn current_sync_streams() -> SyncStreams {
     SYNC_STREAMS.read().map(|guard| *guard).unwrap_or_default()
 }

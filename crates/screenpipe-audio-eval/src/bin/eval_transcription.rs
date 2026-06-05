@@ -132,115 +132,6 @@ fn parse_models(spec: &str, default_cap: usize) -> Result<Vec<ModelSpec>> {
     Ok(out)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn single_model_no_cap_uses_default() {
-        let specs = parse_models("tiny", 50).unwrap();
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].name, "tiny");
-        assert_eq!(specs[0].cap, 50);
-        assert!(matches!(
-            specs[0].engine,
-            AudioTranscriptionEngine::WhisperTiny
-        ));
-    }
-
-    #[test]
-    fn cap_override_wins_over_default() {
-        let specs = parse_models("tiny=10", 50).unwrap();
-        assert_eq!(specs[0].cap, 10);
-    }
-
-    #[test]
-    fn multiple_models_preserve_order() {
-        let specs =
-            parse_models("tiny=50,whisper-large-v3-turbo-quantized=20,parakeet", 30).unwrap();
-        assert_eq!(specs.len(), 3);
-        assert_eq!(specs[0].name, "tiny");
-        assert_eq!(specs[0].cap, 50);
-        assert_eq!(specs[1].name, "whisper-large-v3-turbo-quantized");
-        assert_eq!(specs[1].cap, 20);
-        assert_eq!(specs[2].name, "parakeet");
-        // parakeet falls back to default since no =N was provided.
-        assert_eq!(specs[2].cap, 30);
-    }
-
-    #[test]
-    fn whitespace_and_empty_entries_tolerated() {
-        let specs = parse_models("  tiny ,, , parakeet=5 ", 50).unwrap();
-        assert_eq!(specs.len(), 2);
-        assert_eq!(specs[0].name, "tiny");
-        assert_eq!(specs[1].name, "parakeet");
-        assert_eq!(specs[1].cap, 5);
-    }
-
-    #[test]
-    fn unknown_model_errors_with_clear_message() {
-        let err = parse_models("bogus-engine", 50).unwrap_err().to_string();
-        assert!(
-            err.contains("unknown model"),
-            "expected 'unknown model' in: {err}"
-        );
-    }
-
-    #[test]
-    fn base_alias_rejected_not_silently_remapped() {
-        let err = parse_models("base", 50).unwrap_err().to_string();
-        // Don't silently fall through to tiny — surface a clear error so the
-        // CI report doesn't mislead.
-        assert!(
-            err.contains("not a screenpipe engine variant"),
-            "expected explicit rejection in: {err}"
-        );
-    }
-
-    #[test]
-    fn empty_spec_errors() {
-        let err = parse_models("", 50).unwrap_err().to_string();
-        assert!(err.contains("empty"), "expected 'empty' in: {err}");
-        let err2 = parse_models(" , , ", 50).unwrap_err().to_string();
-        assert!(err2.contains("empty"), "expected 'empty' in: {err2}");
-    }
-
-    #[test]
-    fn zero_cap_rejected() {
-        let err = parse_models("tiny=0", 50).unwrap_err().to_string();
-        assert!(err.contains("is 0"), "expected '=0' rejection in: {err}");
-    }
-
-    #[test]
-    fn non_numeric_cap_errors() {
-        let err = parse_models("tiny=lots", 50).unwrap_err().to_string();
-        assert!(
-            err.contains("invalid cap"),
-            "expected parse error in: {err}"
-        );
-    }
-
-    #[test]
-    fn whisper_aliases_resolve() {
-        assert!(matches!(
-            parse_engine("whisper-tiny").unwrap(),
-            AudioTranscriptionEngine::WhisperTiny
-        ));
-        assert!(matches!(
-            parse_engine("whisper-large").unwrap(),
-            AudioTranscriptionEngine::WhisperLargeV3
-        ));
-        assert!(matches!(
-            parse_engine("whisper-large-v3-turbo-quantized").unwrap(),
-            AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
-        ));
-        assert!(matches!(
-            parse_engine("parakeet").unwrap(),
-            AudioTranscriptionEngine::Parakeet
-        ));
-    }
-}
-
 /// Ensure the model weights are on disk before constructing the engine.
 /// Whisper variants go through screenpipe's own HF helper; Parakeet goes
 /// through audiopipe directly because the engine constructor only does a
@@ -425,4 +316,113 @@ async fn main() -> Result<()> {
         anyhow::bail!("one or more models failed; see error rows in the JSON output");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_model_no_cap_uses_default() {
+        let specs = parse_models("tiny", 50).unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "tiny");
+        assert_eq!(specs[0].cap, 50);
+        assert!(matches!(
+            specs[0].engine,
+            AudioTranscriptionEngine::WhisperTiny
+        ));
+    }
+
+    #[test]
+    fn cap_override_wins_over_default() {
+        let specs = parse_models("tiny=10", 50).unwrap();
+        assert_eq!(specs[0].cap, 10);
+    }
+
+    #[test]
+    fn multiple_models_preserve_order() {
+        let specs =
+            parse_models("tiny=50,whisper-large-v3-turbo-quantized=20,parakeet", 30).unwrap();
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[0].name, "tiny");
+        assert_eq!(specs[0].cap, 50);
+        assert_eq!(specs[1].name, "whisper-large-v3-turbo-quantized");
+        assert_eq!(specs[1].cap, 20);
+        assert_eq!(specs[2].name, "parakeet");
+        // parakeet falls back to default since no =N was provided.
+        assert_eq!(specs[2].cap, 30);
+    }
+
+    #[test]
+    fn whitespace_and_empty_entries_tolerated() {
+        let specs = parse_models("  tiny ,, , parakeet=5 ", 50).unwrap();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name, "tiny");
+        assert_eq!(specs[1].name, "parakeet");
+        assert_eq!(specs[1].cap, 5);
+    }
+
+    #[test]
+    fn unknown_model_errors_with_clear_message() {
+        let err = parse_models("bogus-engine", 50).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown model"),
+            "expected 'unknown model' in: {err}"
+        );
+    }
+
+    #[test]
+    fn base_alias_rejected_not_silently_remapped() {
+        let err = parse_models("base", 50).unwrap_err().to_string();
+        // Don't silently fall through to tiny — surface a clear error so the
+        // CI report doesn't mislead.
+        assert!(
+            err.contains("not a screenpipe engine variant"),
+            "expected explicit rejection in: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_spec_errors() {
+        let err = parse_models("", 50).unwrap_err().to_string();
+        assert!(err.contains("empty"), "expected 'empty' in: {err}");
+        let err2 = parse_models(" , , ", 50).unwrap_err().to_string();
+        assert!(err2.contains("empty"), "expected 'empty' in: {err2}");
+    }
+
+    #[test]
+    fn zero_cap_rejected() {
+        let err = parse_models("tiny=0", 50).unwrap_err().to_string();
+        assert!(err.contains("is 0"), "expected '=0' rejection in: {err}");
+    }
+
+    #[test]
+    fn non_numeric_cap_errors() {
+        let err = parse_models("tiny=lots", 50).unwrap_err().to_string();
+        assert!(
+            err.contains("invalid cap"),
+            "expected parse error in: {err}"
+        );
+    }
+
+    #[test]
+    fn whisper_aliases_resolve() {
+        assert!(matches!(
+            parse_engine("whisper-tiny").unwrap(),
+            AudioTranscriptionEngine::WhisperTiny
+        ));
+        assert!(matches!(
+            parse_engine("whisper-large").unwrap(),
+            AudioTranscriptionEngine::WhisperLargeV3
+        ));
+        assert!(matches!(
+            parse_engine("whisper-large-v3-turbo-quantized").unwrap(),
+            AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
+        ));
+        assert!(matches!(
+            parse_engine("parakeet").unwrap(),
+            AudioTranscriptionEngine::Parakeet
+        ));
+    }
 }

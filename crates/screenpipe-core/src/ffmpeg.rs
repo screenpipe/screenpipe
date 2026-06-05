@@ -23,23 +23,33 @@ pub fn find_ffmpeg_path() -> Option<PathBuf> {
 
 /// Create a `std::process::Command` for ffmpeg with `CREATE_NO_WINDOW` on Windows.
 pub fn ffmpeg_cmd(path: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
-    #[allow(unused_mut)]
-    let mut cmd = std::process::Command::new(path);
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new(path)
+    }
+
     #[cfg(windows)]
     {
+        let mut cmd = std::process::Command::new(path);
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd
     }
-    cmd
 }
 
 /// Create a `tokio::process::Command` for ffmpeg with `CREATE_NO_WINDOW` on Windows.
 pub fn ffmpeg_cmd_async(path: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    #[allow(unused_mut)]
-    let mut cmd = tokio::process::Command::new(path);
+    #[cfg(not(windows))]
+    {
+        tokio::process::Command::new(path)
+    }
+
     #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    cmd
+    {
+        let mut cmd = tokio::process::Command::new(path);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd
+    }
 }
 
 /// True when a usable ffprobe exists next to the given ffmpeg binary, OR

@@ -19,7 +19,7 @@ oasgen = { workspace = true }
 
 # Cross-platform audio capture. Tracks screenpipe/cpal main, which carries
 # the Windows WASAPI AEC and macOS VoiceProcessingIO patches.
-cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "99f7c0f175217b5e47e4e454acbc02089d1fdd29" }
+cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12" }
 
 # Wav encoding
 hound = "3.5"

@@ -24,13 +24,14 @@ pub struct UiCaptureConfig {
     /// Capture aggregated text input
     pub capture_text: bool,
 
-    /// Capture individual keystrokes (privacy risk - disabled by default)
+    /// Emit individual key events. The engine decides whether those events
+    /// are persisted or used only as capture triggers.
     pub capture_keystrokes: bool,
 
     /// Capture app switches
     pub capture_app_switch: bool,
 
-    /// Capture window focus changes (high volume - disabled by default)
+    /// Capture window focus changes
     pub capture_window_focus: bool,
 
     /// Capture scroll events (very high volume - disabled by default)
@@ -186,8 +187,8 @@ impl Default for UiCaptureConfig {
             capture_text: true,
             capture_keystrokes: false, // Privacy risk
             capture_app_switch: true,
-            capture_window_focus: false, // High volume
-            capture_scroll: false,       // Very high volume
+            capture_window_focus: true,
+            capture_scroll: false, // Very high volume
             capture_clipboard: true,
             capture_clipboard_content: true,
             capture_context: true,
@@ -428,6 +429,7 @@ mod tests {
         let config = UiCaptureConfig::new();
         assert!(config.enabled);
         assert!(config.capture_clicks);
+        assert!(config.capture_window_focus);
         assert!(!config.capture_keystrokes); // Should be off by default
         assert!(config.capture_clipboard_content); // On by default
     }

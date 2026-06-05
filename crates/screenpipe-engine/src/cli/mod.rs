@@ -507,19 +507,15 @@ pub struct RecordArgs {
     #[arg(long)]
     pub min_capture_interval_ms: Option<u64>,
 
-    /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_keystroke`.
-    /// When true, non-printable key events (Arrow/Enter/Tab/Esc, modifier
-    /// combos like Ctrl+S) fire a paired capture so `ui_events.frame_id`
-    /// is populated for the originating row. Off by default — fast typing
-    /// can flood the pipeline even with the min-capture-interval debounce.
+    /// Legacy key-trigger override. Recording sessions keep keyboard-triggered
+    /// capture on; raw key/text DB rows are controlled separately by
+    /// `--disable-keyboard-capture`.
     #[arg(long)]
     pub capture_on_keystroke: Option<bool>,
 
     /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_clipboard`.
-    /// When true, clipboard changes fire a paired capture so the clipboard
-    /// row's `frame_id` is linked. Off by default — adds 50-150ms of
-    /// blocking work per Ctrl+C/X/V (more with OCR fallback) which can
-    /// cause visible HID input lag on some USB devices.
+    /// When true, clipboard changes fire a paired capture. Clipboard DB row
+    /// persistence is controlled separately by `--disable-clipboard-capture`.
     #[arg(long)]
     pub capture_on_clipboard: Option<bool>,
 
@@ -589,10 +585,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_clipboard_capture: bool,
 
-    /// Disable keyboard / typed-text capture entirely. The UI recorder will
-    /// not record what you type (`capture_text`) — the accessibility tree +
-    /// OCR still capture on-screen text. Useful when piping ~/.screenpipe
-    /// data into a remote LLM (secrets get typed).
+    /// Disable persisting keyboard / typed-text rows. Keyboard events still
+    /// wake event-driven capture, and the accessibility tree + OCR still
+    /// capture on-screen text. Useful when piping ~/.screenpipe data into a
+    /// remote LLM (secrets get typed).
     #[arg(long, default_value_t = false)]
     pub disable_keyboard_capture: bool,
 
@@ -783,11 +779,10 @@ impl RecordArgs {
 
     /// Create UI recorder configuration from record arguments
     pub fn to_ui_recorder_config(&self) -> crate::ui_recorder::UiRecorderConfig {
-        // Mirror `--capture-on-keystroke` / `--capture-on-clipboard` into
-        // the recorder so it doesn't mint corr_ids for triggers the
-        // capture loop will drop. None = engine default (false), same as
-        // in `RecordingConfig::to_ui_recorder_config`.
         let defaults = crate::ui_recorder::UiRecorderConfig::default();
+        let capture_on_clipboard = self
+            .capture_on_clipboard
+            .unwrap_or(defaults.capture_on_clipboard);
         crate::ui_recorder::UiRecorderConfig {
             enabled: true,
             enable_tree_walker: true,
@@ -795,19 +790,22 @@ impl RecordArgs {
             excluded_windows: self.ignored_windows.clone(),
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
-            // --disable-clipboard-capture flips both flags off. Defaults are
-            // `true` for both, so opting out has to be explicit.
-            capture_clipboard: !self.disable_clipboard_capture,
+            // Keep operation detection alive when clipboard-triggered capture
+            // is enabled, but do not store rows/content when the user opted out.
+            capture_clipboard: !self.disable_clipboard_capture || capture_on_clipboard,
             capture_clipboard_content: !self.disable_clipboard_capture,
-            // --disable-keyboard-capture drops the typed-text stream; the
-            // a11y tree + OCR still capture on-screen text.
+            // Keyboard events always reach the recorder so they can wake
+            // event-driven capture. --disable-keyboard-capture only stops
+            // text/key rows from being persisted.
             capture_text: !self.disable_keyboard_capture,
-            capture_on_keystroke: self
-                .capture_on_keystroke
-                .unwrap_or(defaults.capture_on_keystroke),
-            capture_on_clipboard: self
-                .capture_on_clipboard
-                .unwrap_or(defaults.capture_on_clipboard),
+            capture_keystrokes: true,
+            record_keyboard_events: !self.disable_keyboard_capture,
+            record_clipboard_events: !self.disable_clipboard_capture,
+            // Same-app title changes must reach the event-driven trigger
+            // mapper so focus changes can produce linked captures.
+            capture_window_focus: true,
+            capture_on_keystroke: true,
+            capture_on_clipboard,
             capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
             ..defaults
         }
@@ -1902,6 +1900,35 @@ mod tests {
                     !settings.pause_on_drm_content,
                     "absent flag should be false in settings"
                 );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_trigger_sources_survive_sensitive_storage_opt_out() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--capture-on-clipboard",
+            "true",
+            "--disable-keyboard-capture",
+            "--disable-clipboard-capture",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Record(args) => {
+                let ui = args.to_ui_recorder_config();
+                assert!(ui.capture_window_focus);
+                assert!(ui.capture_keystrokes);
+                assert!(ui.capture_on_keystroke);
+                assert!(ui.capture_clipboard);
+                assert!(ui.capture_on_clipboard);
+                assert!(!ui.capture_clipboard_content);
+                assert!(!ui.capture_text);
+                assert!(!ui.record_keyboard_events);
+                assert!(!ui.record_clipboard_events);
             }
             _ => panic!("expected Record command"),
         }

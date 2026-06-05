@@ -534,10 +534,7 @@ fn build_capture(
     // at 96kHz (common for headphone DACs), asbd may still report 48kHz, causing
     // the recording pipeline to interpret 1.44M samples as 30s @ 48kHz when
     // they're actually 15s @ 96kHz — produces files that play at 2x slowmo.
-    let sample_rate = agg_device
-        .nominal_sample_rate()
-        .map(|r| r as f64)
-        .unwrap_or(asbd.sample_rate);
+    let sample_rate = agg_device.nominal_sample_rate().unwrap_or(asbd.sample_rate);
     info!(
         "Process Tap: {:.0} Hz (asbd reported {:.0} Hz), {} ch, {} bit",
         sample_rate, asbd.sample_rate, channels, asbd.bits_per_channel

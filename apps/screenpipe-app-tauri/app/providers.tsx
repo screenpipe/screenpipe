@@ -15,6 +15,9 @@ import { forwardRef } from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { commands } from "@/lib/utils/tauri";
 import { useUpdateListener } from "@/components/update-banner";
+import { AppEntitlementGate } from "@/components/app-entitlement-gate";
+import { DeeplinkHandler } from "@/components/deeplink-handler";
+import { usePathname } from "next/navigation";
 
 /// Global mount point for the updater event listener. Lives here (not in
 /// per-page hooks) so the listener is registered for the lifetime of the
@@ -45,6 +48,12 @@ export const Providers = forwardRef<
   // succeeds; the post-mount effect flips mounted=true and the real tree
   // renders client-only without a hydration step.
   const [mounted, setMounted] = useState(false);
+  // The deep-link handler (which turns the screenpipe:// login callback into a
+  // loadUser call) MUST stay mounted outside the entitlement gate. Otherwise the
+  // "sign in required" screen unmounts it and the login token is dropped, so
+  // sign-in can never complete and the user is locked out for good.
+  const pathname = usePathname();
+  const isOverlay = pathname === "/shortcut-reminder";
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -133,7 +142,14 @@ export const Providers = forwardRef<
             <ChangelogDialogProvider>
               <PermissionMonitorProvider>
                 <UpdateListenerMount />
-                <PostHogProvider client={posthog}>{mounted ? children : null}</PostHogProvider>
+                <PostHogProvider client={posthog}>
+                  {mounted ? (
+                    <>
+                      {!isOverlay && <DeeplinkHandler />}
+                      <AppEntitlementGate>{children}</AppEntitlementGate>
+                    </>
+                  ) : null}
+                </PostHogProvider>
               </PermissionMonitorProvider>
             </ChangelogDialogProvider>
           </ThemeProvider>

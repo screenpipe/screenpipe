@@ -14,6 +14,7 @@ export type ScreenpipeTauriCommands = {
   reveal: string;
   dispose: string;
   events: string;
+  identify: string;
 };
 
 export type ScreenpipeTauriStartOptions = Partial<RecorderOptions> & {
@@ -86,6 +87,23 @@ export type CreateScreenpipeTauriClientOptions = {
   commands?: Partial<ScreenpipeTauriCommands>;
   /** Override the Tauri event channel — defaults to `screenpipe://event`. */
   eventChannel?: string;
+  /**
+   * Stable identifier for the end user of YOUR app. When set, the native
+   * plugin tags its telemetry — crash reports (Sentry) and usage events
+   * (PostHog) — with this id, so a specific user can be identified in
+   * screenpipe's dashboards. Sent to the plugin via `screenpipe_identify`
+   * on creation; reporting happens natively in Rust (no webview/CSP issues).
+   */
+  userId?: string;
+  /**
+   * Master switch for SDK telemetry. Defaults to `true`. Set `false` to
+   * disable it entirely in the plugin (no PostHog/Sentry requests are made).
+   */
+  telemetry?: boolean;
+  /** Optional app name attached to telemetry for segmentation. */
+  appName?: string;
+  /** Optional release/version string attached to telemetry. */
+  release?: string;
 };
 
 export const DEFAULT_TAURI_COMMANDS: ScreenpipeTauriCommands;

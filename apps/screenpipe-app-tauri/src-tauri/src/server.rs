@@ -257,6 +257,10 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
         .route("/log", axum::routing::post(log_message))
         .route("/auth", axum::routing::post(handle_auth))
         .route("/app-icon", axum::routing::get(get_app_icon_handler))
+        .route(
+            "/installed-apps",
+            axum::routing::get(list_installed_apps_handler),
+        )
         .route("/window-size", axum::routing::post(set_window_size))
         .route("/focus", axum::routing::post(handle_focus))
         .layer(cors)
@@ -493,6 +497,38 @@ async fn get_app_icon_handler(
         ];
         (StatusCode::NOT_FOUND, headers, Bytes::new())
     }
+}
+
+/// List installed applications by display name. Lets the privacy window-filter
+/// UI surface apps that haven't been captured yet (the SQL autocomplete only
+/// knows recorded apps). Cached briefly so repeated mounts don't re-scan disk.
+async fn list_installed_apps_handler(State(_): State<ServerState>) -> impl IntoResponse {
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static CACHE: Lazy<Mutex<Option<(Instant, Vec<String>)>>> = Lazy::new(|| Mutex::new(None));
+    const TTL: Duration = Duration::from_secs(60);
+
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((at, apps)) = guard.as_ref() {
+            if at.elapsed() < TTL {
+                return Json(apps.clone());
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let apps = tokio::task::spawn_blocking(crate::icons::list_installed_apps)
+        .await
+        .unwrap_or_default();
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let apps: Vec<String> = Vec::new();
+
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((Instant::now(), apps.clone()));
+    }
+    Json(apps)
 }
 
 async fn set_window_size(

@@ -91,6 +91,14 @@ $env:RECORD_VIDEO="1"; bun run test:e2e
 #    with OCR/Timeline assertions when the runner exposes usable frames; no-audio
 #    keeps hosted runners out of Whisper startup while vision capture stays on)
 $env:SCREENPIPE_E2E_SEED="onboarding,no-audio"; bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/windows-core-recording.spec.ts
+
+# 6. Run the Windows event-trigger capture checks (keystroke/clipboard/window-focus
+#    triggers on; raw key and clipboard rows stay disabled and focus rows get linked)
+$env:SCREENPIPE_E2E_SEED="onboarding,no-audio,event-trigger-capture"; bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/windows-core-recording.spec.ts
+
+# 7. Run the same trigger lane with raw key DB rows opted in; verifies key rows
+#    get linked frame_id too.
+$env:SCREENPIPE_E2E_SEED="onboarding,no-audio,event-trigger-capture,keyboard-db-capture"; bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/windows-core-recording.spec.ts
 ```
 
 ### Run a single spec

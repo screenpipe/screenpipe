@@ -414,6 +414,30 @@ describe("chat-store: cross-window duplicate row collapsing", () => {
     expect(rows[0].id).toBe("real");
   });
 
+  it("collapses a stub row after disk sync patches its dedupKey", () => {
+    // Listener ordering bug: home/page's saved-title listener can create a
+    // metadata-only stub before chat-sidebar's disk sync runs. If the later
+    // patch does not include dedupKey, the live Recents selector cannot
+    // recognize this as a cross-window twin.
+    useChatStore.getState().actions.upsert(
+      withMessages("real", "same opener", "answer", { createdAt: 1_000 }),
+    );
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "stubTwin", createdAt: 1_200, title: "same opener" }),
+    );
+
+    expect(selectOrderedSessions(useChatStore.getState())).toHaveLength(2);
+
+    useChatStore.getState().actions.patch("stubTwin", {
+      dedupKey: "same opener",
+      messageCount: 2,
+    });
+
+    const rows = selectOrderedSessions(useChatStore.getState());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("real");
+  });
+
   it("does NOT merge same-opener chats created more than the window apart", () => {
     useChatStore.getState().actions.upsert(
       withMessages("a", "good morning", "x", { createdAt: 1_000 }),

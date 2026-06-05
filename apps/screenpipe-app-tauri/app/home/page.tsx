@@ -26,7 +26,15 @@ import {
   NotebookPen,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
-import { useChatStore, type SessionStatus } from "@/lib/stores/chat-store";
+import {
+  sessionRecordFromMeta,
+  useChatStore,
+  type SessionStatus,
+} from "@/lib/stores/chat-store";
+import {
+  conversationMetaFromJson,
+  loadConversationFile,
+} from "@/lib/chat-storage";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
@@ -278,7 +286,7 @@ function HomeContent() {
     (async () => {
       const unlisten = await listen<{ id: string; title?: string; titleSource?: "fallback" | "ai" | "user" }>(
         "chat-conversation-saved",
-        (event) => {
+        async (event) => {
           if (cancelled) return;
           const { id, title, titleSource } = event.payload ?? {};
           const nextTitle = title?.trim();
@@ -287,6 +295,13 @@ function HomeContent() {
           const store = useChatStore.getState();
           const existing = store.sessions[id];
           if (!existing) {
+            const conv = await loadConversationFile(id);
+            if (cancelled) return;
+            const meta = conversationMetaFromJson(conv);
+            if (meta) {
+              store.actions.upsert(sessionRecordFromMeta(meta));
+              return;
+            }
             store.actions.upsert({
               id,
               title: nextTitle,
@@ -302,14 +317,26 @@ function HomeContent() {
             });
             return;
           }
+          let dedupKey: string | undefined;
+          if (!existing.dedupKey && !existing.messages?.length) {
+            const conv = await loadConversationFile(id);
+            if (cancelled) return;
+            dedupKey = conversationMetaFromJson(conv)?.dedupKey;
+          }
           // Respect titleSource priority: user > ai > fallback.
           // Never downgrade an existing higher-priority source.
-          if (!shouldAcceptTitleSource(existing.titleSource, titleSource)) return;
+          if (!shouldAcceptTitleSource(existing.titleSource, titleSource)) {
+            if (dedupKey) store.actions.patch(id, { dedupKey });
+            return;
+          }
           if (existing.title !== nextTitle || (titleSource && existing.titleSource !== titleSource)) {
             store.actions.patch(id, {
               title: nextTitle,
               ...(titleSource ? { titleSource } : {}),
+              ...(dedupKey ? { dedupKey } : {}),
             });
+          } else if (dedupKey) {
+            store.actions.patch(id, { dedupKey });
           }
         },
       );
@@ -922,12 +949,12 @@ function HomeContent() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
                   search
-                  <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
-                    {formatShortcutDisplay(
-                      settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
-                      isMac,
-                    )}
-                  </kbd>
+                  {!settings.disabledShortcuts.includes("searchShortcut") &&
+                  settings.searchShortcut ? (
+                    <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                      {formatShortcutDisplay(settings.searchShortcut, isMac)}
+                    </kbd>
+                  ) : null}
                 </TooltipContent>
               </Tooltip>
             </>
@@ -1137,12 +1164,12 @@ function HomeContent() {
                       </TooltipTrigger>
                       <TooltipContent side="right" className="text-xs">
                         search
-                        <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
-                          {formatShortcutDisplay(
-                            settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
-                            isMac,
-                          )}
-                        </kbd>
+                        {!settings.disabledShortcuts.includes("searchShortcut") &&
+                        settings.searchShortcut ? (
+                          <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                            {formatShortcutDisplay(settings.searchShortcut, isMac)}
+                          </kbd>
+                        ) : null}
                       </TooltipContent>
                     </Tooltip>
                     {/* Divider between the search affordance and the

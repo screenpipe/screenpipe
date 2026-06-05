@@ -75,7 +75,17 @@ jobs:
             cmake \
             build-essential \
             libopenblas-dev \
-            libwayland-dev
+            libwayland-dev \
+            libpipewire-0.3-dev \
+            libegl-dev \
+            libgbm-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev
           sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
@@ -150,7 +160,9 @@ jobs:
           path: /tmp/meeting-eval/
 
       - name: Post sticky PR comment
-        if: github.event_name == 'pull_request'
+        # Skip on fork PRs: the default GITHUB_TOKEN is read-only for forks, so
+        # gh pr comment can never succeed there and would fail the whole job.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

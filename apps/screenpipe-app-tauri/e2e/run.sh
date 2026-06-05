@@ -7,6 +7,8 @@ set -e
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_ROOT"
 echo "Building Screenpipe (debug, no bundle, with e2e webdriver)..."
-bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
+# NEXT_PUBLIC_SCREENPIPE_E2E bypasses the billing gate by default so the suite
+# exercises real features; the dedicated entitlement-gate spec re-enables it.
+NEXT_PUBLIC_SCREENPIPE_E2E=true bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
 echo "Running E2E..."
 bun run test:e2e

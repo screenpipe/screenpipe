@@ -439,6 +439,30 @@ pub enum EnterpriseSyncError {
     Io(#[from] std::io::Error),
 }
 
+// ─── Pure logic: UTF-8-safe truncation ──────────────────────────────────────
+
+/// Truncate `s` to at most `max_bytes`, rounding the cut DOWN to the nearest
+/// UTF-8 character boundary so we never slice through a multi-byte char.
+///
+/// `&s[..n]` panics ("byte index N is not a char boundary") when byte `n` lands
+/// inside a multi-byte character — Polish `ł`, German `ß`, any CJK glyph or
+/// emoji. That panic on the sync worker took down the whole enterprise build for
+/// non-ASCII users (the desktop shim byte-sliced UI-event text at a fixed 200).
+/// Route any snippet/preview byte-slicing before upload, OCR, notifications, or
+/// DB writes through this helper.
+///
+/// Public for unit tests.
+pub fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
+    let mut end = max_bytes.min(s.len());
+    // is_char_boundary(0) and is_char_boundary(s.len()) are always true, so the
+    // loop terminates — at worst at 0 (a leading multi-byte char wider than
+    // max_bytes), yielding "".
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 // ─── Pure logic: build the JSONL payload ────────────────────────────────────
 
 /// Serialize a batch of frames + audio + UI rows + snapshots + memories into
@@ -959,6 +983,54 @@ mod tests {
             importance: 0.7,
             frame_id: None,
         }
+    }
+
+    // ─── truncate_on_char_boundary (UTF-8 safety) ───────────────────────
+
+    #[test]
+    fn truncate_shorter_than_limit_returns_whole_string() {
+        assert_eq!(truncate_on_char_boundary("hello", 200), "hello");
+        assert_eq!(truncate_on_char_boundary("", 200), "");
+    }
+
+    #[test]
+    fn truncate_ascii_cuts_exactly() {
+        assert_eq!(truncate_on_char_boundary("hello world", 5), "hello");
+        // max_bytes == len → whole string (len is always a char boundary).
+        assert_eq!(truncate_on_char_boundary("hello", 5), "hello");
+        assert_eq!(truncate_on_char_boundary("hello", 0), "");
+    }
+
+    #[test]
+    fn truncate_rounds_down_through_multibyte_char() {
+        // The exact crash from the desktop shim's UI-event truncation: 199 ASCII
+        // bytes then Polish 'ł' (U+0142, 2 bytes) straddling byte 200. `&t[..200]`
+        // panicked; the helper must round down to 199 and NOT panic.
+        let prefix = "a".repeat(199);
+        let t = format!("{prefix}ł and more text");
+        assert!(!t.is_char_boundary(200), "test premise: byte 200 splits 'ł'");
+        assert_eq!(truncate_on_char_boundary(&t, 200), prefix);
+        // The real call-site shape ("{prefix}…") stays panic-free.
+        assert_eq!(
+            format!("{}…", truncate_on_char_boundary(&t, 200)),
+            format!("{prefix}…")
+        );
+    }
+
+    #[test]
+    fn truncate_keeps_char_when_boundary_lands_exactly() {
+        // "日本語" — each char is 3 bytes.
+        assert_eq!(truncate_on_char_boundary("日本語", 3), "日"); // byte 3 = boundary
+        assert_eq!(truncate_on_char_boundary("日本語", 4), "日"); // inside 本 → round down
+        assert_eq!(truncate_on_char_boundary("日本語", 9), "日本語"); // whole string
+    }
+
+    #[test]
+    fn truncate_handles_emoji_and_leading_wide_char() {
+        // 👍 is 4 bytes (U+1F44D); a limit inside it rounds all the way to 0.
+        assert_eq!(truncate_on_char_boundary("👍ab", 2), "");
+        assert_eq!(truncate_on_char_boundary("👍ab", 4), "👍");
+        assert_eq!(truncate_on_char_boundary("👍ab", 5), "👍a");
     }
 
     #[test]

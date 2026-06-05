@@ -713,9 +713,9 @@ async icsCalendarGetEntries() : Promise<Result<IcsCalendarEntry[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async icsCalendarGetUpcoming() : Promise<Result<CalendarEventItem[], string>> {
+async icsCalendarGetUpcoming(hoursBack: number | null, hoursAhead: number | null) : Promise<Result<CalendarEventItem[], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming") };
+    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming", { hoursBack, hoursAhead }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1348,6 +1348,14 @@ async readViewerFile(path: string) : Promise<Result<ViewerContent, string>> {
 async reencryptStore() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("reencrypt_store") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async refreshTrayMenu() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_tray_menu") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2410,21 +2418,16 @@ hdRecordingDefault?: string;
  */
 hdRecordingIntervalMs?: number;
 /**
- * Override `EventDrivenCaptureConfig::capture_on_keystroke`.
- * None = engine default (false). When true, non-printable key events
- * (Arrow / Enter / Tab / Esc, modifier combos like Ctrl+S) fire a paired
- * capture so `ui_events.frame_id` is populated for the originating row.
- * Off by default — fast typing can generate a storm of captures even
- * with the 200ms `min_capture_interval_ms` debounce.
+ * Legacy key-trigger override retained for settings compatibility.
+ * Recording sessions keep keyboard-triggered capture on; raw key/text DB
+ * rows are controlled separately by `disableKeyboardCapture`.
  */
 captureOnKeystroke?: boolean | null;
 /**
  * Override `EventDrivenCaptureConfig::capture_on_clipboard`.
  * None = engine default (false). When true, clipboard changes fire a
- * paired capture so `ui_events.frame_id` is populated for the
- * clipboard row. Off by default — adds 50-150ms of blocking work per
- * Ctrl+C/X/V (more with OCR fallback) which can cause visible HID lag
- * on some USB devices.
+ * paired capture. Clipboard DB rows are still controlled separately by
+ * `disableClipboardCapture`.
  */
 captureOnClipboard?: boolean | null;
 /**
@@ -2477,19 +2480,18 @@ ignoreIncognitoWindows: boolean;
  */
 pauseOnDrmContent?: boolean;
 /**
- * Skip clipboard capture in the UI recorder. Defaults to `true`
- * (clipboard capture OFF) — passwords / API keys / private keys
- * frequently pass through the clipboard, so it's opt-in via the
- * "Capture clipboard" toggle.
+ * Skip persisting clipboard rows/content in the UI recorder. Defaults to
+ * `true` (clipboard DB capture OFF) — passwords / API keys / private keys
+ * frequently pass through the clipboard. Clipboard operations can still
+ * wake event-driven capture when `captureOnClipboard` is enabled.
  */
 disableClipboardCapture?: boolean;
 /**
- * Skip keyboard / typed-text capture in the UI recorder
- * (`UiCaptureConfig::capture_text`). Defaults to `true` (keyboard
- * capture OFF) — the raw keystroke stream is the highest-risk,
- * most-redundant signal (secrets get typed), and the accessibility
- * tree + OCR still capture on-screen text so Rewind/Ask keep working.
- * Opt-in via the "Capture keyboard" toggle.
+ * Skip persisting keyboard / typed-text rows in the UI recorder.
+ * Defaults to `true` (keyboard DB capture OFF). Keyboard events still
+ * wake event-driven capture, and the accessibility tree + OCR still
+ * capture on-screen text so Rewind/Ask keep working.
+ * Opt in to keyboard DB rows via the "Capture keyboard" toggle.
  */
 disableKeyboardCapture?: boolean;
 /**
@@ -2716,7 +2718,14 @@ hideThinkingBlocks?: boolean;
 /**
  * UI theme: "light", "dark", or "system".
  */
-uiTheme?: string }
+uiTheme?: string;
+/**
+ * Windows-only: when true, clicking the X on the Home window hides it to
+ * the system tray (and removes it from the taskbar) instead of minimizing.
+ * Read by the CloseRequested handler in main.rs. Default off (historical
+ * minimize-to-taskbar behavior).
+ */
+minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type Suggestion = { text: string;
 /**
@@ -2739,7 +2748,7 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
  * Sync status response.
  */
 export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: number | null; storageLimit: number | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
-export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null }
+export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null; app_entitled: boolean | null; subscription_plan: string | null; entitlement: JsonValue | null }
 export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: number } | { kind: "image"; data_url: string; name: string; path: string } |
 /**
  * Non-text, non-image file (random binary). The UI surfaces a

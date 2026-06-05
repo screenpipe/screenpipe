@@ -8,7 +8,6 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import {
   UserCog,
   ExternalLinkIcon,
-  CreditCard,
   Sparkles,
   Zap,
   Shield,
@@ -54,6 +53,7 @@ export function AccountSection() {
   const [isAnnual, setIsAnnual] = useState(true);
   const [pipeSyncing, setPipeSyncing] = useState(false);
   const [memoriesSyncing, setMemoriesSyncing] = useState(false);
+  const [connectionsSyncing, setConnectionsSyncing] = useState(false);
 
   useEffect(() => {
     if (!settings.user?.email) {
@@ -252,16 +252,6 @@ export function AccountSection() {
               <h3 className="text-lg font-semibold">Screenpipe Pro</h3>
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">active</span>
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => openUrl("https://screenpipe.com/billing")}
-              >
-                <CreditCard className="w-3.5 h-3.5 mr-1.5" />
-                Billing <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
-              </Button>
-            </div>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
@@ -403,6 +393,74 @@ export function AccountSection() {
                     }}
                   >
                     <RefreshCw className={`h-3 w-3 mr-1 ${memoriesSyncing ? "animate-spin" : ""}`} />
+                    sync now
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Connection sync — independent toggle. Off by default and kept
+              separate from pipes/memories on purpose: this syncs connected-
+              account credentials (OAuth tokens, API keys), so enabling it is a
+              distinct, informed choice. Credentials are end-to-end encrypted in
+              the sync blob; the server never sees them in plaintext. */}
+          <div className="mt-4 pt-4 border-t border-border/50">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">connection sync across devices</p>
+                <p className="text-xs text-muted-foreground">
+                  sync connected accounts (gmail, slack, notion…) to your devices — credentials are end-to-end encrypted
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <Switch
+                    id="connections-sync-toggle"
+                    checked={!!settings.connectionsSyncEnabled}
+                    onCheckedChange={async (checked) => {
+                      await updateSettings({ connectionsSyncEnabled: checked });
+                      toast({
+                        title: checked ? "connection sync enabled" : "connection sync disabled",
+                        description: checked
+                          ? "connected accounts will sync across your devices"
+                          : "connected accounts will no longer sync",
+                      });
+                    }}
+                  />
+                  <Label htmlFor="connections-sync-toggle" className="text-xs text-muted-foreground cursor-pointer sr-only">
+                    sync
+                  </Label>
+                </div>
+                {settings.connectionsSyncEnabled && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs uppercase tracking-wide"
+                    title={
+                      isServerDown
+                        ? "screenpipe server is starting up — try again in a moment"
+                        : undefined
+                    }
+                    disabled={connectionsSyncing || isServerDown}
+                    onClick={async () => {
+                      setConnectionsSyncing(true);
+                      try {
+                        await localFetch("/sync/connections/pull", { method: "POST" });
+                        await localFetch("/sync/connections/push", { method: "POST" });
+                        toast({ title: "connections synced" });
+                      } catch (e) {
+                        toast({
+                          title: "sync failed",
+                          description: syncErrorDescription(e),
+                          variant: "destructive",
+                        });
+                      } finally {
+                        setConnectionsSyncing(false);
+                      }
+                    }}
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${connectionsSyncing ? "animate-spin" : ""}`} />
                     sync now
                   </Button>
                 )}

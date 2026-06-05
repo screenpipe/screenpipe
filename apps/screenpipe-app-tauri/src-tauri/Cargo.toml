@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.4"
+version = "2.5.14"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -14,7 +14,7 @@ rust-version = "1.92"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
-tauri-build = { version = "=2.5.4", features = [] }
+tauri-build = { version = "=2.6.2", features = [] }
 tauri-helper = { git = "https://github.com/divanshu-go/tauri-helper", rev = "e25ff1d2c5026189305a0251a1e06788efe1d2b3" }
 # Used by build.rs on Windows MSVC targets (incl. cross-compiles from
 # Linux/macOS CI runners) to compile c/bswap_shim.c — provides
@@ -25,7 +25,7 @@ cc = "1"
 
 [dependencies]
 tauri-helper = { git = "https://github.com/divanshu-go/tauri-helper", rev = "e25ff1d2c5026189305a0251a1e06788efe1d2b3" }
-tauri = { version = "=2.10.1", features = [
+tauri = { version = "=2.11.2", features = [
   "protocol-asset",
   "macos-private-api",
   "tray-icon",
@@ -36,7 +36,7 @@ tauri = { version = "=2.10.1", features = [
   # WindowBuilder::add_child, which is currently behind the unstable feature.
   "unstable",
 ] }
-tauri-utils = { version = "=2.8.2", features = [] }
+tauri-utils = { version = "=2.9.2", features = [] }
 # plugins
 tauri-plugin-fs = "=2.4.5"
 tauri-plugin-notification = "=2.3.3"
@@ -114,7 +114,6 @@ futures = "0.3.30"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
-chrono-tz = "0.10"
 tauri-plugin-opener = "2.5.3"
 uuid = { version = "1.0", features = ["v4"] }
 urlencoding = "2"
@@ -148,7 +147,6 @@ screenpipe-events = { path = "../../../crates/screenpipe-events" }
 screenpipe-redact = { path = "../../../crates/screenpipe-redact", features = ["onnx-coreml", "opf-text"] }
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 image = "0.25.5"
-icalendar = "0.17"
 
 # Used only by the path-included `ee/desktop-rust/enterprise_sync.rs`. Gated
 # behind enterprise-build via the `dep:thiserror` syntax in [features] so
@@ -303,6 +301,14 @@ serial_test = "3"
 # thiserror: gated behind `enterprise-build` via `dep:thiserror`; cargo-machete
 # can't follow `#[path = ...]` imports into ee/desktop-rust/enterprise_sync.rs.
 ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync"]
+
+[patch.crates-io]
+# macOS tray menus can outlive the Rust `Menu` that created them while the
+# native menu is open. This fork stores an Rc<MenuChild> on NSMenuItem instead
+# of a raw pointer so stale AppKit items keep their Rust click data alive.
+# Pinned by commit (not branch) for reproducible builds; drop once
+# upstream tauri-apps/muda#361 merges and ships in a released muda.
+muda = { git = "https://github.com/divanshu-go/muda", rev = "9dc5de53e84040a63c9a5423b669ec892de8a671" }
 
 [profile.release]
 codegen-units = 1

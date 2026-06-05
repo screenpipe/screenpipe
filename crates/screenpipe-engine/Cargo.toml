@@ -165,9 +165,10 @@ apple-intelligence = ["dep:screenpipe-apple-intelligence"]
 qwen3-asr = ["screenpipe-audio/qwen3-asr"]
 parakeet = ["screenpipe-audio/parakeet"]
 parakeet-mlx = ["screenpipe-audio/parakeet-mlx"]
-# Image-PII detector via MLX (Apple Silicon-only). Off by default;
-# Mac release builds opt in to pick up the ~6× speedup over the ONNX
-# CoreML EP path.
+# Image-PII detector via MLX (Apple Silicon-only). Compiled into macOS
+# release builds for experiments, but the CLI runtime keeps ONNX as the
+# default stable path unless SCREENPIPE_ENABLE_EXPERIMENTAL_RFDETR_MLX=1
+# is set.
 rfdetr-mlx = ["screenpipe-redact/mlx-mac"]
 
 # v45 phase 3 text-PII redactor via ONNX Runtime. CPU baseline for

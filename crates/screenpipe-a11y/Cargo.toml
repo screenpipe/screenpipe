@@ -47,6 +47,7 @@ rusqlite = { version = "0.29", features = ["bundled"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native Windows APIs - no rdev dependency

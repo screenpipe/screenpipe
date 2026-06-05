@@ -182,7 +182,7 @@ export function StorageSection() {
                 }
               }}
             >
-              {isClearing ? "clearing..." : "scan"}
+              {isClearing ? "clearing..." : "clear"}
             </Button>
           </div>
         </CardContent>

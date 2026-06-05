@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-screenpipe-identify"
+description = "Enables the screenpipe_identify command without any pre-configured scope."
+commands.allow = ["screenpipe_identify"]
+
+[[permission]]
+identifier = "deny-screenpipe-identify"
+description = "Denies the screenpipe_identify command without any pre-configured scope."
+commands.deny = ["screenpipe_identify"]

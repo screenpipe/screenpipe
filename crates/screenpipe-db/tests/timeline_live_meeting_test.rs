@@ -175,7 +175,7 @@ mod timeline_live_meeting_tests {
 
         // A covering audio chunk at `base` (the background-captured meeting audio).
         let chunk_id = db
-            .insert_audio_chunk("meeting.mp4", Some(base))
+            .insert_audio_chunk("System Audio (output)_meeting.mp4", Some(base))
             .await
             .unwrap();
 
@@ -236,9 +236,12 @@ mod timeline_live_meeting_tests {
         let base = Utc::now();
 
         // Only chunk is 5 minutes away — outside the 15s coverage window.
-        db.insert_audio_chunk("far.mp4", Some(base - Duration::minutes(5)))
-            .await
-            .unwrap();
+        db.insert_audio_chunk(
+            "System Audio (output)_far.mp4",
+            Some(base - Duration::minutes(5)),
+        )
+        .await
+        .unwrap();
         let meeting_id = db
             .insert_meeting("zoom.us", "ui_scan", None, None)
             .await
@@ -267,6 +270,56 @@ mod timeline_live_meeting_tests {
         );
     }
 
+    /// A live output/system segment must not be mirrored onto a nearby mic/input
+    /// chunk when the matching output chunk is missing. Mic and system audio are
+    /// separate tracks; corrupting source attribution is worse than leaving the
+    /// output segment pending for backfill.
+    #[tokio::test]
+    async fn test_mirror_never_falls_back_to_wrong_device_chunk() {
+        let db = setup_test_db().await;
+        let base = Utc::now();
+
+        let mic_chunk_id = db
+            .insert_audio_chunk("Ruark's AirPods (input)_meeting.mp4", Some(base))
+            .await
+            .unwrap();
+        let meeting_id = db
+            .insert_meeting("zoom.us", "ui_scan", None, None)
+            .await
+            .unwrap();
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "screenpipe-cloud",
+            Some("nova-3"),
+            "deepgram:0:0",
+            "System Audio",
+            "output",
+            Some("Speaker 1"),
+            "remote audience should not attach to mic",
+            base + Duration::seconds(2),
+        )
+        .await
+        .unwrap();
+
+        let inserted = db
+            .mirror_live_meeting_to_audio_transcriptions(meeting_id, 15.0)
+            .await
+            .unwrap();
+        assert_eq!(
+            inserted, 0,
+            "output live segment without output chunk must not mirror onto mic chunk"
+        );
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audio_transcriptions WHERE audio_chunk_id = ?1",
+        )
+        .bind(mic_chunk_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0, "mic chunk must remain free of system transcript");
+    }
+
     /// End-to-end: after the mirror runs (as it does at meeting-end), the live
     /// transcript appears on the timeline via `find_video_chunks` EXACTLY ONCE.
     /// This proves (a) the mirrored `audio_transcriptions` row's timestamp matches
@@ -290,7 +343,7 @@ mod timeline_live_meeting_tests {
         .await
         .unwrap();
         // The background-captured meeting audio (covering chunk).
-        db.insert_audio_chunk("meeting.mp4", Some(base))
+        db.insert_audio_chunk("System Audio (output)_meeting.mp4", Some(base))
             .await
             .unwrap();
 
@@ -348,7 +401,7 @@ mod timeline_live_meeting_tests {
 
         // The meeting's covering audio, already identified with that speaker.
         let chunk_id = db
-            .insert_audio_chunk("meeting.mp4", Some(base))
+            .insert_audio_chunk("System Audio (output)_meeting.mp4", Some(base))
             .await
             .unwrap();
         db.insert_audio_transcription(

@@ -166,7 +166,7 @@ impl ImageWorker {
 
             let result = match shutdown.as_ref() {
                 Some(n) => tokio::select! {
-                    r = self.process_one() => Some(r),
+                    _r = self.process_one() => Some(_r),
                     _ = n.notified() => None,
                 },
                 None => Some(self.process_one().await),

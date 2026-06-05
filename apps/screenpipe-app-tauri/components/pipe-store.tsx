@@ -57,6 +57,7 @@ import {
   Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
 import { MemoizedReactMarkdown } from "@/components/markdown";
@@ -532,17 +533,18 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
       posthog.capture("pipe_installed_from_store", { slug });
 
-      // Override the pipe's preset with the user's default preset so it
-      // works out of the box (published pipes may reference presets the
-      // user doesn't have).
+      // Override the pipe's preset so it works out of the box (published
+      // pipes may reference presets the user doesn't have). Prefer the
+      // dedicated "pipes" preset (auto, tier-safe) over the Opus chat
+      // default — see pickPipePreset() for the full rationale.
       const pipeName = data.name || slug;
-      const defaultPreset = settings.aiPresets?.find((p: any) => p.defaultPreset);
-      if (defaultPreset?.id) {
+      const pipePreset = pickPipePreset(settings.aiPresets);
+      if (pipePreset?.id) {
         try {
           await localFetch(`/pipes/${pipeName}/config`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ preset: defaultPreset.id }),
+            body: JSON.stringify({ preset: pipePreset.id }),
           });
         } catch {}
       }

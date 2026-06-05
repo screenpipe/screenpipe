@@ -180,14 +180,17 @@ impl MeetingStreamingConfig {
         language: Option<String>,
         local_speaker_name: Option<String>,
     ) -> Self {
-        let provider = MeetingStreamingProvider::from_str(provider)
+        let requested_provider = MeetingStreamingProvider::from_str(provider)
             .unwrap_or(MeetingStreamingProvider::SelectedEngine);
+        let auth_token = cloud_token.and_then(|token| non_empty_trimmed(&token));
+        let provider =
+            resolve_settings_provider(enabled, requested_provider, auth_token.as_deref());
         let provider_api_key_override =
             provider_api_key_override.and_then(|key| non_empty_trimmed(&key));
         let mut config = Self {
             enabled,
             provider,
-            auth_token: cloud_token.filter(|s| !s.trim().is_empty()),
+            auth_token,
             language: language.filter(|s| !s.trim().is_empty()),
             local_speaker_name: local_speaker_name.and_then(|name| non_empty_trimmed(&name)),
             ..Self::default()
@@ -237,6 +240,26 @@ impl MeetingStreamingConfig {
                 .as_deref()
                 .is_some_and(|key| !key.trim().is_empty()),
         }
+    }
+}
+
+fn resolve_settings_provider(
+    enabled: bool,
+    requested_provider: MeetingStreamingProvider,
+    cloud_token: Option<&str>,
+) -> MeetingStreamingProvider {
+    if !enabled || requested_provider != MeetingStreamingProvider::SelectedEngine {
+        return requested_provider;
+    }
+
+    if cloud_token.is_some_and(|token| !token.trim().is_empty()) {
+        // Paid/cloud users expect live meeting notes to use Screenpipe Cloud by
+        // default. `selected-engine` remains the non-cloud default, but once a
+        // cloud token is configured we promote it to cloud live unless the user
+        // disables live transcription or explicitly chooses another provider.
+        MeetingStreamingProvider::ScreenpipeCloud
+    } else {
+        MeetingStreamingProvider::SelectedEngine
     }
 }
 
@@ -341,6 +364,37 @@ mod tests {
             config.model.as_deref(),
             Some("selected transcription engine")
         );
+    }
+
+    #[test]
+    fn selected_engine_promotes_to_cloud_when_cloud_is_configured() {
+        let config = MeetingStreamingConfig::from_settings(
+            true,
+            "selected-engine",
+            Some("cloud-token".to_string()),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(config.provider, MeetingStreamingProvider::ScreenpipeCloud);
+        assert!(config.live_transcription_ready());
+        assert_eq!(config.model.as_deref(), Some("nova-3"));
+    }
+
+    #[test]
+    fn disabled_live_transcription_does_not_promote_cloud() {
+        let config = MeetingStreamingConfig::from_settings(
+            false,
+            "selected-engine",
+            Some("cloud-token".to_string()),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(config.provider, MeetingStreamingProvider::SelectedEngine);
+        assert!(!config.enabled);
     }
 
     #[test]

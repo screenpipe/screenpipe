@@ -707,7 +707,7 @@ mod tests {
             .expect("expected Ok via stale-id fallback when monitors exist");
 
         assert!(
-            vm.recording_tasks.len() > 0,
+            !vm.recording_tasks.is_empty(),
             "fallback should start at least one monitor task"
         );
         assert_eq!(vm.status().await, VisionManagerStatus::Running);

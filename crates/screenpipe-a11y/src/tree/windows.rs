@@ -830,6 +830,7 @@ mod tests {
             &None, // monitor_rect
             &None, // window_rect
             &[],
+            "",
             &mut false,
         );
 
@@ -900,6 +901,7 @@ mod tests {
             &None, // monitor_rect
             &None, // window_rect
             &[],
+            "",
             &mut false,
         );
 
@@ -975,7 +977,8 @@ mod tests {
             ..Default::default()
         };
 
-        let ignored = vec!["bit".to_string()];
+        let ignored_raw = vec!["bit".to_string()];
+        let ignored = WindowPattern::parse_list(&ignored_raw);
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
@@ -991,6 +994,7 @@ mod tests {
             &None, // monitor_rect
             &None, // window_rect
             &ignored,
+            "",
             &mut hit,
         );
 

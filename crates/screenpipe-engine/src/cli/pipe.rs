@@ -154,7 +154,8 @@ pub async fn handle_pipe_command(command: &PipeCommand) -> anyhow::Result<()> {
 
 /// Get the API base URL from env or default.
 pub fn api_base_url() -> String {
-    std::env::var("SCREENPIPE_API_BASE_URL").unwrap_or_else(|_| "https://screenpi.pe".to_string())
+    std::env::var("SCREENPIPE_API_BASE_URL")
+        .unwrap_or_else(|_| "https://screenpipe.com".to_string())
 }
 
 /// Get the auth token, checking in order:

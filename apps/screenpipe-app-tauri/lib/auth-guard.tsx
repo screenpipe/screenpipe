@@ -9,6 +9,8 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { toast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import posthog from "posthog-js";
+import { commands } from "@/lib/utils/tauri";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const TOAST_COOLDOWN_MS = 5 * 60 * 1000;
@@ -17,11 +19,12 @@ let lastToastTime = 0;
 
 function openLogin() {
   // dynamic import to avoid SSR/test crashes from tauri plugins
+  const loginUrl = screenpipeWebUrl("/login", "https://screenpipe.com");
   import("@tauri-apps/plugin-shell").then(({ open }) => {
-    open("https://screenpipe.com/login");
+    open(loginUrl);
   }).catch(() => {
     // fallback: window.open works in tauri webview
-    window.open("https://screenpipe.com/login", "_blank");
+    window.open(loginUrl, "_blank");
   });
 }
 
@@ -31,8 +34,8 @@ function showSignedOutToast() {
   lastToastTime = now;
 
   toast({
-    title: "signed out — cloud features paused",
-    description: "local recording still running. sign in to restore pro.",
+    title: "signed out — app paused",
+    description: "sign in with an active plan to keep using screenpipe.",
     variant: "destructive",
     duration: 30000,
     action: (
@@ -57,6 +60,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     console.warn("auth-guard: session expired, clearing");
     posthog.capture("session_expired");
     await updateSettings({ user: null as any });
+    try {
+      await commands.setCloudToken(null);
+    } catch {}
     showSignedOutToast();
   }, [updateSettings]);
 

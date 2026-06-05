@@ -9,7 +9,7 @@ use crate::health::{
     set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
 use crate::recording::{local_api_context_from_app, RecordingState};
-use crate::store::{get_store, OnboardingStore, SettingsStore};
+use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window::ShowRewindWindow;
 use anyhow::Result;
@@ -48,6 +48,7 @@ struct TrayMenuData {
     cloud_subscribed: bool,
     has_permission_issue: bool,
     app_ui_hidden: bool,
+    disable_timeline: bool,
 }
 
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
@@ -65,35 +66,50 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         ("Control+Super+S", "Control+Super+K", "Control+Super+L")
     };
 
-    let (show_shortcut, search_shortcut, chat_shortcut) = if let Ok(store) = get_store(app, None) {
-        (
-            store
-                .get("showScreenpipeShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_show.to_string()),
-            store
-                .get("searchShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_search.to_string()),
-            store
-                .get("showChatShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_chat.to_string()),
-        )
+    let settings = SettingsStore::get(app)
+        .unwrap_or_default()
+        .unwrap_or_default();
+
+    let mut show_shortcut = if settings.show_screenpipe_shortcut.trim().is_empty() {
+        default_show.to_string()
     } else {
-        (
-            default_show.to_string(),
-            default_search.to_string(),
-            default_chat.to_string(),
-        )
+        settings.show_screenpipe_shortcut.clone()
+    };
+    let mut search_shortcut = if settings.search_shortcut.trim().is_empty() {
+        default_search.to_string()
+    } else {
+        settings.search_shortcut.clone()
+    };
+    let mut chat_shortcut = if settings.show_chat_shortcut.trim().is_empty() {
+        default_chat.to_string()
+    } else {
+        settings.show_chat_shortcut.clone()
     };
 
-    let cloud_subscribed = SettingsStore::get(app)
-        .unwrap_or_default()
-        .unwrap_or_default()
-        .user
-        .cloud_subscribed
-        == Some(true);
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "showScreenpipeShortcut")
+    {
+        show_shortcut.clear();
+    }
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "searchShortcut")
+    {
+        search_shortcut.clear();
+    }
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "showChatShortcut")
+    {
+        chat_shortcut.clear();
+    }
+
+    let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
+    let disable_timeline = settings.recording.disable_timeline;
 
     let app_ui_hidden = is_app_ui_hidden();
 
@@ -119,6 +135,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         cloud_subscribed,
         has_permission_issue,
         app_ui_hidden,
+        disable_timeline,
     }
 }
 
@@ -202,7 +219,7 @@ fn send_notify(title: impl Into<String>, body: impl Into<String>) {
 }
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
-fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
+pub(crate) fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
     let update_item = UPDATE_MENU_ITEM
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -222,10 +239,8 @@ fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
     let data = prefetch_tray_menu_data(app);
     let menu = create_dynamic_menu(app, &new_state, update_item.as_ref(), &data)?;
     if let Some(tray) = app.tray_by_id("screenpipe_main") {
-        if let Ok(mut guard) = PREVIOUS_TRAY_MENU.lock() {
-            *guard = Some(menu.clone());
-        }
-        tray.set_menu(Some(menu))?;
+        install_tray_menu(&tray, menu)?;
+        clear_pending_tray_menu();
     }
     // Update last state so the poller doesn't immediately rebuild again
     {
@@ -277,23 +292,65 @@ fn get_effective_recording_status() -> RecordingStatus {
     real
 }
 
-/// Keep the most recent tray menu alive to prevent a use-after-free crash.
+/// Keep the active tray menu alive and defer macOS menu replacement safely.
 ///
-/// muda 0.17.1 stores raw `*const MenuChild` pointers as NSMenuItem instance
-/// variables (mod.rs:947 — there is even a FIXME about this). When
-/// `tray.set_menu(new_menu)` is called while the old menu is still displayed,
-/// the old `MenuChild` items are freed but their NSMenuItems survive (retained
-/// by the visible NSMenu). If the user clicks an item in the stale menu,
-/// `fire_menu_item_click` dereferences the freed pointer → use-after-free →
-/// reads garbage as an Icon with width=0 → `to_png()` panics with ZeroWidth
-/// inside an `extern "C"` callback → abort (catch_unwind can't help).
+/// muda's macOS backend stores raw `*const MenuChild` pointers as NSMenuItem
+/// instance variables. When `tray.set_menu(new_menu)` is called while the old
+/// menu is still displayed, the old `MenuChild` items can be freed while their
+/// NSMenuItems survive. Clicking an item in that stale menu makes
+/// `fire_menu_item_click` dereference freed memory inside an `extern "C"`
+/// callback, so catch_unwind cannot keep the process alive.
 ///
-/// Storing a clone of the `Menu<Wry>` keeps the `Arc<MenuInner>` alive, which
-/// keeps the inner `muda::Menu` `Rc` alive, which keeps the `MenuChild` items
-/// alive. On the next update (≥5 s), the old clone is replaced and dropped —
-/// by then the stale NSMenu is long gone.
-static PREVIOUS_TRAY_MENU: Lazy<Mutex<Option<tauri::menu::Menu<Wry>>>> =
+/// We avoid background `set_menu` on macOS. The poller caches the latest menu
+/// inputs, then the tray mouse-down handler installs that menu before AppKit
+/// opens the native menu.
+static ACTIVE_TRAY_MENU: Lazy<Mutex<Option<tauri::menu::Menu<Wry>>>> =
     Lazy::new(|| Mutex::new(None));
+
+static PENDING_TRAY_MENU: Lazy<Mutex<Option<(MenuState, TrayMenuData)>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn install_tray_menu(tray: &TrayIcon, menu: tauri::menu::Menu<Wry>) -> Result<()> {
+    {
+        let mut active = ACTIVE_TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner());
+        *active = Some(menu.clone());
+    }
+    tray.set_menu(Some(menu))?;
+    Ok(())
+}
+
+fn clear_pending_tray_menu() {
+    let mut pending = PENDING_TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner());
+    *pending = None;
+}
+
+#[cfg(target_os = "macos")]
+fn queue_pending_tray_menu(state: MenuState, data: TrayMenuData) {
+    let mut pending = PENDING_TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner());
+    *pending = Some((state, data));
+}
+
+#[cfg(target_os = "macos")]
+fn apply_pending_tray_menu(app: &AppHandle) -> Result<()> {
+    let pending = {
+        let mut pending = PENDING_TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner());
+        pending.take()
+    };
+
+    let Some((state, data)) = pending else {
+        return Ok(());
+    };
+
+    let update_item = UPDATE_MENU_ITEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let menu = create_dynamic_menu(app, &state, update_item.as_ref(), &data)?;
+    if let Some(tray) = app.tray_by_id("screenpipe_main") {
+        install_tray_menu(&tray, menu)?;
+    }
+    Ok(())
+}
 
 #[derive(Default, PartialEq, Clone)]
 struct MenuState {
@@ -317,11 +374,8 @@ pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wr
         // Initial menu setup with empty state
         let data = prefetch_tray_menu_data(app);
         let menu = create_dynamic_menu(app, &MenuState::default(), update_item, &data)?;
-        // Keep a clone alive to prevent use-after-free (see PREVIOUS_TRAY_MENU doc).
-        if let Ok(mut guard) = PREVIOUS_TRAY_MENU.lock() {
-            *guard = Some(menu.clone());
-        }
-        main_tray.set_menu(Some(menu))?;
+        install_tray_menu(&main_tray, menu)?;
+        clear_pending_tray_menu();
 
         // Setup click handlers
         setup_tray_click_handlers(&main_tray)?;
@@ -432,11 +486,8 @@ pub fn recreate_tray(app: &AppHandle) {
                             update_item.as_ref(),
                             &data,
                         ) {
-                            // Keep a clone alive to prevent use-after-free (see PREVIOUS_TRAY_MENU doc).
-                            if let Ok(mut guard) = PREVIOUS_TRAY_MENU.lock() {
-                                *guard = Some(menu.clone());
-                            }
-                            let _ = new_tray.set_menu(Some(menu));
+                            let _ = install_tray_menu(&new_tray, menu);
+                            clear_pending_tray_menu();
                         }
                         // NOTE: do NOT re-register click handlers here.
                         // The handler from setup_tray() is keyed by tray ID and persists
@@ -527,25 +578,25 @@ fn create_dynamic_menu(
     // --- Primary actions (most-used first) ---
     // Use native accelerators for right-aligned shortcut display (like Notion Calendar)
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_chat") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show_chat", "Chat")
-                .accelerator(&to_accelerator(&chat_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show_chat", "Chat");
+        if !chat_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(chat_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_search") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show_search", "Search")
-                .accelerator(&to_accelerator(&search_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show_search", "Search");
+        if !search_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(search_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
-    if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show", "Timeline")
-                .accelerator(&to_accelerator(&show_shortcut))
-                .build(app)?,
-        );
+    if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") && !data.disable_timeline {
+        let mut item = MenuItemBuilder::with_id("show", "Timeline");
+        if !show_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(show_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
 
     // --- Recording status + devices ---
@@ -788,6 +839,29 @@ fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
             error!("panic in tray menu event handler: {:?}", e);
         }
     });
+
+    #[cfg(target_os = "macos")]
+    {
+        main_tray.on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click {
+                button_state: tauri::tray::MouseButtonState::Down,
+                ..
+            } = event
+            {
+                if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let app = tray.app_handle().clone();
+                    if let Err(e) = apply_pending_tray_menu(&app) {
+                        error!("failed to refresh tray menu before open: {}", e);
+                    }
+                })) {
+                    error!(
+                        "panic caught while refreshing tray menu before open: {:?}",
+                        e
+                    );
+                }
+            }
+        });
+    }
 
     // Windows: left-click opens the app (like macOS dock click), right-click shows menu
     #[cfg(target_os = "windows")]
@@ -1291,6 +1365,9 @@ async fn update_menu_if_needed(
     app: &AppHandle,
     update_item: &tauri::menu::MenuItem<Wry>,
 ) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let _ = update_item;
+
     // Pre-fetch all data on the tokio thread (off main thread) so the
     // main-thread closure only does lightweight menu-item construction.
     let data = prefetch_tray_menu_data(app);
@@ -1349,40 +1426,48 @@ async fn update_menu_if_needed(
     });
 
     if should_update {
-        // IMPORTANT: All NSStatusItem/TrayIcon operations must happen on the main thread.
-        // If the TrayIcon is dropped on a tokio thread (e.g., after recreate_tray removed
-        // the old one from the manager), NSStatusBar _removeStatusItem fires on the wrong
-        // thread and crashes.
-        let app_for_thread = app.clone();
-        let update_item = update_item.clone();
-        let _ = app.run_on_main_thread(move || {
-            if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if let Some(tray) = app_for_thread.tray_by_id("screenpipe_main") {
-                    debug!("tray_menu_update: setting menu");
-                    if let Ok(menu) =
-                        create_dynamic_menu(&app_for_thread, &new_state, Some(&update_item), &data)
-                    {
-                        // Keep a clone alive to prevent use-after-free (see PREVIOUS_TRAY_MENU doc).
-                        if let Ok(mut guard) = PREVIOUS_TRAY_MENU.lock() {
-                            *guard = Some(menu.clone());
+        #[cfg(target_os = "macos")]
+        {
+            queue_pending_tray_menu(new_state, data);
+            debug!("tray_menu_update: queued menu refresh for next open");
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // IMPORTANT: All NSStatusItem/TrayIcon operations must happen on the main thread.
+            // If the TrayIcon is dropped on a tokio thread (e.g., after recreate_tray removed
+            // the old one from the manager), NSStatusBar _removeStatusItem fires on the wrong
+            // thread and crashes.
+            let app_for_thread = app.clone();
+            let update_item = update_item.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(tray) = app_for_thread.tray_by_id("screenpipe_main") {
+                        debug!("tray_menu_update: setting menu");
+                        if let Ok(menu) = create_dynamic_menu(
+                            &app_for_thread,
+                            &new_state,
+                            Some(&update_item),
+                            &data,
+                        ) {
+                            let _ = install_tray_menu(&tray, menu);
                         }
-                        let _ = tray.set_menu(Some(menu));
                     }
+                })) {
+                    let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        format!("{:?}", e)
+                    };
+                    error!(
+                        "panic caught in tray menu update (ObjC exception?): {}",
+                        panic_msg
+                    );
                 }
-            })) {
-                let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    format!("{:?}", e)
-                };
-                error!(
-                    "panic caught in tray menu update (ObjC exception?): {}",
-                    panic_msg
-                );
-            }
-        });
+            });
+        }
     }
 
     Ok(())

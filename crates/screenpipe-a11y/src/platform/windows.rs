@@ -675,21 +675,23 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                 // Record key events for shortcuts (with modifiers)
                 if mods & 0x0A != 0 {
                     // Ctrl or Win pressed
-                    let event = UiEvent {
-                        id: None,
-                        timestamp,
-                        relative_ms: t,
-                        data: EventData::Key {
-                            key_code: vk_code,
-                            modifiers: mods,
-                        },
-                        app_name,
-                        window_title,
-                        browser_url: None,
-                        element: None,
-                        frame_id: None,
-                    };
-                    let _ = s.tx.try_send(event);
+                    if s.config.capture_keystrokes {
+                        let event = UiEvent {
+                            id: None,
+                            timestamp,
+                            relative_ms: t,
+                            data: EventData::Key {
+                                key_code: vk_code,
+                                modifiers: mods,
+                            },
+                            app_name,
+                            window_title,
+                            browser_url: None,
+                            element: None,
+                            frame_id: None,
+                        };
+                        let _ = s.tx.try_send(event);
+                    }
                 } else if s.config.capture_text {
                     // Aggregate text input
                     if let Some(c) = vk_to_char(vk_code, mods) {
@@ -718,6 +720,22 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                         };
                         let _ = s.tx.try_send(event);
                     }
+                } else if s.config.capture_keystrokes {
+                    let event = UiEvent {
+                        id: None,
+                        timestamp,
+                        relative_ms: t,
+                        data: EventData::Key {
+                            key_code: vk_code,
+                            modifiers: mods,
+                        },
+                        app_name,
+                        window_title,
+                        browser_url: None,
+                        element: None,
+                        frame_id: None,
+                    };
+                    let _ = s.tx.try_send(event);
                 }
             }
         });

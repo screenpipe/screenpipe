@@ -9,7 +9,7 @@
 //! icon with width=0 or height=0 is passed. On macOS this happens inside an
 //! `extern "C"` callback (nounwind) and causes an immediate abort.
 //!
-//! These helpers validate the image before forwarding to the real `set_icon`.
+//! These helpers validate the image before forwarding to Tauri's tray APIs.
 
 use tauri::image::Image;
 use tauri::tray::TrayIcon;
@@ -33,7 +33,7 @@ pub fn safe_set_icon(tray: &TrayIcon, image: Image<'_>) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    tray.set_icon(Some(image))?;
+    tray.set_icon_with_as_template(Some(image), false)?;
     Ok(())
 }
 
@@ -48,7 +48,6 @@ pub fn safe_set_icon_as_template(tray: &TrayIcon, image: Image<'_>) -> anyhow::R
         );
         return Ok(());
     }
-    tray.set_icon(Some(image))?;
-    tray.set_icon_as_template(true)?;
+    tray.set_icon_with_as_template(Some(image), true)?;
     Ok(())
 }

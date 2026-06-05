@@ -1,6 +1,6 @@
 use chrono::Local;
 use reqwest::Client;
-use serde_json::json;
+use serde_json::{json, Map};
 use std::env;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -11,6 +11,8 @@ use sysinfo::{CpuExt, PidExt, ProcessExt, System, SystemExt};
 use tracing::debug;
 use tracing::trace;
 use tracing::{error, info, warn};
+
+use crate::telemetry_context::TelemetryContext;
 
 pub struct ResourceMonitor {
     start_time: Instant,
@@ -260,9 +262,9 @@ impl ResourceMonitor {
             debug!("Telemetry disabled, will not send performance data to PostHog");
         }
 
-        // Use analytics ID from env var (passed from Tauri app) or generate random UUID
-        let distinct_id = env::var("SCREENPIPE_ANALYTICS_ID")
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+        // Use env-provided analytics/support IDs or generate a random UUID.
+        let distinct_id = TelemetryContext::distinct_id_from_env()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Collect hardware info once (CPU brand, GPU names) — never panics
         let hw_info = HardwareInfo::collect();
@@ -295,27 +297,44 @@ impl ResourceMonitor {
         let sys = System::new();
 
         // Avoid unnecessary cloning by using references
+        let mut properties = Map::new();
+        properties.insert("distinct_id".to_string(), json!(&self.distinct_id));
+        properties.insert("$lib".to_string(), json!("rust-reqwest"));
+        properties.insert("total_memory_gb".to_string(), json!(total_memory_gb));
+        properties.insert(
+            "system_total_memory_gb".to_string(),
+            json!(system_total_memory),
+        );
+        properties.insert(
+            "memory_usage_percent".to_string(),
+            json!((total_memory_gb / system_total_memory) * 100.0),
+        );
+        properties.insert("total_cpu_percent".to_string(), json!(total_cpu));
+        properties.insert(
+            "runtime_seconds".to_string(),
+            json!(self.start_time.elapsed().as_secs()),
+        );
+        properties.insert("os_name".to_string(), json!(sys.name().unwrap_or_default()));
+        properties.insert(
+            "os_version".to_string(),
+            json!(sys.os_version().unwrap_or_default()),
+        );
+        properties.insert(
+            "kernel_version".to_string(),
+            json!(sys.kernel_version().unwrap_or_default()),
+        );
+        properties.insert("cpu_count".to_string(), json!(sys.cpus().len()));
+        properties.insert("cpu_brand".to_string(), json!(&self.hw_info.cpu_brand));
+        properties.insert("cpu_arch".to_string(), json!(&self.hw_info.cpu_arch));
+        properties.insert("gpu_count".to_string(), json!(self.hw_info.gpu_names.len()));
+        properties.insert("gpu_names".to_string(), json!(&self.hw_info.gpu_names));
+        properties.insert("release".to_string(), json!(env!("CARGO_PKG_VERSION")));
+        TelemetryContext::from_env().insert_posthog_properties(&mut properties);
+
         let payload = json!({
             "api_key": "phc_z7FZXE8vmXtdTQ78LMy3j1BQWW4zP6PGDUP46rgcdnb",
             "event": "resource_usage",
-            "properties": {
-                "distinct_id": &self.distinct_id,
-                "$lib": "rust-reqwest",
-                "total_memory_gb": total_memory_gb,
-                "system_total_memory_gb": system_total_memory,
-                "memory_usage_percent": (total_memory_gb / system_total_memory) * 100.0,
-                "total_cpu_percent": total_cpu,
-                "runtime_seconds": self.start_time.elapsed().as_secs(),
-                "os_name": sys.name().unwrap_or_default(),
-                "os_version": sys.os_version().unwrap_or_default(),
-                "kernel_version": sys.kernel_version().unwrap_or_default(),
-                "cpu_count": sys.cpus().len(),
-                "cpu_brand": &self.hw_info.cpu_brand,
-                "cpu_arch": &self.hw_info.cpu_arch,
-                "gpu_count": self.hw_info.gpu_names.len(),
-                "gpu_names": &self.hw_info.gpu_names,
-                "release": env!("CARGO_PKG_VERSION"),
-            }
+            "properties": properties,
         });
 
         trace!(target: "resource_monitor", "Sending resource usage to PostHog: {:?}", payload);

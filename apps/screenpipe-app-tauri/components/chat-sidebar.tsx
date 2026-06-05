@@ -256,6 +256,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             updatedAt: Math.max(existing.updatedAt, meta.updatedAt),
             kind: meta.kind,
             pipeContext: meta.pipeContext,
+            dedupKey: meta.dedupKey,
             draft: false,
           });
           return;
