@@ -907,4 +907,96 @@ mod tests {
         let _ = abort_handle.await;
     }
 
+    /// The real regression guard for native-steer queue serialization: drive
+    /// the actual `spawn_queue` drain loop and prove a queued follow-up stays
+    /// blocked while `steer_in_flight` is set, then is written once the guard
+    /// clears. This exercises the `while is_prompt && (is_agent_active() ||
+    /// is_steer_in_flight())` gate and the steer-only `select!` — not just the
+    /// atomic, which is why it would catch a regression in the drain loop
+    /// itself (e.g. dropping the `is_steer_in_flight()` term).
+    ///
+    /// Unix-only because it needs a real writable child stdin; `cat` drains
+    /// whatever the loop writes and exits on EOF.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_steer_in_flight_blocks_drain_loop_until_cleared() {
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat as a fake pi stdin");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue(stdin, state.clone(), 0);
+
+        // Simulate the agent_end -> agent_start gap: a steer has been written
+        // to stdin but its turn hasn't started, and the prior turn already
+        // ended (agent NOT active). This is exactly the window the guard
+        // exists to cover.
+        state.set_steer_in_flight();
+
+        let (_id, mut reply_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "queued-follow-up" }),
+                WaitMode::Prompt,
+                "queued-follow-up".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        // The drain loop must park in the steer wait and never write the
+        // follow-up while the steer is in flight.
+        let blocked =
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut reply_rx).await;
+        assert!(
+            blocked.is_err(),
+            "follow-up must stay queued while a steer is in flight"
+        );
+        assert!(state.is_steer_in_flight(), "guard should still be set");
+
+        // The steered turn started (in prod, agent_start/message_start clears
+        // the guard). Clearing it must wake the drain loop and release the
+        // follow-up — proving the `select!` is wired to `done_notify`.
+        state.clear_steer_in_flight();
+
+        let released = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx)
+            .await
+            .expect("follow-up must be released once the steer clears")
+            .expect("reply channel stayed open");
+        assert!(
+            released.is_ok(),
+            "follow-up should be written after the steer cleared, got {released:?}"
+        );
+
+        // Tear down: end the post-write wait the loop entered, close the
+        // channel so the loop exits, and reap cat.
+        state.signal_terminated();
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Process death must clear the steer guard. Otherwise a steer that dies
+    /// before its `agent_start` arrives would leave `steer_in_flight` set, and
+    /// every subsequent queued prompt would eat the full 30s fallback timeout.
+    #[tokio::test]
+    async fn test_signal_terminated_clears_steer_in_flight() {
+        let state = PiQueueState::new();
+        assert!(!state.is_steer_in_flight(), "starts clear");
+
+        state.set_steer_in_flight();
+        assert!(state.is_steer_in_flight(), "set takes effect");
+
+        state.signal_terminated();
+        assert!(
+            !state.is_steer_in_flight(),
+            "process termination must clear the in-flight steer guard"
+        );
+    }
 }
