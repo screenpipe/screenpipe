@@ -59,6 +59,10 @@ import {
   loadConversationFile,
   saveConversationFile,
 } from "@/lib/chat-storage";
+import {
+  getCachedBrowserStateEntry,
+  resolveNewestBrowserState,
+} from "@/lib/browser-state-cache";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
@@ -655,6 +659,10 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       }
 
       const existing = await loadConversationFile(sid);
+      const browserState = resolveNewestBrowserState(
+        existing?.browserState,
+        getCachedBrowserStateEntry(sid),
+      );
 
       const firstUserMsg = messages.find(
         (m: any) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
@@ -728,6 +736,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         // (back-compat).
         ...(session.kind ? { kind: session.kind } : existing?.kind ? { kind: existing.kind } : {}),
         ...(session.pipeContext ? { pipeContext: session.pipeContext } : existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+        ...(browserState ? { browserState } : {}),
       };
 
       try {

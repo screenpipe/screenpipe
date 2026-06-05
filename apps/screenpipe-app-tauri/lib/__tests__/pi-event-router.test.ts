@@ -15,6 +15,10 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  deleteCachedBrowserState,
+  setCachedBrowserState,
+} from "../browser-state-cache";
 
 vi.mock("@/lib/chat-storage", () => ({
   listConversations: vi.fn(async () => []),
@@ -40,6 +44,7 @@ function piEvt(sessionId: string, event: AgentInnerEvent): AgentEventEnvelope {
 
 function reset() {
   vi.clearAllMocks();
+  deleteCachedBrowserState("A");
   useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 }
 
@@ -126,6 +131,46 @@ describe("pi-event-router: status mirroring for backgrounded sessions", () => {
     );
     expect(useChatStore.getState().sessions.fresh).toBeDefined();
     expect(useChatStore.getState().sessions.fresh.status).toBe("streaming");
+  });
+});
+
+describe("pi-event-router: browser state preservation", () => {
+  beforeEach(reset);
+
+  it("preserves browserState from the shadow cache when background save runs before the file exists", async () => {
+    seed("A", {
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+      ],
+      messageCount: 1,
+      isLoading: true,
+      isStreaming: true,
+    });
+    useChatStore.setState({ currentId: "B" });
+    setCachedBrowserState("A", {
+      url: "https://example.com/background-shadow",
+      updatedAt: 4_321,
+      width: 480,
+    });
+
+    handleTerminated({ sessionId: "A", exitCode: 0 } as any);
+    await flushPendingSaves();
+
+    expect(saveConversationFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "A",
+        browserState: {
+          url: "https://example.com/background-shadow",
+          updatedAt: 4_321,
+          width: 480,
+        },
+      }),
+    );
   });
 });
 
