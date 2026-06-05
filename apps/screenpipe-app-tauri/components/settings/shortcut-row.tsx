@@ -201,6 +201,14 @@ const ShortcutRow = ({
           };
           await syncShortcuts(updatedShortcuts);
 
+          if (reminderShortcutKeys.has(shortcut)) {
+            try {
+              await commands.refreshTrayMenu();
+            } catch (e) {
+              // Tray may not exist in some environments, that's ok.
+            }
+          }
+
           // Keep the visible reminder in sync when one of its displayed shortcuts changes.
           if (settings.showShortcutOverlay && reminderShortcutKeys.has(shortcut)) {
             try {
@@ -245,6 +253,14 @@ const ShortcutRow = ({
       searchShortcut: settings.searchShortcut,
       lockVaultShortcut: settings.lockVaultShortcut || "",
     });
+
+    if (reminderShortcutKeys.has(shortcut)) {
+      try {
+        await commands.refreshTrayMenu();
+      } catch (e) {
+        // Tray may not exist in some environments, that's ok.
+      }
+    }
 
     if (settings.showShortcutOverlay && reminderShortcutKeys.has(shortcut)) {
       try {

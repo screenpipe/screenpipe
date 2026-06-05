@@ -216,7 +216,7 @@ fn send_notify(title: impl Into<String>, body: impl Into<String>) {
 }
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
-fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
+pub(crate) fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
     let update_item = UPDATE_MENU_ITEM
         .lock()
         .unwrap_or_else(|e| e.into_inner())

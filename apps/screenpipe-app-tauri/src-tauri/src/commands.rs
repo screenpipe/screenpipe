@@ -2122,6 +2122,20 @@ pub async fn open_search_window(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn refresh_tray_menu(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let app_handle_clone = app_handle.clone();
+    app_handle
+        .run_on_main_thread(move || {
+            if let Err(err) = crate::tray::force_tray_rebuild(&app_handle_clone) {
+                error!("tray rebuild failed: {}", err);
+            }
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 fn shortcut_reminder_label(
     value: &str,
     setting_key: &str,

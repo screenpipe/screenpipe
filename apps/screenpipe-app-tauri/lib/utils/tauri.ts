@@ -1353,6 +1353,14 @@ async reencryptStore() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async refreshTrayMenu() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_tray_menu") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Wipe the persisted API auth key and write a fresh `sp-<uuid8>` to the
  * secret store. Returns the new key. The running server keeps its old key
