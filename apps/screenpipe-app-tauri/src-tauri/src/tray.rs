@@ -9,7 +9,7 @@ use crate::health::{
     set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
 use crate::recording::{local_api_context_from_app, RecordingState};
-use crate::store::{get_store, OnboardingStore, SettingsStore};
+use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window::ShowRewindWindow;
 use anyhow::Result;
@@ -65,35 +65,49 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         ("Control+Super+S", "Control+Super+K", "Control+Super+L")
     };
 
-    let (show_shortcut, search_shortcut, chat_shortcut) = if let Ok(store) = get_store(app, None) {
-        (
-            store
-                .get("showScreenpipeShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_show.to_string()),
-            store
-                .get("searchShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_search.to_string()),
-            store
-                .get("showChatShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_chat.to_string()),
-        )
+    let settings = SettingsStore::get(app)
+        .unwrap_or_default()
+        .unwrap_or_default();
+
+    let mut show_shortcut = if settings.show_screenpipe_shortcut.trim().is_empty() {
+        default_show.to_string()
     } else {
-        (
-            default_show.to_string(),
-            default_search.to_string(),
-            default_chat.to_string(),
-        )
+        settings.show_screenpipe_shortcut.clone()
+    };
+    let mut search_shortcut = if settings.search_shortcut.trim().is_empty() {
+        default_search.to_string()
+    } else {
+        settings.search_shortcut.clone()
+    };
+    let mut chat_shortcut = if settings.show_chat_shortcut.trim().is_empty() {
+        default_chat.to_string()
+    } else {
+        settings.show_chat_shortcut.clone()
     };
 
-    let cloud_subscribed = SettingsStore::get(app)
-        .unwrap_or_default()
-        .unwrap_or_default()
-        .user
-        .cloud_subscribed
-        == Some(true);
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "showScreenpipeShortcut")
+    {
+        show_shortcut.clear();
+    }
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "searchShortcut")
+    {
+        search_shortcut.clear();
+    }
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "showChatShortcut")
+    {
+        chat_shortcut.clear();
+    }
+
+    let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
 
     let app_ui_hidden = is_app_ui_hidden();
 
@@ -561,25 +575,25 @@ fn create_dynamic_menu(
     // --- Primary actions (most-used first) ---
     // Use native accelerators for right-aligned shortcut display (like Notion Calendar)
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_chat") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show_chat", "Chat")
-                .accelerator(&to_accelerator(&chat_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show_chat", "Chat");
+        if !chat_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(chat_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_search") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show_search", "Search")
-                .accelerator(&to_accelerator(&search_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show_search", "Search");
+        if !search_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(search_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show", "Timeline")
-                .accelerator(&to_accelerator(&show_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show", "Timeline");
+        if !show_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(show_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
 
     // --- Recording status + devices ---
