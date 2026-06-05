@@ -26,6 +26,30 @@ describe("normalizeMediaFilePath", () => {
       "C:/Users/Hugo Azevedo/.screenpipe/data/audio.wav",
     );
   });
+
+  it("preserves the leading slash when decoding Unix file URLs", () => {
+    const path = "file:///Users/ansh/.screenpipe/data/audio%20clip.wav";
+
+    expect(normalizeMediaFilePath(path)).toBe(
+      "/Users/ansh/.screenpipe/data/audio clip.wav",
+    );
+  });
+
+  it("preserves the full absolute Unix path", () => {
+    const path = "/Users/ansh/.screenpipe/data/audio clip.wav";
+
+    expect(normalizeMediaFilePath(path)).toBe(
+      "/Users/ansh/.screenpipe/data/audio clip.wav",
+    );
+  });
+
+  it("trims outer whitespace before stripping surrounding quotes", () => {
+    const path = '  "file:///Users/ansh/.screenpipe/data/audio%20clip.wav"  ';
+
+    expect(normalizeMediaFilePath(path)).toBe(
+      "/Users/ansh/.screenpipe/data/audio clip.wav",
+    );
+  });
 });
 
 describe("isAudioMediaPath", () => {
