@@ -577,7 +577,7 @@ export function MemoriesSection() {
 
   const combinedTags = React.useMemo(() => {
     const set = new Set([...allTags, ...artifactSources]);
-    return [...set];
+    return [...set].sort((a, b) => a.localeCompare(b));
   }, [allTags, artifactSources]);
 
   const handleDeleteArtifact = useCallback(
