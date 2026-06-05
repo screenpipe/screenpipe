@@ -794,7 +794,7 @@ export function MemoriesSection() {
           [
             { value: "all", label: "all" },
             { value: "memories", label: "memories" },
-            { value: "artifacts", label: "outputs" },
+            { value: "artifacts", label: "artifacts" },
           ] as { value: TypeFilter; label: string }[]
         ).map(({ value, label }) => (
           <button
@@ -1072,7 +1072,7 @@ export function MemoriesSection() {
                         {artifactItemSource(artItem)}
                       </Badge>
                       <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
-                        output
+                        artifact
                       </span>
                       {artSize != null && (
                         <span className="text-[10px] text-muted-foreground/50">
