@@ -35,6 +35,15 @@ describe("normalizeMediaFilePath", () => {
     );
   });
 
+  it("normalizes Unix file URLs with non-standard slash counts", () => {
+    expect(
+      normalizeMediaFilePath("file:/Users/ansh/.screenpipe/data/audio%20clip.wav"),
+    ).toBe("/Users/ansh/.screenpipe/data/audio clip.wav");
+    expect(
+      normalizeMediaFilePath("file:////Users/ansh/.screenpipe/data/audio%20clip.wav"),
+    ).toBe("/Users/ansh/.screenpipe/data/audio clip.wav");
+  });
+
   it("preserves the full absolute Unix path", () => {
     const path = "/Users/ansh/.screenpipe/data/audio clip.wav";
 

@@ -17,7 +17,7 @@ export function normalizeMediaFilePath(path: string): string {
   if (/^file:\/\/\/[A-Z]:[\\/]/i.test(cleaned)) {
     cleaned = cleaned.replace(/^file:\/\/\//i, "");
   } else {
-    cleaned = cleaned.replace(/^file:\/\//i, "");
+    cleaned = cleaned.replace(/^file:\/+/i, "/");
   }
 
   // Windows file URLs often become /C:/Users/... after stripping file://.
