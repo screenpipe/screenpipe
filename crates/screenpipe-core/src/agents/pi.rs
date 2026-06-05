@@ -955,8 +955,14 @@ impl PiExecutor {
     /// `Ok(model)`  → the requested model is allowed (or we can't validate).
     /// `Err(model)` → requested not allowed; the returned value is the fallback.
     fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
-        // No catalog (or only the offline fallback) → don't second-guess.
-        if allowed.is_empty() {
+        // No catalog, or only the offline/degraded fallback sentinel → we
+        // couldn't actually validate, so don't second-guess the requested
+        // model. Without the sentinel check the `["auto"]` list returned by
+        // `fallback_cloud_models` when the gateway is unreachable would
+        // masquerade as a one-model tier and spuriously downgrade a
+        // deliberately-chosen premium model, firing a bogus `model_fallback`
+        // notice on every offline run.
+        if allowed.is_empty() || Self::is_offline_fallback_catalog(allowed) {
             return Ok(requested.to_string());
         }
         // "auto" is always valid: the gateway picks an allowed model server-side.
@@ -971,6 +977,20 @@ impl PiExecutor {
             allowed[0].clone()
         };
         Err(fallback)
+    }
+
+    /// `true` when `allowed` is exactly the offline/degraded fallback catalog
+    /// (`["auto"]`) produced by [`fallback_cloud_models`] when the gateway's
+    /// `/v1/models` is unreachable. It carries no real tier information, so we
+    /// treat it like an empty catalog and never let it drive a downgrade.
+    ///
+    /// Trade-off: this collides with a hypothetical real tier whose allow-list
+    /// is genuinely only `["auto"]`. No such tier exists today (real tiers list
+    /// concrete model ids), and even if one appeared `auto` is always accepted
+    /// by the gateway, so passing the requested model through for its
+    /// server-side auto-pick stays correct.
+    fn is_offline_fallback_catalog(allowed: &[String]) -> bool {
+        allowed.len() == 1 && allowed[0] == "auto"
     }
 
     /// Spawn the pi subprocess and wait for its output.
@@ -2456,12 +2476,31 @@ mod tests {
             Err("claude-haiku-4-5".to_string())
         );
 
-        // Empty catalog (offline / gateway down) → trust the requested model,
-        // don't break degraded runs.
+        // Empty catalog (gateway returned an empty list) → trust the requested
+        // model, don't break degraded runs.
         assert_eq!(
             PiExecutor::pick_allowed_model("claude-opus-4", &[]),
             Ok("claude-opus-4".to_string())
         );
+
+        // Offline sentinel ["auto"] (gateway unreachable → fallback_cloud_models)
+        // must be treated like an empty catalog: it is NOT a one-model tier, so
+        // a deliberately-chosen premium model passes through unchanged instead
+        // of being spuriously downgraded. This is the #3763 offline regression.
+        let offline_sentinel = vec!["auto".to_string()];
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &offline_sentinel),
+            Ok("claude-opus-4".to_string())
+        );
+        assert_eq!(
+            PiExecutor::pick_allowed_model("auto", &offline_sentinel),
+            Ok("auto".to_string())
+        );
+        assert!(PiExecutor::is_offline_fallback_catalog(&offline_sentinel));
+        // A real single-model tier on a concrete id is NOT the sentinel.
+        assert!(!PiExecutor::is_offline_fallback_catalog(&[
+            "claude-haiku-4-5".to_string()
+        ]));
     }
 
     #[test]
