@@ -1008,7 +1008,10 @@ impl PrecomputedSignal {
 /// any `AX` prefix and whitespace, then case-insensitive compare.
 fn role_matches(actual: &str, expected: &str) -> bool {
     fn normalise(s: &str) -> String {
-        let trimmed = s.strip_prefix("AX").or_else(|| s.strip_prefix("ax")).unwrap_or(s);
+        let trimmed = s
+            .strip_prefix("AX")
+            .or_else(|| s.strip_prefix("ax"))
+            .unwrap_or(s);
         trimmed
             .chars()
             .filter(|c| !c.is_whitespace())
@@ -1547,12 +1550,8 @@ fn windows_scan_process_uia(
                                     None,
                                     auto_id.as_deref(),
                                 ) {
-                                    let label = format_signal_match(
-                                        signal,
-                                        &role,
-                                        name.as_deref(),
-                                        None,
-                                    );
+                                    let label =
+                                        format_signal_match(signal, &role, name.as_deref(), None);
                                     if !found.contains(&label) {
                                         found.push(label);
                                     }
