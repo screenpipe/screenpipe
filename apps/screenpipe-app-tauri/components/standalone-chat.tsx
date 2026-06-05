@@ -23,21 +23,13 @@ import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { BrowserSidebar } from "@/components/browser-sidebar";
+import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  MemoizedReactMarkdown,
-  chatUrlTransform,
-  openScreenpipeViewerLink,
-  rewriteLocalMarkdownLinksForChat,
-} from "@/components/markdown";
-import { ChatCodeBlock } from "@/components/ui/chat-code-block";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -75,6 +67,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
+import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
@@ -91,7 +84,6 @@ import {
   shouldHandleChatLoadConversationForWindow,
   shouldHandleChatPrefillForWindow,
 } from "@/lib/chat-utils";
-import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards, type ConnectionSetupSuggestion } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
@@ -185,7 +177,6 @@ type ConnectedIntegration = {
 
 type ConnectionListItem = ConnectedIntegration & { connected: boolean };
 type ActivityAppItem = { name: string; count: number; app_name?: string };
-
 function normalizeConnectionForPlatform<T extends ConnectedIntegration>(connection: T, isWindows: boolean): T {
   if (isWindows && connection.id === "apple-calendar") {
     return {
@@ -1422,147 +1413,6 @@ function AppStatsBlock({ content }: { content: string }) {
   );
 }
 
-// Markdown renderer for text blocks
-function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
-  // Assistant messages occasionally contain raw tool-call XML the model emitted
-  // as text — rewrite it to a fenced code block so rehypeRaw doesn't collapse
-  // the unknown tags and bleed the args into the prose. See sanitize-tool-call-xml.ts.
-  const renderText = rewriteLocalMarkdownLinksForChat(
-    isUser ? text : sanitizeToolCallXml(text),
-  );
-  return (
-    <MemoizedReactMarkdown
-      className={cn(
-        "prose prose-sm max-w-full break-words overflow-hidden [word-break:break-word]",
-        isUser
-          ? "text-foreground dark:prose-invert"
-          : "dark:prose-invert"
-      )}
-      remarkPlugins={[remarkGfm]}
-      urlTransform={chatUrlTransform}
-      rehypePlugins={[rehypeRaw]}
-      components={{
-        p({ children }) {
-          return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
-        },
-        details({ children, ...props }) {
-          return (
-            <details
-              className="mt-4 border border-border rounded-md overflow-hidden not-prose"
-              {...(props as React.HTMLAttributes<HTMLDetailsElement>)}
-            >
-              {children}
-            </details>
-          );
-        },
-        summary({ children, ...props }) {
-          return (
-            <summary
-              className="px-3 py-2 text-xs font-medium text-muted-foreground cursor-pointer select-none list-none flex items-center gap-2 hover:bg-muted/50 hover:text-foreground transition-colors"
-              {...(props as React.HTMLAttributes<HTMLElement>)}
-            >
-              <svg
-                className="w-2.5 h-2.5 transition-transform [[open]_&]:rotate-90"
-                viewBox="0 0 6 10"
-                fill="currentColor"
-              >
-                <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              </svg>
-              {children}
-            </summary>
-          );
-        },
-        a({ href, children, ...props }) {
-          if (
-            href?.startsWith("screenpipe://timeline") ||
-            href?.startsWith("screenpipe://frame") ||
-            href?.startsWith("screenpipe://view")
-          ) {
-            const handleScreenpipeLinkClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
-              e.preventDefault();
-              try {
-                if (await openScreenpipeViewerLink(href)) return;
-
-                if (href.startsWith("screenpipe://frame")) {
-                  const frameId = href.split("frame/")[1]?.replace(/^\//, "");
-                  if (frameId) {
-                    useTimelineStore.getState().setPendingNavigation({ timestamp: "", frameId });
-                    await commands.showWindow("Main");
-                    await emit("navigate-to-frame", frameId);
-                  }
-                  return;
-                }
-                const url = new URL(href);
-                const timestamp = url.searchParams.get("timestamp") || url.searchParams.get("start_time");
-                if (timestamp) {
-                  const date = new Date(timestamp);
-                  if (!isNaN(date.getTime())) {
-                    useTimelineStore.getState().setPendingNavigation({ timestamp });
-                    await commands.showWindow("Main");
-                    await emit("navigate-to-timestamp", timestamp);
-                  }
-                }
-              } catch (error) {
-                console.error("Failed to open screenpipe link:", error);
-              }
-            };
-
-            return (
-              <a
-                href="#"
-                onClick={handleScreenpipeLinkClick}
-                className="underline underline-offset-2 text-blue-500 hover:text-blue-400 cursor-pointer inline"
-                {...props}
-              >
-                {children}
-              </a>
-            );
-          }
-
-          return (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" {...props}>
-              {children}
-            </a>
-          );
-        },
-        pre({ children, ...props }) {
-          return (
-            <pre className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-neutral-950 p-3 my-2 text-xs max-w-full not-prose" {...props}>
-              {children}
-            </pre>
-          );
-        },
-        code({ className, children, ...props }) {
-          const content = String(children).replace(/\n$/, "");
-          const match = /language-([^\s]+)/.exec(className || "");
-          const language = match?.[1] || "";
-          const isCodeBlock = className?.includes("language-");
-
-          if (language === "mermaid") {
-            return <MermaidDiagramBlock chart={content} />;
-          }
-
-          if (language === "app-stats") {
-            return <AppStatsBlock content={content} />;
-          }
-
-          if (isCodeBlock) {
-            return <ChatCodeBlock language={language} value={content} />;
-          }
-
-          return (
-            <code className="px-1.5 py-0.5 rounded bg-neutral-800 dark:bg-neutral-900 text-neutral-200 font-mono text-xs not-prose" {...props}>
-              {content}
-            </code>
-          );
-        },
-      }}
-    >
-      {renderText}
-    </MemoizedReactMarkdown>
-  );
-}
-
 // Groups consecutive tool blocks into a single group for collapsible rendering
 type GroupedBlock =
   | { type: "text"; text: string; key: number }
@@ -1795,11 +1645,13 @@ function MessageContent({
   deferSourceFooter = false,
   onImageClick,
   onRetry,
+  onOpenViewerPath,
 }: {
   message: Message;
   deferSourceFooter?: boolean;
   onImageClick?: (images: string[], index: number) => void;
   onRetry?: (prompt: string) => void;
+  onOpenViewerPath?: (path: string) => void;
 }) {
   const isUser = message.role === "user";
   const { settings } = useSettings();
@@ -1867,7 +1719,23 @@ function MessageContent({
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
         {displayGroups.map((group) => {
           if (group.type === "text") {
-            return <MarkdownBlock key={`text-${group.key}`} text={group.text} isUser={isUser} />;
+            return (
+              <MarkdownBlock
+                key={`text-${group.key}`}
+                text={group.text}
+                isUser={isUser}
+                onOpenViewerPath={onOpenViewerPath}
+                renderSpecialCodeBlock={(language, content) => {
+                  if (language === "mermaid") {
+                    return <MermaidDiagramBlock chart={content} />;
+                  }
+                  if (language === "app-stats") {
+                    return <AppStatsBlock content={content} />;
+                  }
+                  return null;
+                }}
+              />
+            );
           }
           if (group.type === "thinking") {
             // Settings → Display → Hide Thinking Blocks (default true). Even
@@ -1975,7 +1843,20 @@ function MessageContent({
   return (
     <div className="space-y-2">
       {attachmentsRow}
-      <MarkdownBlock text={displayText} isUser={isUser} />
+      <MarkdownBlock
+        text={displayText}
+        isUser={isUser}
+        onOpenViewerPath={onOpenViewerPath}
+        renderSpecialCodeBlock={(language, content) => {
+          if (language === "mermaid") {
+            return <MermaidDiagramBlock chart={content} />;
+          }
+          if (language === "app-stats") {
+            return <AppStatsBlock content={content} />;
+          }
+          return null;
+        }}
+      />
       {sourceFooter}
       {retryCta}
     </div>
@@ -2902,6 +2783,8 @@ export function StandaloneChat({
   const [conversationId, setConversationId] = useState<string | null>(
     initialSessionIdRef.current,
   );
+  const { filePreview, openFilePreview, closeFilePreview } =
+    useChatFilePreview(conversationId);
   const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
   const queuedPrompts = useMemo(
     () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
@@ -8188,6 +8071,7 @@ export function StandaloneChat({
                     }
                     onImageClick={(images, index) => setImageViewer({ images, index })}
                     onRetry={(prompt) => sendMessage(prompt)}
+                    onOpenViewerPath={openFilePreview}
                   />
                 )}
               </div>
@@ -8964,7 +8848,12 @@ export function StandaloneChat({
           the agent navigates (or when restoring a chat that has saved
           state). The actual page is rendered by a Tauri WebviewWindow
           positioned over the placeholder div inside this component. */}
-      <BrowserSidebar conversationId={conversationId} />
+      <BrowserSidebar
+        conversationId={conversationId}
+        filePreview={filePreview}
+        onCloseFilePreview={closeFilePreview}
+        onReplaceFilePreviewPath={openFilePreview}
+      />
       </div> {/* End of horizontal chat+browser split */}
 
 
