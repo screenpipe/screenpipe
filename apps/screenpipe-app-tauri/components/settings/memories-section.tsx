@@ -16,6 +16,17 @@ import {
   TooltipProvider,
 } from "@/components/ui/tooltip";
 import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import {
   Trash2,
   Check,
   X,
@@ -197,7 +208,7 @@ export function MemoriesSection() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState("");
@@ -403,7 +414,6 @@ export function MemoriesSection() {
 
   const deleteMemory = async (id: number) => {
     setDeletingId(id);
-    setConfirmDeleteId(null);
     try {
       const res = await localFetch(`/memories/${id}`, {
         method: "DELETE",
@@ -913,20 +923,40 @@ export function MemoriesSection() {
             {selectedIds.size > 0 ? `${selectedIds.size} selected` : "select all"}
           </span>
           {selectedIds.size > 0 && (
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-6 text-[10px] px-2 gap-1"
-              onClick={batchDelete}
-              disabled={batchDeleting}
-            >
-              {batchDeleting ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Trash2 className="h-3 w-3" />
-              )}
-              delete {selectedIds.size}
-            </Button>
+            <AlertDialog open={confirmBatchDelete} onOpenChange={setConfirmBatchDelete}>
+              <AlertDialogTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-6 text-[10px] px-2 gap-1"
+                  disabled={batchDeleting}
+                >
+                  {batchDeleting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                  delete {selectedIds.size}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>delete {selectedIds.size} item{selectedIds.size !== 1 ? "s" : ""}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    the selected items will be permanently deleted. this cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    variant="destructive"
+                    onClick={() => { setConfirmBatchDelete(false); batchDelete(); }}
+                  >
+                    delete {selectedIds.size}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
         </div>
       )}
@@ -1109,15 +1139,35 @@ export function MemoriesSection() {
                       <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
                     {artItem.type === "output" && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={() => void handleDeleteArtifact(artItem.data)}
-                        title="delete"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="delete"
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>delete artifact</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              this artifact will be permanently deleted. this cannot be undone.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              variant="destructive"
+                              onClick={() => void handleDeleteArtifact(artItem.data)}
+                            >
+                              delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     )}
                   </div>
                 </div>
@@ -1382,48 +1432,40 @@ export function MemoriesSection() {
                       <Copy className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
                   </Button>
-                  {confirmDeleteId === memory.id ? (
-                    <div className="flex items-center gap-0.5">
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
                       <Button
                         size="icon"
                         variant="ghost"
-                        className="h-7 w-7"
-                        onClick={() => deleteMemory(memory.id)}
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                         disabled={isDeleting}
-                        title="confirm delete"
+                        title="delete"
                       >
                         {isDeleting ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
-                          <Check className="h-3.5 w-3.5 text-destructive" />
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         )}
                       </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7"
-                        onClick={() => setConfirmDeleteId(null)}
-                        title="cancel"
-                      >
-                        <X className="h-3.5 w-3.5 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => setConfirmDeleteId(memory.id)}
-                      disabled={isDeleting}
-                      title="delete"
-                    >
-                      {isDeleting ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      )}
-                    </Button>
-                  )}
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>delete memory</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          this memory will be permanently deleted. this cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          variant="destructive"
+                          onClick={() => deleteMemory(memory.id)}
+                        >
+                          delete
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
               </div>
             );
