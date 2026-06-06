@@ -548,7 +548,10 @@ mod tests {
     fn sanitize_preserves_multi_dot_names() {
         assert_eq!(sanitize_component("my..file.txt"), "my..file.txt");
         assert_eq!(sanitize_component("report.2024.csv"), "report.2024.csv");
-        assert_eq!(sanitize_component("archive..2024.tar.gz"), "archive..2024.tar.gz");
+        assert_eq!(
+            sanitize_component("archive..2024.tar.gz"),
+            "archive..2024.tar.gz"
+        );
     }
 
     #[test]
