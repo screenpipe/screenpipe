@@ -106,13 +106,16 @@ fn record_to_response(r: OutputRecord) -> OutputResponse {
     }
 }
 
-/// Sanitize a path component by stripping `/`, `\`, `..`, and `.` to prevent
-/// path traversal. Returns only the filename-safe portion.
+/// Sanitize a single path component to prevent directory traversal.
+///
+/// Strips `/` and `\` so the value cannot inject extra path segments,
+/// then rejects the special traversal names `.` and `..`.
 fn sanitize_component(s: &str) -> String {
-    s.replace(['/', '\\'], "")
-        .replace("..", "")
-        .trim_matches('.')
-        .to_string()
+    let cleaned = s.replace(['/', '\\'], "");
+    if cleaned == "." || cleaned == ".." || cleaned.is_empty() {
+        return String::new();
+    }
+    cleaned
 }
 
 /// Build the canonical output path: `<outputs_root>/<source_type>/<source>/<filename>`.
@@ -506,5 +509,83 @@ pub async fn auto_register_pipe_outputs(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_slashes() {
+        assert_eq!(sanitize_component("a/b"), "ab");
+        assert_eq!(sanitize_component("a\\b"), "ab");
+        assert_eq!(sanitize_component("a/b\\c"), "abc");
+    }
+
+    #[test]
+    fn sanitize_blocks_traversal_names() {
+        assert_eq!(sanitize_component(".."), "");
+        assert_eq!(sanitize_component("."), "");
+    }
+
+    #[test]
+    fn sanitize_blocks_traversal_with_slashes() {
+        assert_eq!(sanitize_component("../"), "");
+        assert_eq!(sanitize_component("..\\"), "");
+        assert_eq!(sanitize_component("/.."), "");
+        assert_eq!(sanitize_component("\\.."), "");
+    }
+
+    #[test]
+    fn sanitize_preserves_dotfiles() {
+        assert_eq!(sanitize_component(".hidden"), ".hidden");
+        assert_eq!(sanitize_component(".env"), ".env");
+        assert_eq!(sanitize_component(".gitignore"), ".gitignore");
+    }
+
+    #[test]
+    fn sanitize_preserves_multi_dot_names() {
+        assert_eq!(sanitize_component("my..file.txt"), "my..file.txt");
+        assert_eq!(sanitize_component("report.2024.csv"), "report.2024.csv");
+        assert_eq!(sanitize_component("archive..2024.tar.gz"), "archive..2024.tar.gz");
+    }
+
+    #[test]
+    fn sanitize_preserves_trailing_dots() {
+        assert_eq!(sanitize_component("file."), "file.");
+        assert_eq!(sanitize_component("file.."), "file..");
+    }
+
+    #[test]
+    fn sanitize_empty_input() {
+        assert_eq!(sanitize_component(""), "");
+    }
+
+    #[test]
+    fn sanitize_normal_names() {
+        assert_eq!(sanitize_component("output.txt"), "output.txt");
+        assert_eq!(sanitize_component("my-pipe"), "my-pipe");
+        assert_eq!(sanitize_component("screenshot_2024"), "screenshot_2024");
+    }
+
+    #[test]
+    fn build_output_path_rejects_traversal() {
+        let root = std::path::Path::new("/fake/screenpipe");
+        assert_eq!(build_output_path(root, "..", "src", "f.txt"), None);
+        assert_eq!(build_output_path(root, "pipe", "..", "f.txt"), None);
+        assert_eq!(build_output_path(root, "pipe", "src", ".."), None);
+    }
+
+    #[test]
+    fn build_output_path_normal() {
+        let root = std::path::Path::new("/fake/screenpipe");
+        let result = build_output_path(root, "pipe", "my-pipe", "report.txt");
+        assert_eq!(
+            result,
+            Some(std::path::PathBuf::from(
+                "/fake/screenpipe/outputs/pipe/my-pipe/report.txt"
+            ))
+        );
     }
 }
