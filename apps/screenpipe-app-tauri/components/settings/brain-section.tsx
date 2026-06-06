@@ -37,7 +37,6 @@ import { useOutputs, type Output } from "@/lib/hooks/use-outputs";
 import { useArtifacts, type Artifact } from "@/lib/hooks/use-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
-import { readTextFile } from "@tauri-apps/plugin-fs";
 
 interface MemoryRecord {
   id: number;
@@ -247,8 +246,11 @@ export function BrainSection() {
     });
     if (!artifactContents.has(key)) {
       try {
-        const text = await readTextFile(path);
-        setArtifactContents((prev) => new Map(prev).set(key, text));
+        const res = await commands.readViewerFile(path);
+        if (res.status === "ok" && res.data.kind === "text") {
+          const text = res.data.text;
+          setArtifactContents((prev) => new Map(prev).set(key, text));
+        }
       } catch {}
     }
   };
@@ -676,7 +678,7 @@ export function BrainSection() {
   const isStale = staleDays >= 1;
 
   return (
-    <div className="space-y-4 h-full flex flex-col">
+    <div data-testid="section-brain" className="space-y-4 h-full flex flex-col">
       <p className="text-muted-foreground text-sm mb-4">
         what the AI has learned from your activity and what it has generated for you
       </p>
@@ -705,6 +707,7 @@ export function BrainSection() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
+            data-testid="brain-search-input"
             placeholder="search memories, files, entities, or dates..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -712,6 +715,7 @@ export function BrainSection() {
           />
         </div>
         <Button
+          data-testid="brain-add-memory-btn"
           size="sm"
           variant="outline"
           className="h-8 text-xs gap-1"
@@ -729,6 +733,7 @@ export function BrainSection() {
       {addingNew && (
         <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20">
           <textarea
+            data-testid="brain-add-memory-textarea"
             ref={newContentRef}
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
@@ -790,6 +795,7 @@ export function BrainSection() {
               cancel
             </Button>
             <Button
+              data-testid="brain-add-memory-save"
               size="sm"
               className="h-7 text-xs"
               onClick={createMemory}
@@ -821,6 +827,7 @@ export function BrainSection() {
         ).map(({ value, label }) => (
           <button
             key={value}
+            data-testid={`brain-filter-${value}`}
             onClick={() => {
               setTypeFilter(value);
               // clear active tag if it won't be visible in the new filter
@@ -919,6 +926,7 @@ export function BrainSection() {
       {unifiedItems.length > 0 && (
         <div className="flex items-center gap-2 text-xs">
           <Checkbox
+            data-testid="brain-select-all"
             checked={selectedIds.size === unifiedItems.length && unifiedItems.length > 0}
             onCheckedChange={toggleSelectAll}
             className="h-3.5 w-3.5"
@@ -932,6 +940,7 @@ export function BrainSection() {
               onOpenChange={setConfirmBatchDelete}
               trigger={
                 <Button
+                  data-testid="brain-delete-selected"
                   size="sm"
                   variant="destructive"
                   className="h-6 text-[10px] px-2 gap-1"
@@ -1000,15 +1009,18 @@ export function BrainSection() {
               const artDate = artifactItemDate(artItem);
 
               const artKey = artifactItemKey(artItem);
+              const artTestId = artItem.type === "output" ? String(artItem.data.id) : artKey;
               const fullContent = artifactContents.get(artKey);
               const isArtExpanded = expandedArtifactKeys.has(artKey);
               const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
               return (
                 <div
                   key={artKey}
+                  data-testid={`brain-item-artifact-${artTestId}`}
                   className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
                 >
                   <Checkbox
+                    data-testid={`brain-checkbox-artifact-${artTestId}`}
                     checked={selectedIds.has(artKey)}
                     onCheckedChange={() => toggleSelected(artKey)}
                     className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
@@ -1019,6 +1031,7 @@ export function BrainSection() {
                   />
                   <div className="flex-1 min-w-0">
                     <CompactMarkdown
+                      data-testid={`brain-artifact-preview-${artTestId}`}
                       expanded={isArtExpanded}
                       onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
                     >
@@ -1066,6 +1079,7 @@ export function BrainSection() {
                       <ConfirmDeleteDialog
                         trigger={
                           <Button
+                            data-testid={`brain-delete-artifact-${artTestId}`}
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -1091,9 +1105,11 @@ export function BrainSection() {
             return (
               <div
                 key={`mem-${memory.id}`}
+                data-testid={`brain-item-memory-${memory.id}`}
                 className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
               >
                 <Checkbox
+                  data-testid={`brain-checkbox-memory-${memory.id}`}
                   checked={selectedIds.has(`mem:${memory.id}`)}
                   onCheckedChange={() => toggleSelected(`mem:${memory.id}`)}
                   className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
@@ -1275,6 +1291,7 @@ export function BrainSection() {
                   <ConfirmDeleteDialog
                     trigger={
                       <Button
+                        data-testid={`brain-delete-memory-${memory.id}`}
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"

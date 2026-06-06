@@ -14,6 +14,7 @@ interface CompactMarkdownProps {
   expanded?: boolean;
   onToggleExpanded?: () => void;
   suffix?: React.ReactNode;
+  "data-testid"?: string;
 }
 
 const markdownComponents = {
@@ -79,6 +80,7 @@ export function CompactMarkdown({
   expanded = false,
   onToggleExpanded,
   suffix,
+  "data-testid": dataTestId,
 }: CompactMarkdownProps) {
   const isLong = children.length > truncateLen;
   const displayContent =
@@ -87,7 +89,7 @@ export function CompactMarkdown({
       : children;
 
   return (
-    <div className="text-sm text-foreground">
+    <div className="text-sm text-foreground" data-testid={dataTestId}>
       <MemoizedReactMarkdown
         className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
         remarkPlugins={[remarkGfm]}
