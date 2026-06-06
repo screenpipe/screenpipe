@@ -340,7 +340,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Seeds and opens a long meeting note, then clicks the bottom editor line."
+      "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
     },
     {
       "spec": "notification-viewer-link.spec.ts",
@@ -521,6 +521,26 @@
       "confidence": "partial",
       "ux": "synthetic",
       "notes": "Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions)."
+    },
+    {
+      "spec": "privacy-installed-apps.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "storage-privacy", "real-ui-e2e"],
+      "features": ["settings-privacy-filters", "installed-apps"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism)."
+    },
+    {
+      "spec": "zz-app-entitlement-gate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "billing", "real-ui-e2e"],
+      "features": ["app-entitlement-gate", "billing-gate"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared."
     }
   ]
 }

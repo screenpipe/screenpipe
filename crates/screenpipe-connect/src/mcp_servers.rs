@@ -1311,8 +1311,7 @@ struct StdioSession {
     /// Stderr lines buffered so we can include them in error messages.
     stderr_buf: Arc<Mutex<String>>,
     /// Kept alive via kill_on_drop — dropped (and process killed) when session is dropped.
-    #[allow(dead_code)]
-    child: tokio::process::Child,
+    _child: tokio::process::Child,
     /// PID of the spawned process. On Windows this is cmd.exe; on Unix it's the
     /// direct child. Stored so Drop can kill the whole process tree / group.
     pid: u32,
@@ -1388,7 +1387,7 @@ impl StdioSession {
             reader: BufReader::new(stdout).lines(),
             next_id: 0,
             stderr_buf,
-            child,
+            _child: child,
             pid,
         })
     }

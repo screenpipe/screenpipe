@@ -17,6 +17,7 @@ const COMMANDS: &[&str] = &[
     "screenpipe_reveal",
     "screenpipe_dispose",
     "screenpipe_events",
+    "screenpipe_identify",
 ];
 
 fn main() {

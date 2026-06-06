@@ -594,9 +594,8 @@ mod linux_icon_cache {
             }
 
             // If icon isn't in the map, try loading the icon path
-            if let icon_path = self.get_icon_path_from_name(app_name).await? {
-                return self.load_icon_from_path(&icon_path);
-            }
+            let icon_path = self.get_icon_path_from_name(app_name).await?;
+            return self.load_icon_from_path(&icon_path);
 
             Err(format!("Icon for App '{}' not found", app_name))
         }
@@ -607,7 +606,7 @@ mod linux_icon_cache {
             {
                 let icon_name = icon_name.to_string();
 
-                MainContext::default().invoke(clone!(@strong icon_name => move || {
+                main_context.invoke(clone!(@strong icon_name => move || {
                     let result = gtk::IconTheme::default()
                         .and_then(|icon_theme| {
                             icon_theme
@@ -702,7 +701,7 @@ mod linux_icon_cache {
 
     pub async fn get_app_icon(
         app_name: &str,
-        app_path: Option<String>,
+        _app_path: Option<String>,
     ) -> Result<Option<AppIcon>, String> {
         ICON_CACHE.get_app_icon(app_name).await
     }
@@ -714,4 +713,153 @@ pub async fn get_app_icon(
     app_path: Option<String>,
 ) -> Result<Option<AppIcon>, String> {
     linux_icon_cache::get_app_icon(app_name.to_lowercase().as_str(), app_path).await
+}
+
+/// Best-effort enumeration of installed applications by display name.
+///
+/// Powers the privacy window-filter UI so users can add an ignore/include rule
+/// for an app *before* it has ever been captured — paired with `get_app_icon`,
+/// which already resolves an icon for any installed app by name. Read-only
+/// directory scans; never errors (returns an empty list on any failure).
+/// Names are deduped and sorted.
+#[cfg(target_os = "macos")]
+pub fn list_installed_apps() -> Vec<String> {
+    use std::collections::BTreeSet;
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dirs = [
+        "/Applications".to_string(),
+        "/Applications/Utilities".to_string(),
+        "/System/Applications".to_string(),
+        "/System/Applications/Utilities".to_string(),
+        format!("{home}/Applications"),
+    ];
+
+    for dir in dirs.iter() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("app") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    names.insert(stem.to_string());
+                }
+            }
+        }
+    }
+
+    names.into_iter().collect()
+}
+
+#[cfg(target_os = "windows")]
+pub fn list_installed_apps() -> Vec<String> {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    fn collect_lnk_stems(dir: &Path, names: &mut BTreeSet<String>, depth: usize) {
+        if depth > 4 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_lnk_stems(&path, names, depth + 1);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("lnk"))
+                .unwrap_or(false)
+            {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    let low = stem.to_lowercase();
+                    // Start Menu folders are noisy with non-app shortcuts.
+                    if low.contains("uninstall") || low.contains("readme") {
+                        continue;
+                    }
+                    names.insert(stem.to_string());
+                }
+            }
+        }
+    }
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(pd) = std::env::var("ProgramData") {
+        roots.push(PathBuf::from(pd).join("Microsoft\\Windows\\Start Menu\\Programs"));
+    }
+    if let Ok(ad) = std::env::var("APPDATA") {
+        roots.push(PathBuf::from(ad).join("Microsoft\\Windows\\Start Menu\\Programs"));
+    }
+    for root in roots {
+        collect_lnk_stems(&root, &mut names, 0);
+    }
+
+    names.into_iter().collect()
+}
+
+#[cfg(target_os = "linux")]
+pub fn list_installed_apps() -> Vec<String> {
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    let mut dirs: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/usr/local/share/applications"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".local/share/applications"));
+    }
+    if let Ok(xdg) = std::env::var("XDG_DATA_DIRS") {
+        for d in xdg.split(':') {
+            if !d.is_empty() {
+                dirs.push(PathBuf::from(d).join("applications"));
+            }
+        }
+    }
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // First `Name=` in the entry, skipping hidden launchers.
+            let mut name: Option<String> = None;
+            let mut hidden = false;
+            for line in content.lines() {
+                let line = line.trim();
+                if let Some(v) = line.strip_prefix("Name=") {
+                    if name.is_none() {
+                        name = Some(v.trim().to_string());
+                    }
+                } else if line.eq_ignore_ascii_case("NoDisplay=true")
+                    || line.eq_ignore_ascii_case("Hidden=true")
+                {
+                    hidden = true;
+                }
+            }
+            if hidden {
+                continue;
+            }
+            if let Some(n) = name {
+                if !n.is_empty() {
+                    names.insert(n);
+                }
+            }
+        }
+    }
+
+    names.into_iter().collect()
 }

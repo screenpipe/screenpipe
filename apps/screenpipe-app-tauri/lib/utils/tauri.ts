@@ -713,9 +713,9 @@ async icsCalendarGetEntries() : Promise<Result<IcsCalendarEntry[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async icsCalendarGetUpcoming() : Promise<Result<CalendarEventItem[], string>> {
+async icsCalendarGetUpcoming(hoursBack: number | null, hoursAhead: number | null) : Promise<Result<CalendarEventItem[], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming") };
+    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming", { hoursBack, hoursAhead }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -732,6 +732,19 @@ async icsCalendarSaveEntries(entries: IcsCalendarEntry[]) : Promise<Result<null,
 async icsCalendarTestUrl(url: string) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ics_calendar_test_url", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Copy a skill folder into the screenpipe store. `source_path` is the folder
+ * that directly contains `SKILL.md` (from a scan result or the folder picker).
+ * Re-importing the same name refreshes it.
+ */
+async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("import_skill", { sourcePath }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -770,6 +783,17 @@ async isServerRunning() : Promise<Result<boolean, string>> {
 async listCacheFiles() : Promise<Result<CacheFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_cache_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List skills currently in the screenpipe store.
+ */
+async listImportedSkills() : Promise<Result<ImportedSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_imported_skills") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1353,6 +1377,14 @@ async reencryptStore() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async refreshTrayMenu() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_tray_menu") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Wipe the persisted API auth key and write a fresh `sp-<uuid8>` to the
  * secret store. Returns the new key. The running server keeps its old key
@@ -1430,6 +1462,19 @@ async remoteSyncStopScheduler() : Promise<Result<null, string>> {
 async remoteSyncTest(config: RemoteSyncConfig) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remote_sync_test", { config }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Remove a skill from the store. The pi executor's sync drops the mirrored
+ * copies from new sessions; we also clear the chat agent's live copy so it
+ * disappears without waiting for a restart.
+ */
+async removeImportedSkill(name: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_imported_skill", { name }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1585,6 +1630,17 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Scan the standard locations for skill folders the user could import.
+ */
+async scanDeviceSkills() : Promise<Result<DeviceSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("scan_device_skills") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2098,6 +2154,30 @@ export type CalendarStatus = { available: boolean; authorized: boolean; authoriz
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 /**
+ * A skill folder discovered somewhere on the user's device.
+ */
+export type DeviceSkill = {
+/**
+ * Display name (from frontmatter `name:`, falling back to the folder name).
+ */
+name: string;
+/**
+ * One-line summary from frontmatter `description:` (may be empty).
+ */
+description: string;
+/**
+ * Absolute path to the skill folder (the one containing `SKILL.md`).
+ */
+path: string;
+/**
+ * Human label for where it was found, e.g. `~/.claude/skills`.
+ */
+source: string;
+/**
+ * True when a skill of the same normalized name is already imported.
+ */
+imported: boolean }
+/**
  * An SSH host discovered from ~/.ssh/config or ~/.ssh/known_hosts.
  */
 export type DiscoveredHost = { host: string; port: number; user: string | null; key_path: string | null; source: string;
@@ -2112,6 +2192,14 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
+/**
+ * A skill currently sitting in the screenpipe store.
+ */
+export type ImportedSkill = { name: string; description: string;
+/**
+ * Absolute path inside `<data_dir>/skills/`.
+ */
+path: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
@@ -2710,7 +2798,14 @@ hideThinkingBlocks?: boolean;
 /**
  * UI theme: "light", "dark", or "system".
  */
-uiTheme?: string }
+uiTheme?: string;
+/**
+ * Windows-only: when true, clicking the X on the Home window hides it to
+ * the system tray (and removes it from the taskbar) instead of minimizing.
+ * Read by the CloseRequested handler in main.rs. Default off (historical
+ * minimize-to-taskbar behavior).
+ */
+minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type Suggestion = { text: string;
 /**
@@ -2733,7 +2828,7 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
  * Sync status response.
  */
 export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: number | null; storageLimit: number | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
-export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null }
+export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null; app_entitled: boolean | null; subscription_plan: string | null; entitlement: JsonValue | null }
 export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: number } | { kind: "image"; data_url: string; name: string; path: string } |
 /**
  * Non-text, non-image file (random binary). The UI surfaces a

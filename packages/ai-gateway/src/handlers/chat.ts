@@ -250,13 +250,17 @@ export const SCREENPIPE_SYSTEM_HINT = `You have screenpipe skills. At the start 
 
 /** Prepend a screenpipe system hint if no system message already mentions screenpipe */
 export function ensureScreenpipeHint(body: RequestBody): RequestBody {
-  const hasScreenpipeContext = body.messages.some(
+  // SCREENPIPE-AI-PROXY-1Q: body.messages can be undefined on malformed requests;
+  // treat a missing list as empty instead of throwing
+  // "Cannot read properties of undefined (reading 'some')".
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const hasScreenpipeContext = messages.some(
     (m) => m.role === 'system' && typeof m.content === 'string' && m.content.toLowerCase().includes('screenpipe')
   );
   if (hasScreenpipeContext) return body;
   return {
     ...body,
-    messages: [{ role: 'system', content: SCREENPIPE_SYSTEM_HINT }, ...body.messages],
+    messages: [{ role: 'system', content: SCREENPIPE_SYSTEM_HINT }, ...messages],
   };
 }
 

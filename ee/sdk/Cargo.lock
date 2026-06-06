@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "accessibility"
 version = "0.3.0"
-source = "git+https://github.com/eiz/accessibility.git?branch=master#173e898d4a52ee0afe0224ecb458d324057856e7"
+source = "git+https://github.com/eiz/accessibility.git?rev=173e898d4a52ee0afe0224ecb458d324057856e7#173e898d4a52ee0afe0224ecb458d324057856e7"
 dependencies = [
  "accessibility-sys",
  "cocoa",
@@ -18,7 +18,7 @@ dependencies = [
 [[package]]
 name = "accessibility-sys"
 version = "0.2.0"
-source = "git+https://github.com/eiz/accessibility.git?branch=master#173e898d4a52ee0afe0224ecb458d324057856e7"
+source = "git+https://github.com/eiz/accessibility.git?rev=173e898d4a52ee0afe0224ecb458d324057856e7#173e898d4a52ee0afe0224ecb458d324057856e7"
 dependencies = [
  "core-foundation-sys",
 ]
@@ -1178,6 +1178,18 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.1"
+source = "git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a#8481f3f0dc7dd39bb5be80d9424bfac0cad3801a"
+dependencies = [
+ "cc",
+ "cidre-macros 0.5.0",
+ "half",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "cidre"
+version = "0.15.1"
 source = "git+https://github.com/yury/cidre.git#7049fbfbb92a5b3ed034d3c3162e2fccf3dd5f3e"
 dependencies = [
  "cc",
@@ -1465,10 +1477,10 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/screenpipe/cpal.git?branch=main#01b68e60c80a59bbc1cac3629e725cf3bb2e4901"
+source = "git+https://github.com/screenpipe/cpal.git?rev=01b68e60c80a59bbc1cac3629e725cf3bb2e4901#01b68e60c80a59bbc1cac3629e725cf3bb2e4901"
 dependencies = [
  "alsa",
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "core-foundation-sys",
  "coreaudio-rs",
  "dasp_sample",
@@ -2474,7 +2486,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-sidecar"
 version = "2.5.0"
-source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?branch=main#b0f48a514235d1278d860f4a0af66aa9d6e1618d"
+source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?rev=b0f48a514235d1278d860f4a0af66aa9d6e1618d#b0f48a514235d1278d860f4a0af66aa9d6e1618d"
 dependencies = [
  "anyhow",
  "tar",
@@ -6530,7 +6542,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 [[package]]
 name = "rusty-tesseract"
 version = "1.1.10"
-source = "git+https://github.com/screenpipe/rusty-tesseract.git?branch=main#08346c1de08d122c7121425abc79081c30dbf778"
+source = "git+https://github.com/screenpipe/rusty-tesseract.git?rev=08346c1de08d122c7121425abc79081c30dbf778#08346c1de08d122c7121425abc79081c30dbf778"
 dependencies = [
  "dirs 5.0.1",
  "image",
@@ -6630,9 +6642,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs#a581b6a61c59c7c10258631f57fd837657f27380"
+source = "git+https://github.com/screenpipe/sck-rs?rev=b7f48a1236b2339350baa1375a805c7ce32f88df#b7f48a1236b2339350baa1375a805c7ce32f88df"
 dependencies = [
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image",
  "once_cell",
  "thiserror 1.0.69",
@@ -6665,6 +6677,7 @@ dependencies = [
  "dirs 5.0.1",
  "evdev",
  "libc",
+ "objc2-app-kit",
  "parking_lot",
  "regex",
  "rusqlite",
@@ -6697,7 +6710,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.350"
+version = "0.4.7"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6708,10 +6721,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.350"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "eventkit-rs",
@@ -6731,6 +6745,7 @@ dependencies = [
  "screenpipe-secrets",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -6741,7 +6756,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.350"
+version = "0.4.7"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6780,7 +6795,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.350"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6805,7 +6820,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.350"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6821,7 +6836,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-recorder"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6841,7 +6856,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.350"
+version = "0.4.7"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -6850,7 +6865,7 @@ dependencies = [
  "atspi-proxies",
  "base64 0.22.1",
  "chrono",
- "cidre 0.15.1",
+ "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
  "core-foundation",
  "core-graphics",
  "image",
@@ -6877,7 +6892,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sdk"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "napi",
  "napi-build",
@@ -6905,11 +6920,13 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-tauri"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "base64 0.22.1",
+ "reqwest",
  "screenpipe-recorder",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-plugin",
  "tempfile",

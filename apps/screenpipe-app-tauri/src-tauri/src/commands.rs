@@ -221,6 +221,7 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
     let _ = app.emit("native-notification-action", &json);
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn is_meeting_deeplink(url: &str) -> bool {
     url.starts_with("screenpipe://meeting/") || url.starts_with("screenpipe://meeting?")
 }
@@ -2124,9 +2125,72 @@ pub async fn open_search_window(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn refresh_tray_menu(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let app_handle_clone = app_handle.clone();
+    app_handle
+        .run_on_main_thread(move || {
+            if let Err(err) = crate::tray::force_tray_rebuild(&app_handle_clone) {
+                error!("tray rebuild failed: {}", err);
+            }
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn shortcut_reminder_label(
+    value: &str,
+    setting_key: &str,
+    disabled_shortcuts: &[String],
+) -> String {
+    if disabled_shortcuts.iter().any(|disabled| disabled == setting_key) {
+        String::new()
+    } else if value.trim().is_empty() {
+        String::new()
+    } else {
+        value.to_string()
+    }
+}
+
+fn shortcut_reminder_payload(
+    settings: &crate::store::SettingsStore,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "overlay".to_string(),
+        serde_json::Value::String(shortcut_reminder_label(
+            &settings.show_screenpipe_shortcut,
+            "showScreenpipeShortcut",
+            &settings.disabled_shortcuts,
+        )),
+    );
+    map.insert(
+        "chat".to_string(),
+        serde_json::Value::String(shortcut_reminder_label(
+            &settings.show_chat_shortcut,
+            "showChatShortcut",
+            &settings.disabled_shortcuts,
+        )),
+    );
+    map.insert(
+        "search".to_string(),
+        serde_json::Value::String(shortcut_reminder_label(
+            &settings.search_shortcut,
+            "searchShortcut",
+            &settings.disabled_shortcuts,
+        )),
+    );
+    map.insert(
+        "shortcutOverlaySize".to_string(),
+        serde_json::Value::String(settings.shortcut_overlay_size.clone()),
+    );
+    map
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn show_shortcut_reminder(
     app_handle: tauri::AppHandle,
-    shortcut: String,
+    _shortcut: String,
 ) -> Result<(), String> {
     use tauri::{Emitter, WebviewWindowBuilder};
 
@@ -2137,20 +2201,16 @@ pub async fn show_shortcut_reminder(
     // The screenpipe shortcut only opens the timeline/rewind overlay, so the
     // reminder is pointless when the timeline is disabled. Suppress it here so
     // every caller (startup, settings toggles, shortcut edits) is covered.
-    let timeline_disabled = crate::store::SettingsStore::get(&app_handle)
+    let store = crate::store::SettingsStore::get(&app_handle)
         .unwrap_or_default()
-        .unwrap_or_default()
-        .recording
-        .disable_timeline;
-    if timeline_disabled {
+        .unwrap_or_default();
+    if store.recording.disable_timeline {
         info!("timeline disabled: skipping shortcut reminder overlay");
         return Ok(());
     }
 
-    let shortcut_overlay_size = crate::store::SettingsStore::get(&app_handle)
-        .unwrap_or_default()
-        .unwrap_or_default()
-        .shortcut_overlay_size;
+    let shortcut_overlay_size = store.shortcut_overlay_size.clone();
+    let shortcut_payload = serde_json::Value::Object(shortcut_reminder_payload(&store)).to_string();
 
     // On macOS, try the native SwiftUI shortcut reminder first
     #[cfg(target_os = "macos")]
@@ -2193,24 +2253,7 @@ pub async fn show_shortcut_reminder(
                 }
             }
 
-            let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-            match serde_json::from_str::<serde_json::Value>(&shortcut) {
-                Ok(serde_json::Value::Object(o)) => {
-                    for (k, v) in o {
-                        map.insert(k, v);
-                    }
-                }
-                _ => {
-                    map.insert(
-                        "overlay".to_string(),
-                        serde_json::Value::String(shortcut.clone()),
-                    );
-                }
-            }
-            map.insert(
-                "shortcutOverlaySize".to_string(),
-                serde_json::Value::String(shortcut_overlay_size.clone()),
-            );
+            let mut map = shortcut_reminder_payload(&store);
             if let Some(state) = app_handle.try_state::<RecordingState>() {
                 let guard = state.server.lock().await;
                 if let Some(ref core) = *guard {
@@ -2300,7 +2343,7 @@ pub async fn show_shortcut_reminder(
             window_height,
         )));
         let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
-        let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut);
+        let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut_payload);
         let _ = window.show();
 
         #[cfg(target_os = "macos")]
@@ -2445,7 +2488,7 @@ pub async fn show_shortcut_reminder(
     });
 
     // Send the shortcut info to the window
-    let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut);
+    let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut_payload);
 
     Ok(())
 }

@@ -148,8 +148,7 @@ struct FilterResponse {
 /// [`reqwest::Client`] for actual request dispatch.
 struct CachedClient {
     /// Keeps the SDK verifier alive for `http`'s lifetime.
-    #[allow(dead_code)]
-    inner: tinfoil::Client,
+    _inner: tinfoil::Client,
     http: reqwest::Client,
     created_at: Instant,
 }
@@ -286,7 +285,7 @@ impl TinfoilRedactor {
             .clone();
         let http_clone = http.clone();
         *g = Some(CachedClient {
-            inner,
+            _inner: inner,
             http,
             created_at: Instant::now(),
         });

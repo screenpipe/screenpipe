@@ -1,0 +1,127 @@
+name: Close inactive issues and PRs
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  close-inactive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Close inactive issues and pull requests
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const daysAgo = (days) => {
+              const date = new Date();
+              date.setDate(date.getDate() - days);
+              return date;
+            };
+
+            const thresholds = {
+              issue: daysAgo(14),
+              pr: daysAgo(7),
+            };
+
+            const commentBody = [
+              "Closing this because there has been no activity for a while.",
+              "",
+              "Feel free to reopen if this is still relevant.",
+            ].join("\n");
+
+            async function closeIssue(issue) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: commentBody,
+              });
+
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
+            }
+
+            async function closePullRequest(pullRequest) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pullRequest.number,
+                body: commentBody,
+              });
+
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: pullRequest.number,
+                state: "closed",
+              });
+            }
+
+            function inactiveSince(item, threshold) {
+              return new Date(item.updated_at) <= threshold;
+            }
+
+            const issueItems = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100,
+              },
+            );
+
+            const issues = issueItems.filter((issue) => !issue.pull_request);
+            const pullRequests = await github.paginate(
+              github.rest.pulls.list,
+              {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100,
+              },
+            );
+
+            let closedIssues = 0;
+            let closedPullRequests = 0;
+
+            for (const issue of issues) {
+              if (!inactiveSince(issue, thresholds.issue)) {
+                continue;
+              }
+
+              await closeIssue(issue);
+              closedIssues += 1;
+              core.info(`Closed issue #${issue.number}; last activity ${issue.updated_at}`);
+            }
+
+            for (const pullRequest of pullRequests) {
+              if (!inactiveSince(pullRequest, thresholds.pr)) {
+                continue;
+              }
+
+              await closePullRequest(pullRequest);
+              closedPullRequests += 1;
+              core.info(`Closed PR #${pullRequest.number}; last activity ${pullRequest.updated_at}`);
+            }
+
+            await core.summary
+              .addHeading("Inactive cleanup")
+              .addRaw(`Closed ${closedPullRequests} PR(s) with no activity for 7+ days.\n`)
+              .addRaw(`Closed ${closedIssues} issue(s) with no activity for 14+ days.\n`)
+              .write();

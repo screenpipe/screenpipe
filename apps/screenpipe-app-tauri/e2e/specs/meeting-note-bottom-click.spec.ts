@@ -57,6 +57,12 @@ interface Geom {
   editorPixelsBehindFooter: number | null;
 }
 
+interface EditorFocusProbe {
+  fail?: string;
+  editorFocusCalls?: number;
+  activeInEditor?: boolean;
+}
+
 describe("meeting note – bottom line is clickable", function () {
   this.timeout(240_000);
   let meetingId = 0;
@@ -294,6 +300,64 @@ describe("meeting note – bottom line is clickable", function () {
     const editor = await waitForTestId("note-editor", 20000);
     await editor.waitForExist({ timeout: t(10000) });
     await browser.pause(t(800));
+  });
+
+  it("does not refocus editor-originated clicks from the note shell", async () => {
+    const result = (await browser.executeAsync((done: (v: EditorFocusProbe) => void) => {
+      const shell = document.querySelector(
+        '[data-testid="note-editor-shell"]',
+      ) as HTMLElement | null;
+      const editorEl = document.querySelector(
+        '[data-testid="note-editor"]',
+      ) as HTMLElement | null;
+      const firstParagraph = editorEl?.querySelector("p") as HTMLElement | null;
+      if (!shell || !editorEl || !firstParagraph) {
+        done({ fail: "missing note editor shell, editor, or paragraph" });
+        return;
+      }
+
+      let editorFocusCalls = 0;
+      const originalFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function patchedFocus(
+        this: HTMLElement,
+        ...args: Parameters<HTMLElement["focus"]>
+      ) {
+        if (this === editorEl) editorFocusCalls += 1;
+        return originalFocus.apply(this, args);
+      };
+
+      const focusTrap = document.createElement("button");
+      focusTrap.type = "button";
+      focusTrap.textContent = "focus probe";
+      focusTrap.style.position = "fixed";
+      focusTrap.style.left = "-9999px";
+      focusTrap.style.top = "0";
+      document.body.appendChild(focusTrap);
+      focusTrap.focus();
+
+      firstParagraph.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        }),
+      );
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          HTMLElement.prototype.focus = originalFocus;
+          focusTrap.remove();
+          done({
+            editorFocusCalls,
+            activeInEditor: editorEl.contains(document.activeElement),
+          });
+        });
+      });
+    })) as EditorFocusProbe;
+
+    if (result.fail) throw new Error(result.fail);
+    expect(result.editorFocusCalls).toBe(0);
+    expect(result.activeInEditor).toBe(false);
   });
 
   it("diagnoses footer overlap and asserts the last line is clickable", async () => {

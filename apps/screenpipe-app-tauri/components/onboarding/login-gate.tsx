@@ -8,6 +8,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
 import posthog from "posthog-js";
+import { hasAppEntitlement, isDevBillingBypassEnabled } from "@/lib/app-entitlement";
 
 interface OnboardingLoginProps {
   handleNextSlide: () => void;
@@ -231,6 +232,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
   const [isHovered, setIsHovered] = useState(false);
   const bgRef = useRef<HTMLCanvasElement>(null);
   const btnRef = useRef<HTMLCanvasElement>(null);
+  const canSkipLogin = isDevBillingBypassEnabled();
 
   useBackgroundCanvas(bgRef, 500, 480);
   useButtonCanvas(btnRef, 200, 52, isHovered);
@@ -241,12 +243,12 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
   }, []);
 
   useEffect(() => {
-    if (settings.user?.token && !hasAdvanced.current) {
+    if (settings.user?.token && (canSkipLogin || hasAppEntitlement(settings.user)) && !hasAdvanced.current) {
       hasAdvanced.current = true;
       posthog.capture("onboarding_login_completed");
       setTimeout(() => handleNextSlide(), 500);
     }
-  }, [settings.user?.token, handleNextSlide]);
+  }, [canSkipLogin, settings.user, settings.user?.token, handleNextSlide]);
 
   const handleLogin = useCallback(() => {
     posthog.capture("onboarding_login_clicked");
@@ -256,7 +258,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
   }, []);
 
   const handleSkip = useCallback(() => {
-    posthog.capture("onboarding_login_skipped");
+    posthog.capture("onboarding_login_skipped_dev");
     handleNextSlide();
   }, [handleNextSlide]);
 
@@ -349,13 +351,13 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
               animate={{ opacity: 1 }}
               transition={{ duration: 0.5, delay: 1.0 }}
             >
-              free access to claude haiku &amp; cloud transcription
+              sign in to activate your plan
             </motion.p>
           </>
         )}
 
         <AnimatePresence>
-          {showSkip && !isLoggedIn && (
+          {showSkip && canSkipLogin && !isLoggedIn && (
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -363,7 +365,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
               onClick={handleSkip}
               className="font-mono text-xs text-muted-foreground/70 hover:text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors mt-8 tracking-wide"
             >
-              skip for now — continue without an account
+              skip for dev — continue without an account
             </motion.button>
           )}
         </AnimatePresence>

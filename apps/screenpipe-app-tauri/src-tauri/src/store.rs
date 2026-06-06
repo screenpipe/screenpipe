@@ -42,6 +42,8 @@ pub fn resolved_api_auth_key() -> Option<String> {
 
 /// Magic header for encrypted store.bin files.
 const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
+const APP_ENTITLEMENT_MAX_STALE_HOURS: i64 = 72;
+const APP_ENTITLEMENT_CLOCK_SKEW_MINUTES: i64 = 5;
 
 // ---------------------------------------------------------------------------
 // Settings-loss recovery
@@ -697,6 +699,13 @@ pub struct SettingsStore {
     /// serialize only known fields and silently wipe frontend-only data.
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, serde_json::Value>,
+
+    /// Windows-only: when true, clicking the X on the Home window hides it to
+    /// the system tray (and removes it from the taskbar) instead of minimizing.
+    /// Read by the CloseRequested handler in main.rs. Default off (historical
+    /// minimize-to-taskbar behavior).
+    #[serde(rename = "minimizeToTrayOnClose", default)]
+    pub minimize_to_tray_on_close: bool,
 }
 
 fn generate_device_id() -> String {
@@ -808,6 +817,9 @@ pub struct User {
     pub contact: Option<String>,
     pub cloud_subscribed: Option<bool>,
     pub credits_balance: Option<i32>,
+    pub app_entitled: Option<bool>,
+    pub subscription_plan: Option<String>,
+    pub entitlement: Option<serde_json::Value>,
 }
 
 impl Default for User {
@@ -829,8 +841,62 @@ impl Default for User {
             contact: None,
             cloud_subscribed: None,
             credits_balance: None,
+            app_entitled: None,
+            subscription_plan: None,
+            entitlement: None,
         }
     }
+}
+
+fn parse_entitlement_time(
+    value: Option<&serde_json::Value>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .and_then(|value| value.as_str())
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+}
+
+fn entitlement_checked_recently(entitlement: &serde_json::Value) -> bool {
+    let Some(checked_at) = parse_entitlement_time(entitlement.get("checked_at")) else {
+        return false;
+    };
+
+    let now = chrono::Utc::now();
+    checked_at <= now + chrono::Duration::minutes(APP_ENTITLEMENT_CLOCK_SKEW_MINUTES)
+        && now.signed_duration_since(checked_at)
+            <= chrono::Duration::hours(APP_ENTITLEMENT_MAX_STALE_HOURS)
+}
+
+fn entitlement_active(entitlement: &serde_json::Value) -> bool {
+    entitlement
+        .get("active")
+        .and_then(|active| active.as_bool())
+        .unwrap_or(false)
+}
+
+fn entitlement_has_future_grace(entitlement: &serde_json::Value) -> bool {
+    parse_entitlement_time(entitlement.get("grace_until"))
+        .map(|grace_until| grace_until > chrono::Utc::now())
+        .unwrap_or(false)
+}
+
+fn entitlement_is_lifetime(entitlement: &serde_json::Value) -> bool {
+    let field = |key: &str| {
+        entitlement
+            .get(key)
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+    };
+    field("plan") == "lifetime" || field("source") == "lifetime"
+}
+
+fn entitlement_feature(entitlement: &serde_json::Value, feature: &str) -> bool {
+    entitlement
+        .get("features")
+        .and_then(|features| features.get(feature))
+        .and_then(|feature| feature.as_bool())
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
@@ -1050,6 +1116,7 @@ Rules:
             translucent_sidebar: false,
             hide_thinking_blocks: true,
             ui_theme: "system".to_string(),
+            minimize_to_tray_on_close: false,
             extra: std::collections::HashMap::new(),
         }
     }
@@ -1211,6 +1278,40 @@ impl SettingsStore {
             config.port = p;
         }
         config
+    }
+
+    pub fn app_entitled_or_dev(&self) -> bool {
+        // Debug builds (`bun tauri dev`, e2e, signed dev builds) are never gated.
+        // Release builds must not be bypassable via a runtime env var.
+        if cfg!(debug_assertions) {
+            return true;
+        }
+
+        // Legacy cloud subscribers keep working during rollout.
+        if self.user.cloud_subscribed == Some(true) {
+            return true;
+        }
+
+        let Some(entitlement) = self.user.entitlement.as_ref() else {
+            return false;
+        };
+
+        let has_app_feature =
+            self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app");
+        if !has_app_feature {
+            return false;
+        }
+
+        // Perpetual (lifetime) grants and server-issued offline grace windows stay
+        // valid even when the cached entitlement is stale. A local-first app must
+        // not stop recording just because it could not reach the server for a few
+        // days.
+        if entitlement_is_lifetime(entitlement) || entitlement_has_future_grace(entitlement) {
+            return true;
+        }
+
+        // Otherwise require a recent check confirming the plan is still active.
+        entitlement_checked_recently(entitlement) && entitlement_active(entitlement)
     }
 
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {

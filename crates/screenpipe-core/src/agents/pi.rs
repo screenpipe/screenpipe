@@ -408,6 +408,113 @@ impl PiExecutor {
         // wiped if a stale copy exists (e.g. after a role downgrade).
         Self::ensure_screenpipe_team_skill(project_dir)?;
 
+        // Mirror user-imported skills (Settings → Connections → Skills) into
+        // this session. Best-effort; never blocks a run.
+        if let Err(e) = Self::sync_user_skills(project_dir) {
+            warn!("failed to sync user skills: {}", e);
+        }
+
+        Ok(())
+    }
+
+    /// Marker file dropped inside every skill dir we mirror from the global
+    /// store, so [`Self::sync_user_skills`] can tell its own copies apart from
+    /// baseline (`screenpipe-api`/`-cli`/`-team`) and hand-authored skills and
+    /// safely remove ones the user has since deleted from the store.
+    const USER_SKILL_MARKER: &'static str = ".screenpipe-managed";
+
+    /// Baseline skills screenpipe writes into every session itself
+    /// ([`Self::ensure_screenpipe_skill`] / [`Self::ensure_screenpipe_team_skill`]).
+    /// A store entry under one of these names must never be mirrored: it would
+    /// clobber the real baseline and, once stamped with
+    /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
+    /// importer already rejects these names; this guards any folder that reaches
+    /// the store another way.
+    const BASELINE_SKILL_NAMES: [&'static str; 3] =
+        ["screenpipe-api", "screenpipe-cli", "screenpipe-team"];
+
+    /// Mirror the user's imported skills from the global store
+    /// (`<data_dir>/skills/<name>/`) into `project_dir/.pi/skills/` so every
+    /// pipe and chat session can load them. The store is populated by the
+    /// desktop app's Settings → Connections → Skills importer.
+    ///
+    /// Idempotent + self-cleaning: each mirrored skill is stamped with
+    /// [`Self::USER_SKILL_MARKER`]; on every call we refresh the contents of
+    /// skills still in the store and remove previously-mirrored skills that
+    /// have left it. Baseline + hand-authored skills (no marker) are never
+    /// touched. Best-effort: a single malformed skill is logged and skipped so
+    /// it can never break a session.
+    pub fn sync_user_skills(project_dir: &Path) -> Result<()> {
+        let store = crate::paths::default_screenpipe_data_dir().join("skills");
+        Self::sync_user_skills_from(&store, project_dir)
+    }
+
+    /// Implementation of [`Self::sync_user_skills`] with the store path passed
+    /// in, so it can be unit-tested without touching the real data dir.
+    fn sync_user_skills_from(store: &Path, project_dir: &Path) -> Result<()> {
+        let dest_root = project_dir.join(".pi").join("skills");
+
+        // Copy/refresh every store skill (a folder containing SKILL.md).
+        let mut store_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(entries) = std::fs::read_dir(store) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                if !src.is_dir() || !src.join("SKILL.md").exists() {
+                    continue;
+                }
+                let key = match entry.file_name().into_string() {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                // Never let a store entry shadow a baseline skill screenpipe
+                // writes itself — that would clobber it and, once marked, risk
+                // its deletion on a later sync.
+                if Self::BASELINE_SKILL_NAMES.contains(&key.as_str()) {
+                    continue;
+                }
+                let dest = dest_root.join(&key);
+                let copy = (|| -> std::io::Result<()> {
+                    if dest.exists() {
+                        std::fs::remove_dir_all(&dest)?;
+                    }
+                    crate::paths::copy_dir_all(&src, &dest)?;
+                    std::fs::write(
+                        dest.join(Self::USER_SKILL_MARKER),
+                        b"mirrored from <data>/skills by screenpipe\n",
+                    )?;
+                    Ok(())
+                })();
+                match copy {
+                    Ok(()) => {
+                        store_keys.insert(key);
+                    }
+                    Err(e) => warn!("failed to mirror user skill {:?}: {}", src, e),
+                }
+            }
+        }
+
+        // Drop any skill we previously mirrored that has left the store.
+        if let Ok(entries) = std::fs::read_dir(&dest_root) {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let key = match entry.file_name().into_string() {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                if store_keys.contains(&key) {
+                    continue;
+                }
+                if dir.join(Self::USER_SKILL_MARKER).exists() {
+                    if let Err(e) = std::fs::remove_dir_all(&dir) {
+                        warn!("failed to remove stale user skill {:?}: {}", dir, e);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -481,6 +588,11 @@ impl PiExecutor {
         // allowed to do. Run it after the permission-filtered baseline so
         // it correctly mirrors the user's current admin/license state.
         Self::ensure_screenpipe_team_skill(project_dir)?;
+
+        // Mirror user-imported skills into this session too (best-effort).
+        if let Err(e) = Self::sync_user_skills(project_dir) {
+            warn!("failed to sync user skills: {}", e);
+        }
 
         Ok(())
     }
@@ -854,6 +966,145 @@ impl PiExecutor {
         requested.to_string()
     }
 
+    /// Resolve a screenpipe-cloud model AND validate it against the tier's
+    /// allowed model list returned by the gateway (`/v1/models`).
+    ///
+    /// Why this exists: a pipe's preset can resolve to a model the user's
+    /// current plan/tier does not allow (e.g. `claude-opus-4` on a tier whose
+    /// `allowed_models` are haiku/gemini only). Previously we passed the
+    /// requested model straight through to pi, which then sent it to the
+    /// gateway and got rejected — the pipe failed with an opaque error even
+    /// though the user had valid credits and a valid plan. Validating here
+    /// turns that hard failure into a graceful fallback to an allowed model.
+    ///
+    /// For non-screenpipe providers (ollama / openai-byok / anthropic-byok /
+    /// custom) we don't have an allow-list and must not touch the model — the
+    /// user owns that provider. We only strip the `@date` suffix via
+    /// [`resolve_model`].
+    ///
+    /// Tier-flicker self-heal: tier resolution can momentarily report a LOWER
+    /// tier than the user actually has (stale token captured at engine boot,
+    /// sidecar restart, token refresh mid-run). To avoid silently downgrading
+    /// a paying subscriber who deliberately picked a premium model, when the
+    /// requested model is missing we re-read the CURRENT token and re-fetch
+    /// the catalog once. If the fresh token reveals the model is allowed after
+    /// all, we keep it. Only if it's still disallowed do we fall back.
+    ///
+    /// Returns `(resolved_model, fell_back_from)` — `fell_back_from` is
+    /// `Some(original)` only when we actually downgraded, so the caller can
+    /// surface a visible notice instead of silently swapping the model.
+    async fn resolve_screenpipe_model(
+        &self,
+        requested: &str,
+        provider: &str,
+    ) -> (String, Option<String>) {
+        let base = Self::resolve_model(requested, provider);
+        if provider != "screenpipe" {
+            return (base, None);
+        }
+
+        let api_url = self.api_url.clone();
+
+        // Fetch the tier-filtered catalog. On any failure (offline, gateway
+        // down) we get the minimal fallback list — in that case we trust the
+        // requested model rather than forcing a fallback, since validation is
+        // best-effort and we don't want to break offline/degraded runs.
+        let fetch_allowed = |token: Option<String>| {
+            let api_url = api_url.clone();
+            async move {
+                let models = screenpipe_cloud_models(&api_url, token.as_deref()).await;
+                models
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default()
+            }
+        };
+
+        let allowed = fetch_allowed(self.current_user_token()).await;
+
+        let mut decision = Self::pick_allowed_model(&base, &allowed);
+
+        // Tier-flicker self-heal: model looks disallowed → re-read the token
+        // (it may have refreshed to the real tier since boot) and re-check
+        // once before committing to a downgrade.
+        if decision.is_err() {
+            let fresh = self.current_user_token();
+            let fresh_allowed = fetch_allowed(fresh).await;
+            if !fresh_allowed.is_empty() && fresh_allowed != allowed {
+                let retry = Self::pick_allowed_model(&base, &fresh_allowed);
+                if retry.is_ok() {
+                    info!(
+                        "model '{}' allowed after token refresh (tier flicker self-healed)",
+                        base
+                    );
+                }
+                decision = retry;
+            }
+        }
+
+        match decision {
+            Ok(m) => (m, None),
+            Err(fallback) => {
+                warn!(
+                    "model '{}' is not available on this tier (allowed: [{}]); \
+                     falling back to '{}' so the pipe doesn't fail",
+                    base,
+                    allowed.join(", "),
+                    fallback
+                );
+                (fallback, Some(base))
+            }
+        }
+    }
+
+    /// Pure validation step for [`resolve_screenpipe_model`] (network-free so
+    /// it's unit-testable).
+    ///
+    /// `Ok(model)`  → the requested model is allowed (or we can't validate).
+    /// `Err(model)` → requested not allowed; the returned value is the fallback.
+    fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
+        // No catalog, or only the offline/degraded fallback sentinel → we
+        // couldn't actually validate, so don't second-guess the requested
+        // model. Without the sentinel check the `["auto"]` list returned by
+        // `fallback_cloud_models` when the gateway is unreachable would
+        // masquerade as a one-model tier and spuriously downgrade a
+        // deliberately-chosen premium model, firing a bogus `model_fallback`
+        // notice on every offline run.
+        if allowed.is_empty() || Self::is_offline_fallback_catalog(allowed) {
+            return Ok(requested.to_string());
+        }
+        // "auto" is always valid: the gateway picks an allowed model server-side.
+        if requested == "auto" || allowed.iter().any(|m| m == requested) {
+            return Ok(requested.to_string());
+        }
+        // Requested model is NOT in the tier's allow-list. Pick a safe default:
+        // prefer "auto" (gateway chooses), else the first allowed model.
+        let fallback = if allowed.iter().any(|m| m == "auto") {
+            "auto".to_string()
+        } else {
+            allowed[0].clone()
+        };
+        Err(fallback)
+    }
+
+    /// `true` when `allowed` is exactly the offline/degraded fallback catalog
+    /// (`["auto"]`) produced by [`fallback_cloud_models`] when the gateway's
+    /// `/v1/models` is unreachable. It carries no real tier information, so we
+    /// treat it like an empty catalog and never let it drive a downgrade.
+    ///
+    /// Trade-off: this collides with a hypothetical real tier whose allow-list
+    /// is genuinely only `["auto"]`. No such tier exists today (real tiers list
+    /// concrete model ids), and even if one appeared `auto` is always accepted
+    /// by the gateway, so passing the requested model through for its
+    /// server-side auto-pick stays correct.
+    fn is_offline_fallback_catalog(allowed: &[String]) -> bool {
+        allowed.len() == 1 && allowed[0] == "auto"
+    }
+
     /// Spawn the pi subprocess and wait for its output.
     #[allow(clippy::too_many_arguments)]
     async fn spawn_pi(
@@ -1193,22 +1444,32 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
+        // Provider resolution:
+        // 1. Explicit provider from pipe frontmatter → use it
+        // 2. No provider specified → screenpipe cloud (default)
+        let resolved_provider = provider.unwrap_or("screenpipe").to_string();
+
+        let (resolved_model, fell_back_from) = self
+            .resolve_screenpipe_model(model, &resolved_provider)
+            .await;
+        if let Some(ref original) = fell_back_from {
+            warn!(
+                "pipe model '{}' unavailable on current tier — ran on '{}' instead",
+                original, resolved_model
+            );
+        }
+
         let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
             provider,
-            Some(model),
+            Some(&resolved_model),
             provider_url,
         )
         .await?;
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
-
-        // Provider resolution:
-        // 1. Explicit provider from pipe frontmatter → use it
-        // 2. No provider specified → screenpipe cloud (default)
-        let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
         Self::ensure_context_pruning_extension(working_dir)?;
@@ -1220,7 +1481,6 @@ impl AgentExecutor for PiExecutor {
                 "pi not found. try restarting the app or delete ~/.screenpipe/pi-agent and restart"
             )
         })?;
-        let resolved_model = Self::resolve_model(model, &resolved_provider);
 
         info!(
             "pipe using provider: {}, model: {}",
@@ -1296,9 +1556,23 @@ impl AgentExecutor for PiExecutor {
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
-        let resolved_model = Self::resolve_model(model, &resolved_provider);
-
+        let (resolved_model, fell_back_from) = self
+            .resolve_screenpipe_model(model, &resolved_provider)
+            .await;
+        // Surface the downgrade to the UI so a user who deliberately picked a
+        // premium model isn't silently served a weaker one (e.g. during a tier
+        // flicker). The UI renders this status line as a non-blocking notice.
+        if let Some(ref original) = fell_back_from {
+            let _ = line_tx.send(format!(
+                r#"{{"type":"status","kind":"model_fallback","requested":{},"used":{}}}"#,
+                serde_json::Value::String(original.clone()),
+                serde_json::Value::String(resolved_model.clone()),
+            ));
+        }
+        // Re-read after resolution: resolve_screenpipe_model may have refreshed
+        // the token internally; use the current value for config + spawn.
         let cloud_token = self.current_user_token();
+
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
@@ -2236,6 +2510,64 @@ pub fn ensure_bash_available() -> Option<String> {
 mod tests {
     use super::*;
 
+    /// `sync_user_skills_from` mirrors store skills into a session's
+    /// `.pi/skills/`, leaves baseline/hand-authored skills alone, and removes
+    /// its own mirrors once a skill leaves the store.
+    #[test]
+    fn sync_user_skills_mirrors_and_self_cleans() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = tmp.path().join("skills");
+        let project = tmp.path().join("proj");
+        let skills = project.join(".pi").join("skills");
+
+        // A user skill in the store.
+        std::fs::create_dir_all(store.join("foo")).unwrap();
+        std::fs::write(
+            store.join("foo").join("SKILL.md"),
+            "---\nname: foo\n---\nhi",
+        )
+        .unwrap();
+        // A "foo" dir without SKILL.md must be ignored (not a skill).
+        std::fs::create_dir_all(store.join("not-a-skill")).unwrap();
+        // A baseline skill already written by screenpipe (no marker) must survive.
+        std::fs::create_dir_all(skills.join("screenpipe-api")).unwrap();
+        std::fs::write(skills.join("screenpipe-api").join("SKILL.md"), "base").unwrap();
+        // A store entry colliding with a baseline name must be ignored, never
+        // mirrored — otherwise it would clobber the baseline above.
+        std::fs::create_dir_all(store.join("screenpipe-api")).unwrap();
+        std::fs::write(store.join("screenpipe-api").join("SKILL.md"), "evil").unwrap();
+
+        PiExecutor::sync_user_skills_from(&store, &project).unwrap();
+
+        // Mirrored with a marker.
+        assert!(skills.join("foo").join("SKILL.md").exists());
+        assert!(skills
+            .join("foo")
+            .join(PiExecutor::USER_SKILL_MARKER)
+            .exists());
+        // Non-skill dir not copied.
+        assert!(!skills.join("not-a-skill").exists());
+        // Baseline untouched: original content, and never stamped as managed
+        // (so the colliding store entry can't get it deleted on a later sync).
+        assert_eq!(
+            std::fs::read_to_string(skills.join("screenpipe-api").join("SKILL.md")).unwrap(),
+            "base"
+        );
+        assert!(!skills
+            .join("screenpipe-api")
+            .join(PiExecutor::USER_SKILL_MARKER)
+            .exists());
+
+        // Remove from store, sync again → our mirror is gone, baseline stays.
+        std::fs::remove_dir_all(store.join("foo")).unwrap();
+        PiExecutor::sync_user_skills_from(&store, &project).unwrap();
+        assert!(!skills.join("foo").exists());
+        assert!(skills.join("screenpipe-api").join("SKILL.md").exists());
+
+        // Missing store dir is a no-op, not an error.
+        PiExecutor::sync_user_skills_from(&tmp.path().join("nope"), &project).unwrap();
+    }
+
     /// Verifies that `from_utf8_lossy` handles invalid UTF-8 gracefully.
     /// This is the fix for the toggl-sync crash: "stream did not contain valid UTF-8".
     /// The fix replaces strict UTF-8 `BufReader::lines()` with raw byte-level
@@ -2293,6 +2625,67 @@ mod tests {
 
         // Unrelated error carries no hint.
         assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
+    }
+
+    #[test]
+    fn test_pick_allowed_model() {
+        let allowed: Vec<String> = ["auto", "claude-haiku-4-5", "gemini-3.5-flash"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Allowed model passes through unchanged.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("gemini-3.5-flash", &allowed),
+            Ok("gemini-3.5-flash".to_string())
+        );
+        // "auto" is always valid.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("auto", &allowed),
+            Ok("auto".to_string())
+        );
+        // Disallowed model (the reported bug: opus on a haiku/gemini tier)
+        // falls back to "auto" when present.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &allowed),
+            Err("auto".to_string())
+        );
+
+        // When "auto" is NOT offered, fall back to the first allowed model.
+        let no_auto: Vec<String> = ["claude-haiku-4-5", "gemini-3.5-flash"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &no_auto),
+            Err("claude-haiku-4-5".to_string())
+        );
+
+        // Empty catalog (gateway returned an empty list) → trust the requested
+        // model, don't break degraded runs.
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &[]),
+            Ok("claude-opus-4".to_string())
+        );
+
+        // Offline sentinel ["auto"] (gateway unreachable → fallback_cloud_models)
+        // must be treated like an empty catalog: it is NOT a one-model tier, so
+        // a deliberately-chosen premium model passes through unchanged instead
+        // of being spuriously downgraded. This is the #3763 offline regression.
+        let offline_sentinel = vec!["auto".to_string()];
+        assert_eq!(
+            PiExecutor::pick_allowed_model("claude-opus-4", &offline_sentinel),
+            Ok("claude-opus-4".to_string())
+        );
+        assert_eq!(
+            PiExecutor::pick_allowed_model("auto", &offline_sentinel),
+            Ok("auto".to_string())
+        );
+        assert!(PiExecutor::is_offline_fallback_catalog(&offline_sentinel));
+        // A real single-model tier on a concrete id is NOT the sentinel.
+        assert!(!PiExecutor::is_offline_fallback_catalog(&[
+            "claude-haiku-4-5".to_string()
+        ]));
     }
 
     #[test]

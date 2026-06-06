@@ -357,6 +357,43 @@ jobs:
           Invoke-WebRequest -Uri "https://release-registry.services.sentry.io/apps/sentry-cli/latest?response=download&arch=x86_64&platform=Windows&package=sentry-cli" -OutFile sentry-cli.exe
           .\sentry-cli.exe debug-files upload --org $env:SENTRY_ORG --project screenpipe-cli target/x86_64-pc-windows-msvc/release/
 
+      - name: Install CodeSignTool for SSL.com EV signing (Windows)
+        shell: powershell
+        run: |
+          # Same SSL.com eSigner cert + tool the desktop app uses (release-app.yml).
+          $cstDest = "$env:RUNNER_TEMP\CodeSignTool"
+          Write-Host "Downloading CodeSignTool..."
+          Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip" -OutFile "$env:RUNNER_TEMP\cst.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\cst.zip" -DestinationPath "$cstDest" -Force
+          echo "CODESIGNTOOL_PATH=$cstDest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "CodeSignTool installed at $cstDest"
+
+      - name: Sign screenpipe.exe with SSL.com EV (Windows)
+        shell: powershell
+        env:
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+        run: |
+          # Authenticode-sign our own binary so Windows/Defender stop flagging it
+          # as "Unknown publisher". Only screenpipe.exe is signed here: the bundled
+          # DLLs (onnxruntime, vcruntime/msvcp) are already vendor-signed, and each
+          # SSL.com sign consumes monthly quota, so we sign exactly one PE per release.
+          # sign-ssl.ps1 no-ops when ESIGNER_* secrets are absent (forks/PRs).
+          $exe = (Resolve-Path "target/x86_64-pc-windows-msvc/release/screenpipe.exe").Path
+          & apps/screenpipe-app-tauri/src-tauri/sign-ssl.ps1 $exe
+          if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: signing failed for $exe"; exit 1 }
+          if ($env:ESIGNER_USERNAME) {
+            $sig = Get-AuthenticodeSignature $exe
+            Write-Host "Authenticode status: $($sig.Status)"
+            if ($sig.Status -ne 'Valid') {
+              Write-Host "ERROR: screenpipe.exe not validly signed (status=$($sig.Status))"
+              exit 1
+            }
+            Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+          }
+
       - name: Set version
         shell: pwsh
         run: |
@@ -394,10 +431,26 @@ jobs:
           if (Test-Path $openblasBin) {
             Copy-Item "$openblasBin/*.dll" "$packageDir/bin/" -Force
           }
-          # Bundle vcruntime DLLs for onnxruntime.dll (it uses dynamic CRT)
-          Copy-Item C:\Windows\System32\vcruntime140.dll "$packageDir/bin/" -Force
-          Copy-Item C:\Windows\System32\vcruntime140_1.dll "$packageDir/bin/" -Force -ErrorAction SilentlyContinue
-          Copy-Item C:\Windows\System32\msvcp140.dll "$packageDir/bin/" -Force -ErrorAction SilentlyContinue
+          # Bundle VC++ runtime DLLs required by onnxruntime.dll (dynamic CRT).
+          # These MUST ship: a missing one causes STATUS_DLL_INIT_FAILED
+          # (0xC0000142) on customer machines without the VC++ redistributable.
+          # Hard-fail rather than silently shipping an incomplete package
+          # (these previously used -ErrorAction SilentlyContinue).
+          $vcDlls = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
+          foreach ($dll in $vcDlls) {
+            $src = "C:\Windows\System32\$dll"
+            if (!(Test-Path $src)) {
+              Write-Host "ERROR: required VC++ runtime DLL not found on runner: $src"
+              exit 1
+            }
+            Copy-Item $src "$packageDir/bin/" -Force
+          }
+          foreach ($dll in $vcDlls) {
+            if (!(Test-Path "$packageDir/bin/$dll")) {
+              Write-Host "ERROR: $dll missing from package bin/ after copy"
+              exit 1
+            }
+          }
           7z a "$packageDir.zip" "./$packageDir/*"
 
       - name: Calculate SHA256

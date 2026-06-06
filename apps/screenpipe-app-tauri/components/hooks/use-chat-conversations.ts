@@ -713,6 +713,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
       ...(browserState ? { browserState } : {}),
+      ...(existing?.pinned ? { pinned: existing.pinned } : {}),
+      ...(existing?.hidden ? { hidden: existing.hidden } : {}),
       // Preserve sort key across reloads. Source of truth: the in-memory
       // chat-store, which is bumped exactly once per user-send.
       ...(await (async () => {

@@ -498,7 +498,7 @@ impl SafeMonitor {
     }
 
     /// Per-frame xcap capture fallback (no index caching).
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     fn per_frame_capture(monitor_id: u32) -> Result<DynamicImage> {
         let monitors = XcapMonitor::all().map_err(Error::from)?;
         let monitor = monitors
