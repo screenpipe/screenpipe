@@ -408,6 +408,113 @@ impl PiExecutor {
         // wiped if a stale copy exists (e.g. after a role downgrade).
         Self::ensure_screenpipe_team_skill(project_dir)?;
 
+        // Mirror user-imported skills (Settings → Connections → Skills) into
+        // this session. Best-effort; never blocks a run.
+        if let Err(e) = Self::sync_user_skills(project_dir) {
+            warn!("failed to sync user skills: {}", e);
+        }
+
+        Ok(())
+    }
+
+    /// Marker file dropped inside every skill dir we mirror from the global
+    /// store, so [`Self::sync_user_skills`] can tell its own copies apart from
+    /// baseline (`screenpipe-api`/`-cli`/`-team`) and hand-authored skills and
+    /// safely remove ones the user has since deleted from the store.
+    const USER_SKILL_MARKER: &'static str = ".screenpipe-managed";
+
+    /// Baseline skills screenpipe writes into every session itself
+    /// ([`Self::ensure_screenpipe_skill`] / [`Self::ensure_screenpipe_team_skill`]).
+    /// A store entry under one of these names must never be mirrored: it would
+    /// clobber the real baseline and, once stamped with
+    /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
+    /// importer already rejects these names; this guards any folder that reaches
+    /// the store another way.
+    const BASELINE_SKILL_NAMES: [&'static str; 3] =
+        ["screenpipe-api", "screenpipe-cli", "screenpipe-team"];
+
+    /// Mirror the user's imported skills from the global store
+    /// (`<data_dir>/skills/<name>/`) into `project_dir/.pi/skills/` so every
+    /// pipe and chat session can load them. The store is populated by the
+    /// desktop app's Settings → Connections → Skills importer.
+    ///
+    /// Idempotent + self-cleaning: each mirrored skill is stamped with
+    /// [`Self::USER_SKILL_MARKER`]; on every call we refresh the contents of
+    /// skills still in the store and remove previously-mirrored skills that
+    /// have left it. Baseline + hand-authored skills (no marker) are never
+    /// touched. Best-effort: a single malformed skill is logged and skipped so
+    /// it can never break a session.
+    pub fn sync_user_skills(project_dir: &Path) -> Result<()> {
+        let store = crate::paths::default_screenpipe_data_dir().join("skills");
+        Self::sync_user_skills_from(&store, project_dir)
+    }
+
+    /// Implementation of [`Self::sync_user_skills`] with the store path passed
+    /// in, so it can be unit-tested without touching the real data dir.
+    fn sync_user_skills_from(store: &Path, project_dir: &Path) -> Result<()> {
+        let dest_root = project_dir.join(".pi").join("skills");
+
+        // Copy/refresh every store skill (a folder containing SKILL.md).
+        let mut store_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(entries) = std::fs::read_dir(store) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                if !src.is_dir() || !src.join("SKILL.md").exists() {
+                    continue;
+                }
+                let key = match entry.file_name().into_string() {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                // Never let a store entry shadow a baseline skill screenpipe
+                // writes itself — that would clobber it and, once marked, risk
+                // its deletion on a later sync.
+                if Self::BASELINE_SKILL_NAMES.contains(&key.as_str()) {
+                    continue;
+                }
+                let dest = dest_root.join(&key);
+                let copy = (|| -> std::io::Result<()> {
+                    if dest.exists() {
+                        std::fs::remove_dir_all(&dest)?;
+                    }
+                    crate::paths::copy_dir_all(&src, &dest)?;
+                    std::fs::write(
+                        dest.join(Self::USER_SKILL_MARKER),
+                        b"mirrored from <data>/skills by screenpipe\n",
+                    )?;
+                    Ok(())
+                })();
+                match copy {
+                    Ok(()) => {
+                        store_keys.insert(key);
+                    }
+                    Err(e) => warn!("failed to mirror user skill {:?}: {}", src, e),
+                }
+            }
+        }
+
+        // Drop any skill we previously mirrored that has left the store.
+        if let Ok(entries) = std::fs::read_dir(&dest_root) {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let key = match entry.file_name().into_string() {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                if store_keys.contains(&key) {
+                    continue;
+                }
+                if dir.join(Self::USER_SKILL_MARKER).exists() {
+                    if let Err(e) = std::fs::remove_dir_all(&dir) {
+                        warn!("failed to remove stale user skill {:?}: {}", dir, e);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -481,6 +588,11 @@ impl PiExecutor {
         // allowed to do. Run it after the permission-filtered baseline so
         // it correctly mirrors the user's current admin/license state.
         Self::ensure_screenpipe_team_skill(project_dir)?;
+
+        // Mirror user-imported skills into this session too (best-effort).
+        if let Err(e) = Self::sync_user_skills(project_dir) {
+            warn!("failed to sync user skills: {}", e);
+        }
 
         Ok(())
     }
@@ -2416,6 +2528,64 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `sync_user_skills_from` mirrors store skills into a session's
+    /// `.pi/skills/`, leaves baseline/hand-authored skills alone, and removes
+    /// its own mirrors once a skill leaves the store.
+    #[test]
+    fn sync_user_skills_mirrors_and_self_cleans() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = tmp.path().join("skills");
+        let project = tmp.path().join("proj");
+        let skills = project.join(".pi").join("skills");
+
+        // A user skill in the store.
+        std::fs::create_dir_all(store.join("foo")).unwrap();
+        std::fs::write(
+            store.join("foo").join("SKILL.md"),
+            "---\nname: foo\n---\nhi",
+        )
+        .unwrap();
+        // A "foo" dir without SKILL.md must be ignored (not a skill).
+        std::fs::create_dir_all(store.join("not-a-skill")).unwrap();
+        // A baseline skill already written by screenpipe (no marker) must survive.
+        std::fs::create_dir_all(skills.join("screenpipe-api")).unwrap();
+        std::fs::write(skills.join("screenpipe-api").join("SKILL.md"), "base").unwrap();
+        // A store entry colliding with a baseline name must be ignored, never
+        // mirrored — otherwise it would clobber the baseline above.
+        std::fs::create_dir_all(store.join("screenpipe-api")).unwrap();
+        std::fs::write(store.join("screenpipe-api").join("SKILL.md"), "evil").unwrap();
+
+        PiExecutor::sync_user_skills_from(&store, &project).unwrap();
+
+        // Mirrored with a marker.
+        assert!(skills.join("foo").join("SKILL.md").exists());
+        assert!(skills
+            .join("foo")
+            .join(PiExecutor::USER_SKILL_MARKER)
+            .exists());
+        // Non-skill dir not copied.
+        assert!(!skills.join("not-a-skill").exists());
+        // Baseline untouched: original content, and never stamped as managed
+        // (so the colliding store entry can't get it deleted on a later sync).
+        assert_eq!(
+            std::fs::read_to_string(skills.join("screenpipe-api").join("SKILL.md")).unwrap(),
+            "base"
+        );
+        assert!(!skills
+            .join("screenpipe-api")
+            .join(PiExecutor::USER_SKILL_MARKER)
+            .exists());
+
+        // Remove from store, sync again → our mirror is gone, baseline stays.
+        std::fs::remove_dir_all(store.join("foo")).unwrap();
+        PiExecutor::sync_user_skills_from(&store, &project).unwrap();
+        assert!(!skills.join("foo").exists());
+        assert!(skills.join("screenpipe-api").join("SKILL.md").exists());
+
+        // Missing store dir is a no-op, not an error.
+        PiExecutor::sync_user_skills_from(&tmp.path().join("nope"), &project).unwrap();
+    }
 
     /// Verifies that `from_utf8_lossy` handles invalid UTF-8 gracefully.
     /// This is the fix for the toggl-sync crash: "stream did not contain valid UTF-8".

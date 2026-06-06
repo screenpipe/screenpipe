@@ -637,6 +637,20 @@ pub struct RecordArgs {
     /// in_meeting override flag stays false.
     #[arg(long, default_value_t = false)]
     pub disable_meeting_detector: bool,
+
+    /// Enable the work-hours recording schedule. When set, capture runs only
+    /// inside the windows defined by `--schedule-rule` and pauses (without
+    /// exiting the process) outside them. Off by default (records 24/7).
+    /// Passing any `--schedule-rule` implies this.
+    #[arg(long, default_value_t = false)]
+    pub schedule_enabled: bool,
+
+    /// A work-hours schedule rule. Repeatable. Format: `day,start,end,mode`
+    /// where day is 0-6 (0=Monday), start/end are local 24h "HH:MM", and mode
+    /// is `all`, `audio_only`, or `screen_only`. Example:
+    /// `--schedule-rule 0,09:00,18:00,all --schedule-rule 1,09:00,18:00,all`.
+    #[arg(long = "schedule-rule", value_parser = parse_schedule_rule)]
+    pub schedule_rules: Vec<screenpipe_config::ScheduleRule>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -675,6 +689,8 @@ pub struct RecordArgSources {
     pub encrypt_secrets: bool,
     pub disable_snapshot_compaction: bool,
     pub disable_meeting_detector: bool,
+    pub schedule_enabled: bool,
+    pub schedule_rules: bool,
 }
 
 impl RecordArgSources {
@@ -721,6 +737,8 @@ impl RecordArgSources {
             encrypt_secrets: from_command_line(record, "encrypt_secrets"),
             disable_snapshot_compaction: from_command_line(record, "disable_snapshot_compaction"),
             disable_meeting_detector: from_command_line(record, "disable_meeting_detector"),
+            schedule_enabled: from_command_line(record, "schedule_enabled"),
+            schedule_rules: from_command_line(record, "schedule_rules"),
         }
     }
 
@@ -759,11 +777,59 @@ impl RecordArgSources {
             || self.encrypt_secrets
             || self.disable_snapshot_compaction
             || self.disable_meeting_detector
+            || self.schedule_enabled
+            || self.schedule_rules
     }
 }
 
 fn from_command_line(matches: &ArgMatches, id: &str) -> bool {
     matches.value_source(id) == Some(ValueSource::CommandLine)
+}
+
+/// Parse a `--schedule-rule` value: `day,start,end,mode`.
+/// day = 0-6 (0=Monday), start/end = local 24h "HH:MM",
+/// mode = `all` | `audio_only` | `screen_only`.
+fn parse_schedule_rule(s: &str) -> Result<screenpipe_config::ScheduleRule, String> {
+    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+    if parts.len() != 4 {
+        return Err(format!(
+            "expected `day,start,end,mode` (4 comma-separated fields), got {} in '{s}'",
+            parts.len()
+        ));
+    }
+    let day_of_week: u8 = parts[0]
+        .parse()
+        .map_err(|_| format!("day must be 0-6 (0=Monday), got '{}'", parts[0]))?;
+    if day_of_week > 6 {
+        return Err(format!("day must be 0-6 (0=Monday), got '{}'", parts[0]));
+    }
+    let parse_hhmm = |t: &str| -> Result<String, String> {
+        let (h, m) = t
+            .split_once(':')
+            .ok_or_else(|| format!("time must be HH:MM, got '{t}'"))?;
+        let hh: u8 = h.parse().map_err(|_| format!("invalid hour in '{t}'"))?;
+        let mm: u8 = m.parse().map_err(|_| format!("invalid minute in '{t}'"))?;
+        if hh > 23 || mm > 59 {
+            return Err(format!("time out of range, got '{t}'"));
+        }
+        Ok(format!("{hh:02}:{mm:02}"))
+    };
+    let start_time = parse_hhmm(parts[1])?;
+    let end_time = parse_hhmm(parts[2])?;
+    let record_mode = match parts[3] {
+        "all" | "audio_only" | "screen_only" => parts[3].to_string(),
+        other => {
+            return Err(format!(
+                "mode must be all|audio_only|screen_only, got '{other}'"
+            ))
+        }
+    };
+    Ok(screenpipe_config::ScheduleRule {
+        day_of_week,
+        start_time,
+        end_time,
+        record_mode,
+    })
 }
 
 impl RecordArgs {
@@ -874,6 +940,9 @@ impl RecordArgs {
             disable_clipboard_capture: self.disable_clipboard_capture,
             disable_keyboard_capture: self.disable_keyboard_capture,
             listen_on_lan: self.listen_on_lan,
+            // Passing any `--schedule-rule` implies the schedule is on.
+            schedule_enabled: self.schedule_enabled || !self.schedule_rules.is_empty(),
+            schedule_rules: self.schedule_rules.clone(),
             ..screenpipe_config::RecordingSettings::default()
         }
     }
@@ -1153,6 +1222,16 @@ impl RecordArgs {
         }
         if sources.disable_meeting_detector {
             settings.disable_meeting_detector = self.disable_meeting_detector;
+        }
+        if sources.schedule_enabled {
+            settings.schedule_enabled = self.schedule_enabled;
+        }
+        if sources.schedule_rules {
+            settings.schedule_rules = self.schedule_rules.clone();
+            // Supplying rules on the CLI implies turning the schedule on.
+            if !self.schedule_rules.is_empty() {
+                settings.schedule_enabled = true;
+            }
         }
     }
 }
@@ -1903,6 +1982,79 @@ mod tests {
             }
             _ => panic!("expected Record command"),
         }
+    }
+
+    #[test]
+    fn test_schedule_disabled_by_default() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert!(!args.schedule_enabled);
+                assert!(args.schedule_rules.is_empty());
+                assert!(!args.to_recording_settings().schedule_enabled);
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_schedule_rules_parse_and_auto_enable() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--schedule-rule",
+            "0,09:00,18:00,all",
+            "--schedule-rule",
+            "4,08:30,12:00,screen_only",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert_eq!(args.schedule_rules.len(), 2);
+                let settings = args.to_recording_settings();
+                assert!(
+                    settings.schedule_enabled,
+                    "passing rules should auto-enable the schedule"
+                );
+                assert_eq!(settings.schedule_rules.len(), 2);
+                assert_eq!(settings.schedule_rules[0].day_of_week, 0);
+                assert_eq!(settings.schedule_rules[0].start_time, "09:00");
+                assert_eq!(settings.schedule_rules[0].end_time, "18:00");
+                assert_eq!(settings.schedule_rules[0].record_mode, "all");
+                assert_eq!(settings.schedule_rules[1].day_of_week, 4);
+                assert_eq!(settings.schedule_rules[1].record_mode, "screen_only");
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_schedule_rule_rejects_bad_input() {
+        assert!(
+            Cli::try_parse_from([
+                "screenpipe",
+                "record",
+                "--schedule-rule",
+                "0,09:00,18:00,bogus"
+            ])
+            .is_err(),
+            "invalid mode should fail to parse"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "screenpipe",
+                "record",
+                "--schedule-rule",
+                "9,09:00,18:00,all"
+            ])
+            .is_err(),
+            "day out of range should fail to parse"
+        );
+        assert!(
+            Cli::try_parse_from(["screenpipe", "record", "--schedule-rule", "0,9am,18:00,all"])
+                .is_err(),
+            "non HH:MM time should fail to parse"
+        );
     }
 
     #[test]

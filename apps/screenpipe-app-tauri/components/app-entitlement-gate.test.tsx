@@ -41,6 +41,13 @@ vi.mock("@/lib/utils/tauri", () => ({
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.open }));
 
+// The resume effect only restarts the engine from the primary window, which it
+// detects via getCurrentWindow().label. Stand in as the primary "main" window so
+// the sequenced stop -> settle -> spawn actually runs under test.
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 import { AppEntitlementGate } from "./app-entitlement-gate";
 
 // Build timestamps relative to the real clock so freshness checks are stable

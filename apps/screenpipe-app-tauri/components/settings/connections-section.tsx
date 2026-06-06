@@ -41,6 +41,7 @@ import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
 import { InputMonitoringPanel } from "./input-monitoring-card";
 import { CustomMcpCard } from "./custom-mcp-card";
+import { SkillsCard } from "./skills-card";
 import posthog from "posthog-js";
 
 // ---------------------------------------------------------------------------
@@ -635,6 +636,15 @@ export function IntegrationIcon({
         <path d="M12 22v-4.5" />
       </svg>
     ),
+    skills: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
+        <path d="M20 3v4" />
+        <path d="M22 5h-4" />
+        <path d="M4 17v2" />
+        <path d="M5 18H3" />
+      </svg>
+    ),
     microsoft365: (
       <svg viewBox="0 0 24 24" className="w-5 h-5">
         <path fill="#F25022" d="M1 1h10v10H1z"/>
@@ -915,6 +925,59 @@ function McpSpotlight({
         >
           <Plus className="h-3.5 w-3.5" />
           {totalCount === 0 ? "Add" : "Manage"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Skills spotlight — mirrors McpSpotlight. Opens the skills importer dialog.
+function SkillsSpotlight({
+  count,
+  selected,
+  onClick,
+}: {
+  count: number;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const summary =
+    count === 0 ? "No skills yet" : `${count} skill${count === 1 ? "" : "s"} imported`;
+
+  return (
+    <div
+      className={`
+        rounded-xl border bg-card p-3 transition-colors
+        ${selected ? "border-foreground bg-accent" : "border-border"}
+      `}
+    >
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onClick}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <IntegrationIcon
+            icon="skills"
+            className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted"
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-medium text-foreground">Skills</h3>
+              {count > 0 && <span className="h-2 w-2 rounded-full bg-foreground" />}
+            </div>
+            <p className="text-xs text-muted-foreground">{summary}</p>
+          </div>
+        </button>
+        <Button
+          type="button"
+          size="sm"
+          variant={count === 0 ? "default" : "outline"}
+          onClick={onClick}
+          className="h-8 gap-1.5 text-xs normal-case font-sans tracking-normal"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          {count === 0 ? "Connect skills" : "Manage"}
         </Button>
       </div>
     </div>
@@ -3001,6 +3064,18 @@ export function ConnectionsSection({
   const [customMcpEnabledCount, setCustomMcpEnabledCount] = useState(0);
   const [krispConnected, setKrispConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
+  const [importedSkillsCount, setImportedSkillsCount] = useState(0);
+
+  const loadSkillsCount = useCallback(() => {
+    commands
+      .listImportedSkills()
+      .then((res) => setImportedSkillsCount(res.status === "ok" ? res.data.length : 0))
+      .catch(() => setImportedSkillsCount(0));
+  }, []);
+
+  useEffect(() => {
+    loadSkillsCount();
+  }, [loadSkillsCount]);
 
   const refreshStatus = useCallback(() => {
     detectInstalledConnectionIds()
@@ -3143,6 +3218,7 @@ export function ConnectionsSection({
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false, detected: detectedConnectionIds.has("perplexity") },
       { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected, detected: detectedConnectionIds.has("krisp") },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false, detected: customMcpServerCount > 0 },
+      { id: "skills", name: "Skills", icon: "skills", connected: importedSkillsCount > 0, category: "Agent" },
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
     // owned-default is hidden from settings — the agent drives it via the
@@ -3182,7 +3258,7 @@ export function ConnectionsSection({
       ...tile,
       category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, inputMonitoringGranted, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const categoryOptions = useMemo(() => {
     const categories = Array.from(
@@ -3267,6 +3343,7 @@ export function ConnectionsSection({
       case "anythingllm": return <AnythingLLMPanel />;
       case "hermes": return <HermesCard />;
       case "custom-mcp": return <CustomMcpCard />;
+      case "skills": return <SkillsCard onChanged={loadSkillsCount} />;
       case "krisp": return <KrispPanel
         onConnected={() => setKrispConnected(true)}
         onDisconnected={() => setKrispConnected(false)}
@@ -3341,6 +3418,12 @@ export function ConnectionsSection({
         totalCount={customMcpServerCount}
         selected={selected === "custom-mcp"}
         onClick={() => setSelected(selected === "custom-mcp" ? null : "custom-mcp")}
+      />
+
+      <SkillsSpotlight
+        count={importedSkillsCount}
+        selected={selected === "skills"}
+        onClick={() => setSelected(selected === "skills" ? null : "skills")}
       />
 
       {/* Suggested — device-aware high-activation connections, default view only. */}

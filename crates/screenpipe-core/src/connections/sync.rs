@@ -19,7 +19,9 @@ use tracing::{debug, warn};
 #[cfg(feature = "secrets")]
 use screenpipe_secrets::SecretStore;
 
+#[cfg(feature = "secrets")]
 const CONNECTION_SECRET_PREFIX: &str = "cred:";
+#[cfg(feature = "secrets")]
 const OAUTH_SECRET_PREFIX: &str = "oauth:";
 const CONNECTION_TOMBSTONES_FILE: &str = ".connection_sync_tombstones.json";
 const OAUTH_SUFFIX: &str = "-oauth.json";
@@ -368,10 +370,12 @@ fn read_connection_file(screenpipe_dir: &Path) -> HashMap<String, SavedConnectio
     }
 }
 
+#[cfg(feature = "secrets")]
 fn connection_secret_key(manifest_key: &str) -> String {
     format!("{}{}", CONNECTION_SECRET_PREFIX, manifest_key)
 }
 
+#[cfg(feature = "secrets")]
 fn oauth_secret_key(manifest_key: &str) -> String {
     format!("{}{}", OAUTH_SECRET_PREFIX, manifest_key)
 }
@@ -380,6 +384,7 @@ fn connection_oauth_file_path(screenpipe_dir: &Path, manifest_key: &str) -> std:
     screenpipe_dir.join(format!("{}{}", manifest_key, OAUTH_SUFFIX))
 }
 
+#[cfg(feature = "secrets")]
 fn file_timestamp(path: &Path) -> String {
     path.metadata()
         .and_then(|m| m.modified())
@@ -884,7 +889,9 @@ mod tests {
 
     fn connection(
         key: &str,
-        integration: &str,
+        // integration_id is derived from `key` via parse_connection_key; this
+        // positional arg is vestigial (kept so existing call sites read clearly).
+        _integration: &str,
         modified: &str,
         by: &str,
         is_oauth: bool,

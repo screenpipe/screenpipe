@@ -738,6 +738,19 @@ async icsCalendarTestUrl(url: string) : Promise<Result<number, string>> {
 }
 },
 /**
+ * Copy a skill folder into the screenpipe store. `source_path` is the folder
+ * that directly contains `SKILL.md` (from a scan result or the folder picker).
+ * Re-importing the same name refreshes it.
+ */
+async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("import_skill", { sourcePath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Initialize sync with password.
  * This initializes both the local SyncManager (for device queries) and
  * the server's SyncService (for actual data sync).
@@ -770,6 +783,17 @@ async isServerRunning() : Promise<Result<boolean, string>> {
 async listCacheFiles() : Promise<Result<CacheFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_cache_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List skills currently in the screenpipe store.
+ */
+async listImportedSkills() : Promise<Result<ImportedSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_imported_skills") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1444,6 +1468,19 @@ async remoteSyncTest(config: RemoteSyncConfig) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Remove a skill from the store. The pi executor's sync drops the mirrored
+ * copies from new sessions; we also clear the chat agent's live copy so it
+ * disappears without waiting for a restart.
+ */
+async removeImportedSkill(name: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_imported_skill", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Remove a device from sync.
  */
 async removeSyncDevice(deviceId: string) : Promise<Result<null, string>> {
@@ -1593,6 +1630,17 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Scan the standard locations for skill folders the user could import.
+ */
+async scanDeviceSkills() : Promise<Result<DeviceSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("scan_device_skills") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2106,6 +2154,30 @@ export type CalendarStatus = { available: boolean; authorized: boolean; authoriz
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 /**
+ * A skill folder discovered somewhere on the user's device.
+ */
+export type DeviceSkill = {
+/**
+ * Display name (from frontmatter `name:`, falling back to the folder name).
+ */
+name: string;
+/**
+ * One-line summary from frontmatter `description:` (may be empty).
+ */
+description: string;
+/**
+ * Absolute path to the skill folder (the one containing `SKILL.md`).
+ */
+path: string;
+/**
+ * Human label for where it was found, e.g. `~/.claude/skills`.
+ */
+source: string;
+/**
+ * True when a skill of the same normalized name is already imported.
+ */
+imported: boolean }
+/**
  * An SSH host discovered from ~/.ssh/config or ~/.ssh/known_hosts.
  */
 export type DiscoveredHost = { host: string; port: number; user: string | null; key_path: string | null; source: string;
@@ -2120,6 +2192,14 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
+/**
+ * A skill currently sitting in the screenpipe store.
+ */
+export type ImportedSkill = { name: string; description: string;
+/**
+ * Absolute path inside `<data_dir>/skills/`.
+ */
+path: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }

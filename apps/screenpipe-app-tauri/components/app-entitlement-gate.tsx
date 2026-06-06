@@ -20,6 +20,28 @@ import {
 } from "@/lib/app-entitlement";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+// Drive the resume from exactly ONE window — the main CONTENT window — so
+// multiple webviews don't fire overlapping spawns that race each other (and a
+// reconnect teardown) and wedge the recorder at "Starting capture session".
+//
+// The content-window label differs by platform: on macOS it is "home" (the
+// "main" window there is the NSPanel overlay, which must NOT drive recording —
+// gating on "main" was why macOS never resumed after login). On Windows/Linux
+// the content window is "main-window" (window overlay mode) or "main". This
+// must match the window that actually handles the sign-in deep link, so its
+// gate observes the entitled flip.
+function isPrimaryWindow(): boolean {
+  try {
+    const label = getCurrentWindow().label;
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    if (/Mac/i.test(ua)) return label === "home";
+    return label === "main-window" || label === "main";
+  } catch {
+    return false;
+  }
+}
 
 function EntitlementShell({
   title,
@@ -56,6 +78,7 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   const stoppedForGateRef = useRef(false);
   const autoVerifiedRef = useRef(false);
   const prevEntitledRef = useRef<boolean | null>(null);
+  const resumingRef = useRef(false);
   const user = settings.user as AppUser | null | undefined;
   const devBypass = isDevBillingBypassEnabled();
   const isEntitled = hasAppEntitlement(user);
@@ -159,15 +182,35 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   // sign-in, purchase, or a successful refresh). Native autostart only runs once
   // at launch, so without this a freshly-paid user would see the app but get no
   // recording until they restarted it.
+  //
+  // This must use the SAME recipe as the reliable settings restart
+  // (display-section / recording-settings): one owner, guarded against
+  // re-entry, and a sequenced stop -> settle -> spawn. A bare spawn() here
+  // raced a reconnect's in-flight teardown and wedged the engine at "Starting
+  // capture session" (port never rebound). See the recording-settings
+  // "Apply & Restart" path for the canonical sequence.
   useEffect(() => {
     if (!isSettingsLoaded || devBypass) return;
     const previouslyEntitled = prevEntitledRef.current;
     prevEntitledRef.current = isEntitled;
-    if (previouslyEntitled === false && isEntitled) {
-      commands.spawnScreenpipe(null).catch((err) => {
-        console.warn("failed to start screenpipe after entitlement restored:", err);
-      });
-    }
+    if (previouslyEntitled !== false || !isEntitled) return;
+    // Single owner: only the primary window restarts the engine, so secondary
+    // webviews don't fire overlapping spawns that race each other.
+    if (!isPrimaryWindow()) return;
+    // Collapse rapid re-fires into one restart in flight.
+    if (resumingRef.current) return;
+    resumingRef.current = true;
+    void (async () => {
+      try {
+        await commands.stopScreenpipe();
+        await new Promise((r) => setTimeout(r, 500));
+        await commands.spawnScreenpipe(null);
+      } catch (err) {
+        console.warn("failed to restart screenpipe after entitlement restored:", err);
+      } finally {
+        resumingRef.current = false;
+      }
+    })();
   }, [devBypass, isEntitled, isSettingsLoaded]);
 
   const devLoginBlock = isDevLoginEnabled() ? (

@@ -938,6 +938,12 @@ fn check_whats_new(app: &tauri::AppHandle) {
         match client
             .post("http://127.0.0.1:11435/notify")
             .json(&serde_json::json!({
+                // Explicit type so this isn't bucketed as a "pipe" notification
+                // (the /notify default) and silently suppressed when a user
+                // turns off Pipe notifications. App updates are a separate class
+                // with their own toggle. See the pipe gate in
+                // notifications/routes.rs (#3880).
+                "type": "app-update",
                 "title": format!("🎉 screenpipe v{} — what's new", current_version),
                 "body": body,
             }))

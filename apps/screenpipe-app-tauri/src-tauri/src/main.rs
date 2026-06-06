@@ -124,6 +124,7 @@ mod native_shortcut_reminder;
 mod notifications;
 mod safe_icon;
 mod shortcuts;
+mod skills;
 mod specta_bindings;
 mod vault;
 mod viewer;
