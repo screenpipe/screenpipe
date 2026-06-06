@@ -16,17 +16,6 @@ import {
   TooltipProvider,
 } from "@/components/ui/tooltip";
 import {
-  AlertDialog,
-  AlertDialogTrigger,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogAction,
-  AlertDialogCancel,
-} from "@/components/ui/alert-dialog";
-import {
   Trash2,
   Check,
   X,
@@ -36,15 +25,13 @@ import {
   Tag,
   Plus,
   Pencil,
-  ChevronDown,
-  ChevronUp,
   AlertCircle,
   FolderOpen,
   Eye,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { MemoizedReactMarkdown } from "@/components/markdown";
-import remarkGfm from "remark-gfm";
+import { CompactMarkdown } from "@/components/settings/compact-markdown";
+import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
 import { localFetch } from "@/lib/api";
 import { useOutputs, type Output } from "@/lib/hooks/use-outputs";
 import { useArtifacts, type Artifact } from "@/lib/hooks/use-artifacts";
@@ -164,7 +151,7 @@ function timeAgo(iso: string): string {
   return `${days}d ago`;
 }
 
-function MemoriesSkeleton() {
+function BrainSkeleton() {
   return (
     <div className="space-y-1.5 flex-1 overflow-y-auto pr-1">
       {Array.from({ length: 6 }).map((_, index) => (
@@ -201,7 +188,7 @@ function MemoriesSkeleton() {
 type SortField = "created_at" | "importance";
 type SortDir = "desc" | "asc";
 
-export function MemoriesSection() {
+export function BrainSection() {
   const { toast } = useToast();
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -923,8 +910,10 @@ export function MemoriesSection() {
             {selectedIds.size > 0 ? `${selectedIds.size} selected` : "select all"}
           </span>
           {selectedIds.size > 0 && (
-            <AlertDialog open={confirmBatchDelete} onOpenChange={setConfirmBatchDelete}>
-              <AlertDialogTrigger asChild>
+            <ConfirmDeleteDialog
+              open={confirmBatchDelete}
+              onOpenChange={setConfirmBatchDelete}
+              trigger={
                 <Button
                   size="sm"
                   variant="destructive"
@@ -938,31 +927,18 @@ export function MemoriesSection() {
                   )}
                   delete {selectedIds.size}
                 </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>delete {selectedIds.size} item{selectedIds.size !== 1 ? "s" : ""}?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    the selected items will be permanently deleted. this cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    variant="destructive"
-                    onClick={() => { setConfirmBatchDelete(false); batchDelete(); }}
-                  >
-                    delete {selectedIds.size}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+              }
+              title={`delete ${selectedIds.size} item${selectedIds.size !== 1 ? "s" : ""}?`}
+              description="the selected items will be permanently deleted. this cannot be undone."
+              confirmLabel={`delete ${selectedIds.size}`}
+              onConfirm={() => { setConfirmBatchDelete(false); batchDelete(); }}
+            />
           )}
         </div>
       )}
 
       {loading && (outputsLoading || artifactsLoading) ? (
-        <MemoriesSkeleton />
+        <BrainSkeleton />
       ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
           <p>
@@ -1010,12 +986,6 @@ export function MemoriesSection() {
               const fullContent = artifactContents.get(artKey);
               const isArtExpanded = expandedArtifactKeys.has(artKey);
               const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
-              const TRUNCATE_LEN = 150;
-              const isLong = (fullContent ?? artPreview ?? "").length > TRUNCATE_LEN;
-              const displayContent = !isArtExpanded && rawContent.length > TRUNCATE_LEN
-                ? rawContent.slice(0, TRUNCATE_LEN) + "\u2026"
-                : rawContent;
-
               return (
                 <div
                   key={artKey}
@@ -1031,75 +1001,12 @@ export function MemoriesSection() {
                     }`}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-foreground">
-                      <MemoizedReactMarkdown
-                        className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          h1({ children }) {
-                            return <p className="text-base font-semibold mb-1">{children}</p>;
-                          },
-                          h2({ children }) {
-                            return <p className="text-sm font-semibold mb-1">{children}</p>;
-                          },
-                          h3({ children }) {
-                            return <p className="text-xs font-semibold mb-0.5">{children}</p>;
-                          },
-                          h4({ children }) {
-                            return <p className="text-xs font-medium mb-0.5">{children}</p>;
-                          },
-                          p({ children }) {
-                            return <p className="mb-1 last:mb-0">{children}</p>;
-                          },
-                          a({ href, children }) {
-                            return (
-                              <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="underline hover:text-foreground/70 transition-colors"
-                              >
-                                {children}
-                              </a>
-                            );
-                          },
-                          code({ className, children, ...props }) {
-                            const isInline = !className;
-                            if (isInline) {
-                              return (
-                                <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
-                                  {children}
-                                </code>
-                              );
-                            }
-                            return (
-                              <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
-                                <code className={className} {...props}>
-                                  {children}
-                                </code>
-                              </pre>
-                            );
-                          },
-                        }}
-                      >
-                        {displayContent}
-                      </MemoizedReactMarkdown>
-                      {isLong && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void toggleArtifactExpanded(artKey, artPath);
-                          }}
-                          className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
-                        >
-                          {isArtExpanded ? (
-                            <><ChevronUp className="h-2.5 w-2.5" /> show less</>
-                          ) : (
-                            <><ChevronDown className="h-2.5 w-2.5" /> show more</>
-                          )}
-                        </button>
-                      )}
-                    </div>
+                    <CompactMarkdown
+                      expanded={isArtExpanded}
+                      onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
+                    >
+                      {rawContent}
+                    </CompactMarkdown>
                     <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                       {artDate && (
                         <span className="text-xs text-muted-foreground">
@@ -1139,8 +1046,8 @@ export function MemoriesSection() {
                       <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
                     {artItem.type === "output" && (
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
+                      <ConfirmDeleteDialog
+                        trigger={
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1149,25 +1056,11 @@ export function MemoriesSection() {
                           >
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>delete artifact</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              this artifact will be permanently deleted. this cannot be undone.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              variant="destructive"
-                              onClick={() => void handleDeleteArtifact(artItem.data)}
-                            >
-                              delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                        }
+                        title="delete artifact"
+                        description="this artifact will be permanently deleted. this cannot be undone."
+                        onConfirm={() => void handleDeleteArtifact(artItem.data)}
+                      />
                     )}
                   </div>
                 </div>
@@ -1217,89 +1110,19 @@ export function MemoriesSection() {
                       className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-y focus:outline-none focus:border-foreground/40"
                       rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
                     />
-                  ) : (() => {
-                    const TRUNCATE_LEN = 150;
-                    const isLong = memory.content.length > TRUNCATE_LEN;
-                    const isExpanded = expandedIds.has(memory.id);
-                    const displayContent =
-                      isLong && !isExpanded
-                        ? memory.content.slice(0, TRUNCATE_LEN) + "…"
-                        : memory.content;
-                    return (
-                      <div className="text-sm text-foreground">
-                        <MemoizedReactMarkdown
-                          className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            h1({ children }) {
-                              return <p className="text-sm font-semibold mb-1">{children}</p>;
-                            },
-                            h2({ children }) {
-                              return <p className="text-sm font-semibold mb-1">{children}</p>;
-                            },
-                            h3({ children }) {
-                              return <p className="text-xs font-semibold mb-0.5">{children}</p>;
-                            },
-                            h4({ children }) {
-                              return <p className="text-xs font-medium mb-0.5">{children}</p>;
-                            },
-                            p({ children }) {
-                              return <p className="mb-1 last:mb-0">{children}</p>;
-                            },
-                            a({ href, children }) {
-                              return (
-                                <a
-                                  href={href}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="underline hover:text-foreground/70 transition-colors"
-                                >
-                                  {children}
-                                </a>
-                              );
-                            },
-                            code({ className, children, ...props }) {
-                              const isInline = !className;
-                              if (isInline) {
-                                return (
-                                  <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
-                                    {children}
-                                  </code>
-                                );
-                              }
-                              return (
-                                <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
-                                  <code className={className} {...props}>
-                                    {children}
-                                  </code>
-                                </pre>
-                              );
-                            },
-                          }}
-                        >
-                          {displayContent}
-                        </MemoizedReactMarkdown>
-                        {savingId === memory.id && (
+                  ) : (
+                    <CompactMarkdown
+                      expanded={expandedIds.has(memory.id)}
+                      onToggleExpanded={() => toggleExpanded(memory.id)}
+                      suffix={
+                        savingId === memory.id ? (
                           <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
-                        )}
-                        {isLong && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleExpanded(memory.id);
-                            }}
-                            className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
-                          >
-                            {isExpanded ? (
-                              <><ChevronUp className="h-2.5 w-2.5" /> show less</>
-                            ) : (
-                              <><ChevronDown className="h-2.5 w-2.5" /> show more</>
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })()}
+                        ) : undefined
+                      }
+                    >
+                      {memory.content}
+                    </CompactMarkdown>
+                  )}
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
@@ -1432,8 +1255,8 @@ export function MemoriesSection() {
                       <Copy className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
                   </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
+                  <ConfirmDeleteDialog
+                    trigger={
                       <Button
                         size="icon"
                         variant="ghost"
@@ -1447,25 +1270,11 @@ export function MemoriesSection() {
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         )}
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>delete memory</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          this memory will be permanently deleted. this cannot be undone.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          variant="destructive"
-                          onClick={() => deleteMemory(memory.id)}
-                        >
-                          delete
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                    }
+                    title="delete memory"
+                    description="this memory will be permanently deleted. this cannot be undone."
+                    onConfirm={() => deleteMemory(memory.id)}
+                  />
                 </div>
               </div>
             );
