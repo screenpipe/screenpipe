@@ -21,6 +21,18 @@ interface ThemeProviderState {
   toggleTheme: () => void;
 }
 
+function readStoredTheme(
+  storageKey: string,
+  fallback: ColorTheme = "system",
+): ColorTheme {
+  try {
+    const storedTheme = localStorage?.getItem(storageKey) as ColorTheme | null;
+    return storedTheme ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const initialState: ThemeProviderState = {
   theme: "system",
   setTheme: () => null,
@@ -50,16 +62,7 @@ export function ThemeProvider({
   useEffect(() => {
     // Fallback for SSR or edge cases where initializer didn't run
     if (theme && isLoaded) return;
-    try {
-      const storedTheme = localStorage?.getItem(storageKey) as ColorTheme;
-      if (storedTheme) {
-        setThemeState(storedTheme);
-      } else {
-        setThemeState("system");
-      }
-    } catch {
-      setThemeState("system");
-    }
+    setThemeState(readStoredTheme(storageKey));
     setIsLoaded(true);
   }, [storageKey, theme, isLoaded]);
 
@@ -81,6 +84,41 @@ export function ThemeProvider({
       root.classList.add(theme);
     }
   }, [theme, isLoaded]);
+
+  // Keep separate windows/webviews in sync when another window changes the
+  // stored theme. This is what makes the dedicated viewer window follow theme
+  // changes from the main app window.
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const syncThemeFromStorage = () => {
+      const storedTheme = readStoredTheme(storageKey);
+      setThemeState((currentTheme) =>
+        currentTheme === storedTheme ? currentTheme : storedTheme,
+      );
+    };
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key && event.key !== storageKey) return;
+      syncThemeFromStorage();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncThemeFromStorage();
+      }
+    };
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", syncThemeFromStorage);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", syncThemeFromStorage);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [isLoaded, storageKey]);
 
   // Listen to Tauri window theme changes to sync user's OS theme preference
   useEffect(() => {
