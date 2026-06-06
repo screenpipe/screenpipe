@@ -130,7 +130,13 @@ fn build_output_path(
     if st.is_empty() || src.is_empty() || fname.is_empty() {
         return None;
     }
-    Some(screenpipe_dir.join("outputs").join(st).join(src).join(fname))
+    Some(
+        screenpipe_dir
+            .join("outputs")
+            .join(st)
+            .join(src)
+            .join(fname),
+    )
 }
 
 /// Read the first N bytes of a non-image file as a UTF-8 preview.
@@ -195,7 +201,9 @@ pub(crate) async fn register_output_handler(
     .ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "source, source_type, or filename contains invalid characters"})),
+            JsonResponse(
+                json!({"error": "source, source_type, or filename contains invalid characters"}),
+            ),
         )
     })?;
     let dest_str = dest.to_string_lossy().to_string();
@@ -396,7 +404,10 @@ pub(crate) async fn delete_output_handler(
 /// whose files don't exist on disk.
 pub async fn auto_register_pipe_outputs(
     db: &screenpipe_db::DatabaseManager,
-    items: Vec<(screenpipe_core::pipes::ArtifactDeclaration, std::path::PathBuf)>,
+    items: Vec<(
+        screenpipe_core::pipes::ArtifactDeclaration,
+        std::path::PathBuf,
+    )>,
     pipe_name: &str,
     screenpipe_dir: &std::path::Path,
 ) {

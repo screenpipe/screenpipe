@@ -10216,10 +10216,7 @@ LIMIT ? OFFSET ?
         Ok(id)
     }
 
-    pub async fn get_output_by_id(
-        &self,
-        id: i64,
-    ) -> Result<crate::types::OutputRecord, SqlxError> {
+    pub async fn get_output_by_id(&self, id: i64) -> Result<crate::types::OutputRecord, SqlxError> {
         sqlx::query_as::<_, crate::types::OutputRecord>(
             "SELECT id, source, source_type, title, kind, original_path, output_path, \
              size_bytes, preview, metadata, created_at, updated_at \
@@ -10342,12 +10339,11 @@ LIMIT ? OFFSET ?
     }
 
     pub async fn delete_output(&self, id: i64) -> Result<Option<String>, SqlxError> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT output_path FROM outputs WHERE id = ?1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT output_path FROM outputs WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         if let Some((path,)) = &row {
             let mut tx = self.begin_immediate_with_retry().await?;
