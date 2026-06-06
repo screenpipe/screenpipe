@@ -68,6 +68,75 @@ function AppIcon({ app }: { app: string }) {
 }
 
 /**
+ * Single picker row. Hoisted out of MeetingAppsPicker so its identity is
+ * stable across parent re-renders — defining it inline caused the entire row
+ * subtree (incl. the hover-styled Button) to remount on every state change,
+ * which flickered the :hover background while the cursor sat still on top of
+ * the ignore button.
+ */
+const Row = React.memo(function Row({
+  value,
+  label,
+  app,
+  sub,
+  added,
+  onToggle,
+}: {
+  value: string;
+  label: string;
+  app: string;
+  sub?: string;
+  added: boolean;
+  onToggle: (value: string) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 px-2 py-1.5 hover:bg-muted/50 cursor-pointer border-b border-border last:border-b-0",
+        added && "bg-muted/40",
+      )}
+      onClick={() => onToggle(value)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle(value);
+        }
+      }}
+    >
+      <AppIcon app={app} />
+      <span className="text-sm font-medium truncate flex-1">{label}</span>
+      {sub && (
+        <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+          {sub}
+        </span>
+      )}
+      <Button
+        size="sm"
+        variant={added ? "secondary" : "outline"}
+        className="h-6 text-[10px] shrink-0"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle(value);
+        }}
+        title={added ? `${label} is ignored — click to re-enable` : `ignore ${label}`}
+      >
+        {added ? (
+          <>
+            <Check className="h-3 w-3 mr-1" /> ignored
+          </>
+        ) : (
+          <>
+            <Plus className="h-3 w-3 mr-1" /> ignore
+          </>
+        )}
+      </Button>
+    </div>
+  );
+});
+
+/**
  * Picker for the meeting-detection ignore list. Auto-populates from the apps
  * the user has actually used (last 7 days, via the local DB) plus a curated set
  * of known meeting apps, each shown with its real icon. Clicking a row toggles
@@ -134,65 +203,6 @@ export function MeetingAppsPicker({
     q.length > 0 &&
     !meetingRows.some((m) => m.value.toLowerCase() === q) &&
     !selected.some((s) => s.toLowerCase() === q);
-
-  const Row = ({
-    value,
-    label,
-    app,
-    sub,
-  }: {
-    value: string;
-    label: string;
-    app: string;
-    sub?: string;
-  }) => {
-    const added = isSelected(value);
-    return (
-      <div
-        className={cn(
-          "flex items-center gap-2 px-2 py-1.5 hover:bg-muted/50 cursor-pointer border-b border-border last:border-b-0",
-          added && "bg-muted/40",
-        )}
-        onClick={() => onToggle(value)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggle(value);
-          }
-        }}
-      >
-        <AppIcon app={app} />
-        <span className="text-sm font-medium truncate flex-1">{label}</span>
-        {sub && (
-          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
-            {sub}
-          </span>
-        )}
-        <Button
-          size="sm"
-          variant={added ? "secondary" : "outline"}
-          className="h-6 text-[10px] shrink-0"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle(value);
-          }}
-          title={added ? `${label} is ignored — click to re-enable` : `ignore ${label}`}
-        >
-          {added ? (
-            <>
-              <Check className="h-3 w-3 mr-1" /> ignored
-            </>
-          ) : (
-            <>
-              <Plus className="h-3 w-3 mr-1" /> ignore
-            </>
-          )}
-        </Button>
-      </div>
-    );
-  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -265,7 +275,14 @@ export function MeetingAppsPicker({
             </div>
           )}
           {meetingRows.map((m) => (
-            <Row key={m.value} value={m.value} label={m.label} app={m.label} />
+            <Row
+              key={m.value}
+              value={m.value}
+              label={m.label}
+              app={m.label}
+              added={isSelected(m.value)}
+              onToggle={onToggle}
+            />
           ))}
 
           <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30">
@@ -290,6 +307,8 @@ export function MeetingAppsPicker({
               label={n.app}
               app={n.app}
               sub={n.totalCount > 0 ? formatCount(n.totalCount) : undefined}
+              added={isSelected(n.app)}
+              onToggle={onToggle}
             />
           ))}
         </div>
