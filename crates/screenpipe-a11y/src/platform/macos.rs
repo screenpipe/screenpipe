@@ -1578,6 +1578,36 @@ fn check_clipboard_crash_marker() {
     });
 }
 
+/// `true` when something drains the libdispatch main queue — i.e. the main
+/// thread runs an AppKit/tao runloop (the desktop app). In headless CLI mode
+/// (`screenpipe record`), main() is tokio's `block_on`: the main queue is
+/// never serviced, so a `dispatch_sync` hop onto it blocks forever (observed:
+/// clipboard worker parked in `_dispatch_thread_main_event_wait_slow` on the
+/// first Cmd+C, inflight marker left behind, dead-man switch tripping on the
+/// next launch — clipboard permanently disabled). Probed once per process:
+/// dispatch an async no-op and see whether it runs within 500ms. If the
+/// queue is dead the leaked block is harmless (it would only ever run at
+/// exit, sending on a closed channel).
+fn main_queue_alive() -> bool {
+    static ALIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALIVE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        cidre::dispatch::Queue::main().async_once(move || {
+            let _ = tx.send(());
+        });
+        let alive = rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_ok();
+        if !alive {
+            tracing::info!(
+                "main dispatch queue not serviced (headless CLI) — clipboard reads \
+                 will run on the capture worker thread, guarded by the crash marker"
+            );
+        }
+        alive
+    })
+}
+
 fn get_clipboard() -> Option<String> {
     check_clipboard_crash_marker();
     if CLIPBOARD_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1590,10 +1620,7 @@ fn get_clipboard() -> Option<String> {
     // case is we don't detect a crash next startup.
     let _ = std::fs::write(&inflight, std::process::id().to_string());
 
-    // dispatch_sync onto the main queue — the only thread where NSPasteboard
-    // is documented to behave. AppKit serializes pasteboard observers on
-    // main, so this side-steps the cache-invalidation race entirely.
-    let result = cidre::dispatch::Queue::main().sync_once(|| {
+    let read = || {
         let mut clipboard = arboard::Clipboard::new().ok()?;
         let text = clipboard.get_text().ok()?;
         if text.is_empty() {
@@ -1601,7 +1628,21 @@ fn get_clipboard() -> Option<String> {
         } else {
             Some(text)
         }
-    });
+    };
+
+    let result = if main_queue_alive() {
+        // dispatch_sync onto the main queue — the only thread where NSPasteboard
+        // is documented to behave. AppKit serializes pasteboard observers on
+        // main, so this side-steps the cache-invalidation race entirely.
+        cidre::dispatch::Queue::main().sync_once(read)
+    } else {
+        // Headless: no runloop drains the main queue, so the sync hop above
+        // would deadlock. Read on this worker thread instead — this re-exposes
+        // the off-main cache-invalidation race (arboard#218), but it's the only
+        // option without a main runloop, the window is microseconds, and the
+        // dead-man switch above catches a crash loop.
+        read()
+    };
 
     let _ = std::fs::remove_file(&inflight);
     result
