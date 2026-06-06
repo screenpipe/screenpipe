@@ -1133,7 +1133,7 @@ pub async fn event_driven_capture_loop(
             let vc_filters = WindowFilters::new(
                 &capture_params.tree_walker_config.ignored_windows,
                 &capture_params.tree_walker_config.included_windows,
-                &[],
+                &capture_params.tree_walker_config.ignored_urls,
             );
             let mut fresh_ids = get_excluded_sck_window_ids(&vc_filters);
             fresh_ids.sort_unstable();
@@ -1709,7 +1709,7 @@ async fn do_capture(
     let window_filters = WindowFilters::new(
         &params.tree_walker_config.ignored_windows,
         &params.tree_walker_config.included_windows,
-        &[],
+        &params.tree_walker_config.ignored_urls,
     );
     let mut excluded_ids = get_excluded_sck_window_ids(&window_filters);
     excluded_ids.sort_unstable();
