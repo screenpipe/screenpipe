@@ -2860,6 +2860,11 @@ export function StandaloneChat({
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Root of the chat surface. The webview drag-drop event is window-global and
+  // this chat is kept mounted-but-hidden (display:none) on non-chat sections,
+  // so we use this ref's visibility to ignore drops meant for another view
+  // (e.g. a meeting note) that would otherwise also stage into the composer.
+  const dropRootRef = useRef<HTMLDivElement>(null);
 
   const [scheduleDialogMessage, setScheduleDialogMessage] = useState<{ prompt: string; response: string } | null>(null);
   const [prefillContext, setPrefillContext] = useState<string | null>(null);
@@ -3367,6 +3372,13 @@ export function StandaloneChat({
 
     const webview = getCurrentWebview();
     const unlisten = webview.onDragDropEvent((event) => {
+      // The drag-drop event is window-global. Only react when this chat is the
+      // visible surface; when it's the hidden home layer (display:none on other
+      // sections) offsetParent is null, so a drop meant for another view is not
+      // also staged here.
+      if (!dropRootRef.current || dropRootRef.current.offsetParent === null) {
+        return;
+      }
       if (event.payload.type === "enter" || event.payload.type === "over") {
         setIsDragging(true);
       } else if (event.payload.type === "drop") {
@@ -7988,7 +8000,7 @@ export function StandaloneChat({
   );
 
   return (
-    <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
+    <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
       {/* Header - draggable only in standalone mode */}
       {/* Add left padding on macOS to avoid traffic light overlap (standalone only) */}
       <div

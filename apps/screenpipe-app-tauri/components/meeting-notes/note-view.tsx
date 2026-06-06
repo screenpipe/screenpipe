@@ -169,18 +169,52 @@ export function NoteView({
   const [dismissedJoinUrl, setDismissedJoinUrl] = useState<string | null>(null);
   const { settings, updateSettings } = useSettings();
   const noteEditorRef = useRef<NoteEditorHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
 
-  // Drag-and-drop images straight into the note. Tauri owns OS file drops at
-  // the webview level (they never surface as DOM drop events), so we listen on
-  // the webview, show a drop overlay while a drag is in flight, then read the
-  // dropped image files, resize them, and insert them into the editor.
+  // Drag-and-drop images straight into the note. Tauri delivers OS file drops
+  // at the webview level (they never surface as DOM drop events), and the event
+  // is window-global, so we hit-test the drop position against this note's own
+  // box before reacting. Without that, an image dropped on the sidebar (or one
+  // caught by another always-mounted webview drop listener such as the chat)
+  // would still land in the note. We show the overlay only while an image drag
+  // is over the note, then read the files, resize them, and insert them at the
+  // drop point.
   useEffect(() => {
-    const insertDroppedImages = async (paths: string[]) => {
+    // Tauri reports drag positions in physical pixels; getBoundingClientRect is
+    // in CSS pixels, so convert before comparing.
+    const toClient = (pos: { x: number; y: number }) => {
+      const dpr = window.devicePixelRatio || 1;
+      return { x: pos.x / dpr, y: pos.y / dpr };
+    };
+    const pointOverNote = (pos: { x: number; y: number }) => {
+      const el = rootRef.current;
+      if (!el || el.offsetParent === null) return false; // unmounted or hidden
+      const { x, y } = toClient(pos);
+      const r = el.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    const hasImagePath = (paths: string[]) =>
+      paths.some((p) =>
+        NOTE_IMAGE_EXTENSIONS.includes(imageExtensionFromName(p)),
+      );
+
+    const insertDroppedImages = async (
+      paths: string[],
+      pos: { x: number; y: number },
+    ) => {
       const imagePaths = paths.filter((path) =>
         NOTE_IMAGE_EXTENSIONS.includes(imageExtensionFromName(path)),
       );
-      if (imagePaths.length === 0) return;
+      if (paths.length === 0) return;
+      if (imagePaths.length === 0) {
+        toast({
+          title: "couldn't insert image",
+          description: "drop a png, jpg, gif, webp, bmp, or svg file.",
+          variant: "destructive",
+        });
+        return;
+      }
       try {
         const images: string[] = [];
         for (const path of imagePaths) {
@@ -188,7 +222,8 @@ export function NoteView({
           if (raw) images.push(await resizeImageDataUrl(raw));
         }
         if (images.length === 0) return;
-        noteEditorRef.current?.insertImages(images);
+        const { x, y } = toClient(pos);
+        noteEditorRef.current?.insertImages(images, { clientX: x, clientY: y });
         posthog.capture("meeting_note_images_inserted", {
           meeting_id: meeting.id,
           count: images.length,
@@ -204,15 +239,25 @@ export function NoteView({
       }
     };
 
+    // `enter` carries the dragged paths so we can tell whether it's an image;
+    // `over` does not, so we remember what `enter` classified. Default to true
+    // when a platform omits the paths so we never suppress a real image drag.
+    let dragHasImage = true;
     const webview = getCurrentWebview();
     const unlisten = webview.onDragDropEvent((event) => {
-      if (event.payload.type === "enter" || event.payload.type === "over") {
-        setIsDraggingImage(true);
-      } else if (event.payload.type === "leave") {
+      const payload = event.payload;
+      if (payload.type === "enter") {
+        dragHasImage =
+          payload.paths.length === 0 ? true : hasImagePath(payload.paths);
+      }
+      if (payload.type === "enter" || payload.type === "over") {
+        setIsDraggingImage(dragHasImage && pointOverNote(payload.position));
+      } else if (payload.type === "leave") {
         setIsDraggingImage(false);
-      } else if (event.payload.type === "drop") {
+      } else if (payload.type === "drop") {
         setIsDraggingImage(false);
-        void insertDroppedImages(event.payload.paths ?? []);
+        if (!pointOverNote(payload.position)) return;
+        void insertDroppedImages(payload.paths ?? [], payload.position);
       }
     });
 
@@ -811,7 +856,7 @@ export function NoteView({
   };
 
   return (
-    <div className="relative flex h-full flex-col bg-background">
+    <div ref={rootRef} className="relative flex h-full flex-col bg-background">
       {isDraggingImage && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/60">
           <div className="border border-foreground bg-foreground px-12 py-10 text-background">
