@@ -205,6 +205,9 @@ async checkInputMonitoringPermissionCmd() : Promise<OSPermissionStatus> {
 async checkMicrophonePermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_microphone_permission");
 },
+async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_permission", { permission });
+},
 /**
  * Check only screen recording permission (no dialog trigger)
  * Uses CGPreflightScreenCaptureAccess which is safe to poll repeatedly
@@ -1559,6 +1562,14 @@ async resetOnboarding() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async resetPermission(permission: OSPermission) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reset_permission", { permission }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Resize the Search NSPanel. Regular Tauri setSize doesn't work on NSPanels.
  */
@@ -2214,7 +2225,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null;
  * since the user can't fix it by reconnecting in the broken bundle.
  */
 needs_attention?: boolean }
-export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring"
+export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;

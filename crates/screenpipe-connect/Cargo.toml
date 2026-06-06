@@ -57,7 +57,7 @@ default = []
 specta = ["dep:specta"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
-eventkit-rs = "0.1"
+eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52787c8435d734ed443e2d5641f45b0177cae", default-features = false, features = ["events"] }
 objc2 = "0.6"
 objc2-event-kit = "0.3"
 objc2-foundation = "0.3"

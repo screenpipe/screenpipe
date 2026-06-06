@@ -561,6 +561,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared."
+    },
+    {
+      "spec": "zz-logout-resurrect.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "settings"],
+      "features": ["account-logout", "auth-session"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx."
     }
   ]
 }

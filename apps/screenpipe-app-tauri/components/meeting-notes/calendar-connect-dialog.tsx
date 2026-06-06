@@ -239,13 +239,21 @@ function NativeCalendarConnect({
     ]);
     try {
       const result = await commands.calendarAuthorize();
-      if (result.status === "ok" && result.data === "granted") {
+      const status = await commands.calendarStatus();
+      const granted =
+        status.status === "ok" &&
+        status.data.authorized &&
+        status.data.calendarCount > 0;
+      if (result.status === "ok" && granted) {
         setConnected(true);
         await onConnected();
         setStatusText(`${label} connected.`);
         onClose();
       } else {
-        setStatusText("Calendar permission was not granted.");
+        await commands.openPermissionSettings("calendar");
+        setStatusText(
+          "Calendar permission was not granted. Open Privacy & Security → Calendars.",
+        );
       }
     } catch (err) {
       setStatusText(String(err));

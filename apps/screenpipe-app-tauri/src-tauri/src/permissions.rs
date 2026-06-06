@@ -17,6 +17,7 @@ pub enum OSPermission {
     Accessibility,
     Automation,
     InputMonitoring,
+    Calendar,
 }
 
 #[tauri::command(async)]
@@ -52,6 +53,10 @@ pub fn open_permission_settings(permission: OSPermission) {
                 .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
                 .spawn()
                 .expect("Failed to open Input Monitoring settings"),
+            OSPermission::Calendar => Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")
+                .spawn()
+                .expect("Failed to open Calendar settings"),
         };
     }
 }
@@ -109,6 +114,12 @@ pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission)
                 // CGRequestListenEventAccess). The ghost-record probe lives
                 // inside `screenpipe_a11y::request_input_monitoring`.
                 let _ = request_input_monitoring_permission().await;
+            }
+            OSPermission::Calendar => {
+                if let Err(e) = crate::calendar::calendar_authorize().await {
+                    warn!("calendar permission request failed: {}", e);
+                    open_permission_settings(OSPermission::Calendar);
+                }
             }
         }
     }
@@ -378,6 +389,98 @@ pub async fn request_input_monitoring_permission() -> OSPermissionStatus {
     }
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn check_permission(permission: OSPermission) -> OSPermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        match permission {
+            OSPermission::ScreenRecording => check_screen_recording_permission(),
+            OSPermission::Microphone => check_microphone_permission(),
+            OSPermission::Accessibility => check_accessibility_permission(),
+            OSPermission::InputMonitoring => {
+                if screenpipe_a11y::check_input_monitoring() {
+                    OSPermissionStatus::Granted
+                } else {
+                    OSPermissionStatus::Denied
+                }
+            }
+            OSPermission::Calendar => {
+                use eventkit::AuthorizationStatus;
+                match crate::calendar::calendar_status().await {
+                    Ok(status) if status.authorized => OSPermissionStatus::Granted,
+                    Ok(status)
+                        if status.authorization_status
+                            == AuthorizationStatus::NotDetermined.to_string() =>
+                    {
+                        OSPermissionStatus::Empty
+                    }
+                    _ => OSPermissionStatus::Denied,
+                }
+            }
+            OSPermission::Automation => OSPermissionStatus::Denied,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = permission;
+        OSPermissionStatus::NotNeeded
+    }
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn reset_permission(app: tauri::AppHandle, permission: OSPermission) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        let service = match &permission {
+            OSPermission::ScreenRecording => "ScreenCapture",
+            OSPermission::Microphone => "Microphone",
+            OSPermission::Accessibility => "Accessibility",
+            OSPermission::InputMonitoring => "ListenEvent",
+            OSPermission::Calendar => "Calendar",
+            OSPermission::Automation => {
+                open_permission_settings(OSPermission::Automation);
+                return Ok(());
+            }
+        };
+
+        let bundle_id = app.config().identifier.as_str();
+        if bundle_id.is_empty() {
+            return Err("no bundle identifier in app config".to_string());
+        }
+
+        let output = Command::new("tccutil")
+            .args(["reset", service, bundle_id])
+            .output()
+            .map_err(|e| format!("failed to run tccutil: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("tccutil reset {} failed: {}", service, stderr.trim()));
+        }
+
+        if matches!(permission, OSPermission::Calendar) {
+            tokio::task::spawn_blocking(|| {
+                let cal = screenpipe_connect::calendar::ScreenpipeCalendar::new();
+                cal.reset();
+            })
+            .await
+            .map_err(|e| format!("failed to reset EventKit store: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, permission);
+        Ok(())
+    }
+}
+
 /// Reset a permission using tccutil and re-request it
 /// This removes the app from the TCC database and triggers a fresh permission request
 #[tauri::command(async)]
@@ -396,6 +499,7 @@ pub async fn reset_and_request_permission(
             OSPermission::Microphone => "Microphone",
             OSPermission::Accessibility => "Accessibility",
             OSPermission::InputMonitoring => "ListenEvent",
+            OSPermission::Calendar => "Calendar",
             OSPermission::Automation => {
                 // Automation doesn't use tccutil reset flow — just open settings
                 open_permission_settings(OSPermission::Automation);

@@ -232,13 +232,13 @@ function SyncOnboarding({ onSubscribe, onRefresh, isLoading, isRefreshing, isLog
           </div>
           <div className="text-right">
             <div className="text-lg font-bold">
-              ${isAnnual ? "19" : "29"}
+              ${isAnnual ? "42" : "50"}
               <span className="text-sm font-normal text-muted-foreground">
                 /mo
               </span>
             </div>
             {isAnnual && (
-              <p className="text-xs text-primary">$228/year - Save 34%</p>
+              <p className="text-xs text-primary">$500/year - Save 17%</p>
             )}
           </div>
         </div>

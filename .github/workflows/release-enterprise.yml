@@ -145,7 +145,17 @@ jobs:
           $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
           $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
           $ortDir = "ort-system-lib"
-          Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.22.0.zip"
+          # retry: the GitHub release CDN intermittently returns 504, which would otherwise fail the whole job
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.22.0.zip"
+              break
+            } catch {
+              if ($attempt -eq 5) { throw }
+              Write-Host "onnxruntime download failed on attempt $attempt; retrying..."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
           if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
           7z x onnxruntime-win-x64-1.22.0.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
           if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }

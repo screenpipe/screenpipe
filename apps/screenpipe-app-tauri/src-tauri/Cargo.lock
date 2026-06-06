@@ -3918,14 +3918,15 @@ dependencies = [
 
 [[package]]
 name = "eventkit-rs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ec236647b02b93eb0a48d6bce3317f5b51a636193df8bb52ced5c637aed77e0"
+version = "0.5.6"
+source = "git+https://github.com/divanshu-go/eventkit-rs?rev=9dd52787c8435d734ed443e2d5641f45b0177cae#9dd52787c8435d734ed443e2d5641f45b0177cae"
 dependencies = [
  "block2 0.6.2",
  "chrono",
  "clap",
+ "embed_plist",
  "objc2 0.6.4",
+ "objc2-core-graphics",
  "objc2-event-kit",
  "objc2-foundation 0.3.2",
  "thiserror 2.0.18",
@@ -10904,7 +10905,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.16"
+version = "2.5.19"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -10923,6 +10924,7 @@ dependencies = [
  "core-graphics-helmer-fork",
  "dark-light",
  "dirs 5.0.1",
+ "eventkit-rs",
  "fix-path-env",
  "freedesktop-desktop-entry",
  "freedesktop-icon-lookup",

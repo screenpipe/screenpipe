@@ -7,6 +7,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
+import { emit, listen } from "@tauri-apps/api/event";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { User } from "../utils/tauri";
@@ -999,6 +1000,15 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	// Install global fetch interceptor to catch 401s from screenpi.pe
 	const settingsRef = useRef(settings);
 	settingsRef.current = settings;
+
+	// Monotonic auth generation, bumped on every explicit sign-out. A
+	// loadUser() call snapshots this at entry; if a sign-out bumps it while the
+	// network request is still in flight, loadUser refuses to write the user
+	// back. Without this, a slow refresh that started before the user clicked
+	// "logout" resurrects the just-cleared session — the user had to click
+	// logout twice. Regression test: e2e/specs/zz-logout-resurrect.spec.ts.
+	const authGenerationRef = useRef(0);
+
 	useEffect(() => {
 		installAuthInterceptor(
 			() => settingsRef.current.user?.token ?? undefined,
@@ -1015,6 +1025,19 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			}
 		);
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Cross-window sign-out: when any window broadcasts a sign-out (logout
+	// button or 401 interceptor), bump THIS window's auth generation so an
+	// in-flight loadUser here also aborts instead of writing the user back
+	// into the shared store. Pairs with the emit() in updateSettings.
+	useEffect(() => {
+		const unlistenPromise = listen("screenpipe-auth-signout", () => {
+			authGenerationRef.current += 1;
+		});
+		return () => {
+			unlistenPromise.then((un) => un()).catch(() => {});
+		};
+	}, []);
 
 	// Auto-refresh user data from API when app starts with a stored token.
 	// This ensures subscription status (cloud_subscribed) stays current —
@@ -1145,6 +1168,20 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
+		// Sign-out (user → null) must invalidate any loadUser() request that is
+		// currently in flight so the cleared session can't be resurrected when a
+		// slow refresh resolves afterwards. Bump synchronously — before the first
+		// await — so even the logout button's fire-and-forget call wins the race.
+		if ("user" in updates && !updates.user) {
+			authGenerationRef.current += 1;
+			// Broadcast to the other windows. Each non-overlay window has its own
+			// SettingsProvider + DeeplinkHandler, so a login's deep-link fires a
+			// loadUser in EVERY window. Without this, a logout in this window
+			// wouldn't invalidate an in-flight loadUser in another window, which
+			// would write the user back into the shared store and resurrect the
+			// session. Fire-and-forget; the listener above bumps each window's ref.
+			emit("screenpipe-auth-signout").catch(() => {});
+		}
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
 
@@ -1190,6 +1227,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	};
 
 	const loadUser = async (token: string, verify = false) => {
+		// Snapshot the auth generation at the start of the request. If the user
+		// signs out while this fetch is in flight, the generation changes and we
+		// abort the write below instead of resurrecting the cleared session.
+		const generation = authGenerationRef.current;
 		try {
 			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpi.pe"), {
 				method: "POST",
@@ -1209,6 +1250,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 			const data = await response.json();
 			const userData = normalizeAppUser(data.user, token) as User;
+
+			// The user signed out while this request was in flight — writing
+			// userData now would resurrect the cleared session (the "logout needs
+			// two clicks" bug). Abort silently; the sign-out already won.
+			if (authGenerationRef.current !== generation) {
+				console.log("loadUser: sign-out during fetch — not restoring session");
+				return;
+			}
 
 			// if user was not logged in, send posthog event and bridge identity
 			if (!settings.user?.id) {

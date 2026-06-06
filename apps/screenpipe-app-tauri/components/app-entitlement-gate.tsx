@@ -114,7 +114,13 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     posthog.capture("app_entitlement_choose_plan_clicked", {
       logged_in: Boolean(user?.token),
     });
-    openUrl(PRICING_URL).catch(() => window.open(PRICING_URL, "_blank"));
+    // Hand the Clerk token to the web checkout so it pins customer_email +
+    // metadata.user_id to THIS account — prevents the "paid with a different
+    // email in Stripe -> still locked" mismatch.
+    const url = user?.token
+      ? `${PRICING_URL}${PRICING_URL.includes("?") ? "&" : "?"}token=${encodeURIComponent(user.token)}`
+      : PRICING_URL;
+    openUrl(url).catch(() => window.open(url, "_blank"));
   }, [user?.token]);
 
   const openLogin = useCallback(() => {

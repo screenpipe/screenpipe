@@ -29,6 +29,7 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
+import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { GoogleSheetsCard } from "./google-sheets-card";
@@ -562,6 +563,20 @@ export function IntegrationIcon({
     ),
     "apple-intelligence": <img src="/images/apple-intelligence.png" alt="Apple Intelligence" className="w-5 h-5 rounded" />,
     "input-monitoring": <Keyboard className="h-5 w-5 text-muted-foreground" />,
+    "apple-calendar": (
+      <svg
+        viewBox="0 0 24 24"
+        className="w-5 h-5 shrink-0 text-foreground"
+        fill="currentColor"
+        aria-label="Apple Calendar"
+      >
+        <path
+          fillRule="evenodd"
+          clipRule="evenodd"
+          d="M11.5 6.773q0-3.273 3.273-3.273q0 3.273-3.273 3.273M8.835 7.5c.698 0 1.233.246 1.7.46.363.166.684.314 1.01.314s.721-.148 1.167-.314c.574-.214 1.232-.46 1.93-.46.879 0 2.007.499 2.818 1.496-.45.296-1.35 1.18-1.35 3.15 0 1.525 1.284 2.726 1.926 2.959-.698 2.312-2.06 4.395-3.394 4.395-.58 0-1.065-.194-1.549-.387-.483-.194-.967-.387-1.548-.387-.58 0-.968.193-1.355.387s-.774.387-1.355.387c-1.908 0-3.87-4.258-3.87-7.355S7.287 7.5 8.835 7.5"
+        />
+      </svg>
+    ),
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
@@ -805,6 +820,7 @@ const DEVICE_CONNECTION_ORDER = [
   "linear",
   "slack",
   "gmail",
+  "apple-calendar",
   "google-calendar",
   "google-docs",
   "google-sheets",
@@ -3055,6 +3071,7 @@ export function ConnectionsSection({
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [browserUrlDetected, setBrowserUrlDetected] = useState(false);
   const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
+  const [appleCalendarConnected, setAppleCalendarConnected] = useState(false);
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
   const [googleDocsConnected, setGoogleDocsConnected] = useState(false);
   const [googleSheetsConnected, setGoogleSheetsConnected] = useState(false);
@@ -3138,6 +3155,16 @@ export function ConnectionsSection({
       commands.checkInputMonitoringPermissionCmd()
         .then(r => setInputMonitoringGranted(r === "granted"))
         .catch(() => setInputMonitoringGranted(false));
+      Promise.all([
+        commands.checkPermission("calendar"),
+        commands.calendarStatus(),
+      ])
+        .then(([permission, res]) => setAppleCalendarConnected(
+          permission === "granted" &&
+          res.status === "ok" &&
+          res.data.authorized
+        ))
+        .catch(() => setAppleCalendarConnected(false));
     }
   }, []);
 
@@ -3201,6 +3228,7 @@ export function ConnectionsSection({
       ] : []),
       ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
       ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted }] : []),
+      ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: appleCalendarConnected }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
@@ -3258,7 +3286,7 @@ export function ConnectionsSection({
       ...tile,
       category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const categoryOptions = useMemo(() => {
     const categories = Array.from(
@@ -3330,6 +3358,7 @@ export function ConnectionsSection({
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
       case "input-monitoring": return <InputMonitoringPanel onStatusChange={setInputMonitoringGranted} />;
+      case "apple-calendar": return <AppleCalendarCard onStatusChange={setAppleCalendarConnected} />;
       case "google-calendar": return <GoogleCalendarCard
         onConnected={() => setGoogleCalendarConnected(true)}
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
@@ -3523,9 +3552,17 @@ export function ConnectionsSection({
               <DialogHeader className="flex-row items-center gap-3 space-y-0 border-b border-border p-4 pr-12 text-left">
                 <IntegrationIcon icon={selectedTile.icon} />
                 <div className="min-w-0">
-                  <DialogTitle className="text-sm font-semibold font-sans normal-case">
-                    {selectedTile.name}
-                  </DialogTitle>
+                  <div className="flex items-center gap-2">
+                    <DialogTitle className="text-sm font-semibold font-sans normal-case">
+                      {selectedTile.name}
+                    </DialogTitle>
+                    {selectedTile.id === "apple-calendar" && (
+                      <span className="px-2 py-0.5 text-xs font-medium border border-border text-muted-foreground rounded-full inline-flex items-center gap-1">
+                        <CalendarIcon className="h-2.5 w-2.5" />
+                        macOS
+                      </span>
+                    )}
+                  </div>
                   {selectedTile.connected && (
                     <span className="text-xs text-foreground">connected</span>
                   )}
