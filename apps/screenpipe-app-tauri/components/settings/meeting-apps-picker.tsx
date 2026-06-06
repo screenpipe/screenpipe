@@ -98,6 +98,8 @@ const Row = React.memo(function Row({
       onClick={() => onToggle(value)}
       role="button"
       tabIndex={0}
+      data-testid={`meeting-apps-picker-row-${value.toLowerCase()}`}
+      data-added={added ? "true" : "false"}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -121,6 +123,7 @@ const Row = React.memo(function Row({
           onToggle(value);
         }}
         title={added ? `${label} is ignored — click to re-enable` : `ignore ${label}`}
+        data-testid={`meeting-apps-picker-toggle-${value.toLowerCase()}`}
       >
         {added ? (
           <>
@@ -206,7 +209,10 @@ export function MeetingAppsPicker({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[80vh] flex flex-col">
+      <DialogContent
+        className="max-w-xl max-h-[80vh] flex flex-col"
+        data-testid="meeting-apps-picker-dialog"
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <UserX className="h-4 w-4" /> Ignore apps from meeting detection

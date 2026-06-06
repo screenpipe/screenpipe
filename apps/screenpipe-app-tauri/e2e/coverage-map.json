@@ -423,6 +423,16 @@
       "notes": "Settings sections, storage, privacy, and rapid switching crash guard."
     },
     {
+      "spec": "meeting-apps-picker.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "real-ui-e2e"],
+      "features": ["settings-recording", "meeting-detector-ignored-apps"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847)."
+    },
+    {
       "spec": "timeline.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "capture-ocr"],

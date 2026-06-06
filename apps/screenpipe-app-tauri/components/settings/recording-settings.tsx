@@ -3332,11 +3332,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     className="h-7 text-[11px] gap-1.5"
                     onClick={() => setMeetingAppsPickerOpen(true)}
                     title="Choose apps that should never auto-start a meeting"
+                    data-testid="settings-ignore-meeting-apps-button"
                   >
                     <UserX className="h-3.5 w-3.5" />
                     ignore apps
                     {(settings.ignoredMeetingApps?.length ?? 0) > 0 && (
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
+                      <span
+                        className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums"
+                        data-testid="settings-ignore-meeting-apps-count"
+                      >
                         {settings.ignoredMeetingApps!.length}
                       </span>
                     )}
