@@ -1238,6 +1238,9 @@ async fn setup_pipe_permissions(
     if let Err(e) = PiExecutor::ensure_subagent_extension(pipe_dir, config.subagent) {
         warn!("failed to install sub-agent extension: {}", e);
     }
+    if let Err(e) = PiExecutor::ensure_register_artifact_extension(pipe_dir) {
+        warn!("failed to install register-artifact extension: {}", e);
+    }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
     }
