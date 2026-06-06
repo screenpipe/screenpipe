@@ -567,6 +567,22 @@ export function BrainSection() {
     return items;
   }, [memories, outputs, artifacts, deletedArtifactPaths, typeFilter, activeTag, sortField, debouncedQuery]);
 
+  // Prune selectedIds when the list changes (e.g. individual delete, filter change)
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const validKeys = new Set(
+        unifiedItems.map((item) =>
+          item.kind === "memory"
+            ? `mem:${(item.data as MemoryRecord).id}`
+            : artifactItemKey(item.data as DisplayItem)
+        )
+      );
+      const pruned = new Set([...prev].filter((k) => validKeys.has(k)));
+      return pruned.size === prev.size ? prev : pruned;
+    });
+  }, [unifiedItems]);
+
   const artifactSources = React.useMemo(() => {
     const merged = mergeArtifactItems(outputs, artifacts, deletedArtifactPaths);
     return [...new Set(merged.map(artifactItemSource))];
@@ -586,8 +602,9 @@ export function BrainSection() {
         return next;
       });
       await deleteOutput(output.id);
+      toast({ title: "artifact deleted" });
     },
-    [deleteOutput],
+    [deleteOutput, toast],
   );
 
   const toggleSelectAll = () => {
