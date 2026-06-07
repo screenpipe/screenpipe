@@ -58,15 +58,12 @@ fn host_matches_pattern(host_lower: &str, blocked: &str) -> bool {
     }
 
     // For patterns without a TLD (e.g. "chase" instead of "chase.com"),
-    // expand across common TLDs at domain boundaries.
+    // match the pattern against any domain label. This covers every TLD
+    // (chase.com, chase.co.uk, chase.io, …) without hardcoding a list,
+    // while still respecting domain boundaries: "purchase.com" splits to
+    // ["purchase", "com"], so "chase" never matches it.
     if !blocked.contains('.') {
-        for tld in ["com", "net", "org", "bank"] {
-            if host_lower == format!("{}.{}", blocked, tld)
-                || host_lower.ends_with(&format!(".{}.{}", blocked, tld))
-            {
-                return true;
-            }
-        }
+        return host_lower.split('.').any(|label| label == blocked);
     }
 
     false
@@ -111,12 +108,19 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_domain_pattern_expands_tlds() {
+    fn test_partial_domain_pattern_matches_any_tld() {
         let b = blocked(&["chase"]);
         assert!(is_url_blocked("https://chase.com", &b));
         assert!(is_url_blocked("https://www.chase.com", &b));
         assert!(is_url_blocked("https://chase.bank", &b));
+        // TLDs not in the old hardcoded list still match (no TLD allowlist).
+        assert!(is_url_blocked("https://chase.co.uk", &b));
+        assert!(is_url_blocked("https://chase.io", &b));
+        assert!(is_url_blocked("https://online.chase.de/account", &b));
+        // Domain boundaries are still respected — no substring false positives.
         assert!(!is_url_blocked("https://purchase.com", &b));
+        assert!(!is_url_blocked("https://purchase.co.uk", &b));
+        assert!(!is_url_blocked("https://showcase.example.com", &b));
     }
 
     #[test]
