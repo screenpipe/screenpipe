@@ -6,7 +6,7 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 41
+- Mapped specs: 42
 - Declared test blocks: 147
 - Weighted coverage points: 115.3
 
@@ -19,8 +19,8 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 34 | 136 | 111.9 | 14 | 39 | 92% |
-| macos | 38 | 113 | 87.9 | 14 | 40 | 89% |
+| windows | 35 | 136 | 111.9 | 14 | 39 | 92% |
+| macos | 39 | 113 | 87.9 | 14 | 40 | 89% |
 | linux | 29 | 101 | 84.3 | 12 | 36 | 86% |
 
 ## Runtime Results
@@ -42,9 +42,9 @@ pass/fail/skip counts.
 | os-integration | 3 specs / 16 tests / 15.1 pts | 3 specs / 3 tests / 0.9 pts | - |
 | performance | 2 specs / 43 tests / 43.0 pts | 4 specs / 33 tests / 29.5 pts | 1 specs / 28 tests / 28.0 pts |
 | pipes | 1 specs / 7 tests / 7.0 pts | 1 specs / 7 tests / 7.0 pts | 1 specs / 7 tests / 7.0 pts |
-| real-ui-e2e | 16 specs / 67 tests / 55.1 pts | 17 specs / 54 tests / 44.6 pts | 14 specs / 48 tests / 42.7 pts |
+| real-ui-e2e | 17 specs / 67 tests / 55.1 pts | 18 specs / 54 tests / 44.6 pts | 14 specs / 48 tests / 42.7 pts |
 | settings | 4 specs / 19 tests / 18.4 pts | 4 specs / 12 tests / 10.7 pts | 3 specs / 11 tests / 10.4 pts |
-| storage-privacy | 4 specs / 19 tests / 18.4 pts | 3 specs / 11 tests / 10.4 pts | 3 specs / 11 tests / 10.4 pts |
+| storage-privacy | 5 specs / 19 tests / 18.4 pts | 4 specs / 11 tests / 10.4 pts | 3 specs / 11 tests / 10.4 pts |
 | tauri-command | 8 specs / 17 tests / 10.3 pts | 9 specs / 19 tests / 10.8 pts | 8 specs / 17 tests / 10.3 pts |
 | window-lifecycle | 16 specs / 60 tests / 51.2 pts | 16 specs / 41 tests / 29.6 pts | 12 specs / 36 tests / 28.1 pts |
 
@@ -79,7 +79,7 @@ pass/fail/skip counts.
 
 ## Execution Integrity
 
-- Specs that claim coverage but contain zero executable test blocks: zz-owned-browser-background-nav.spec.ts. They assert nothing and no longer count toward any critical feature.
+- Specs that claim coverage but contain zero executable test blocks: zzz-browser-state-chat-switch.spec.ts, zz-owned-browser-background-nav.spec.ts. They assert nothing and no longer count toward any critical feature.
 - Declared coverage below is NOT reconciled against execution: no runtime results
   were supplied. Specs can self-skip on hosted runners (no display, vision off,
   recording disabled) and still read as covered. Run `e2e:coverage:runtime` (or pass
@@ -130,3 +130,4 @@ pass/fail/skip counts.
 | windows-system-integration.spec.ts | windows | os-integration, local-api, audio-device, window-lifecycle, performance | app-launch, local-api-auth, audio-device-health, window-lifecycle, os-process-health, webview-stability | high | strong | mixed | 15 | Windows display, WebView2, loopback, process, Defender, audio, focus, and crash-report checks. |
 | windows-user-journey.spec.ts | windows | real-ui-e2e, settings, notifications, storage-privacy, window-lifecycle | home-search, timeline, settings-recording, meeting-notes, shortcut-reminder, notifications, storage-retention, settings-privacy-api-auth | high | strong | real-user-flow | 8 | Windows-first real UX journey across search, timeline, settings, meetings, notifications, storage, and privacy. |
 | zz-owned-browser-background-nav.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 0 | Owned browser background navigation visibility. |
+| zzz-browser-state-chat-switch.spec.ts | windows, macos | real-ui-e2e, storage-privacy | chat, owned-browser | high | strong | synthetic | 0 | Synthetic E2E (zzz- prefix, search-driven): Phase A tests cache-only round-trip with no conversation files (exact regression scenario). Phase B tests disk persistence via seed files + auto-save. Asserts native e2e_owned_browser_visible from search after browser attachment destroys home's WebDriver handle. Skipped on Linux (WebKitGTK child attach rejection). |

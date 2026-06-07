@@ -223,6 +223,16 @@
       "notes": "macOS-only chat streaming responsiveness."
     },
     {
+      "spec": "zzz-browser-state-chat-switch.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e", "storage-privacy"],
+      "features": ["chat", "owned-browser"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Synthetic E2E (zzz- prefix, search-driven): Phase A tests cache-only round-trip with no conversation files (exact regression scenario). Phase B tests disk persistence via seed files + auto-save. Asserts native e2e_owned_browser_visible from search after browser attachment destroys home's WebDriver handle. Skipped on Linux (WebKitGTK child attach rejection)."
+    },
+    {
       "spec": "chat-switch-context-loss.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
