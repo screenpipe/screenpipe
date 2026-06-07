@@ -302,7 +302,10 @@ async function fetchGoogleProvider(
   };
 }
 
-async function fetchIcsProvider(): Promise<ProviderCalendarResult> {
+async function fetchIcsProvider(
+  hoursBack: number,
+  hoursAhead: number,
+): Promise<ProviderCalendarResult> {
   try {
     const entries = await commands.icsCalendarGetEntries();
     if (entries.status !== "ok") {
@@ -313,7 +316,10 @@ async function fetchIcsProvider(): Promise<ProviderCalendarResult> {
       return { source: "ics", connected: false, ok: true, events: [] };
     }
 
-    const upcoming = await commands.icsCalendarGetUpcoming();
+    const upcoming = await commands.icsCalendarGetUpcoming(
+      hoursBack,
+      hoursAhead,
+    );
     if (upcoming.status !== "ok") {
       return { source: "ics", connected: true, ok: false, events: [] };
     }
@@ -353,7 +359,7 @@ export async function fetchUpcomingCalendarSnapshot(opts?: {
   const providers = await Promise.all([
     fetchNativeProvider(hoursBack, hoursAhead),
     fetchGoogleProvider(hoursBack, hoursAhead),
-    fetchIcsProvider(),
+    fetchIcsProvider(hoursBack, hoursAhead),
   ]);
   const sourceConnected = (provider: ProviderCalendarResult) =>
     provider.connected || provider.events.length > 0;

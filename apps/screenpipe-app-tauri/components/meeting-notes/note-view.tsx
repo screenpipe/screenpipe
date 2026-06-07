@@ -15,6 +15,7 @@ import {
   ExternalLink,
   FileText,
   Info,
+  ImageIcon,
   Languages,
   Loader2,
   Mic2,
@@ -31,7 +32,8 @@ import {
 import { commands } from "@/lib/utils/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { save as saveDialog, open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,6 +62,7 @@ import {
 } from "@/lib/utils/meeting-format";
 import {
   buildEnrichedSummarizePrompt,
+  extractImageDataUrlsFromMarkdown,
   buildMeetingSummarizeDisplayLabel,
   buildMeetingMarkdown,
   fetchMeetingAudio,
@@ -75,7 +78,12 @@ import {
 import { cn } from "@/lib/utils";
 import { Receipts } from "./receipts";
 import { ReplayStrip } from "./replay-strip";
-import { NoteEditor } from "./note-editor";
+import { NoteEditor, type NoteEditorHandle } from "./note-editor";
+import {
+  imageBytesToDataUrl,
+  NOTE_IMAGE_EXTENSIONS,
+  resizeImageDataUrl,
+} from "./image-utils";
 import { TranscriptPanel } from "./transcript-panel";
 import { useSettings, type Settings } from "@/lib/hooks/use-settings";
 
@@ -159,6 +167,7 @@ export function NoteView({
   const [inactivityPrompt, setInactivityPrompt] = useState(false);
   const [dismissedJoinUrl, setDismissedJoinUrl] = useState<string | null>(null);
   const { settings, updateSettings } = useSettings();
+  const noteEditorRef = useRef<NoteEditorHandle>(null);
 
   const lastSavedRef = useRef({
     title: meeting.title ?? "",
@@ -428,6 +437,7 @@ export function NoteView({
         attendees: attendees || null,
         note: note || null,
       };
+      const noteImages = extractImageDataUrlsFromMarkdown(note);
       // Re-fetch context just before summarize so the bundle reflects
       // anything that happened in the last 30s (especially for ongoing
       // meetings where the cached snapshot can be stale).
@@ -469,9 +479,11 @@ export function NoteView({
           meeting: fresh,
           context: ctx,
           transcript,
+          noteImages,
           directiveOverride,
         }),
         displayLabel: buildMeetingSummarizeDisplayLabel(fresh),
+        images: noteImages,
         autoSend: true,
         source: "meeting-summarize",
         useHomeChat: true,
@@ -485,6 +497,45 @@ export function NoteView({
       });
     } finally {
       setSummarizing(false);
+    }
+  };
+
+  const handleInsertImages = async () => {
+    try {
+      const selected = await openFileDialog({
+        multiple: true,
+        filters: [{ name: "Images", extensions: NOTE_IMAGE_EXTENSIONS }],
+      });
+      if (!selected) return;
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const images: string[] = [];
+      for (const path of paths) {
+        const raw = imageBytesToDataUrl(path, await readFile(path));
+        if (raw) images.push(await resizeImageDataUrl(raw));
+      }
+
+      if (images.length === 0) {
+        toast({
+          title: "couldn't insert image",
+          description: "choose a png, jpg, gif, webp, bmp, or svg file.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      noteEditorRef.current?.insertImages(images);
+      posthog.capture("meeting_note_images_inserted", {
+        meeting_id: meeting.id,
+        count: images.length,
+      });
+    } catch (err) {
+      console.error("failed to insert meeting note image", err);
+      toast({
+        title: "couldn't insert image",
+        description: String(err),
+        variant: "destructive",
+      });
     }
   };
 
@@ -783,6 +834,16 @@ export function NoteView({
                 <Copy className="h-3.5 w-3.5" />
               )}
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleInsertImages()}
+              title="insert image"
+              aria-label="insert image"
+              className="h-8 w-8 rounded-none p-0"
+            >
+              <ImageIcon className="h-3.5 w-3.5" />
+            </Button>
             {!isLive && (
               <>
                 <Button
@@ -875,6 +936,7 @@ export function NoteView({
           </div>
 
           <NoteEditor
+            ref={noteEditorRef}
             key={meeting.id}
             value={note}
             onChange={setNote}

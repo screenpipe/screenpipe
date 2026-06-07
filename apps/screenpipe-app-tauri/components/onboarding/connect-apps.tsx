@@ -281,7 +281,7 @@ interface Integration {
   cardKey: string;
   name: string;
   valueProp: string;
-  ahaCopy: string;
+  ahaCopy?: string;
   isPro: boolean;
   type: "oauth" | "mcp" | "chatgpt" | "claude" | "codex" | "obsidian";
 }
@@ -311,7 +311,6 @@ const INTEGRATIONS: Integration[] = [
     cardKey: "codex",
     name: "Codex",
     valueProp: "give OpenAI Codex full memory of your work",
-    ahaCopy: "MCP installed — restart Codex",
     isPro: false,
     type: "codex",
   },
@@ -329,7 +328,6 @@ const INTEGRATIONS: Integration[] = [
     cardKey: "claude",
     name: "Claude",
     valueProp: "give Claude Desktop full memory of your screen",
-    ahaCopy: "MCP installed — restart Claude",
     isPro: false,
     type: "claude",
   },
@@ -338,7 +336,6 @@ const INTEGRATIONS: Integration[] = [
     cardKey: "cursor",
     name: "Cursor",
     valueProp: "give Cursor AI full memory of your work",
-    ahaCopy: "MCP installed — restart Cursor",
     isPro: false,
     type: "mcp",
   },
@@ -455,14 +452,16 @@ function IntegrationCard({
                 <Check className="w-3 h-3 shrink-0" strokeWidth={2.5} />
                 <span className="truncate">{displayName ?? "connected"}</span>
               </span>
-              <motion.span
-                className="font-mono text-[9px] text-muted-foreground/50 pl-4 leading-tight"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2, duration: 0.3 }}
-              >
-                {integration.ahaCopy}
-              </motion.span>
+              {integration.ahaCopy && (
+                <motion.span
+                  className="font-mono text-[9px] text-muted-foreground/50 pl-4 leading-tight"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.2, duration: 0.3 }}
+                >
+                  {integration.ahaCopy}
+                </motion.span>
+              )}
             </motion.div>
           ) : isConnecting ? (
             <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground/50">

@@ -119,6 +119,53 @@ describe("fetchUpcomingCalendarSnapshot", () => {
     ).toBe(false);
   });
 
+  it("includes ICS events when hoursAhead is 72", async () => {
+    mocks.commands.oauthStatus.mockResolvedValue({
+      status: "ok",
+      data: { connected: false },
+    });
+    mocks.commands.icsCalendarGetEntries.mockResolvedValue({
+      status: "ok",
+      data: [{ name: "Work", url: "https://example.com/cal.ics", enabled: true }],
+    });
+    mocks.commands.icsCalendarGetUpcoming.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          id: "ics-1",
+          title: "Three day planning",
+          start: "2026-06-05T10:00:00Z",
+          end: "2026-06-05T11:00:00Z",
+          attendees: [],
+          calendarName: "Work",
+          isAllDay: false,
+          source: "ics",
+        },
+      ],
+    });
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.startsWith("/connections/calendar/events")) {
+        return Promise.resolve(
+          jsonResponse(false, { error: "AuthorizationDenied" }),
+        );
+      }
+
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+
+    const snapshot = await fetchUpcomingCalendarSnapshot({
+      hoursAhead: 72,
+    });
+
+    expect(mocks.commands.icsCalendarGetUpcoming).toHaveBeenCalledWith(0, 72);
+    expect(snapshot.connectedSources).toEqual(["ics"]);
+    expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.events[0]).toMatchObject({
+      title: "Three day planning",
+      source: "ics",
+    });
+  });
+
   it("falls back to Google events when OAuth status cannot be read", async () => {
     mocks.commands.oauthStatus.mockRejectedValue(
       new Error("tauri unavailable"),

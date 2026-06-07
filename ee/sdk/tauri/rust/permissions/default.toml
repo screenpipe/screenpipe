@@ -19,4 +19,5 @@ permissions = [
     "allow-screenpipe-reveal",
     "allow-screenpipe-dispose",
     "allow-screenpipe-events",
+    "allow-screenpipe-identify",
 ]

@@ -881,7 +881,7 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
     Ok(windows
         .into_iter()
         .filter_map(|window| {
-            let mut app_name = match window.app_name() {
+            let app_name = match window.app_name() {
                 Ok(name) => name.to_string(),
                 Err(e) => {
                     debug!("Failed to get app_name for window: {}", e);
@@ -892,14 +892,22 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
             // On Windows, xcap returns empty string when OpenProcess fails
             // (elevated/system processes). Fall back to exe filename.
             #[cfg(target_os = "windows")]
-            if app_name.is_empty() {
-                if let Some(pid) = window.pid().ok() {
-                    if let Some(exe_name) = get_process_exe_name(pid as u32) {
-                        debug!("app_name was empty, using exe name: {}", exe_name);
-                        app_name = exe_name;
+            let app_name = {
+                if app_name.is_empty() {
+                    if let Some(pid) = window.pid().ok() {
+                        if let Some(exe_name) = get_process_exe_name(pid as u32) {
+                            debug!("app_name was empty, using exe name: {}", exe_name);
+                            exe_name
+                        } else {
+                            app_name
+                        }
+                    } else {
+                        app_name
                     }
+                } else {
+                    app_name
                 }
-            }
+            };
 
             let title = match window.title() {
                 Ok(title) => title.to_string(),

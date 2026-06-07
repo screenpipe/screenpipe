@@ -7,6 +7,12 @@
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
 
+    <!-- EventKit calendar access. Required under hardened runtime: without it
+         macOS denies EventKit before TCC is consulted, so no permission prompt
+         fires and the app never appears in Privacy & Security → Calendars. -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+
     <!-- DENO -->
     <!-- DEAD CODE? -->
     <key>com.apple.security.cs.allow-jit</key>

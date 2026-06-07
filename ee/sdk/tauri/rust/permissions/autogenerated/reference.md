@@ -12,6 +12,7 @@ Allows every screenpipe plugin command — recorder lifecycle, snapshots, reveal
 - `allow-screenpipe-reveal`
 - `allow-screenpipe-dispose`
 - `allow-screenpipe-events`
+- `allow-screenpipe-identify`
 
 ## Permission Table
 
@@ -70,6 +71,32 @@ Enables the screenpipe_events command without any pre-configured scope.
 <td>
 
 Denies the screenpipe_events command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`screenpipe-tauri:allow-screenpipe-identify`
+
+</td>
+<td>
+
+Enables the screenpipe_identify command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`screenpipe-tauri:deny-screenpipe-identify`
+
+</td>
+<td>
+
+Denies the screenpipe_identify command without any pre-configured scope.
 
 </td>
 </tr>

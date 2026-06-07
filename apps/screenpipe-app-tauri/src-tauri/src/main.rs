@@ -124,6 +124,7 @@ mod native_shortcut_reminder;
 mod notifications;
 mod safe_icon;
 mod shortcuts;
+mod skills;
 mod specta_bindings;
 mod vault;
 mod viewer;
@@ -802,9 +803,46 @@ async fn main() {
                 #[cfg(target_os = "windows")]
                 {
                     if window.label() == "home" {
-                        // Minimize instead of closing so the Home window stays in the
-                        // taskbar as the persistent app icon.
-                        let _ = window.minimize();
+                        // Behavior depends on the user setting `minimizeToTrayOnClose`:
+                        //  - false (default, historical behavior): minimize the Home
+                        //    window so its icon stays in the Windows taskbar as the
+                        //    persistent app entry point.
+                        //  - true (opt-in): hide the window AND remove it from the
+                        //    taskbar so the system tray icon becomes the only entry
+                        //    point. The app process keeps running (see ExitRequested
+                        //    handler below). The tray left-click handler in
+                        //    tray.rs::setup_tray_click_handlers restores the window,
+                        //    and window/show.rs::show_existing_main resets
+                        //    skip_taskbar back to false on restore.
+                        //
+                        // Settings reads are best-effort: if the store can't be read
+                        // we fall back to the historical minimize() behavior so the
+                        // user never loses access to the window. set_skip_taskbar /
+                        // hide failures also fall back to minimize() for the same
+                        // reason, so the user is never left with a lost (hidden,
+                        // off-taskbar) window.
+                        let minimize_to_tray = crate::store::SettingsStore::get(
+                            window.app_handle(),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(|s| s.minimize_to_tray_on_close)
+                        .unwrap_or(false);
+
+                        if minimize_to_tray {
+                            let skip_ok = window.set_skip_taskbar(true).is_ok();
+                            let hide_ok = window.hide().is_ok();
+                            if !(skip_ok && hide_ok) {
+                                // Hard fallback so the user is never left with an
+                                // off-taskbar but visible window.
+                                let _ = window.set_skip_taskbar(false);
+                                let _ = window.minimize();
+                            }
+                        } else {
+                            // Minimize instead of closing so the Home window stays in
+                            // the taskbar as the persistent app icon.
+                            let _ = window.minimize();
+                        }
                     } else {
                         // Overlay and other windows: hide (they're skip_taskbar anyway)
                         let _ = window.hide();
@@ -1128,12 +1166,23 @@ async fn main() {
             // Attach non-sensitive settings to all future Sentry events
             if !telemetry_disabled {
                 sentry::configure_scope(|scope| {
-                    // Set user.id to the persistent analytics UUID
-                    // This links Sentry errors to PostHog sessions and feedback reports
+                    // Set user.id to the persistent analytics UUID. Support
+                    // context env vars are attached as tags so managed
+                    // deployments can be filtered without replacing the app id.
                     scope.set_user(Some(sentry::protocol::User {
                         id: Some(store.recording.analytics_id.clone()),
                         ..Default::default()
                     }));
+                    let telemetry_context = screenpipe_engine::telemetry_context::TelemetryContext::from_env();
+                    for (key, value) in telemetry_context.pairs() {
+                        scope.set_tag(key, value);
+                    }
+                    if !telemetry_context.is_empty() {
+                        scope.set_context(
+                            "screenpipe_support",
+                            sentry::protocol::Context::Other(telemetry_context.to_json_map()),
+                        );
+                    }
                     scope.set_context("app_settings", sentry::protocol::Context::Other({
                         let mut map = std::collections::BTreeMap::new();
                         map.insert("audio_chunk_duration".into(), serde_json::json!(store.recording.audio_chunk_duration));
@@ -1375,9 +1424,15 @@ async fn main() {
             // Start server core + capture on a dedicated thread with its own tokio runtime
             // to avoid competing with Tauri's UI runtime.
             // Two-phase startup: ServerCore (DB + HTTP + pipes) then CaptureSession (vision + audio).
-            {
+            'start_server: {
                 let store_clone = store.clone();
                 let data_dir_clone = data_dir.clone();
+                if !store_clone.app_entitled_or_dev() {
+                    info!("Skipping server auto-start: active screenpipe plan required");
+                    crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
+                    let _ = app_handle.emit("app-entitlement-required", ());
+                    break 'start_server;
+                }
                 let recording_state = app_handle.state::<RecordingState>();
                 recording_state.is_starting.store(true, std::sync::atomic::Ordering::SeqCst);
                 let server_arc = recording_state.server.clone();

@@ -13,6 +13,7 @@ const DEFAULT_TAURI_COMMANDS = Object.freeze({
   reveal: "plugin:screenpipe|screenpipe_reveal",
   dispose: "plugin:screenpipe|screenpipe_dispose",
   events: "plugin:screenpipe|screenpipe_events",
+  identify: "plugin:screenpipe|screenpipe_identify",
 });
 
 /**
@@ -60,6 +61,31 @@ function createScreenpipeTauriClient(options = {}) {
   const listen = options.listen || defaultListen;
   const commands = mergeCommands(options.commands);
   const eventChannel = options.eventChannel || SCREENPIPE_EVENT_CHANNEL;
+
+  // Telemetry runs natively in the Rust plugin — crash reports to Sentry,
+  // usage to PostHog — so there's no webview fetch and no Content-Security-
+  // Policy to trip over. When the host configures telemetry, hand the plugin
+  // the identity once on creation: `userId` tags events so a specific end
+  // user shows up in screenpipe's dashboards, and `telemetry: false` turns it
+  // off. Fire-and-forget. (With no config, the plugin still reports anonymous
+  // lifecycle/crash telemetry on its default-on setting.)
+  if (
+    options.userId !== undefined ||
+    options.appName !== undefined ||
+    options.release !== undefined ||
+    options.telemetry !== undefined
+  ) {
+    Promise.resolve(
+      invoke(commands.identify, {
+        options: {
+          userId: options.userId,
+          appName: options.appName,
+          release: options.release,
+          telemetry: options.telemetry,
+        },
+      }),
+    ).catch(() => {});
+  }
 
   return {
     commands,

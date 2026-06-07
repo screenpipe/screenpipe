@@ -9,7 +9,6 @@ import "./globals.css";
 import { Providers } from "./providers";
 import { Toaster } from "@/components/ui/toaster";
 import { Suspense, useEffect } from "react";
-import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { BrowserPairingDialog } from "@/components/browser-pairing-dialog";
@@ -377,7 +376,9 @@ export default function RootLayout({
             React #419 (hydration recovery) → #185 (infinite loop during
             recovery render) on every first launch after auto-update. */}
         <Providers>
-          {!isOverlay && <DeeplinkHandler />}
+          {/* DeeplinkHandler is mounted in Providers (outside the entitlement
+              gate) so the screenpipe:// login callback is always caught, even
+              while the "sign in required" screen is showing. */}
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}

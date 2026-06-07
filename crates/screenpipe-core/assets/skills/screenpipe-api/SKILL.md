@@ -261,6 +261,28 @@ Each entry's `description` field is self-describing — for capabilities that
 need a control surface (browsers, gateways, etc.), the description includes
 the exact endpoint and body shape. Read it before guessing.
 
+### Calendar Connections
+
+Use calendar-specific endpoints when the user asks about appointments,
+meetings, or upcoming events:
+
+```bash
+# Native Apple/Windows Calendar
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/connections/calendar/events?hours_back=0&hours_ahead=72"
+
+# Google Calendar
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/connections/google-calendar/events?hours_back=0&hours_ahead=72"
+
+# ICS/webcal subscriptions
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/connections/ics-calendar/events?hours_back=0&hours_ahead=72"
+```
+
+If `/connections` shows `ics-calendar.connected: true`, include ICS results
+alongside native and Google Calendar results before saying the calendar is empty.
+
 ### Browser Control — `owned-default`
 
 You have an embedded browser you can drive directly, for the user it will displayed inside the chat. Three intent verbs;

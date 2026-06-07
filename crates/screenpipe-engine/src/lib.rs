@@ -14,6 +14,7 @@ pub mod cli_reminder;
 pub mod cloud_search;
 pub mod connections_api;
 pub mod core;
+pub mod crash_log;
 pub mod drm_detector;
 pub mod event_driven_capture;
 pub mod external_memory_sync;
@@ -47,6 +48,7 @@ pub mod sleep_monitor;
 pub mod snapshot_compaction;
 mod sync_api;
 pub mod sync_provider;
+pub mod telemetry_context;
 pub mod ui_recorder;
 // Exposed publicly so the commercial `screenpipe-sdk` (screenpipe/sdk repo)
 // can wrap `start_ffmpeg_process` / `write_frame_to_ffmpeg` /

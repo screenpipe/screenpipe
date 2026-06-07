@@ -90,13 +90,21 @@ export function TimelineControls({
 		};
 	}, [calendarOpen]);
 	const searchShortcutDisplay = useMemo(
-		() => formatShortcutDisplay(settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"), isMac),
-		[settings.searchShortcut, isMac]
+		() => {
+			if (settings.disabledShortcuts.includes("searchShortcut")) return "";
+			if (!settings.searchShortcut) return "";
+			return formatShortcutDisplay(settings.searchShortcut, isMac);
+		},
+		[settings.searchShortcut, settings.disabledShortcuts, isMac]
 	);
 
 	const chatShortcutDisplay = useMemo(
-		() => formatShortcutDisplay(settings.showChatShortcut || (isMac ? "Control+Super+L" : "Alt+L"), isMac),
-		[settings.showChatShortcut, isMac]
+		() => {
+			if (settings.disabledShortcuts.includes("showChatShortcut")) return "";
+			if (!settings.showChatShortcut) return "";
+			return formatShortcutDisplay(settings.showChatShortcut, isMac);
+		},
+		[settings.showChatShortcut, settings.disabledShortcuts, isMac]
 	);
 
 	const jumpDay = async (days: number) => {
@@ -298,7 +306,9 @@ export function TimelineControls({
 							onClick={onSearchClick}
 							className="flex items-center h-10 gap-1.5 bg-background border border-border px-4 font-mono hover:bg-foreground hover:text-background transition-colors duration-150 cursor-pointer group"
 						>
-							<span className="text-xs text-muted-foreground group-hover:text-background">{searchShortcutDisplay}</span>
+							{searchShortcutDisplay ? (
+								<span className="text-xs text-muted-foreground group-hover:text-background">{searchShortcutDisplay}</span>
+							) : null}
 							<span className="text-xs text-foreground group-hover:text-background">search</span>
 						</button>
 					)
@@ -310,7 +320,9 @@ export function TimelineControls({
 						onClick={onChatClick}
 						className="flex items-center h-10 gap-1.5 bg-background border border-border px-4 font-mono hover:bg-foreground hover:text-background transition-colors duration-150 cursor-pointer group"
 					>
-						<span className="text-xs text-muted-foreground group-hover:text-background">{chatShortcutDisplay}</span>
+						{chatShortcutDisplay ? (
+							<span className="text-xs text-muted-foreground group-hover:text-background">{chatShortcutDisplay}</span>
+						) : null}
 						<span className="text-xs text-foreground group-hover:text-background">chat</span>
 					</button>
 				)}

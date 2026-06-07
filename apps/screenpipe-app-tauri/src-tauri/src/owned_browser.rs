@@ -403,7 +403,7 @@ fn child_webview_builder(
     let app_for_title = app.clone();
     let app_for_nav = app.clone();
     let app_for_page_load = app.clone();
-    let mut builder = tauri::webview::WebviewBuilder::new(label.to_string(), url)
+    let builder = tauri::webview::WebviewBuilder::new(label.to_string(), url)
         .initialization_script(BRIDGE_INIT_SCRIPT)
         .on_navigation(move |_url| {
             // Browsers do not put subframe navigations in the omnibox. Wry's
@@ -434,15 +434,13 @@ fn child_webview_builder(
         });
 
     #[cfg(target_os = "macos")]
-    {
+    let builder = builder.user_agent(
         // Some sites gate the default WKWebView UA even though the underlying
         // engine is Safari.
-        builder = builder.user_agent(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) \
-             AppleWebKit/605.1.15 (KHTML, like Gecko) \
-             Version/17.5 Safari/605.1.15",
-        );
-    }
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) \
+         AppleWebKit/605.1.15 (KHTML, like Gecko) \
+         Version/17.5 Safari/605.1.15",
+    );
 
     builder
 }
@@ -802,8 +800,7 @@ async fn ensure_child_bounds(
         return Err(format!("parent window {parent:?} not found"));
     };
 
-    let mut pending_url = None;
-    let child = {
+    let (child, pending_url) = {
         let mut inner = state.inner.lock().await;
 
         if let Some(child) = inner.child.clone() {
@@ -813,8 +810,8 @@ async fn ensure_child_bounds(
                     .map_err(|e| format!("owned-browser child reparent failed: {e}"))?;
                 inner.child_parent = Some(parent.to_string());
             }
-            pending_url = inner.pending_url.take();
-            child
+            let pending_url = inner.pending_url.take();
+            (child, pending_url)
         } else {
             let blank: url::Url = "about:blank"
                 .parse()
@@ -827,11 +824,11 @@ async fn ensure_child_bounds(
                     LogicalSize::new(width, height),
                 )
                 .map_err(|e| format!("owned-browser child webview attach failed: {e}"))?;
-            pending_url = inner.pending_url.take();
+            let pending_url = inner.pending_url.take();
             inner.child = Some(child.clone());
             inner.child_parent = Some(parent.to_string());
             info!(parent, "owned-browser: child webview attached");
-            child
+            (child, pending_url)
         }
     };
 
@@ -1112,7 +1109,9 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
     }
 
     info!(host, "owned-browser cookies: pre-navigate inject starting");
-    let mut cookies = crate::owned_browser_cookies::cookies_for_host(host).await;
+    let cookies = crate::owned_browser_cookies::cookies_for_host(host).await;
+    #[cfg(target_os = "windows")]
+    let mut cookies = cookies;
     if cookies.is_empty() {
         #[cfg(target_os = "windows")]
         {

@@ -37,6 +37,7 @@ import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
+import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/react";
@@ -59,7 +60,8 @@ const getAppIconUrl = (appName: string): string => {
 
 const createWindowOptions = (
   windowItems: { name: string; count: number; app_name?: string }[],
-  existingPatterns: string[]
+  existingPatterns: string[],
+  installedApps: string[] = []
 ) => {
   // For each observed window, surface BOTH the bare title (matches anywhere)
   // and a scoped `App::Title` variant (matches that one window of that one
@@ -118,8 +120,25 @@ const createWindowOptions = (
     }
   }
 
+  const seenLower = new Set(Array.from(seen, (s) => s.toLowerCase()));
+
+  // Installed apps that have no captures yet. Lets users add an ignore/include
+  // rule for an app before it's ever recorded; the icon still resolves by name
+  // so these render with their real app icon despite zero captures.
+  const installedOptions = installedApps
+    .filter((app) => app && !seenLower.has(app.toLowerCase()))
+    .map((app) => {
+      seenLower.add(app.toLowerCase());
+      return toOption({
+        value: app,
+        label: app,
+        iconHint: app,
+        description: "installed · not captured yet",
+      });
+    });
+
   const customOptions = existingPatterns
-    .filter((pattern) => !seen.has(pattern))
+    .filter((pattern) => !seenLower.has(pattern.toLowerCase()))
     .map((pattern) => ({
       value: pattern,
       label: pattern,
@@ -127,7 +146,7 @@ const createWindowOptions = (
       iconUrl: getAppIconUrl(pattern.includes("::") ? pattern.split("::")[0] : pattern),
     }));
 
-  return [...windowOptions, ...customOptions];
+  return [...windowOptions, ...installedOptions, ...customOptions];
 };
 
 const getFaviconUrl = (domain: string): string => {
@@ -291,6 +310,9 @@ export function PrivacySection() {
     useSqlAutocomplete("window");
   const { items: urlItems, isLoading: isUrlItemsLoading } =
     useSqlAutocomplete("url");
+  // Installed apps with no captures yet — merged into the app filters so users
+  // can block/allow an app before it's ever recorded.
+  const { apps: installedApps } = useInstalledApps();
 
   const handleSettingsChange = useCallback(
     (newSettings: Partial<Settings>, restart: boolean = true) => {
@@ -1244,17 +1266,20 @@ export function PrivacySection() {
               </h3>
             </div>
             <div className="ml-[26px]">
-              <MultiSelect
-                options={createWindowOptions(
-                  windowItems || [],
-                  settings.ignoredWindows
-                )}
-                defaultValue={settings.ignoredWindows}
-                value={settings.ignoredWindows}
-                onValueChange={handleIgnoredWindowsChange}
-                placeholder="Select apps to ignore..."
-                allowCustomValues
-              />
+              <div data-testid="privacy-ignored-apps-select">
+                <MultiSelect
+                  options={createWindowOptions(
+                    windowItems || [],
+                    settings.ignoredWindows,
+                    installedApps
+                  )}
+                  defaultValue={settings.ignoredWindows}
+                  value={settings.ignoredWindows}
+                  onValueChange={handleIgnoredWindowsChange}
+                  placeholder="Select apps to ignore..."
+                  allowCustomValues
+                />
+              </div>
               <Button
                 variant="outline"
                 size="sm"
@@ -1277,17 +1302,20 @@ export function PrivacySection() {
               </h3>
             </div>
             <div className="ml-[26px]">
-              <MultiSelect
-                options={createWindowOptions(
-                  windowItems || [],
-                  settings.includedWindows
-                )}
-                defaultValue={settings.includedWindows}
-                value={settings.includedWindows}
-                onValueChange={handleIncludedWindowsChange}
-                placeholder="Only capture these apps (optional)..."
-                allowCustomValues
-              />
+              <div data-testid="privacy-included-apps-select">
+                <MultiSelect
+                  options={createWindowOptions(
+                    windowItems || [],
+                    settings.includedWindows,
+                    installedApps
+                  )}
+                  defaultValue={settings.includedWindows}
+                  value={settings.includedWindows}
+                  onValueChange={handleIncludedWindowsChange}
+                  placeholder="Only capture these apps (optional)..."
+                  allowCustomValues
+                />
+              </div>
               <Button
                 variant="outline"
                 size="sm"
@@ -1397,6 +1425,7 @@ export function PrivacySection() {
         selected={
           picker === "included" ? settings.includedWindows : settings.ignoredWindows
         }
+        installedApps={installedApps}
         onAdd={(p) => {
           if (picker === "included") addIncludedPattern(p);
           else addIgnoredPattern(p);

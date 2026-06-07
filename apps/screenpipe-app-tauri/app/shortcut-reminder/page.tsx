@@ -21,6 +21,14 @@ import { ScreenMatrix } from "./screen-matrix";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import { appendAuthToken, ensureApiReady, getApiBaseUrl } from "@/lib/api";
 
+type ReminderSettings = {
+  disabledShortcuts?: string[];
+  shortcutOverlaySize?: string;
+  showChatShortcut?: string;
+  showScreenpipeShortcut?: string;
+  searchShortcut?: string;
+};
+
 function useMeetingState() {
   const [meetingState, setMeetingState] = useState(() => computeMeetingActive(null, 0));
   const [loading, setLoading] = useState(false);
@@ -117,6 +125,28 @@ export default function ShortcutReminderPage() {
   const isMacRef = useRef(isMac);
   isMacRef.current = isMac;
 
+  const applyReminderSettings = useCallback((settings?: ReminderSettings | null) => {
+    if (!settings) return;
+
+    const disabledShortcuts = new Set(settings.disabledShortcuts ?? []);
+    const formatForReminder = (shortcut: string | undefined, disabledKey: string) => {
+      if (disabledShortcuts.has(disabledKey)) return "";
+      if (!shortcut || shortcut.trim() === "") return "";
+      return formatShortcut(shortcut, isMacRef.current);
+    };
+
+    setOverlayShortcut(
+      formatForReminder(settings.showScreenpipeShortcut, "showScreenpipeShortcut")
+    );
+    setChatShortcut(formatForReminder(settings.showChatShortcut, "showChatShortcut"));
+    setSearchShortcut(formatForReminder(settings.searchShortcut, "searchShortcut"));
+
+    if (settings.shortcutOverlaySize) {
+      const s = settings.shortcutOverlaySize;
+      setOverlayScale(s === "large" ? 2 : s === "medium" ? 1.5 : 1);
+    }
+  }, []);
+
   // Read shortcuts directly from the store.bin file on disk (bypasses TS store plugin)
   const loadShortcutsFromFile = useCallback(async () => {
     try {
@@ -129,27 +159,14 @@ export default function ShortcutReminderPage() {
       const raw = await readTextFile(path);
       if (!raw) return;
       const data = JSON.parse(raw);
-      const settings = data?.settings;
-      if (settings?.showScreenpipeShortcut) {
-        setOverlayShortcut(formatShortcut(settings.showScreenpipeShortcut, isMacRef.current));
-      }
-      if (settings?.showChatShortcut) {
-        setChatShortcut(formatShortcut(settings.showChatShortcut, isMacRef.current));
-      }
-      if (settings?.searchShortcut) {
-        setSearchShortcut(formatShortcut(settings.searchShortcut, isMacRef.current));
-      }
-      if (settings?.shortcutOverlaySize) {
-        const s = settings.shortcutOverlaySize;
-        setOverlayScale(s === "large" ? 2 : s === "medium" ? 1.5 : 1);
-      }
+      applyReminderSettings(data?.settings as ReminderSettings | undefined);
     } catch (e) {
       // Error objects don't survive JSON.stringify — extract the human-readable parts
       // so the report isn't just "{}".
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       console.error("Failed to read shortcuts from store file:", msg);
     }
-  }, []);
+  }, [applyReminderSettings]);
 
   // Load shortcuts on mount + listen for updates
   useEffect(() => {
@@ -282,9 +299,11 @@ export default function ShortcutReminderPage() {
               <rect x="3" y="3" width="18" height="18" />
               <line x1="3" y1="9" x2="21" y2="9" />
             </svg>
-            <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
-              {overlayShortcut ?? "..."}
-            </span>
+            {overlayShortcut ? (
+              <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
+                {overlayShortcut}
+              </span>
+            ) : null}
           </button>
           <div className="bg-white/25" />
           <button
@@ -301,9 +320,11 @@ export default function ShortcutReminderPage() {
             <svg width={iconPx} height={iconPx} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/70 shrink-0">
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
             </svg>
-            <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
-              {chatShortcut ?? "..."}
-            </span>
+            {chatShortcut ? (
+              <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
+                {chatShortcut}
+              </span>
+            ) : null}
           </button>
           <div className="bg-white/25" />
           <button
@@ -321,9 +342,11 @@ export default function ShortcutReminderPage() {
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
-              {searchShortcut ?? "..."}
-            </span>
+            {searchShortcut ? (
+              <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
+                {searchShortcut}
+              </span>
+            ) : null}
           </button>
 
           {/* Divider row */}

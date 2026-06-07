@@ -115,6 +115,13 @@ fn store_key(integration_id: &str, instance: Option<&str>) -> String {
     }
 }
 
+fn connection_manifest_key(integration_id: &str, instance: Option<&str>) -> String {
+    match instance {
+        Some(inst) => format!("{}:{}", integration_id, inst),
+        None => integration_id.to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Legacy plaintext file location  (~/.screenpipe/{id}-oauth.json)
 //
@@ -481,12 +488,42 @@ pub async fn write_oauth_token(integration_id: &str, data: &Value) -> Result<()>
     write_oauth_token_instance(None, integration_id, None, data).await
 }
 
+/// Compute the next OAuth rotation generation for a token write. Pure logic;
+/// the caller does the I/O (reading the prior token and the high-water mark).
+///
+/// The generation only advances when the refresh token *value* changes — a
+/// real rotation or the first token issued at exchange time. Plain access-token
+/// refreshes (same refresh token) keep the generation steady so they don't
+/// churn the cross-device merge. A rotation seeds from `max(prior, highwater)`
+/// so the counter never regresses below a generation this device already issued
+/// or observed, even after a disconnect→reconnect or a transient keychain read
+/// miss reset `prior` to absent. See [`write_oauth_token_instance`] and
+/// `screenpipe_core::connections::sync::remote_is_newer`.
+fn next_refresh_gen(
+    incoming_refresh: Option<&str>,
+    prior_refresh: Option<&str>,
+    prior_gen: u64,
+    highwater: u64,
+) -> u64 {
+    let rotated = match (incoming_refresh, prior_refresh) {
+        (Some(new), Some(old)) => new != old,
+        (Some(_), None) => true, // first refresh token seen for this slot
+        (None, _) => false,      // no refresh token in this write — don't bump
+    };
+    if rotated {
+        prior_gen.max(highwater).saturating_add(1)
+    } else {
+        prior_gen
+    }
+}
+
 pub async fn write_oauth_token_instance(
     store: Option<&SecretStore>,
     integration_id: &str,
     instance: Option<&str>,
     data: &Value,
 ) -> Result<()> {
+    let manifest_key = connection_manifest_key(integration_id, instance);
     let mut stored = data.clone();
     if let Some(expires_in) = data["expires_in"].as_u64() {
         stored["expires_at"] = Value::from(unix_now() + expires_in);
@@ -498,6 +535,46 @@ pub async fn write_oauth_token_instance(
     // scheduler uses this field to decide whether providers with sliding
     // refresh-token windows (Zoom: 15h) need a keep-alive refresh.
     stored["last_refreshed_at"] = Value::from(unix_now());
+
+    // Stamp a monotonic rotation generation so cross-device sync can always
+    // pick the most recently rotated refresh token. We bump only when the
+    // refresh_token value actually changes (a rotation, or the first token at
+    // exchange time); plain access-token refreshes keep the same generation so
+    // they don't trigger spurious merge churn. Seeding a rotation from a
+    // persistent high-water mark keeps the counter monotonic even across a
+    // disconnect→reconnect or a transient keychain read miss (the documented
+    // dev↔prod bundle ACL split) that would otherwise read prior as absent,
+    // regress the counter to 1, and let a stale higher-generation peer token
+    // win the merge. This is the keystone that makes the merge in
+    // `screenpipe_core::connections::sync::remote_is_newer` immune to the
+    // wall-clock skew between two devices refreshing the same connection.
+    {
+        let gen_field = screenpipe_core::connections::sync::OAUTH_REFRESH_GEN_FIELD;
+        let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+        let prior = load_oauth_json_exact(store, integration_id, instance).await;
+        let prior_refresh = prior
+            .as_ref()
+            .and_then(|p| p["refresh_token"].as_str())
+            .map(str::to_owned);
+        let prior_gen = prior
+            .as_ref()
+            .and_then(|p| p[gen_field].as_u64())
+            .unwrap_or(0);
+        let highwater =
+            screenpipe_core::connections::sync::read_oauth_gen_highwater(&data_dir, &manifest_key);
+        let new_gen = next_refresh_gen(
+            stored["refresh_token"].as_str(),
+            prior_refresh.as_deref(),
+            prior_gen,
+            highwater,
+        );
+        stored[gen_field] = Value::from(new_gen);
+        screenpipe_core::connections::sync::bump_oauth_gen_highwater(
+            &data_dir,
+            &manifest_key,
+            new_gen,
+        );
+    }
 
     // SecretStore path — no plaintext shadow on disk.
     if let Some(s) = store {
@@ -518,12 +595,21 @@ pub async fn write_oauth_token_instance(
                 path.display(),
             );
         }
+        screenpipe_core::connections::sync::clear_connection_tombstone(
+            &screenpipe_core::paths::default_screenpipe_data_dir(),
+            &manifest_key,
+        );
         return Ok(());
     }
 
     // Fallback: no SecretStore available — `0o600` plaintext file.
     let path = oauth_token_path_instance(integration_id, instance);
-    write_plaintext_0600(&path, &stored)
+    write_plaintext_0600(&path, &stored)?;
+    screenpipe_core::connections::sync::clear_connection_tombstone(
+        &screenpipe_core::paths::default_screenpipe_data_dir(),
+        &manifest_key,
+    );
+    Ok(())
 }
 
 pub async fn delete_oauth_token(integration_id: &str) -> Result<()> {
@@ -535,6 +621,7 @@ pub async fn delete_oauth_token_instance(
     integration_id: &str,
     instance: Option<&str>,
 ) -> Result<()> {
+    let manifest_key = connection_manifest_key(integration_id, instance);
     // Delete from SecretStore if available. Errors are swallowed: the key
     // may legitimately not exist (e.g. fresh install, already deleted), and
     // a store error here must not block removal of any plaintext shadow.
@@ -548,6 +635,10 @@ pub async fn delete_oauth_token_instance(
     // Race-safe: NotFound is not an error.
     let path = oauth_token_path_instance(integration_id, instance);
     remove_plaintext_if_exists(&path)?;
+    screenpipe_core::connections::sync::record_connection_tombstone(
+        &screenpipe_core::paths::default_screenpipe_data_dir(),
+        &manifest_key,
+    );
     Ok(())
 }
 
@@ -678,6 +769,20 @@ pub async fn sweep_shadowed_default_slots(store: &SecretStore) -> Result<usize> 
 // Token refresh
 // ---------------------------------------------------------------------------
 
+/// Heuristic: did the token endpoint reject the refresh token *itself* (so a
+/// retry with the same token is pointless), versus a transient/server error?
+/// Per RFC 6749 §5.2 a rotated-out or revoked refresh token comes back as
+/// HTTP 400 with `"error":"invalid_grant"`. We match the code loosely
+/// (case-insensitive substring) because the proxy forwards the provider body
+/// verbatim and providers vary in how they frame it. Used to gate the
+/// rotation-race self-heal retry in [`refresh_token_instance`].
+fn looks_like_invalid_grant(status: reqwest::StatusCode, body: &str) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST && status != reqwest::StatusCode::UNAUTHORIZED {
+        return false;
+    }
+    body.to_ascii_lowercase().contains("invalid_grant")
+}
+
 /// Attempt a token refresh via the backend proxy.
 /// Writes the new token on success, returns the new `access_token`.
 pub async fn refresh_token(client: &reqwest::Client, integration_id: &str) -> Result<String> {
@@ -690,36 +795,69 @@ pub async fn refresh_token_instance(
     integration_id: &str,
     instance: Option<&str>,
 ) -> Result<String> {
-    let (stored, effective_instance) =
+    let (mut stored, effective_instance) =
         load_oauth_json_with_instance(store, integration_id, instance)
             .await
             .ok_or_else(|| anyhow::anyhow!("no stored token for {}", integration_id))?;
-    let refresh_tok = stored["refresh_token"]
+    let mut refresh_tok = stored["refresh_token"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no refresh_token stored for {}", integration_id))?
         .to_string();
 
-    let raw = client
-        .post(EXCHANGE_PROXY_URL)
-        .json(&serde_json::json!({
-            "integration_id": integration_id,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_tok,
-        }))
-        .send()
-        .await?;
-    let status = raw.status();
-    let body = raw.text().await.unwrap_or_default();
-    if !status.is_success() {
+    // Up to two attempts. The retry only fires when the provider rejects our
+    // refresh token as invalid AND a concurrent cross-device sync has since
+    // written a *different* refresh token to our store — i.e. another device
+    // won a rotation race and we just received its live token. Retrying with
+    // that token self-heals the loser of the race instead of surfacing a
+    // transient "disconnected". On any failure we return without writing, so a
+    // genuinely dead token is left intact for the next sync/refresh to replace
+    // (we never persist a known-bad token, which would propagate the brick).
+    let mut attempt = 0u8;
+    let resp: Value = loop {
+        attempt += 1;
+        let raw = client
+            .post(EXCHANGE_PROXY_URL)
+            .json(&serde_json::json!({
+                "integration_id": integration_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_tok,
+            }))
+            .send()
+            .await?;
+        let status = raw.status();
+        let body = raw.text().await.unwrap_or_default();
+        if status.is_success() {
+            break serde_json::from_str(&body).map_err(|e| {
+                anyhow::anyhow!("oauth refresh returned non-JSON body: {e}: {body}")
+            })?;
+        }
+
+        if attempt < 2 && looks_like_invalid_grant(status, &body) {
+            if let Some(fresh) =
+                load_oauth_json_exact(store, integration_id, effective_instance.as_deref()).await
+            {
+                if let Some(new_rt) = fresh["refresh_token"].as_str() {
+                    if new_rt != refresh_tok {
+                        tracing::info!(
+                            "oauth refresh for {}(instance={:?}) hit invalid_grant; retrying with refresh token delivered by cross-device sync",
+                            integration_id,
+                            effective_instance,
+                        );
+                        refresh_tok = new_rt.to_string();
+                        stored = fresh;
+                        continue;
+                    }
+                }
+            }
+        }
+
         return Err(anyhow::anyhow!(
             "oauth refresh for {} returned {}: {}",
             integration_id,
             status,
             body
         ));
-    }
-    let resp: Value = serde_json::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("oauth refresh returned non-JSON body: {e}: {body}"))?;
+    };
 
     // Merge response over stored, then write back to the SAME instance we
     // loaded from. Two reasons this matters:
@@ -848,6 +986,52 @@ mod tests {
     async fn mem_store() -> SecretStore {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         SecretStore::new(pool, None).await.unwrap()
+    }
+
+    #[test]
+    fn refresh_gen_bumps_only_on_rotation() {
+        // First token for a slot (no prior) → generation 1.
+        assert_eq!(next_refresh_gen(Some("r1"), None, 0, 0), 1);
+        // Same refresh token (plain access-token refresh) → unchanged.
+        assert_eq!(next_refresh_gen(Some("r1"), Some("r1"), 5, 5), 5);
+        // Refresh token rotated → one past the prior generation.
+        assert_eq!(next_refresh_gen(Some("r2"), Some("r1"), 5, 5), 6);
+        // Response carrying no refresh token never bumps.
+        assert_eq!(next_refresh_gen(None, Some("r1"), 5, 5), 5);
+    }
+
+    #[test]
+    fn refresh_gen_seeds_from_highwater_on_reconnect() {
+        // prior reads as absent (disconnect→reconnect, or a keychain read
+        // miss) but the high-water remembers we reached generation 9, so the
+        // fresh token out-generations any stale peer instead of resetting to 1.
+        assert_eq!(next_refresh_gen(Some("r-new"), None, 0, 9), 10);
+        // A higher prior than the high-water still wins the seed.
+        assert_eq!(next_refresh_gen(Some("r2"), Some("r1"), 12, 9), 13);
+    }
+
+    #[test]
+    fn invalid_grant_detection_gates_retry() {
+        use reqwest::StatusCode;
+        assert!(looks_like_invalid_grant(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_grant","error_description":"expired"}"#
+        ));
+        // Case-insensitive and tolerant of the proxy wrapping the body.
+        assert!(looks_like_invalid_grant(
+            StatusCode::UNAUTHORIZED,
+            "upstream said INVALID_GRANT"
+        ));
+        // A server-side hiccup is not the token's fault — not retryable.
+        assert!(!looks_like_invalid_grant(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_grant"
+        ));
+        // 400 without the marker is some other client error — not retryable.
+        assert!(!looks_like_invalid_grant(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_scope"}"#
+        ));
     }
 
     // Each test uses a unique fake integration_id so the filesystem fallback

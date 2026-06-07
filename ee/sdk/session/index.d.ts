@@ -115,6 +115,13 @@ export type ScreenpipeEventIntervals = {
 
 export const DEFAULT_EVENT_INTERVALS: Required<ScreenpipeEventIntervals>;
 
+export type ScreenpipeTelemetryPayload = {
+  kind: "posthog" | "sentry";
+  url: string;
+  headers: Record<string, string>;
+  body: unknown;
+};
+
 export type ScreenpipeSessionOptions = {
   app?: { getPath(name: string): string };
   shell?: { showItemInFolder(file: string): void };
@@ -123,6 +130,30 @@ export type ScreenpipeSessionOptions = {
   permissionTimeoutMs?: number;
   recorderOptions?: Partial<RecorderOptions>;
   onEvent?: (event: ScreenpipeEventName, payload: ScreenpipeEventPayload) => void;
+  /**
+   * Stable identifier for the end user of YOUR app. When set, the SDK tags
+   * its telemetry — crash reports (Sentry) and usage events (PostHog) — with
+   * this id, so a specific user can be identified in screenpipe's dashboards.
+   * Omit and events fall back to a per-session anonymous id.
+   */
+  userId?: string;
+  /**
+   * Master switch for SDK telemetry. Defaults to `true`: the SDK reports a
+   * small, PII-scrubbed set of crash + usage events to screenpipe. Set to
+   * `false` — or set env `SCREENPIPE_SDK_TELEMETRY=0` / `DO_NOT_TRACK=1` /
+   * `SCREENPIPE_DISABLE_ANALYTICS=1` — to disable it entirely.
+   */
+  telemetry?: boolean;
+  /** Optional app name attached to telemetry for segmentation. */
+  appName?: string;
+  /** Optional release/version string attached to telemetry. */
+  release?: string;
+  /**
+   * Internal / testing hook: replace the telemetry network transport.
+   * Receives each event payload instead of it being POSTed. May return a
+   * Promise (awaited by `dispose()`'s flush).
+   */
+  telemetryTransport?: (payload: ScreenpipeTelemetryPayload) => void | Promise<void>;
   /**
    * Override one or more polling cadences. Unspecified keys fall back
    * to `DEFAULT_EVENT_INTERVALS`.

@@ -316,6 +316,43 @@ describe('Pipes: discover → install → play', function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  // ─── Step 3b: installed pipe must NOT be pinned to a premium model ───────
+  // Regression guard for the "pipe failed: model not available for your tier"
+  // bug. On install we assign the dedicated "pipes" preset (auto, tier-safe)
+  // via pickPipePreset() — NOT the user's Opus chat default. A pipe pinned to
+  // claude-opus-* 403s the moment tier resolution flickers to a lower tier.
+  // We assert through the API (preset is config, not visible in the DOM).
+  it('assigns a tier-safe preset to the installed pipe (not Opus)', async () => {
+    if (!installedPipeName) throw new Error('no installed pipe to inspect');
+
+    const cfg = await browser.executeAsync(
+      (name: string, done: (v: any) => void) => {
+        fetch(`http://localhost:3030/pipes/${encodeURIComponent(name)}`)
+          .then((r) => r.json())
+          .then((json) => done(json?.config ?? json?.data?.config ?? json ?? null))
+          .catch(() => done(null));
+      },
+      installedPipeName
+    );
+
+    // The config may carry the preset id (e.g. "pipes" / "screenpipe") and/or
+    // a resolved model string. Whichever is present, it must not be an Opus
+    // premium model — that's the exact value that caused the reported failure.
+    const blob = JSON.stringify(cfg ?? {}).toLowerCase();
+    console.log(`[pipes-spec] installed pipe config: ${blob}`);
+    expect(blob).not.toContain('claude-opus');
+
+    // If a preset id is exposed, prefer the dedicated "pipes" preset.
+    const presetId =
+      (cfg && (cfg.preset || cfg.aiPreset || cfg.preset_id)) || null;
+    if (presetId) {
+      console.log(`[pipes-spec] assigned preset id: ${presetId}`);
+      // Either the dedicated pipes preset, or (non-pro user) the single
+      // auto-based default — both are acceptable. Opus chat is not.
+      expect(String(presetId).toLowerCase()).not.toBe('chat');
+    }
+  });
+
   // ─── Step 4: confirm pipe row is visible in My Pipes ─────────────────────
 
   it('shows the installed pipe in My Pipes list', async () => {

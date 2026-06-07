@@ -29,6 +29,11 @@ const ShortcutRow = ({
   type,
   value,
 }: ShortcutRowProps) => {
+  const reminderShortcutKeys = new Set([
+    "showScreenpipeShortcut",
+    "showChatShortcut",
+    "searchShortcut",
+  ]);
   const [isRecording, setIsRecording] = useState(false);
   const { settings, updateSettings } = useSettings();
 
@@ -111,6 +116,7 @@ const ShortcutRow = ({
     startAudioShortcut: string;
     stopAudioShortcut: string;
     showChatShortcut: string;
+    searchShortcut: string;
     lockVaultShortcut?: string;
   }) => {
     console.log("syncing shortcuts:", {
@@ -120,6 +126,7 @@ const ShortcutRow = ({
       startAudioShortcut: updatedShortcuts.startAudioShortcut,
       stopAudioShortcut: updatedShortcuts.stopAudioShortcut,
       showChatShortcut: updatedShortcuts.showChatShortcut,
+      searchShortcut: updatedShortcuts.searchShortcut,
     });
     // wait 1 second for settings to persist
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -189,12 +196,21 @@ const ShortcutRow = ({
             startAudioShortcut: shortcut === "startAudioShortcut" ? keys : settings.startAudioShortcut,
             stopAudioShortcut: shortcut === "stopAudioShortcut" ? keys : settings.stopAudioShortcut,
             showChatShortcut: shortcut === "showChatShortcut" ? keys : settings.showChatShortcut,
+            searchShortcut: shortcut === "searchShortcut" ? keys : settings.searchShortcut,
             lockVaultShortcut: shortcut === "lockVaultShortcut" ? keys : (settings.lockVaultShortcut || ""),
           };
           await syncShortcuts(updatedShortcuts);
 
-          // Update the shortcut reminder overlay if either show shortcut changed
-          if (shortcut === "showScreenpipeShortcut" || shortcut === "showChatShortcut") {
+          if (reminderShortcutKeys.has(shortcut)) {
+            try {
+              await commands.refreshTrayMenu();
+            } catch (e) {
+              // Tray may not exist in some environments, that's ok.
+            }
+          }
+
+          // Keep the visible reminder in sync when one of its displayed shortcuts changes.
+          if (settings.showShortcutOverlay && reminderShortcutKeys.has(shortcut)) {
             try {
               await commands.showShortcutReminder(updatedShortcuts.showScreenpipeShortcut);
             } catch (e) {
@@ -221,7 +237,7 @@ const ShortcutRow = ({
       title: "shortcut disabled",
       description: `${shortcut.replace(/_/g, " ")} disabled`,
     });
-    updateSettings({
+    await updateSettings({
       disabledShortcuts: Array.from(
         new Set([...settings.disabledShortcuts, shortcut as Shortcut])
       ),
@@ -234,8 +250,25 @@ const ShortcutRow = ({
       startAudioShortcut: settings.startAudioShortcut,
       stopAudioShortcut: settings.stopAudioShortcut,
       showChatShortcut: settings.showChatShortcut,
+      searchShortcut: settings.searchShortcut,
       lockVaultShortcut: settings.lockVaultShortcut || "",
     });
+
+    if (reminderShortcutKeys.has(shortcut)) {
+      try {
+        await commands.refreshTrayMenu();
+      } catch (e) {
+        // Tray may not exist in some environments, that's ok.
+      }
+    }
+
+    if (settings.showShortcutOverlay && reminderShortcutKeys.has(shortcut)) {
+      try {
+        await commands.showShortcutReminder(settings.showScreenpipeShortcut);
+      } catch (e) {
+        // Window may not exist, that's ok
+      }
+    }
   };
 
   const isValueEmpty = (v: string | undefined): boolean =>

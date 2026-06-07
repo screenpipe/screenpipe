@@ -3,6 +3,25 @@
 This page keeps framework-specific embed details out of the root README while
 leaving the important paths easy to find.
 
+## Support Telemetry Context
+
+The SDK itself does not send first-party Screenpipe telemetry. If your app
+launches the Screenpipe CLI or engine and you want Screenpipe support to
+recognize the deployment in Sentry/PostHog, set opaque support IDs before
+starting Screenpipe:
+
+```bash
+export SCREENPIPE_SUPPORT_ID="spcust_acme_123"
+export SCREENPIPE_CUSTOMER_ID="acme"
+export SCREENPIPE_DEPLOYMENT_ID="prod-laptop-fleet-01"
+export SCREENPIPE_EMBEDDER="acme-agent"
+export SCREENPIPE_EMBEDDER_VERSION="2026.6.4"
+```
+
+Use IDs instead of emails. See
+[`docs/telemetry-support-context.md`](../../../docs/telemetry-support-context.md)
+for the full env contract and aliases.
+
 ## Electron
 
 Native modules should stay in Electron's main process. The SDK ships

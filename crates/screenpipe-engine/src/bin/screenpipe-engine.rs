@@ -36,6 +36,7 @@ use screenpipe_engine::{
         vision::handle_vision_command,
         Cli, Command, RecordArgSources,
     },
+    crash_log,
     high_fps_controller::HighFpsController,
     hot_frame_cache::HotFrameCache,
     start_meeting_watcher, start_power_manager, start_sleep_monitor, start_speaker_identification,
@@ -548,12 +549,24 @@ async fn main() -> anyhow::Result<()> {
 
         // Attach non-sensitive CLI settings to all future Sentry events
         sentry::configure_scope(|scope| {
-            // Set user.id to the same analytics ID used by PostHog
-            // This links Sentry errors to PostHog sessions and feedback reports
+            // Set user.id to the same analytics ID used by PostHog. Embedded
+            // customers can set SCREENPIPE_SUPPORT_ID to make standalone CLI
+            // events searchable by customer without using email.
             scope.set_user(Some(sentry::protocol::User {
                 id: Some(analytics::get_distinct_id().to_string()),
                 ..Default::default()
             }));
+            let telemetry_context =
+                screenpipe_engine::telemetry_context::TelemetryContext::from_env();
+            for (key, value) in telemetry_context.pairs() {
+                scope.set_tag(key, value);
+            }
+            if !telemetry_context.is_empty() {
+                scope.set_context(
+                    "screenpipe_support",
+                    sentry::protocol::Context::Other(telemetry_context.to_json_map()),
+                );
+            }
             scope.set_context(
                 "cli_settings",
                 sentry::protocol::Context::Other({
@@ -610,6 +623,110 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+
+    // Crash diagnostics. Integrators embed this binary as a child process
+    // inside their own wrapper (e.g. an Electron app) and, when it dies, see
+    // only the exit code — never *why*. Install a panic hook that writes the
+    // message + backtrace to last-panic.log so the parent (and we, via Sentry)
+    // can read the cause after the process exits. Installed only on the Record
+    // path (the long-running server; subcommands return earlier) and written
+    // regardless of telemetry, so analytics-disabled customers still get a
+    // local crash record. Mirrors the desktop app's hook in
+    // apps/screenpipe-app-tauri/src-tauri/src/main.rs.
+    {
+        // Write to the resolved data dir (honors --data-dir) so the crash log
+        // sits next to screenpipe.log, and an embedder running with its own
+        // --data-dir doesn't collide with the desktop app's
+        // ~/.screenpipe/last-panic.log (the app runs its engine in-process and
+        // owns that file).
+        let panic_dir = local_data_dir.clone();
+        // A relaunch right after a crash is the common case: rotate last run's
+        // log to .prev so we don't truncate the message we most need.
+        crash_log::rotate_panic_log(&panic_dir);
+
+        // Reuse the existing embedder attribution (SCREENPIPE_EMBEDDER /
+        // SCREENPIPE_CUSTOMER_ID / ...) so the local crash record is identifiable
+        // even when telemetry is off. When telemetry is on, the Sentry scope is
+        // already tagged with the same context above, so panic events inherit it
+        // and no per-event tagging is needed here.
+        let attribution = {
+            use screenpipe_engine::telemetry_context::TelemetryContext;
+            let joined = TelemetryContext::from_env()
+                .pairs()
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if joined.is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", joined)
+            }
+        };
+
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // stderr first — the embedding parent usually pipes the child's
+            // stderr, and unwinding into an extern "C" frame can turn into
+            // panic_cannot_unwind → abort() and drop everything after this.
+            eprintln!("PANIC: {}", info);
+
+            let thread = std::thread::current();
+            let thread_name = thread.name().unwrap_or("<unnamed>");
+            let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_default();
+
+            // Orderly-shutdown noise: a background task (redact workers, etc.)
+            // caught mid-poll while the tokio runtime tears down on quit. Not a
+            // crash — don't record it where it would skew crash dashboards or
+            // mislead the embedder into thinking the binary is unstable.
+            if payload.contains("Tokio 1.x context was found, but it is being shutdown") {
+                eprintln!(
+                    "(suppressed tokio shutdown-time panic on thread '{}' at {})",
+                    thread_name, location
+                );
+                return;
+            }
+
+            // force_capture ignores RUST_BACKTRACE — we always want the trace.
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let record = format!(
+                "[{}] PANIC on thread '{}' at {}: {}{}\n\nBacktrace:\n{}",
+                timestamp, thread_name, location, payload, attribution, backtrace
+            );
+
+            eprintln!("{}", record);
+            crash_log::write_panic_log(&panic_dir, &record);
+
+            // Best-effort Sentry report. No-op when telemetry is disabled; and
+            // the CLI sample_rate (0.1) applies here, so last-panic.log is the
+            // reliable record while Sentry is the convenience copy.
+            sentry::capture_message(
+                &format!(
+                    "panic on thread '{}' at {}: {}",
+                    thread_name, location, payload
+                ),
+                sentry::Level::Fatal,
+            );
+            // Flush so the event leaves before the process dies.
+            if let Some(client) = sentry::Hub::current().client() {
+                client.flush(Some(std::time::Duration::from_secs(2)));
+            }
+
+            // Default hook last (prints the standard panic output).
+            default_hook(info);
+        }));
+    }
 
     // Only require ffmpeg when audio recording is enabled. Vision-only recording
     // should not attempt network installs (important for offline / locked-down
@@ -1880,43 +1997,48 @@ async fn main() -> anyhow::Result<()> {
         use screenpipe_redact::{ImageRedactionPolicy, ImageRedactor};
         use std::sync::Arc;
 
-        // Prefer the MLX runtime on Mac when the safetensors weights
-        // are present (~6× faster than the CoreML EP path). Falls
-        // through to the ONNX adapter otherwise — load_or_download
-        // fetches rfdetr_v9.onnx from
-        // huggingface.co/screenpipe/pii-image-redactor on first run
-        // (~108 MB), verifies SHA-256, caches at
-        // ~/.screenpipe/models/. Subsequent starts are instant.
+        // The desktop app intentionally uses the ONNX image redactor for
+        // local mode. Keep the standalone CLI on that same stable path by
+        // default: the MLX RF-DETR port is still experimental and can crash
+        // the process while reconciling large frame backlogs. Developers can
+        // still opt in while iterating on that runtime.
         #[allow(unused_mut)]
         let mut detector_arc: Option<Arc<dyn ImageRedactor>> = None;
         #[cfg(all(feature = "rfdetr-mlx", target_os = "macos", target_arch = "aarch64"))]
         {
-            use screenpipe_redact::adapters::rfdetr_mlx::{RfdetrMlxConfig, RfdetrMlxRedactor};
-            let mlx_cfg = RfdetrMlxConfig::default();
-            // Mirrors the ONNX adapter: download once, verify SHA-256,
-            // cache at ~/.screenpipe/models/rfdetr_v9.safetensors.
-            if let Err(e) = mlx_cfg.ensure_model_present().await {
-                tracing::info!(
-                    "rfdetr-mlx safetensors download failed ({e}); falling back to ONNX adapter"
-                );
-            } else {
-                match RfdetrMlxRedactor::load(mlx_cfg) {
-                    Ok(d) => {
-                        info!("image-PII detector: rfdetr-mlx (Apple Silicon GPU)");
-                        // Lazy-load + 60 s idle-unload — frees the
-                        // ~150–200 MB MLX resident footprint when the
-                        // worker is paused or the reconciliation queue
-                        // has drained. Same pattern as OpfAdapter.
-                        let d = Arc::new(d);
-                        let _ = Arc::clone(&d).spawn_idle_unloader();
-                        detector_arc = Some(d as Arc<dyn ImageRedactor>);
-                    }
-                    Err(e) => {
-                        tracing::info!(
-                            "rfdetr-mlx load failed ({e}); falling back to ONNX adapter"
-                        );
+            if std::env::var_os("SCREENPIPE_ENABLE_EXPERIMENTAL_RFDETR_MLX").is_some() {
+                use screenpipe_redact::adapters::rfdetr_mlx::{RfdetrMlxConfig, RfdetrMlxRedactor};
+                let mlx_cfg = RfdetrMlxConfig::default();
+                // Mirrors the ONNX adapter: download once, verify SHA-256,
+                // cache at ~/.screenpipe/models/rfdetr_v9.safetensors.
+                if let Err(e) = mlx_cfg.ensure_model_present().await {
+                    tracing::info!(
+                        "rfdetr-mlx safetensors download failed ({e}); falling back to ONNX adapter"
+                    );
+                } else {
+                    match RfdetrMlxRedactor::load(mlx_cfg) {
+                        Ok(d) => {
+                            info!("image-PII detector: rfdetr-mlx (Apple Silicon GPU)");
+                            // Lazy-load + 60 s idle-unload — frees the
+                            // ~150–200 MB MLX resident footprint when the
+                            // worker is paused or the reconciliation queue
+                            // has drained. Same pattern as OpfAdapter.
+                            let d = Arc::new(d);
+                            let _ = Arc::clone(&d).spawn_idle_unloader();
+                            detector_arc = Some(d as Arc<dyn ImageRedactor>);
+                        }
+                        Err(e) => {
+                            tracing::info!(
+                                "rfdetr-mlx load failed ({e}); falling back to ONNX adapter"
+                            );
+                        }
                     }
                 }
+            } else {
+                tracing::info!(
+                    "rfdetr-mlx disabled by default for CLI stability; \
+                     set SCREENPIPE_ENABLE_EXPERIMENTAL_RFDETR_MLX=1 to opt in"
+                );
             }
         }
         if detector_arc.is_none() {

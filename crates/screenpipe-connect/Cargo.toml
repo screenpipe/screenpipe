@@ -23,6 +23,7 @@ log = "0.4"
 anyhow = "1.0"
 screenpipe-core = { path = "../screenpipe-core" }
 screenpipe-secrets = { path = "../screenpipe-secrets" }
+screenpipe-vault = { path = "../screenpipe-vault" }
 tracing = { workspace = true }
 # NOTE: dropped the `rsa` feature — it pulls `rsa = "0.10.0-rc.12"` which
 # has a `match`-arm type error against the pinned `pkcs8 = 0.11`. Ring
@@ -34,6 +35,8 @@ russh = { version = "0.60", default-features = false, features = ["ring", "flate
 russh-sftp = "2.1"
 dirs = "6"
 chrono = "0.4"
+chrono-tz = "0.10"
+icalendar = "0.17"
 async-trait = "0.1"
 once_cell = "1"
 uuid = { version = "1.5.0", features = ["v4"] }

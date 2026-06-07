@@ -73,6 +73,8 @@ export interface ChatPrefillData {
   /** Short user-facing label shown in chat while `prompt` remains the payload sent to Pi. */
   displayLabel?: string;
   frameId?: number;
+  /** Base64 image data URLs to attach to the next chat turn. */
+  images?: string[];
   autoSend?: boolean;
   source?: string;
   /** Open the Home window chat instead of the Chat overlay. */

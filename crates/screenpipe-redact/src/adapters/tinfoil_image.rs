@@ -99,8 +99,7 @@ pub struct TinfoilImageConfig {
 /// See sibling `tinfoil::CachedClient` for the rationale on holding
 /// the verifier alongside the bare reqwest client.
 struct CachedClient {
-    #[allow(dead_code)]
-    inner: tinfoil::Client,
+    _inner: tinfoil::Client,
     http: reqwest::Client,
     created_at: Instant,
 }
@@ -226,7 +225,7 @@ impl TinfoilImageRedactor {
             .clone();
         let http_clone = http.clone();
         *g = Some(CachedClient {
-            inner,
+            _inner: inner,
             http,
             created_at: Instant::now(),
         });
@@ -255,10 +254,6 @@ struct DetectRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct DetectResponse {
     detections: Vec<RawDetection>,
-    #[allow(dead_code)]
-    latency_ms: Option<f32>,
-    #[allow(dead_code)]
-    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

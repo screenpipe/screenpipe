@@ -40,6 +40,7 @@ use crate::server_core::ServerCore;
 /// callers don't need to reach into `ServerCore` to stop capture.
 pub struct CaptureSession {
     shutdown_tx: broadcast::Sender<()>,
+    vision_task: Option<tokio::task::JoinHandle<()>>,
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
     audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
     audio_disabled: bool,
@@ -71,6 +72,7 @@ impl CaptureSession {
             None;
         // --- Frame-linker sender (set by VisionManager, consumed by UI recorder + capture loops) ---
         let mut linker_tx: Option<screenpipe_engine::frame_linker_actor::LinkerSender> = None;
+        let mut vision_task = None;
 
         // --- Vision ---
         if !config.disable_vision {
@@ -116,9 +118,10 @@ impl CaptureSession {
             }
 
             // Long-running parts (monitor watcher + shutdown handler) stay in the
-            // spawn — they're fire-and-forget by design.
+            // spawn. Keep the handle so stop() can wait for SCK cleanup before
+            // another capture session starts in this long-lived app process.
             let vm_spawn = vision_manager.clone();
-            tokio::spawn(async move {
+            vision_task = Some(tokio::spawn(async move {
                 let mut shutdown_rx = shutdown_rx;
 
                 if let Err(e) = start_monitor_watcher(vm_spawn.clone(), audio_manager_for_drm).await
@@ -134,7 +137,7 @@ impl CaptureSession {
                 if let Err(e) = vm_spawn.shutdown().await {
                     error!("Error shutting down VisionManager: {:?}", e);
                 }
-            });
+            }));
         }
 
         // --- Audio recording ---
@@ -223,6 +226,7 @@ impl CaptureSession {
 
         Ok(Self {
             shutdown_tx,
+            vision_task,
             ui_recorder_handle,
             audio_manager: server.audio_manager.clone(),
             audio_disabled: config.disable_audio,
@@ -252,6 +256,25 @@ impl CaptureSession {
             }
         }
 
+        // Wait until VisionManager releases its ScreenCaptureKit handles. The
+        // desktop app keeps this process alive across stop/start cycles, unlike
+        // the CLI, so returning before this finishes can leave stale SCStreams
+        // producing OS-level "stream output NOT found" frame drops.
+        if let Some(mut vision_task) = self.vision_task.take() {
+            info!("Waiting for VisionManager shutdown...");
+            match tokio::time::timeout(Duration::from_secs(10), &mut vision_task).await {
+                Ok(Ok(())) => info!("VisionManager shutdown finished cleanly"),
+                Ok(Err(e)) => warn!("VisionManager shutdown task failed: {}", e),
+                Err(_) => {
+                    warn!("VisionManager shutdown did not finish within 10s; aborting task");
+                    vision_task.abort();
+                    let _ = vision_task.await;
+                }
+            }
+        }
+
+        invalidate_macos_screen_streams("capture session stop").await;
+
         // Wait for UI recorder tasks to finish
         if let Some(ui_handle) = self.ui_recorder_handle.take() {
             info!("Waiting for UI recorder tasks to finish...");
@@ -264,6 +287,29 @@ impl CaptureSession {
         info!("Capture session stopped");
     }
 }
+
+#[cfg(target_os = "macos")]
+async fn invalidate_macos_screen_streams(reason: &str) {
+    info!("Invalidating macOS ScreenCaptureKit screenshot streams ({reason})");
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(|| {
+            screenpipe_screen::stream_invalidation::invalidate_streams();
+        }),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(())) => info!("macOS ScreenCaptureKit screenshot streams invalidated"),
+        Ok(Err(e)) => warn!("macOS ScreenCaptureKit invalidation task failed: {}", e),
+        Err(_) => warn!("macOS ScreenCaptureKit stream invalidation timed out after 5s"),
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn invalidate_macos_screen_streams(_reason: &str) {}
 
 fn log_capture_transcription_config(config: &RecordingConfig, options: &AudioManagerOptions) {
     let deepgram_diag = match &config.deepgram_config {
