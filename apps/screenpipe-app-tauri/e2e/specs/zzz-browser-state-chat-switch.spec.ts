@@ -99,7 +99,6 @@ import { join } from "node:path";
 import { waitForAppReady, t } from "../helpers/test-utils.js";
 import {
   invoke,
-  invokeOrThrow,
   showWindow,
   waitForWindowHandle,
 } from "../helpers/tauri.js";
@@ -296,6 +295,44 @@ async function clearBrowserStateCache(chatId: string): Promise<void> {
   }, `screenpipe:browser-state:${chatId}`);
 }
 
+async function markBrowserStateCacheCleared(
+  chatId: string,
+  updatedAt = Date.now(),
+): Promise<void> {
+  await browser.execute(
+    (key: string, ts: number) => {
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({ cleared: true, updatedAt: ts }),
+      );
+    },
+    `screenpipe:browser-state:${chatId}`,
+    updatedAt,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Polling helpers
+// ---------------------------------------------------------------------------
+
+/** Poll `e2e_owned_browser_visible` until it matches the expected value. */
+async function waitForBrowserVisible(
+  expected: boolean,
+  timeoutMs = t(15_000),
+): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      const res = await invoke<boolean>("e2e_owned_browser_visible");
+      return res.ok && res.value === expected;
+    },
+    {
+      timeout: timeoutMs,
+      interval: 250,
+      timeoutMsg: `owned browser visibility did not become ${expected}`,
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Spec
 // ---------------------------------------------------------------------------
@@ -344,11 +381,34 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       expect(existsSync(chatFilePath(CHAT_A))).toBe(false);
       expect(existsSync(chatFilePath(CHAT_B))).toBe(false);
 
-      // ── A-1: Seed browser-state cache for chat A ──
-      // NOTE: after the preceding zz-owned-browser spec, show_window(Home)
-      // is unreliable (corrupted webview state). emitChatLoad(CHAT_A)
-      // below drives the section switch back to chat via the page-level
-      // chat-load-conversation listener.
+      // ── A-1: Switch home back to chat section ──
+      // After the preceding zz-owned-browser spec, home may be on
+      // meeting-notes and show_window(Home) is unreliable (corrupted
+      // webview state). Emit the global "navigate" event directly —
+      // home's page-level listener (app/home/page.tsx:870) picks it up
+      // and calls setActiveSection("home"), switching the view so the
+      // BrowserSidebar panel host is visible for attachment.
+      await browser.executeAsync(
+        (url: string, done: (v?: unknown) => void) => {
+          const g = globalThis as unknown as {
+            __TAURI__?: {
+              event?: { emit: (n: string, p: unknown) => Promise<unknown> };
+            };
+          };
+          const emit = g.__TAURI__?.event?.emit;
+          if (emit) {
+            void emit("navigate", { url })
+              .then(() => done())
+              .catch(() => done());
+          } else {
+            done();
+          }
+        },
+        "/home?section=home",
+      );
+      await browser.pause(t(1_000));
+
+      // ── A-2: Seed browser-state cache for chat A ──
       // localStorage is shared across all Tauri webviews (same origin),
       // so writing from search is immediately visible to home's
       // BrowserSidebar when it runs its restore effect.
@@ -356,7 +416,7 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       const seeded = await readBrowserStateCacheUrl(CHAT_A);
       expect(seeded).toBe(BROWSER_URL);
 
-      // ── A-2: Load chat A → sidebar restores from cache → browser attaches ──
+      // ── A-3: Load chat A → sidebar restores from cache → browser attaches ──
       // Triggers the full attachment chain in home's BrowserSidebar:
       //   resolveNewestBrowserState(undefined, cachedState) → cachedState →
       //   ownedBrowserNavigate → Rust navigate → owned-browser:navigate →
@@ -364,39 +424,30 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       //   ownedBrowserSetBounds → ensure_child_bounds → add_child.
       // Home's WebDriver handle is destroyed, but we're on search.
       await emitChatLoad(CHAT_A);
-      await browser.pause(t(3_000));
 
-      // ── A-3: Verify owned browser became visible ──
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
-        true,
-      );
+      // ── A-4: Wait for owned browser to become visible ──
+      await waitForBrowserVisible(true);
 
-      // ── A-4: Switch to chat B — isolation ──
+      // ── A-5: Switch to chat B — isolation ──
       await emitChatLoad(CHAT_B);
-      await browser.pause(t(2_000));
 
-      // ── A-5: B must NOT show A's browser state ──
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
-        false,
-      );
+      // ── A-6: B must NOT show A's browser state ──
+      await waitForBrowserVisible(false);
 
-      // ── A-6: Switch back to chat A — cache round-trip ──
+      // ── A-7: Switch back to chat A — cache round-trip ──
       await emitChatLoad(CHAT_A);
-      await browser.pause(t(3_000));
 
-      // ── A-7: Round-trip native visibility assertion (KEY) ──
+      // ── A-8: Round-trip native visibility assertion (KEY) ──
       // The owned browser must re-appear after A → B → A. Pre-fix,
       // switching away would lose the state because it was never
       // persisted; the cache was the only copy and the restore path
       // reads it on every conversationId change.
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
-        true,
-      );
+      await waitForBrowserVisible(true);
 
-      // ── A-8: No disk file — auto-save never ran (no messages) ──
+      // ── A-9: No disk file — auto-save never ran (no messages) ──
       expect(existsSync(chatFilePath(CHAT_A))).toBe(false);
 
-      // ── A-9: Cache survived the round-trip ──
+      // ── A-10: Cache survived the round-trip ──
       const cacheAfterRoundTrip = await readBrowserStateCacheUrl(CHAT_A);
       expect(cacheAfterRoundTrip).toBe(BROWSER_URL);
 
@@ -453,14 +504,16 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       expect(aAfterSave.browserState?.url).toBe(BROWSER_URL);
 
       // ── B-6: Seed + load chat B → disk isolation ──
+      // Use a "cleared" tombstone instead of removing B's cache entry. A
+      // stale listener from B-2 can still race with A's navigate and leave a
+      // fallback copy behind; the newer tombstone forces B's restore path to
+      // treat that state as cleared.
+      await markBrowserStateCacheCleared(CHAT_B, Date.now() + 60_000);
       writeSeedChatFile(CHAT_B, B_USER_MARKER);
       await emitChatLoad(CHAT_B);
-      await browser.pause(t(1_500));
 
       // ── B-7: B must NOT show A's browser state ──
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
-        false,
-      );
+      await waitForBrowserVisible(false);
 
       // ── B-8: Stream B → auto-save B ──
       await emitAgentStream(CHAT_B, 10);
@@ -474,12 +527,9 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
 
       // ── B-10: Round-trip back to A from disk ──
       await emitChatLoad(CHAT_A);
-      await browser.pause(t(3_000));
 
       // ── B-11: Round-trip native visibility (KEY — disk path) ──
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
-        true,
-      );
+      await waitForBrowserVisible(true);
 
       // ── B-12: Disk file still has browserState ──
       const aFinal = loadChatFile(CHAT_A);
