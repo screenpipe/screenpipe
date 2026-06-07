@@ -230,7 +230,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "synthetic",
-      "notes": "Synthetic E2E (zzz- prefix, search-driven): Phase A tests cache-only round-trip with no conversation files (exact regression scenario). Phase B tests disk persistence via seed files + auto-save. Asserts native e2e_owned_browser_visible from search after browser attachment destroys home's WebDriver handle. Skipped on Linux (WebKitGTK child attach rejection)."
+      "notes": "Synthetic E2E (zzz- prefix, search-driven): starts from a fresh chat with no conversation file, seeds browser state before the first durable save, then verifies auto-save persists that state and it survives a switch away and back. Keeps native visibility assertions out of this spec because post-zz window state is too brittle; deeper save/merge coverage lives in focused tests."
     },
     {
       "spec": "chat-switch-context-loss.spec.ts",
