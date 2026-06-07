@@ -59,6 +59,7 @@ export default defineConfig({
 		alias: {
 			"@": path.resolve(__dirname, "./"),
 			"@ee": path.resolve(__dirname, "../../ee/desktop"),
+			"@screenpipe-ext": path.resolve(__dirname, "../../crates/screenpipe-core/assets/extensions"),
 		},
 	},
 });
