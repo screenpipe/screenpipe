@@ -6969,16 +6969,9 @@ export function StandaloneChat({
           };
         });
       } catch {
-        if (!cancelled) {
-          setQueuedPromptsBySession((prev) => {
-            const existing = prev[sid] ?? [];
-            if (existing.length === 0) return prev;
-            return {
-              ...prev,
-              [sid]: [],
-            };
-          });
-        }
+        // Transient queue refresh failures should not erase the last known
+        // visible queue. The Rust-side `pi-queue-changed` subscription is the
+        // source of truth and will reconcile once IPC recovers.
       }
     })();
 

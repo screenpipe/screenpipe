@@ -60,7 +60,10 @@ import {
   saveConversationFile,
 } from "@/lib/chat-storage";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
-import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
+import {
+  extractConversationHistorySyncUserText,
+  isInjectedTitleSourcePrompt,
+} from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
@@ -431,25 +434,98 @@ interface MutableMessage {
   [k: string]: unknown;
 }
 
+function textFromPiMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part): part is { type?: unknown; text?: unknown } =>
+      !!part && typeof part === "object",
+    )
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("");
+}
+
+function imageDataUrlsFromPiContent(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  const images: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const item = part as {
+      type?: unknown;
+      mimeType?: unknown;
+      mime_type?: unknown;
+      data?: unknown;
+    };
+    if (item.type !== "image" || typeof item.data !== "string") continue;
+    if (item.data.startsWith("data:image/")) {
+      images.push(item.data);
+      continue;
+    }
+    const mime =
+      typeof item.mimeType === "string"
+        ? item.mimeType
+        : typeof item.mime_type === "string"
+          ? item.mime_type
+          : "image/png";
+    images.push(`data:${mime};base64,${item.data}`);
+  }
+  return images;
+}
+
 function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   const store = useChatStore.getState();
   const existing = store.sessions[sid];
   if (!existing) return; // upsert will fire on the next call
 
-  // CRITICAL: skip content writes for the session the panel is actively
-  // rendering. The chat panel's own pi_event handler in standalone-chat
-  // owns the message lifecycle for the current session (it creates the
-  // assistant placeholder, appends deltas, handles agent_end, persists
-  // to disk). If both this router AND the local handler write messages
-  // for the same session, you get DOUBLE messages — one from each
-  // writer — and the panel renders the same assistant reply twice.
-  // The router's job is exclusively to keep BACKGROUND sessions in
-  // sync; the panel handles foreground. On switch, loadConversation
-  // snapshots the panel's state to the store before the router takes
-  // over for what's now a background session.
-  if (store.currentId === sid) return;
+  // The agent-event bus already enforces exclusive delivery: a session's
+  // foreground handler receives its events OR the default router does, never
+  // both at once. So we intentionally do not guard on `currentId === sid`
+  // here. That old belt-and-suspenders check created a switch-back gap where
+  // loadConversation flipped `currentId` before the new foreground handler was
+  // attached; any events in that window were dropped by both writers.
 
   const t = payload.type;
+
+  // Queued follow-ups begin with `message_start(role=user)`. When the user has
+  // switched away, the foreground panel does not see that event, so the
+  // background router must materialize the user bubble and the assistant
+  // placeholder itself. Without this, completed background queues persist only
+  // assistant replies and the user turns appear to vanish from history.
+  if (t === "message_start" && payload.message?.role === "user") {
+    const rawText = textFromPiMessageContent(payload.message?.content);
+    const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
+    const images = imageDataUrlsFromPiContent(payload.message?.content);
+    if (!text && images.length === 0) return;
+
+    const userId = `pi-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const assistantId = `pi-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userMsg: MutableMessage = {
+      id: userId,
+      role: "user",
+      content: text,
+      ...(images.length ? { images } : {}),
+      timestamp: Date.now(),
+    };
+    const assistantShell: MutableMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      contentBlocks: [],
+      timestamp: Date.now(),
+    };
+
+    store.actions.appendMessage(sid, userMsg);
+    store.actions.appendMessage(sid, assistantShell);
+    store.actions.setStreaming(sid, {
+      streamingMessageId: assistantId,
+      streamingText: "",
+      contentBlocks: [],
+      isStreaming: true,
+      isLoading: true,
+    });
+    return;
+  }
 
   // Assistant message starts. When a session moves to the background in the
   // middle of a tool-using reply, Pi may emit another assistant
