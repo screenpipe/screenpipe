@@ -20,6 +20,7 @@ import type {
 	EnterpriseAppUpdatePolicy,
 	EnterpriseInstallMetadata,
 } from "@ee/lib/app-update-policy";
+import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -239,6 +240,8 @@ export type Settings = SettingsStore & {
 	 * purpose: it syncs secrets, so enabling it is a distinct informed choice.
 	 * Credentials are end-to-end encrypted in the sync blob. Pro-gated. */
 	connectionsSyncEnabled?: boolean;
+	/** Font size for the entire app UI */
+	fontSize?: FontSize;
 	/** OpenAI-compatible transcription endpoint URL */
 	openaiCompatibleEndpoint?: string;
 	/** OpenAI-compatible transcription API key */
@@ -604,6 +607,7 @@ let DEFAULT_SETTINGS: Settings = {
 			encryptStore: true,
 			hdRecordingDefault: "ask",
 			hdRecordingIntervalMs: 100,
+			fontSize: "16px",
 		};
 
 export function createDefaultSettingsObject(): Settings {
@@ -1166,6 +1170,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		} as any);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
+
+	useEffect(() => {
+		applyFontSize(settings.fontSize);
+	}, [settings.fontSize]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
 		// Sign-out (user → null) must invalidate any loadUser() request that is
