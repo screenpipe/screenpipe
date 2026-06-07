@@ -344,14 +344,11 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       expect(existsSync(chatFilePath(CHAT_A))).toBe(false);
       expect(existsSync(chatFilePath(CHAT_B))).toBe(false);
 
-      // ── A-1: Ensure home is on the chat section ──
-      // The zz- spec may have left home on meeting-notes. This Tauri
-      // command emits a "navigate" event on the home webview (Rust-side,
-      // not WebDriver) that switches it back to the chat tab.
-      await showWindow({ Home: { page: "home" } });
-      await browser.pause(t(1_500));
-
-      // ── A-2: Seed browser-state cache for chat A ──
+      // ── A-1: Seed browser-state cache for chat A ──
+      // NOTE: after the preceding zz-owned-browser spec, show_window(Home)
+      // is unreliable (corrupted webview state). emitChatLoad(CHAT_A)
+      // below drives the section switch back to chat via the page-level
+      // chat-load-conversation listener.
       // localStorage is shared across all Tauri webviews (same origin),
       // so writing from search is immediately visible to home's
       // BrowserSidebar when it runs its restore effect.
@@ -359,7 +356,7 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       const seeded = await readBrowserStateCacheUrl(CHAT_A);
       expect(seeded).toBe(BROWSER_URL);
 
-      // ── A-3: Load chat A → sidebar restores from cache → browser attaches ──
+      // ── A-2: Load chat A → sidebar restores from cache → browser attaches ──
       // Triggers the full attachment chain in home's BrowserSidebar:
       //   resolveNewestBrowserState(undefined, cachedState) → cachedState →
       //   ownedBrowserNavigate → Rust navigate → owned-browser:navigate →
@@ -369,25 +366,25 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
       await emitChatLoad(CHAT_A);
       await browser.pause(t(3_000));
 
-      // ── A-4: Verify owned browser became visible ──
+      // ── A-3: Verify owned browser became visible ──
       expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
         true,
       );
 
-      // ── A-5: Switch to chat B — isolation ──
+      // ── A-4: Switch to chat B — isolation ──
       await emitChatLoad(CHAT_B);
       await browser.pause(t(2_000));
 
-      // ── A-6: B must NOT show A's browser state ──
+      // ── A-5: B must NOT show A's browser state ──
       expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
         false,
       );
 
-      // ── A-7: Switch back to chat A — cache round-trip ──
+      // ── A-6: Switch back to chat A — cache round-trip ──
       await emitChatLoad(CHAT_A);
       await browser.pause(t(3_000));
 
-      // ── A-8: Round-trip native visibility assertion (KEY) ──
+      // ── A-7: Round-trip native visibility assertion (KEY) ──
       // The owned browser must re-appear after A → B → A. Pre-fix,
       // switching away would lose the state because it was never
       // persisted; the cache was the only copy and the restore path
@@ -396,10 +393,10 @@ describe("Browser state — fresh-chat round-trip (search-driven)", function () 
         true,
       );
 
-      // ── A-9: No disk file — auto-save never ran (no messages) ──
+      // ── A-8: No disk file — auto-save never ran (no messages) ──
       expect(existsSync(chatFilePath(CHAT_A))).toBe(false);
 
-      // ── A-10: Cache survived the round-trip ──
+      // ── A-9: Cache survived the round-trip ──
       const cacheAfterRoundTrip = await readBrowserStateCacheUrl(CHAT_A);
       expect(cacheAfterRoundTrip).toBe(BROWSER_URL);
 
