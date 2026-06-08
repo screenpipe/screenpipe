@@ -29,7 +29,6 @@ export const searchIndex: SettingsField[] = [
   { label: "Monitors" },
   { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
   { label: "Chinese mirror", keywords: ["china", "mirror"] },
-  { label: "OCR", keywords: ["text extraction", "ocr"] },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { Label } from "@/components/ui/label";
