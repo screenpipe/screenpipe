@@ -177,6 +177,65 @@ export function getPipeInstallRisk(pipe: { permissions?: PipePermissions; author
   return "safe";
 }
 
+function getPipeInstallDescription(pipe: { permissions?: PipePermissions; author_verified?: boolean | null }): string {
+  const risk = getPipeInstallRisk(pipe);
+  const unrestricted = isUnrestricted(pipe.permissions);
+  if (risk === "high") {
+    return "Unverified publisher. Can access all your screen data.";
+  }
+  if (unrestricted) {
+    return "Verified publisher. Can access all your screen data.";
+  }
+  if (!pipe.author_verified) {
+    return "Unverified publisher. Review the requested access before installing.";
+  }
+  return "Review the requested access before installing.";
+}
+
+function getAllowedAccessLabels(perms?: PipePermissions): string[] {
+  if (isUnrestricted(perms)) {
+    return [
+      "screen text",
+      "audio",
+      "keyboard input",
+      "screenshots",
+      "accessibility",
+      "raw queries",
+      "connections",
+    ];
+  }
+
+  const labelsByKey: Record<string, string> = {
+    ocr: "screen text",
+    audio: "audio",
+    input: "keyboard input",
+    raw_sql: "raw queries",
+    frames: "screenshots",
+    connections: "connections",
+    accessibility: "accessibility",
+  };
+
+  return PERMISSION_LABELS.flatMap((perm) => {
+    const status = getPermissionStatus(perms, perm.key);
+    return status === "allowed" ? [labelsByKey[perm.key] || perm.label.toLowerCase()] : [];
+  });
+}
+
+function getPipeAccessSummary(perms?: PipePermissions): string {
+  const labels = getAllowedAccessLabels(perms);
+  if (labels.length === 0) {
+    return "No explicit access was declared.";
+  }
+
+  if (labels.length === 1) {
+    return `This pipe requests access to ${labels[0]}.`;
+  }
+
+  const last = labels[labels.length - 1];
+  const rest = labels.slice(0, -1);
+  return `This pipe requests access to ${rest.join(", ")}, and ${last}.`;
+}
+
 function getReadmeFromPipeMd(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("---")) return trimmed;
@@ -528,7 +587,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   const requestInstall = (pipe: StorePipe | PipeDetail) => {
     const risk = getPipeInstallRisk(pipe);
-    if (risk === "safe" || !!availableUpdates[pipe.slug]) {
+    if (risk === "safe" || availableUpdates[pipe.slug]) {
       void handleInstall(pipe.slug);
       return;
     }
@@ -703,65 +762,25 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   const installGateDialog = (
     <Dialog open={!!pendingInstall} onOpenChange={(open) => !open && closeInstallGate()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="text-base">
-            {pendingInstall && getPipeInstallRisk(pendingInstall) === "high"
-              ? "review full-access pipe"
-              : "review pipe access"}
-          </DialogTitle>
-          <DialogDescription className="text-sm">
-            {pendingInstall && getPipeInstallRisk(pendingInstall) === "high"
-              ? "this pipe is from an unverified publisher and has full access to your screen data. make sure you trust it before installing."
-              : "this pipe needs a quick review before installation so you understand what data it can access."}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-w-lg pt-8">
+        <DialogTitle className="sr-only">review pipe access</DialogTitle>
 
         {pendingInstall ? (
-          <div className="space-y-4">
-            <div className="border border-border rounded-none p-4 space-y-1.5">
-              <div className="text-sm font-medium">{pendingInstall.title}</div>
-              <div className="text-xs text-muted-foreground">
-                by {pendingInstall.author || "community publisher"}
-              </div>
-            </div>
-
-            <PermissionsReview
-              permissions={pendingInstall.permissions}
-              authorVerified={pendingInstall.author_verified}
-            />
-
-            {getPipeInstallRisk(pendingInstall) === "high" && (
-              <div className="border border-foreground bg-muted/50 rounded-none p-4 space-y-3">
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  this pipe can access all your screen text, audio, keyboard input, and raw queries.
-                </p>
-                <div className="flex items-start gap-2">
-                  <Checkbox
-                    id="pipe-risk-ack"
-                    data-testid="pipe-risk-ack"
-                    checked={installRiskAcknowledged}
-                    onCheckedChange={(value) => setInstallRiskAcknowledged(value === true)}
-                  />
-                  <Label htmlFor="pipe-risk-ack" className="text-xs leading-relaxed">
-                    I understand this pipe can access all my data.
-                  </Label>
-                </div>
-              </div>
-            )}
-          </div>
+          <InstallRiskSummary
+            title={pendingInstall.title}
+            author={pendingInstall.author}
+            authorVerified={pendingInstall.author_verified}
+            permissions={pendingInstall.permissions}
+            onReviewSource={reviewPendingInstallSource}
+            acknowledgeId="pipe-risk-ack"
+            acknowledged={installRiskAcknowledged}
+            onAcknowledgedChange={setInstallRiskAcknowledged}
+          />
         ) : null}
 
         <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="ghost" onClick={closeInstallGate}>
-            cancel
-          </Button>
-          <Button
-            variant="outline"
-            data-testid="pipe-risk-review-source"
-            onClick={reviewPendingInstallSource}
-          >
-            review source
+            not now
           </Button>
           <Button
             data-testid="pipe-risk-install-confirm"
@@ -771,17 +790,17 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               (getPipeInstallRisk(pendingInstall) === "high" && !installRiskAcknowledged)
             }
             onClick={confirmPendingInstall}
-          >
-            {pendingInstall && installing === pendingInstall.slug ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                installing...
-              </>
-            ) : (
-              "install anyway"
-            )}
-          </Button>
-        </DialogFooter>
+            >
+              {pendingInstall && installing === pendingInstall.slug ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                  installing...
+                </>
+              ) : (
+                "install pipe"
+              )}
+            </Button>
+          </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -1906,6 +1925,88 @@ export function PermissionsReview({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+export function InstallRiskSummary({
+  title,
+  author,
+  authorVerified,
+  permissions,
+  onReviewSource,
+  acknowledgeId,
+  acknowledged,
+  onAcknowledgedChange,
+}: {
+  title: string;
+  author?: string;
+  authorVerified: boolean;
+  permissions?: PipePermissions;
+  onReviewSource?: () => void;
+  acknowledgeId?: string;
+  acknowledged?: boolean;
+  onAcknowledgedChange?: (checked: boolean) => void;
+}) {
+  const risk = getPipeInstallRisk({
+    permissions,
+    author_verified: authorVerified,
+  });
+  const unrestricted = isUnrestricted(permissions);
+  const accessLabels = unrestricted ? [] : getAllowedAccessLabels(permissions);
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            {risk === "high" || unrestricted ? (
+              <AlertTriangle className="h-4 w-4" />
+            ) : (
+              <Shield className="h-4 w-4" />
+            )}
+            {unrestricted ? "Can access all your screen data" : "Requested access"}
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {unrestricted
+              ? "screen text, audio, keyboard input, screenshots, and raw queries."
+              : getPipeAccessSummary(permissions)}{" "}
+            {onReviewSource ? (
+              <button
+                data-testid="pipe-risk-review-source"
+                onClick={onReviewSource}
+                className="underline underline-offset-2 hover:text-foreground transition-colors"
+              >
+                review source
+              </button>
+            ) : null}
+          </p>
+        </div>
+
+        {accessLabels.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {accessLabels.map((label) => (
+              <Badge key={label} variant="secondary" className="rounded-none text-[10px] lowercase">
+                {label}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {risk === "high" && acknowledgeId && onAcknowledgedChange ? (
+          <div className="flex items-start gap-2 pt-3 border-t border-border">
+            <Checkbox
+              id={acknowledgeId}
+              data-testid="pipe-risk-ack"
+              checked={acknowledged === true}
+              onCheckedChange={(value) => onAcknowledgedChange(value === true)}
+            />
+            <Label htmlFor={acknowledgeId} className="text-xs leading-relaxed">
+              I understand this pipe can access all my data.
+            </Label>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -16,13 +16,11 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { listen } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
-import { PermissionsReview, getPipeInstallRisk } from "@/components/pipe-store";
+import { InstallRiskSummary, getPipeInstallRisk } from "@/components/pipe-store";
 import { localFetch } from "@/lib/api";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 
@@ -201,8 +199,8 @@ export function PipeInstallDialog() {
             <AlertDialogDescription className="text-xs">
               {isRegistry
                 ? registryRisk === "high"
-                  ? "this store pipe is from an unverified publisher and has full access to your data. review it carefully before installing."
-                  : "a pipe from the store wants to install. review the permissions below before installing."
+                  ? "Unverified publisher. Can access all your screen data."
+                  : "Review the requested access before installing."
                 : "a pipe from an external link wants to install. pipes are AI agents that run on your screen data — review the prompt below before installing."}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -217,35 +215,15 @@ export function PipeInstallDialog() {
               {isRegistry ? "loading pipe details..." : "loading pipe content..."}
             </div>
           ) : isRegistry && registryDetail ? (
-            <div className="space-y-3">
-              <div className="text-sm font-medium">
-                {registryDetail.title}
-                <span className="text-xs text-muted-foreground ml-2">
-                  by {registryDetail.author}
-                </span>
-              </div>
-              <PermissionsReview
-                permissions={registryDetail.permissions as any}
-                authorVerified={registryDetail.author_verified}
-              />
-              {registryRisk === "high" && (
-                <div className="border border-foreground bg-muted/50 rounded-none p-4 space-y-3">
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    this pipe can access all your screen text, audio, keyboard input, and raw queries.
-                  </p>
-                  <div className="flex items-start gap-2">
-                    <Checkbox
-                      id="registry-pipe-risk-ack"
-                      checked={installRiskAcknowledged}
-                      onCheckedChange={(value) => setInstallRiskAcknowledged(value === true)}
-                    />
-                    <Label htmlFor="registry-pipe-risk-ack" className="text-xs leading-relaxed">
-                      I understand this pipe can access all my data.
-                    </Label>
-                  </div>
-                </div>
-              )}
-            </div>
+            <InstallRiskSummary
+              title={registryDetail.title}
+              author={registryDetail.author}
+              authorVerified={registryDetail.author_verified}
+              permissions={registryDetail.permissions as any}
+              acknowledgeId="registry-pipe-risk-ack"
+              acknowledged={installRiskAcknowledged}
+              onAcknowledgedChange={setInstallRiskAcknowledged}
+            />
           ) : preview ? (
             <div className="border rounded overflow-hidden">
               <div className="px-3 py-1.5 bg-muted text-[10px] uppercase tracking-wider text-muted-foreground border-b">
@@ -268,7 +246,7 @@ export function PipeInstallDialog() {
 
           <AlertDialogFooter>
             <AlertDialogCancel className="text-xs" onClick={handleCancel}>
-              cancel
+              not now
             </AlertDialogCancel>
             <AlertDialogAction
               className="text-xs"
@@ -281,7 +259,7 @@ export function PipeInstallDialog() {
                   installing...
                 </>
               ) : (
-                "install"
+                "install pipe"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
