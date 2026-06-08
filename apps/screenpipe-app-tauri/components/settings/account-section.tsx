@@ -23,7 +23,6 @@ import { Label } from "@/components/ui/label";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { localFetch } from "@/lib/api";
 import { listen } from "@tauri-apps/api/event";
-import { PricingToggle } from "./pricing-toggle";
 import { ReferralCard } from "./referral-card";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import posthog from "posthog-js";
@@ -50,7 +49,7 @@ function syncErrorDescription(e: unknown): string {
 export function AccountSection() {
   const { settings, updateSettings, loadUser } = useSettings();
   const { isServerDown } = useHealthCheck();
-  const [isAnnual, setIsAnnual] = useState(true);
+  const [annual, setAnnual] = useState(true);
   const [pipeSyncing, setPipeSyncing] = useState(false);
   const [memoriesSyncing, setMemoriesSyncing] = useState(false);
   const [connectionsSyncing, setConnectionsSyncing] = useState(false);
@@ -112,19 +111,22 @@ export function AccountSection() {
       return;
     }
     if (!settings.user?.cloud_subscribed) {
-      posthog.capture("cloud_plan_selected", { billing: isAnnual ? "yearly" : "monthly" });
+      posthog.capture("cloud_plan_selected", { plan: "pro", interval: annual ? "year" : "month" });
       try {
-        const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+        // New subscription checkout ($50/mo Pro). Pass the Clerk token so the
+        // session pins customer_email + metadata.user_id to this account — the
+        // webhook then links the sub even if a different email is used at Stripe.
+        const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${settings.user?.token}`,
           },
           body: JSON.stringify({
-            tier: "pro",
-            billingPeriod: isAnnual ? "yearly" : "monthly",
-            userId: settings.user?.id,
-            email: settings.user?.email,
+            plan: "pro",
+            interval: annual ? "year" : "month",
+            token: settings.user?.token,
+            returnUrl: "https://screenpipe.com/account",
+            origin: "app-account-section",
           }),
         });
         const data = await response.json();
@@ -199,7 +201,7 @@ export function AccountSection() {
     <div className="space-y-6">
       {/* Header + login status */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground" data-testid="account-login-status">
           {settings.user?.token
             ? `logged in as ${settings.user.email}`
             : "not logged in"}
@@ -218,6 +220,7 @@ export function AccountSection() {
               <Button
                 variant="outline"
                 size="sm"
+                data-testid="account-logout-button"
                 onClick={async () => {
                   updateSettings({ user: null as any });
                   // Restart Pi with null token so it stops using the old
@@ -502,19 +505,17 @@ export function AccountSection() {
                     <h3 className="text-lg font-semibold">Screenpipe Pro</h3>
                   </div>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-bold">{isAnnual ? "$26" : "$39"}</span>
+                    <span className="text-2xl font-bold">{annual ? "$42" : "$50"}</span>
                     <span className="text-muted-foreground text-sm">/month</span>
-                    {isAnnual && (
-                      <span className="text-xs border border-foreground/20 text-foreground px-2 py-0.5 rounded-full font-medium">
-                        save 33%
-                      </span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAnnual((a) => !a)}
+                      className="ml-1 text-[10px] font-mono text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    >
+                      {annual ? "billed annually · save $100 · pay monthly" : "switch to annual · save $100"}
+                    </button>
                   </div>
-                  {isAnnual && (
-                    <p className="text-xs text-muted-foreground mt-0.5">$312/year, billed annually</p>
-                  )}
                 </div>
-                <PricingToggle isAnnual={isAnnual} onToggle={setIsAnnual} />
               </div>
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4">
@@ -594,19 +595,17 @@ export function AccountSection() {
                     <h3 className="text-lg font-semibold">Screenpipe Pro</h3>
                   </div>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-bold">{isAnnual ? "$26" : "$39"}</span>
+                    <span className="text-2xl font-bold">{annual ? "$42" : "$50"}</span>
                     <span className="text-muted-foreground text-sm">/month</span>
-                    {isAnnual && (
-                      <span className="text-xs border border-foreground/20 text-foreground px-2 py-0.5 rounded-full font-medium">
-                        save 33%
-                      </span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAnnual((a) => !a)}
+                      className="ml-1 text-[10px] font-mono text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    >
+                      {annual ? "billed annually · save $100 · pay monthly" : "switch to annual · save $100"}
+                    </button>
                   </div>
-                  {isAnnual && (
-                    <p className="text-xs text-muted-foreground mt-0.5">$312/year, billed annually</p>
-                  )}
                 </div>
-                <PricingToggle isAnnual={isAnnual} onToggle={setIsAnnual} />
               </div>
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4">

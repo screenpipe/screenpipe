@@ -49,6 +49,7 @@ import {
   FileText,
   User,
   Users,
+  UserX,
   ChevronUp,
   ChevronDown,
   CheckCircle2,
@@ -100,7 +101,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { MultiSelect } from "@/components/ui/multi-select";
+import { MeetingAppsPicker } from "./meeting-apps-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import * as Sentry from "@sentry/react";
@@ -1674,6 +1675,7 @@ export function RecordingSettings() {
   // Add validation state
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [pendingChanges, setPendingChanges] = useState<Partial<SettingsStore>>({});
+  const [meetingAppsPickerOpen, setMeetingAppsPickerOpen] = useState(false);
 
   const { items: windowItems, isLoading: isWindowItemsLoading } =
     useSqlAutocomplete("window");
@@ -2367,6 +2369,21 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         true
       );
     }
+  };
+
+  // Toggle one app in/out of the meeting-detection ignore list (used by the
+  // MeetingAppsPicker rows and chips). Case-insensitive; stores the trimmed
+  // label the user picked.
+  const handleToggleIgnoredMeetingApp = (value: string) => {
+    const cur = settings.ignoredMeetingApps ?? [];
+    const term = value.trim();
+    if (!term) return;
+    const lower = term.toLowerCase();
+    const exists = cur.some((v) => v.toLowerCase() === lower);
+    const next = exists
+      ? cur.filter((v) => v.toLowerCase() !== lower)
+      : [...cur, term];
+    handleSettingsChange({ ignoredMeetingApps: next }, true);
   };
 
   return (
@@ -3307,16 +3324,46 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <p className="text-xs text-muted-foreground">Auto-start meetings when a call app is detected</p>
                 </div>
               </div>
-              <ManagedSwitch
-                settingKey="disableMeetingDetector"
-                id="disableMeetingDetector"
-                checked={!settings.disableMeetingDetector}
-                onCheckedChange={(checked) => handleSettingsChange({ disableMeetingDetector: !checked }, true)}
-              />
+              <div className="flex items-center gap-2 shrink-0">
+                {!settings.disableMeetingDetector && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] gap-1.5"
+                    onClick={() => setMeetingAppsPickerOpen(true)}
+                    title="Choose apps that should never auto-start a meeting"
+                    data-testid="settings-ignore-meeting-apps-button"
+                  >
+                    <UserX className="h-3.5 w-3.5" />
+                    ignore apps
+                    {(settings.ignoredMeetingApps?.length ?? 0) > 0 && (
+                      <span
+                        className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums"
+                        data-testid="settings-ignore-meeting-apps-count"
+                      >
+                        {settings.ignoredMeetingApps!.length}
+                      </span>
+                    )}
+                  </Button>
+                )}
+                <ManagedSwitch
+                  settingKey="disableMeetingDetector"
+                  id="disableMeetingDetector"
+                  checked={!settings.disableMeetingDetector}
+                  onCheckedChange={(checked) => handleSettingsChange({ disableMeetingDetector: !checked }, true)}
+                />
+              </div>
             </div>
           </CardContent>
         </Card>
         )}
+
+        <MeetingAppsPicker
+          open={meetingAppsPickerOpen}
+          onOpenChange={setMeetingAppsPickerOpen}
+          selected={settings.ignoredMeetingApps ?? []}
+          onToggle={handleToggleIgnoredMeetingApp}
+        />
 
         {/* Per-app exclusion list for the CoreAudio Process Tap. Only
             meaningful when the tap is the active backend. */}

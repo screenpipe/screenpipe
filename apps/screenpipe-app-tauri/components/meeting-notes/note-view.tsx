@@ -15,7 +15,6 @@ import {
   ExternalLink,
   FileText,
   Info,
-  ImageIcon,
   Languages,
   Loader2,
   Mic2,
@@ -31,8 +30,9 @@ import {
 } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { save as saveDialog, open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
@@ -81,6 +81,7 @@ import { ReplayStrip } from "./replay-strip";
 import { NoteEditor, type NoteEditorHandle } from "./note-editor";
 import {
   imageBytesToDataUrl,
+  imageExtensionFromName,
   NOTE_IMAGE_EXTENSIONS,
   resizeImageDataUrl,
 } from "./image-utils";
@@ -168,6 +169,102 @@ export function NoteView({
   const [dismissedJoinUrl, setDismissedJoinUrl] = useState<string | null>(null);
   const { settings, updateSettings } = useSettings();
   const noteEditorRef = useRef<NoteEditorHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+
+  // Drag-and-drop images straight into the note. Tauri delivers OS file drops
+  // at the webview level (they never surface as DOM drop events), and the event
+  // is window-global, so we hit-test the drop position against this note's own
+  // box before reacting. Without that, an image dropped on the sidebar (or one
+  // caught by another always-mounted webview drop listener such as the chat)
+  // would still land in the note. We show the overlay only while an image drag
+  // is over the note, then read the files, resize them, and insert them at the
+  // drop point.
+  useEffect(() => {
+    // Tauri reports drag positions in physical pixels; getBoundingClientRect is
+    // in CSS pixels, so convert before comparing.
+    const toClient = (pos: { x: number; y: number }) => {
+      const dpr = window.devicePixelRatio || 1;
+      return { x: pos.x / dpr, y: pos.y / dpr };
+    };
+    const pointOverNote = (pos: { x: number; y: number }) => {
+      const el = rootRef.current;
+      if (!el || el.offsetParent === null) return false; // unmounted or hidden
+      const { x, y } = toClient(pos);
+      const r = el.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    const hasImagePath = (paths: string[]) =>
+      paths.some((p) =>
+        NOTE_IMAGE_EXTENSIONS.includes(imageExtensionFromName(p)),
+      );
+
+    const insertDroppedImages = async (
+      paths: string[],
+      pos: { x: number; y: number },
+    ) => {
+      const imagePaths = paths.filter((path) =>
+        NOTE_IMAGE_EXTENSIONS.includes(imageExtensionFromName(path)),
+      );
+      if (paths.length === 0) return;
+      if (imagePaths.length === 0) {
+        toast({
+          title: "couldn't insert image",
+          description: "drop a png, jpg, gif, webp, bmp, or svg file.",
+          variant: "destructive",
+        });
+        return;
+      }
+      try {
+        const images: string[] = [];
+        for (const path of imagePaths) {
+          const raw = imageBytesToDataUrl(path, await readFile(path));
+          if (raw) images.push(await resizeImageDataUrl(raw));
+        }
+        if (images.length === 0) return;
+        const { x, y } = toClient(pos);
+        noteEditorRef.current?.insertImages(images, { clientX: x, clientY: y });
+        posthog.capture("meeting_note_images_inserted", {
+          meeting_id: meeting.id,
+          count: images.length,
+          source: "drag_drop",
+        });
+      } catch (err) {
+        console.error("failed to insert dropped meeting note image", err);
+        toast({
+          title: "couldn't insert image",
+          description: String(err),
+          variant: "destructive",
+        });
+      }
+    };
+
+    // `enter` carries the dragged paths so we can tell whether it's an image;
+    // `over` does not, so we remember what `enter` classified. Default to true
+    // when a platform omits the paths so we never suppress a real image drag.
+    let dragHasImage = true;
+    const webview = getCurrentWebview();
+    const unlisten = webview.onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "enter") {
+        dragHasImage =
+          payload.paths.length === 0 ? true : hasImagePath(payload.paths);
+      }
+      if (payload.type === "enter" || payload.type === "over") {
+        setIsDraggingImage(dragHasImage && pointOverNote(payload.position));
+      } else if (payload.type === "leave") {
+        setIsDraggingImage(false);
+      } else if (payload.type === "drop") {
+        setIsDraggingImage(false);
+        if (!pointOverNote(payload.position)) return;
+        void insertDroppedImages(payload.paths ?? [], payload.position);
+      }
+    });
+
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [meeting.id, toast]);
 
   const lastSavedRef = useRef({
     title: meeting.title ?? "",
@@ -500,45 +597,6 @@ export function NoteView({
     }
   };
 
-  const handleInsertImages = async () => {
-    try {
-      const selected = await openFileDialog({
-        multiple: true,
-        filters: [{ name: "Images", extensions: NOTE_IMAGE_EXTENSIONS }],
-      });
-      if (!selected) return;
-
-      const paths = Array.isArray(selected) ? selected : [selected];
-      const images: string[] = [];
-      for (const path of paths) {
-        const raw = imageBytesToDataUrl(path, await readFile(path));
-        if (raw) images.push(await resizeImageDataUrl(raw));
-      }
-
-      if (images.length === 0) {
-        toast({
-          title: "couldn't insert image",
-          description: "choose a png, jpg, gif, webp, bmp, or svg file.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      noteEditorRef.current?.insertImages(images);
-      posthog.capture("meeting_note_images_inserted", {
-        meeting_id: meeting.id,
-        count: images.length,
-      });
-    } catch (err) {
-      console.error("failed to insert meeting note image", err);
-      toast({
-        title: "couldn't insert image",
-        description: String(err),
-        variant: "destructive",
-      });
-    }
-  };
-
   const handleRetranscribe = async () => {
     if (retranscribing) return;
     if (!meeting.meeting_end) {
@@ -798,7 +856,16 @@ export function NoteView({
   };
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div ref={rootRef} className="relative flex h-full flex-col bg-background">
+      {isDraggingImage && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/60">
+          <div className="border border-foreground bg-foreground px-12 py-10 text-background">
+            <span className="text-sm font-medium tracking-tight">
+              drop image to add to note
+            </span>
+          </div>
+        </div>
+      )}
       {/* The note scrolls in `main`; the footer is a non-overlapping dock below
           it. Previously the footer was `sticky bottom-0` and floated over the
           bottom of a full-height scroll area, so its opaque bar (control row +
@@ -833,16 +900,6 @@ export function NoteView({
               ) : (
                 <Copy className="h-3.5 w-3.5" />
               )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void handleInsertImages()}
-              title="insert image"
-              aria-label="insert image"
-              className="h-8 w-8 rounded-none p-0"
-            >
-              <ImageIcon className="h-3.5 w-3.5" />
             </Button>
             {!isLive && (
               <>

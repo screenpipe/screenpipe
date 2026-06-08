@@ -205,6 +205,9 @@ async checkInputMonitoringPermissionCmd() : Promise<OSPermissionStatus> {
 async checkMicrophonePermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_microphone_permission");
 },
+async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_permission", { permission });
+},
 /**
  * Check only screen recording permission (no dialog trigger)
  * Uses CGPreflightScreenCaptureAccess which is safe to poll repeatedly
@@ -1559,6 +1562,14 @@ async resetOnboarding() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async resetPermission(permission: OSPermission) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reset_permission", { permission }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Resize the Search NSPanel. Regular Tauri setSize doesn't work on NSPanels.
  */
@@ -2214,7 +2225,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null;
  * since the user can't fix it by reconnecting in the broken bundle.
  */
 needs_attention?: boolean }
-export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring"
+export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
@@ -2459,6 +2470,17 @@ disableSnapshotCompaction?: boolean;
  * in_meeting override flag stays false.
  */
 disableMeetingDetector?: boolean;
+/**
+ * Apps / meeting services to exclude from automatic meeting detection
+ * while leaving detection on for everything else. Case-insensitive
+ * substring match against the running app's name/process AND the matched
+ * detection profile's identifiers (native names + browser URL patterns),
+ * so an entry can be what the user sees ("Discord") or a service domain
+ * ("meet.google.com"). Use when one app trips the detector spuriously
+ * (an always-open Teams, a Discord call you don't want logged) but you
+ * still want Zoom/Meet/etc. detected. Empty = detect all known apps.
+ */
+ignoredMeetingApps?: string[];
 /**
  * Override `EventDrivenCaptureConfig::idle_capture_interval_ms` (milliseconds).
  * None = follow active PowerProfile.

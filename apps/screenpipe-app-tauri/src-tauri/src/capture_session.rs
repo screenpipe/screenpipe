@@ -192,6 +192,7 @@ impl CaptureSession {
                 shutdown_tx.subscribe(),
                 Some(meeting_detector),
                 close_orphaned_meetings_on_start,
+                config.ignored_meeting_apps.clone(),
             );
             info!("meeting watcher started (v2 UI scanning)");
         } else {

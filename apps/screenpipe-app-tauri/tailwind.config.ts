@@ -22,6 +22,16 @@ module.exports = {
 		  sans: ["JetBrains Mono", "SF Mono", "IBM Plex Mono", "ui-monospace", "monospace"],
 		  mono: ["JetBrains Mono", "SF Mono", "IBM Plex Mono", "ui-monospace", "monospace"],
 		},
+		fontSize: {
+		  xs:    ["var(--text-xs)",   { lineHeight: "1rem" }],
+		  sm:    ["var(--text-sm)",   { lineHeight: "1.25rem" }],
+		  base:  ["var(--text-base)", { lineHeight: "1.5rem" }],
+		  lg:    ["var(--text-lg)",   { lineHeight: "1.75rem" }],
+		  xl:    ["var(--text-xl)",   { lineHeight: "1.75rem" }],
+		  "2xl": ["var(--text-2xl)", { lineHeight: "2rem" }],
+		  "3xl": ["var(--text-3xl)", { lineHeight: "2.25rem" }],
+		  "4xl": ["var(--text-4xl)", { lineHeight: "2.5rem" }],
+		},
 		colors: {
 		  // Base colors
 		  border: "hsl(var(--border))",

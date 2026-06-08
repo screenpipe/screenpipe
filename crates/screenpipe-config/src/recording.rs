@@ -181,6 +181,17 @@ pub struct RecordingSettings {
     #[serde(rename = "disableMeetingDetector", default)]
     pub disable_meeting_detector: bool,
 
+    /// Apps / meeting services to exclude from automatic meeting detection
+    /// while leaving detection on for everything else. Case-insensitive
+    /// substring match against the running app's name/process AND the matched
+    /// detection profile's identifiers (native names + browser URL patterns),
+    /// so an entry can be what the user sees ("Discord") or a service domain
+    /// ("meet.google.com"). Use when one app trips the detector spuriously
+    /// (an always-open Teams, a Discord call you don't want logged) but you
+    /// still want Zoom/Meet/etc. detected. Empty = detect all known apps.
+    #[serde(rename = "ignoredMeetingApps", default)]
+    pub ignored_meeting_apps: Vec<String>,
+
     // ── Mitsukeru fork: event-driven capture overrides ─────────────────
     // ミツケル拡張：PowerProfile に依らず個別パラメータを直接指定するための上書き値。
     // None の場合は通常通り PowerProfile が決定。デスクトップ常時記録のような用途で
@@ -544,6 +555,7 @@ impl Default for RecordingSettings {
             max_snapshot_width: default_max_snapshot_width(),
             disable_snapshot_compaction: false,
             disable_meeting_detector: false,
+            ignored_meeting_apps: vec![],
             idle_capture_interval_ms: None,
             visual_check_interval_ms: None,
             visual_change_threshold: None,

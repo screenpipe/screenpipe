@@ -465,6 +465,14 @@ pub struct RecordArgs {
     #[arg(long)]
     pub ignored_urls: Vec<String>,
 
+    /// Apps / meeting services to exclude from automatic meeting detection
+    /// (case-insensitive contains). Matches the running app's name/process or
+    /// the matched detection profile's identifiers, so an entry can be the app
+    /// (e.g. `discord`, `zoom.us`) or the service/domain (e.g. `google meet`,
+    /// `meet.google.com`). Repeatable. Other meeting apps stay detected.
+    #[arg(long)]
+    pub ignored_meeting_apps: Vec<String>,
+
     /// Deepgram API Key for audio transcription
     #[arg(long = "deepgram-api-key")]
     pub deepgram_api_key: Option<String>,
@@ -677,6 +685,7 @@ pub struct RecordArgSources {
     pub ignored_windows: bool,
     pub included_windows: bool,
     pub ignored_urls: bool,
+    pub ignored_meeting_apps: bool,
     pub deepgram_api_key: bool,
     pub transcription_mode: bool,
     pub disable_telemetry: bool,
@@ -725,6 +734,7 @@ impl RecordArgSources {
             ignored_windows: from_command_line(record, "ignored_windows"),
             included_windows: from_command_line(record, "included_windows"),
             ignored_urls: from_command_line(record, "ignored_urls"),
+            ignored_meeting_apps: from_command_line(record, "ignored_meeting_apps"),
             deepgram_api_key: from_command_line(record, "deepgram_api_key"),
             transcription_mode: from_command_line(record, "transcription_mode"),
             disable_telemetry: from_command_line(record, "disable_telemetry"),
@@ -765,6 +775,7 @@ impl RecordArgSources {
             || self.ignored_windows
             || self.included_windows
             || self.ignored_urls
+            || self.ignored_meeting_apps
             || self.deepgram_api_key
             || self.transcription_mode
             || self.disable_telemetry
@@ -915,6 +926,7 @@ impl RecordArgs {
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
             ignored_urls: self.ignored_urls.clone(),
+            ignored_meeting_apps: self.ignored_meeting_apps.clone(),
             languages: self
                 .language
                 .iter()
@@ -1186,6 +1198,9 @@ impl RecordArgs {
         }
         if sources.ignored_urls {
             settings.ignored_urls = self.ignored_urls.clone();
+        }
+        if sources.ignored_meeting_apps {
+            settings.ignored_meeting_apps = self.ignored_meeting_apps.clone();
         }
         if sources.deepgram_api_key {
             settings.deepgram_api_key = self.deepgram_api_key.clone().unwrap_or_default();

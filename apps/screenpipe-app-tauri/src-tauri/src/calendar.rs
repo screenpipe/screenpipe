@@ -60,18 +60,23 @@ fn default_native_source() -> String {
 pub async fn calendar_status() -> Result<CalendarStatus, String> {
     #[cfg(target_os = "macos")]
     {
+        use eventkit::AuthorizationStatus;
         use screenpipe_connect::calendar::ScreenpipeCalendar;
 
         let auth_status = ScreenpipeCalendar::authorization_status();
         let status_str = format!("{}", auth_status);
-        let authorized = status_str == "Full Access";
+        let authorized = matches!(auth_status, AuthorizationStatus::FullAccess);
 
         let calendar_count = if authorized {
             tokio::task::spawn_blocking(|| {
                 let cal = ScreenpipeCalendar::new();
-                cal.list_calendars()
-                    .map(|cals| cals.len() as u32)
-                    .unwrap_or(0)
+                match cal.list_calendars() {
+                    Ok(cals) => cals.len() as u32,
+                    Err(e) => {
+                        warn!("calendar_status: authorized but failed to list calendars: {}", e);
+                        0
+                    }
+                }
             })
             .await
             .unwrap_or(0)
@@ -161,24 +166,44 @@ pub async fn calendar_reset_permission(app: tauri::AppHandle) -> Result<String, 
     #[cfg(target_os = "macos")]
     {
         use tauri::Manager;
+
         let bundle_id = app.config().identifier.clone();
         if bundle_id.is_empty() {
             return Err("no bundle identifier in app config".to_string());
         }
+
         info!(
             "calendar: resetting TCC Calendars permission for bundle {}",
             bundle_id
         );
         let output = tokio::process::Command::new("tccutil")
-            .args(["reset", "Calendars", &bundle_id])
+            .args(["reset", "Calendar", &bundle_id])
             .output()
             .await
-            .map_err(|e| format!("failed to run tccutil: {}", e))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("tccutil failed: {}", stderr.trim()));
+            .map_err(|e| format!("failed to run tccutil for {}: {}", bundle_id, e))?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if output.status.success() {
+            tokio::task::spawn_blocking(|| {
+                let cal = screenpipe_connect::calendar::ScreenpipeCalendar::new();
+                cal.reset();
+            })
+            .await
+            .map_err(|e| format!("failed to reset EventKit store: {}", e))?;
+            Ok(format!("{}: reset", bundle_id))
+        } else {
+            // tccutil exits non-zero when no row exists. That is fine here:
+            // after reset we request EventKit again so macOS can create a row.
+            warn!(
+                "calendar: tccutil reset Calendar {} returned non-zero: {}",
+                bundle_id, stderr
+            );
+            Ok(format!(
+                "{}: no existing TCC row ({})",
+                bundle_id,
+                if stderr.is_empty() { "no details" } else { stderr.as_str() }
+            ))
         }
-        Ok(format!("reset ok for {}", bundle_id))
     }
     #[cfg(not(target_os = "macos"))]
     {

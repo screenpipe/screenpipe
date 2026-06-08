@@ -9,12 +9,13 @@ import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
+import { FONT_SIZE_DEFAULT, FONT_SIZE_OPTIONS } from "@/lib/utils/font-size";
 import { open } from "@tauri-apps/plugin-shell";
 
 export function DisplaySection() {
@@ -85,6 +86,37 @@ export function DisplaySection() {
                         <span className="text-sm text-foreground">{option.label}</span>
                       </div>
                     </label>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="space-y-2.5">
+              <div className="flex items-center space-x-2.5">
+                <Type className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground">Font Size</h3>
+              </div>
+              <div className="flex gap-2 ml-[26px]">
+                {FONT_SIZE_OPTIONS.map((option) => {
+                  const isActive = (settings?.fontSize ?? FONT_SIZE_DEFAULT) === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => handleSettingsChange({ fontSize: option.value })}
+                      className={`flex-1 px-2.5 py-1.5 border-2 transition-all text-center cursor-pointer ${
+                        isActive
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div className="font-medium text-xs text-foreground">{option.label}</div>
+                      <div className="text-muted-foreground mt-0.5" style={{ fontSize: option.value }}>Aa</div>
+                    </button>
                   );
                 })}
               </div>

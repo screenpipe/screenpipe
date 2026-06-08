@@ -348,6 +348,13 @@ export default function RootLayout({
                   document.documentElement.classList.add(systemTheme);
                 }
 
+                try {
+                  var savedFs = localStorage.getItem('screenpipe-font-size');
+                  if (savedFs) {
+                    document.documentElement.style.setProperty('--font-size-base', savedFs);
+                  }
+                } catch (e) {}
+
                 // Crash recovery: if React fails to render, the page stays blank.
                 // After 8s, if <body> has no visible children, reload once.
                 var RELOAD_KEY = '__sp_crash_reload';

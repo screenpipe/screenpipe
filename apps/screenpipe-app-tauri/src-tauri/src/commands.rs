@@ -3052,7 +3052,7 @@ pub async fn perform_ocr_on_image(
         OcrEngine::AppleNative => screenpipe_screen::perform_ocr_apple(&img, &languages),
         OcrEngine::Tesseract => screenpipe_screen::perform_ocr_tesseract(&img, languages),
         #[cfg(target_os = "windows")]
-        OcrEngine::WindowsNative => screenpipe_screen::perform_ocr_windows(&img)
+        OcrEngine::WindowsNative => screenpipe_screen::perform_ocr_windows(&img, &languages)
             .await
             .map_err(|e| format!("windows ocr failed: {}", e))?,
         _ => return Err("unsupported ocr engine".to_string()),

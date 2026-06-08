@@ -179,7 +179,7 @@ pub async fn paired_capture(
         // Windows native OCR is async, so call it directly (not inside spawn_blocking)
         #[cfg(target_os = "windows")]
         let raw = {
-            match screenpipe_screen::perform_ocr_windows(&ctx.image).await {
+            match screenpipe_screen::perform_ocr_windows(&ctx.image, &ctx.languages).await {
                 Ok((text, json, _confidence)) => (text, json),
                 Err(e) => {
                     warn!("windows OCR failed: {}", e);

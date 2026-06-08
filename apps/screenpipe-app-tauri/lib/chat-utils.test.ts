@@ -42,11 +42,19 @@ import { useChatStore } from "./stores/chat-store";
 
 describe("chat-utils", () => {
   beforeEach(() => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      clear: vi.fn(() => storage.clear()),
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+      setItem: vi.fn((key: string, value: string) => {
+        storage.set(key, value);
+      }),
+    });
     emitMock.mockClear();
     showWindowMock.mockClear();
     getCurrentWindowMock.mockReset();
     getCurrentWindowMock.mockReturnValue({ label: "chat" });
-    localStorage.clear();
     useChatStore.setState({
       sessions: {},
       currentId: null,

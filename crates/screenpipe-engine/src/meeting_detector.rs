@@ -1975,6 +1975,50 @@ pub struct RunningMeetingApp {
     pub browser_url: Option<String>,
 }
 
+/// Returns true if a detected meeting app should be skipped because the user
+/// listed it in the `ignoredMeetingApps` setting.
+///
+/// Matching is case-insensitive substring, checked against (in order):
+///   1. the running app's localized name / process name — what the user sees
+///      in the picker (e.g. "Discord", "zoom.us", "Google Chrome"), and
+///   2. the matched profile's platform identifiers + browser URL/title patterns,
+///      so a service-level entry also works for browser meetings
+///      (e.g. "google meet" or "meet.google.com" silences Meet-in-a-browser).
+///
+/// Blank/whitespace entries never match. Empty list = nothing ignored.
+pub fn meeting_app_is_ignored(
+    app_name: &str,
+    profile: &MeetingDetectionProfile,
+    ignored: &[String],
+) -> bool {
+    if ignored.is_empty() {
+        return false;
+    }
+    let app_name_lc = app_name.to_lowercase();
+    let ids = &profile.app_identifiers;
+    ignored.iter().any(|raw| {
+        let term = raw.trim().to_lowercase();
+        if term.is_empty() {
+            return false;
+        }
+        app_name_lc.contains(&term)
+            // macos_app_names are stored lowercase already.
+            || ids.macos_app_names.iter().any(|n| n.contains(&term))
+            || ids
+                .windows_process_names
+                .iter()
+                .any(|n| n.to_lowercase().contains(&term))
+            || ids
+                .browser_url_patterns
+                .iter()
+                .any(|n| n.to_lowercase().contains(&term))
+            || ids
+                .browser_title_patterns
+                .iter()
+                .any(|n| n.to_lowercase().contains(&term))
+    })
+}
+
 /// Known browser app names (lowercase).
 const BROWSER_NAMES: &[&str] = &[
     "google chrome",
@@ -2508,6 +2552,7 @@ pub async fn run_meeting_detection_loop(
     scan_interval: Option<Duration>,
     detector: Option<Arc<screenpipe_audio::meeting_detector::MeetingDetector>>,
     close_orphaned_meetings_on_start: bool,
+    ignored_meeting_apps: Vec<String>,
 ) {
     let profiles = load_detection_profiles();
     let scanner = Arc::new(MeetingUiScanner::new());
@@ -2571,9 +2616,10 @@ pub async fn run_meeting_detection_loop(
     let mut last_explicit_stop_id: Option<i64> = None;
 
     info!(
-        "meeting v2: detection loop started (base_interval={:?}, profiles={})",
+        "meeting v2: detection loop started (base_interval={:?}, profiles={}, ignored_apps={})",
         base_interval,
-        profiles.len()
+        profiles.len(),
+        ignored_meeting_apps.len()
     );
 
     loop {
@@ -2747,6 +2793,26 @@ pub async fn run_meeting_detection_loop(
                 .any(|a| a.profile_index == hint.profile_index)
             {
                 running_apps.push(hint);
+            }
+        }
+
+        // Drop apps the user excluded from detection (settings: ignoredMeetingApps).
+        // Done before the AX scan so an ignored app costs nothing past enumeration,
+        // and applied uniformly to native, browser, and DB-hint matches.
+        if !ignored_meeting_apps.is_empty() {
+            let before = running_apps.len();
+            running_apps.retain(|app| match profiles.get(app.profile_index) {
+                Some(profile) => {
+                    !meeting_app_is_ignored(&app.app_name, profile, &ignored_meeting_apps)
+                }
+                None => true,
+            });
+            let removed = before - running_apps.len();
+            if removed > 0 {
+                debug!(
+                    "meeting v2: skipped {} running app(s) per ignoredMeetingApps filter",
+                    removed
+                );
             }
         }
 
@@ -3344,6 +3410,64 @@ async fn insert_new_meeting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── ignoredMeetingApps filter tests ────────────────────────────────
+
+    fn zoom_test_profile() -> MeetingDetectionProfile {
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                // macos_app_names are stored lowercase by convention.
+                macos_app_names: &["zoom.us", "zoom"],
+                windows_process_names: &["Zoom.exe"],
+                browser_url_patterns: &["zoom.us/j", "zoom.us/wc"],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![],
+            min_signals_required: 1,
+        }
+    }
+
+    #[test]
+    fn ignored_meeting_apps_empty_list_never_ignores() {
+        let p = zoom_test_profile();
+        assert!(!meeting_app_is_ignored("zoom.us", &p, &[]));
+    }
+
+    #[test]
+    fn ignored_meeting_apps_matches_running_app_name() {
+        let p = zoom_test_profile();
+        // user types what they see in the picker
+        assert!(meeting_app_is_ignored("zoom.us", &p, &["zoom".to_string()]));
+    }
+
+    #[test]
+    fn ignored_meeting_apps_is_case_insensitive() {
+        let p = zoom_test_profile();
+        assert!(meeting_app_is_ignored("Zoom.us", &p, &["ZOOM".to_string()]));
+    }
+
+    #[test]
+    fn ignored_meeting_apps_matches_profile_identifier_for_browser() {
+        // For a browser meeting the running app_name is the browser, so the
+        // ignore entry has to resolve via the matched profile's identifiers.
+        let p = zoom_test_profile();
+        assert!(meeting_app_is_ignored(
+            "Google Chrome",
+            &p,
+            &["zoom.us/j".to_string()]
+        ));
+    }
+
+    #[test]
+    fn ignored_meeting_apps_blank_and_unrelated_entries_dont_match() {
+        let p = zoom_test_profile();
+        assert!(!meeting_app_is_ignored("zoom.us", &p, &["   ".to_string()]));
+        assert!(!meeting_app_is_ignored(
+            "zoom.us",
+            &p,
+            &["teams".to_string()]
+        ));
+    }
 
     // ── AttrNeeds tests ────────────────────────────────────────────────
 

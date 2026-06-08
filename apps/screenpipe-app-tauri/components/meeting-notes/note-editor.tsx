@@ -26,7 +26,10 @@ export interface NoteEditorProps {
 }
 
 export interface NoteEditorHandle {
-  insertImages: (dataUrls: string[]) => void;
+  insertImages: (
+    dataUrls: string[],
+    at?: { clientX: number; clientY: number },
+  ) => void;
 }
 
 const PROSE_CLASSES = [
@@ -85,22 +88,34 @@ function NoteEditor(
     onChangeRef.current = onChange;
   }, [onChange]);
 
-  const insertImages = useCallback((dataUrls: string[]) => {
-    const editor = editorRef.current;
-    const images = dataUrls.filter((src) => src.startsWith("data:image/"));
-    if (!editor || images.length === 0) return;
+  const insertImages = useCallback(
+    (dataUrls: string[], at?: { clientX: number; clientY: number }) => {
+      const editor = editorRef.current;
+      const images = dataUrls.filter((src) => src.startsWith("data:image/"));
+      if (!editor || images.length === 0) return;
 
-    editor
-      .chain()
-      .focus()
-      .insertContent(
-        images.flatMap((src) => [
-          { type: "image", attrs: { src, alt: "meeting note image" } },
-          { type: "paragraph" },
-        ]),
-      )
-      .run();
-  }, []);
+      const content = images.flatMap((src) => [
+        { type: "image", attrs: { src, alt: "meeting note image" } },
+        { type: "paragraph" },
+      ]);
+
+      // When the caller passes drop coordinates, drop the image where the user
+      // released it instead of at the stale caret. posAtCoords returns null for
+      // points outside the document (e.g. padding below the text), in which case
+      // we fall back to the caret.
+      const pos =
+        at != null
+          ? editor.view.posAtCoords({ left: at.clientX, top: at.clientY })?.pos
+          : undefined;
+
+      if (pos != null) {
+        editor.chain().focus().insertContentAt(pos, content).run();
+      } else {
+        editor.chain().focus().insertContent(content).run();
+      }
+    },
+    [],
+  );
 
   const insertImageFiles = useCallback(
     async (files: File[]) => {

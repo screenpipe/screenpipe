@@ -1777,6 +1777,7 @@ async fn main() -> anyhow::Result<()> {
             shutdown_tx.subscribe(),
             Some(meeting_detector),
             true,
+            config.ignored_meeting_apps.clone(),
         ))
     } else {
         info!("meeting watcher skipped because audio capture is disabled");

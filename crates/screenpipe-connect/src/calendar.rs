@@ -63,8 +63,26 @@ impl ScreenpipeCalendar {
     }
 
     /// Request full access (shows popup on first call, then persists).
+    ///
+    /// screenpipe only reads calendars/events, but EventKit does not offer a
+    /// read-only Calendar permission on macOS 14+. `WriteOnly` is only for apps
+    /// that create events without reading existing calendar data. Because we
+    /// list calendars and fetch meeting details, we must request FullAccess.
     pub fn request_access(&self) -> EKResult<bool> {
-        self.manager.request_access()
+        let granted = self.manager.request_access()?;
+        if granted {
+            self.reset();
+        }
+        Ok(granted)
+    }
+
+    /// Reset EventKit stores after the user grants Calendar access.
+    ///
+    /// Apple documents this as required if an event store was used before full
+    /// access was granted; otherwise reads can keep returning stale/empty data.
+    pub fn reset(&self) {
+        self.manager.reset();
+        unsafe { self.store.reset() };
     }
 
     // ── Calendar listing ───────────────────────────────────────────────
@@ -107,9 +125,11 @@ impl ScreenpipeCalendar {
             return Err(EventKitError::InvalidDateRange);
         }
 
-        // Ensure authorization
+        // Ensure read authorization. EventKit's WriteOnly mode is insufficient
+        // here: screenpipe reads existing calendar events, attendees, URLs, and
+        // locations for meeting detection.
         let status = Self::authorization_status();
-        if status != AuthorizationStatus::FullAccess && status != AuthorizationStatus::WriteOnly {
+        if status != AuthorizationStatus::FullAccess {
             return Err(EventKitError::AuthorizationDenied);
         }
 
