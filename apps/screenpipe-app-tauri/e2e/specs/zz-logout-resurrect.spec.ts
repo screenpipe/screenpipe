@@ -141,6 +141,49 @@ async function restoreFetch(): Promise<void> {
   });
 }
 
+/** Install the /api/user mock in EVERY open window, not just home.
+ *
+ *  The emitTo("home") deep-link targeting above keeps the LOGIN loadUser in the
+ *  mocked home window. But that only covers the deep-link path. After Phase A
+ *  writes the fake token into the SHARED settings store, the auto-refresh effect
+ *  (lib/hooks/use-settings.tsx, the effect keyed on settings.user?.token) fires
+ *  loadUser(fakeToken) in EVERY window. Non-home windows have no mock, so they
+ *  hit the real network, 401, and the global auth interceptor broadcasts
+ *  "screenpipe-auth-signout" — which clears the freshly-logged-in home window,
+ *  flaking Phase A (Linux/Windows worst, ~50%).
+ *
+ *  Mocking the endpoint in every window keeps those auto-refresh loadUsers on a
+ *  200 fake user: no 401, no cross-window sign-out. Restored per-window in
+ *  after() (restoreFetchAllWindows) so the patch can't leak into later specs. */
+async function tuneUserFetchMockAllWindows(delayMs: number, email: string): Promise<void> {
+  const start = await browser.getWindowHandle();
+  for (const handle of await browser.getWindowHandles()) {
+    try {
+      await browser.switchToWindow(handle);
+      await tuneUserFetchMock(delayMs, email);
+    } catch {
+      // window may have closed mid-iteration; best-effort
+    }
+  }
+  await browser.switchToWindow(start).catch(() => {});
+}
+
+/** Undo tuneUserFetchMockAllWindows: restore window.fetch in every window so a
+ *  fake /api/user response cannot leak into later specs in the shared session. */
+async function restoreFetchAllWindows(): Promise<void> {
+  const start = await browser.getWindowHandle().catch(() => null);
+  const handles = await browser.getWindowHandles().catch(() => [] as string[]);
+  for (const handle of handles) {
+    try {
+      await browser.switchToWindow(handle);
+      await restoreFetch();
+    } catch {
+      // best-effort
+    }
+  }
+  if (start) await browser.switchToWindow(start).catch(() => {});
+}
+
 async function userFetchCalls(): Promise<number> {
   return (await browser.execute(
     () => ((window as unknown as Record<string, unknown>).__E2E_USER_CALLS as number) || 0,
@@ -169,7 +212,10 @@ describe("Logout is not resurrected by an in-flight loadUser", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
-    await tuneUserFetchMock(0, FAKE_EMAIL);
+    // Mock /api/user in every window (not just home) so non-home windows'
+    // auto-refresh loadUser can't 401 and broadcast a session-clearing
+    // sign-out mid-test. See tuneUserFetchMockAllWindows.
+    await tuneUserFetchMockAllWindows(0, FAKE_EMAIL);
     await openAccountSettings();
   });
 
@@ -184,7 +230,7 @@ describe("Logout is not resurrected by an in-flight loadUser", function () {
     } catch {
       // best-effort
     }
-    await restoreFetch().catch(() => {});
+    await restoreFetchAllWindows().catch(() => {});
     await browser.execute(() => window.location.reload());
     await browser
       .waitUntil(
