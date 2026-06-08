@@ -5,6 +5,7 @@ use screenpipe_core::Language;
 
 #[cfg(target_os = "windows")]
 use windows::{
+    core::HSTRING,
     Globalization::Language as WindowsLanguage,
     Graphics::Imaging::BitmapDecoder,
     Media::Ocr::OcrEngine as WindowsOcrEngine,
@@ -172,7 +173,8 @@ fn create_windows_ocr_engine_for_requested_languages(
 
 #[cfg(target_os = "windows")]
 fn try_create_windows_ocr_engine_for_tag(tag: &str) -> Result<Option<WindowsOcrEngine>> {
-    let language = WindowsLanguage::CreateLanguage(tag)?;
+    let language_tag = HSTRING::from(tag);
+    let language = WindowsLanguage::CreateLanguage(&language_tag)?;
     if !WindowsOcrEngine::IsLanguageSupported(&language)? {
         return Ok(None);
     }
