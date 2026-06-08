@@ -11,16 +11,25 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Audio Recording", keywords: ["mic", "microphone"] },
-  { label: "Auto-select audio devices" },
-  { label: "Languages", keywords: ["transcript language"] },
+  // Mirrors the labels actually rendered by RecordingSettings. Keep in sync.
+  { label: "Audio Recording", keywords: ["mic", "microphone", "audio"] },
+  { label: "Transcription engine", keywords: ["whisper", "cloud", "stt"] },
+  { label: "Live meeting notes", keywords: ["captions", "meeting", "live"] },
+  { label: "Append typed text to note", keywords: ["note", "append"] },
+  { label: "Batch Transcription", keywords: ["batch", "chunks", "quality"] },
+  { label: "Filter Music", keywords: ["music", "background music", "filter"] },
+  { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"] },
+  { label: "Languages", keywords: ["transcript language", "language"] },
+  { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"] },
+  { label: "Microphone echo cancellation", keywords: ["echo", "voiceprocessingio"] },
+  { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"] },
   { label: "Screen recording", keywords: ["screen", "video"] },
   { label: "Use all monitors", keywords: ["monitor", "display"] },
   { label: "Recording quality", keywords: ["fps", "quality"] },
   { label: "Monitors" },
-  { label: "HD recording for meetings" },
-  { label: "Chinese mirror" },
-  { label: "OCR", keywords: ["text extraction"] },
+  { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
+  { label: "Chinese mirror", keywords: ["china", "mirror"] },
+  { label: "OCR", keywords: ["text extraction", "ocr"] },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { Label } from "@/components/ui/label";

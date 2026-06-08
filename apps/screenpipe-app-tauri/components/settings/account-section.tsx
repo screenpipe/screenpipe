@@ -7,15 +7,16 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Sign in", keywords: ["login", "log in"] },
-  { label: "Active sessions", keywords: ["devices", "sessions"] },
-  { label: "Log out", keywords: ["signout", "sign out", "logout"] },
-  { label: "Delete account" },
-  { label: "Subscription", keywords: ["billing", "plan", "pro", "upgrade"] },
-  { label: "Pipe sync" },
-  { label: "Memories sync" },
-  { label: "Connection sync" },
-  { label: "Email", keywords: ["profile"] },
+  // Mirrors the labels actually rendered by AccountSection below. Keep in sync
+  // when you add/remove a control — phantom entries route users to a page that
+  // doesn't contain the field.
+  { label: "Sign in to Screenpipe", keywords: ["login", "log in", "sign in"] },
+  { label: "Logout", keywords: ["signout", "sign out", "log out"] },
+  { label: "Screenpipe Pro", keywords: ["subscription", "billing", "plan", "pro", "upgrade", "manage"] },
+  { label: "pipe sync across devices", keywords: ["pipe sync", "sync"] },
+  { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
+  { label: "connection sync across devices", keywords: ["connection sync", "sync", "gmail", "slack", "notion"] },
+  { label: "Refer a friend", keywords: ["referral", "invite", "free month"] },
 ];
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/hooks/use-settings";
