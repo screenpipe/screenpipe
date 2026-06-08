@@ -109,6 +109,19 @@ const BRIDGE_INIT_SCRIPT: &str = r#"
 })();
 "#;
 
+fn title_after_eval_marker(original_title: &str, result_json: &str) -> String {
+    #[derive(serde::Deserialize)]
+    struct Payload {
+        #[serde(default)]
+        title: Option<String>,
+    }
+
+    serde_json::from_str::<Payload>(result_json)
+        .ok()
+        .and_then(|payload| payload.title)
+        .unwrap_or_else(|| original_title.to_string())
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OwnedBrowserStateEvent {
@@ -558,8 +571,9 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             tokio::time::sleep(Duration::from_millis(1_000)).await;
         }
 
-        // Snapshot the current title so we can restore it after we read
-        // our marker. Best-effort — we don't fail the eval if this fails.
+        // Snapshot the current title so the marker transport can be cleared
+        // after eval. If the user code changes document.title, the wrapper
+        // reports that post-eval title and we preserve it below.
         let original_title = self.state.latest_title();
 
         let id = Uuid::new_v4().to_string();
@@ -578,6 +592,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
                         window.__SP_RESULT__({{
                             id: {id},
                             ok: true,
+                            title: document.title,
                             result: __sp_result === undefined ? null : __sp_result
                         }});
                     }}
@@ -586,6 +601,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
                         window.__SP_RESULT__({{
                             id: {id},
                             ok: false,
+                            title: document.title,
                             error: String((e && e.message) || e)
                         }});
                     }}
@@ -622,9 +638,10 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
 
-        // Restore the page's prior title so user-facing chrome (history,
-        // tab labels in any embedding UI) doesn't keep our marker.
-        let restore_lit = serde_json::to_string(&original_title).unwrap_or_else(|_| "\"\"".into());
+        // Clear the marker without undoing a document.title mutation made by
+        // the caller's eval code.
+        let restore_title = title_after_eval_marker(&original_title, &result_json);
+        let restore_lit = serde_json::to_string(&restore_title).unwrap_or_else(|_| "\"\"".into());
         let _ = active.eval(format!("document.title = {restore_lit};"));
         if shown_for_eval && url.is_none() {
             let _ = active.hide();
@@ -966,7 +983,7 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
 
 #[cfg(test)]
 mod normalize_url_tests {
-    use super::normalize_url;
+    use super::{normalize_url, title_after_eval_marker};
 
     #[test]
     fn keeps_fully_qualified() {
@@ -1008,6 +1025,32 @@ mod normalize_url_tests {
     fn preserves_data_url() {
         let u = normalize_url("data:text/plain,hello").unwrap();
         assert_eq!(u.scheme(), "data");
+    }
+
+    #[test]
+    fn restores_title_changed_by_eval_code() {
+        let payload = r#"{"id":"1","ok":true,"title":"changed","result":null}"#;
+        assert_eq!(
+            title_after_eval_marker("Example Domain", payload),
+            "changed"
+        );
+    }
+
+    #[test]
+    fn restores_original_title_when_payload_has_no_title() {
+        let payload = r#"{"id":"1","ok":true,"result":null}"#;
+        assert_eq!(
+            title_after_eval_marker("Example Domain", payload),
+            "Example Domain"
+        );
+    }
+
+    #[test]
+    fn restores_original_title_when_payload_is_malformed() {
+        assert_eq!(
+            title_after_eval_marker("Example Domain", "not json"),
+            "Example Domain"
+        );
     }
 }
 
