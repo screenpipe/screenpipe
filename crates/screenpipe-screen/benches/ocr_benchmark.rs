@@ -169,7 +169,8 @@ fn bench_windows_ocr(c: &mut Criterion) {
 
                     for _ in 0..iters {
                         let start = std::time::Instant::now();
-                        let (result, _, _) = perform_ocr_windows(black_box(&image)).await.unwrap();
+                        let (result, _, _) =
+                            perform_ocr_windows(black_box(&image), &[]).await.unwrap();
                         total_duration += start.elapsed();
 
                         let accuracy = calculate_accuracy(&result, EXPECTED_KEYWORDS);

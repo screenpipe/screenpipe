@@ -555,7 +555,7 @@ async fn perform_ocr_with_engine(
             .map_err(|e| ContinuousCaptureError::ErrorProcessingOcr(e.to_string())),
         OcrEngine::Tesseract => Ok(perform_ocr_tesseract(image, languages)),
         #[cfg(target_os = "windows")]
-        OcrEngine::WindowsNative => perform_ocr_windows(image)
+        OcrEngine::WindowsNative => perform_ocr_windows(image, &languages)
             .await
             .map_err(|e| ContinuousCaptureError::ErrorProcessingOcr(e.to_string())),
         #[cfg(target_os = "macos")]
