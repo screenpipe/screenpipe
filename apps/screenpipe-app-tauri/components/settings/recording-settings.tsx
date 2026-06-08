@@ -7,26 +7,29 @@
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
-import type { SettingsField } from "./settings-search";
+import { useSettingsIndexDriftCheck, type SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   // Mirrors the labels actually rendered by RecordingSettings. Keep in sync.
   { label: "Audio Recording", keywords: ["mic", "microphone", "audio"] },
   { label: "Transcription engine", keywords: ["whisper", "cloud", "stt"] },
-  { label: "Live meeting notes", keywords: ["captions", "meeting", "live"] },
-  { label: "Append typed text to note", keywords: ["note", "append"] },
-  { label: "Batch Transcription", keywords: ["batch", "chunks", "quality"] },
-  { label: "Filter Music", keywords: ["music", "background music", "filter"] },
-  { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"] },
-  { label: "Languages", keywords: ["transcript language", "language"] },
-  { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"] },
-  { label: "Microphone echo cancellation", keywords: ["echo", "voiceprocessingio"] },
-  { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"] },
+  // conditional: rendered only when audio is enabled / engine selected.
+  { label: "Live meeting notes", keywords: ["captions", "meeting", "live"], conditional: true },
+  { label: "Append typed text to note", keywords: ["note", "append"], conditional: true },
+  { label: "Batch Transcription", keywords: ["batch", "chunks", "quality"], conditional: true },
+  { label: "Filter Music", keywords: ["music", "background music", "filter"], conditional: true },
+  { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"], conditional: true },
+  { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
+  { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
+  // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
+  { label: "Microphone echo cancellation", keywords: ["echo", "voiceprocessingio"], conditional: true },
+  { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
   { label: "Screen recording", keywords: ["screen", "video"] },
   { label: "Use all monitors", keywords: ["monitor", "display"] },
   { label: "Recording quality", keywords: ["fps", "quality"] },
-  { label: "Monitors" },
+  // conditional: monitor picker only renders when "Use all monitors" is off.
+  { label: "Monitors", conditional: true },
   { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
   { label: "Chinese mirror", keywords: ["china", "mirror"] },
 ];
@@ -1694,6 +1697,11 @@ function HighFpsCard({
 export function RecordingSettings() {
   const { settings, updateSettings, getDataDir, loadUser } = useSettings();
   const [openLanguages, setOpenLanguages] = React.useState(false);
+  // Dev-only: warn if searchIndex drifts from rendered headings. State-gated
+  // fields are marked `conditional: true` in the index above, so no false
+  // positives while they're hidden — no hardcoded allowlist here.
+  const sectionRootRef = React.useRef<HTMLDivElement | null>(null);
+  useSettingsIndexDriftCheck("Recording", searchIndex, sectionRootRef);
 
   // Add validation state
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -2410,7 +2418,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" ref={sectionRootRef}>
       <p className="text-muted-foreground text-sm mb-4">
         Screen and audio recording preferences
       </p>
