@@ -4,6 +4,16 @@
 "use client";
 
 import React, { useState, useMemo, useCallback } from "react";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Disk usage", keywords: ["disk", "space", "gb"] },
+  { label: "Retention", keywords: ["cleanup", "delete old"] },
+  { label: "Archive" },
+  { label: "Clear Cache" },
+  { label: "Sync", keywords: ["backup"] },
+];
 import { usePostHog } from "posthog-js/react";
 import { cn } from "@/lib/utils";
 import { DiskUsageSection } from "./disk-usage-section";

@@ -76,6 +76,7 @@
     "cmdk": "0.2.1",
     "date-fns": "^3.6.0",
     "framer-motion": "^11.18.2",
+    "fuse.js": "^7.4.2",
     "hotkeys-js": "^3.13.15",
     "js-levenshtein": "^1.1.6",
     "localforage": "^1.10.0",

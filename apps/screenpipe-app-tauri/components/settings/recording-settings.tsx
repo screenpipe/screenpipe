@@ -7,6 +7,21 @@
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Audio Recording", keywords: ["mic", "microphone"] },
+  { label: "Auto-select audio devices" },
+  { label: "Languages", keywords: ["transcript language"] },
+  { label: "Screen recording", keywords: ["screen", "video"] },
+  { label: "Use all monitors", keywords: ["monitor", "display"] },
+  { label: "Recording quality", keywords: ["fps", "quality"] },
+  { label: "Monitors" },
+  { label: "HD recording for meetings" },
+  { label: "Chinese mirror" },
+  { label: "OCR", keywords: ["text extraction"] },
+];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { Label } from "@/components/ui/label";
 import {

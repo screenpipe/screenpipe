@@ -4,6 +4,14 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Blocklist", keywords: ["ignore", "exclude", "block"] },
+  { label: "PII masking", keywords: ["mask", "redact"] },
+  { label: "Telemetry" },
+];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import {

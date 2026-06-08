@@ -46,6 +46,7 @@
         "cmdk": "0.2.1",
         "date-fns": "^3.6.0",
         "framer-motion": "^11.18.2",
+        "fuse.js": "^7.4.2",
         "hotkeys-js": "^3.13.15",
         "js-levenshtein": "^1.1.6",
         "localforage": "^1.10.0",
@@ -1522,6 +1523,8 @@
     "function.prototype.name": ["function.prototype.name@1.1.6", "", { "dependencies": { "call-bind": "^1.0.2", "define-properties": "^1.2.0", "es-abstract": "^1.22.1", "functions-have-names": "^1.2.3" } }, ""],
 
     "functions-have-names": ["functions-have-names@1.2.3", "", {}, ""],
+
+    "fuse.js": ["fuse.js@7.4.2", "", {}, "sha512-LVbzjD4WA6UP5B1UnP8wuaXJiLnqMdM/E4fiJXTJ5haJ5b/MBNsK29h2fm6swEoQaVQjvYFWKLE2RanyZIoRVQ=="],
 
     "geckodriver": ["geckodriver@6.1.0", "", { "dependencies": { "@wdio/logger": "^9.18.0", "@zip.js/zip.js": "^2.8.11", "decamelize": "^6.0.1", "http-proxy-agent": "^7.0.2", "https-proxy-agent": "^7.0.6", "modern-tar": "^0.7.2" }, "bin": { "geckodriver": "bin/geckodriver.js" } }, "sha512-ZRXLa4ZaYTTgUO4Eefw+RsQCleugU2QLb1ME7qTYxxuRj51yAhfnXaItXNs5/vUzfIaDHuZ+YnSF005hfp07nQ=="],
 
