@@ -906,7 +906,10 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
 /// Returns an empty vec if no windows match the filters or on error.
 #[cfg(target_os = "macos")]
 pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.ignore_patterns.is_empty() && window_filters.include_patterns.is_empty() {
+    if window_filters.ignore_patterns.is_empty()
+        && window_filters.include_patterns.is_empty()
+        && window_filters.ignored_urls.is_empty()
+    {
         return Vec::new();
     }
 

@@ -514,6 +514,7 @@ impl VisionManager {
             let hd_config = crate::hd_recorder::HdRecorderConfig {
                 ignored_windows: self.config.ignored_windows.clone(),
                 included_windows: self.config.included_windows.clone(),
+                ignored_urls: self.config.ignored_urls.clone(),
             };
             let hd_handle = self
                 .vision_handle

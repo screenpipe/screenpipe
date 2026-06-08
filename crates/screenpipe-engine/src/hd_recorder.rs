@@ -59,6 +59,9 @@ pub struct HdRecorderConfig {
     pub ignored_windows: Vec<String>,
     /// Included-window patterns (mirror of the event-loop window filter).
     pub included_windows: Vec<String>,
+    /// Ignored-URL patterns — windows showing a blocked URL are excluded from
+    /// HD capture too (URL privacy parity with the event-driven capture loop).
+    pub ignored_urls: Vec<String>,
 }
 
 /// Per-monitor HD recorder loop. Idles until an HD session is active, then
@@ -211,8 +214,13 @@ mod macos {
         // take effect on the next chunk. The .mp4 is then encoded CFR at this fps.
         let fps = interval_to_fps(controller.snapshot().interval_ms);
 
-        // Privacy: exclude ignored windows at the OS level (parity with capture).
-        let filters = WindowFilters::new(&config.ignored_windows, &config.included_windows, &[]);
+        // Privacy: exclude ignored windows and blocked-URL windows at the OS
+        // level (parity with capture).
+        let filters = WindowFilters::new(
+            &config.ignored_windows,
+            &config.included_windows,
+            &config.ignored_urls,
+        );
         let mut excluded = get_excluded_sck_window_ids(&filters);
         excluded.sort_unstable();
         excluded.dedup();
