@@ -366,42 +366,64 @@ fn resolve_codex_path(creds: &serde_json::Map<String, Value>) -> Result<PathBuf>
     screenpipe_connect::connections::codex::resolve_home_path(creds)
 }
 
-/// SecretStore key under which the Honcho high-water cursor is persisted so an
-/// engine restart doesn't re-send the backlog.
-const HONCHO_CURSOR_KEY: &str = "honcho:sync-cursor";
+/// SecretStore key prefix under which Honcho high-water cursors are persisted so
+/// an engine restart doesn't re-send the backlog. The full key is scoped to the
+/// Honcho target because changing workspace/API URL/peer should seed that new
+/// target from the full local backlog.
+const HONCHO_CURSOR_KEY_PREFIX: &str = "honcho:sync-cursor";
 
-/// Process-wide in-memory cursor. Source of truth is the [`SecretStore`] when
+/// Process-wide in-memory cursors. Source of truth is the [`SecretStore`] when
 /// one is present; this cell is the fallback (CLI / no secret store) and also
 /// lets the scheduler tick and the HTTP "sync now" trigger share one mark
-/// within a process. Seeded to `None` → "send the full backlog on first tick".
-fn honcho_cursor_cell() -> &'static std::sync::Mutex<Option<String>> {
-    static CELL: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| std::sync::Mutex::new(None))
+/// within a process. Missing key → "send the full backlog on first tick".
+type HonchoCursorMap = HashMap<String, String>;
+
+fn honcho_cursor_cell() -> &'static std::sync::Mutex<HonchoCursorMap> {
+    static CELL: std::sync::OnceLock<std::sync::Mutex<HonchoCursorMap>> =
+        std::sync::OnceLock::new();
+    CELL.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn honcho_cursor_key(api_url: &str, workspace: &str, peer_name: &str) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        HONCHO_CURSOR_KEY_PREFIX,
+        api_url.trim_end_matches('/'),
+        workspace,
+        peer_name
+    )
 }
 
 async fn load_honcho_cursor(
     secret_store: Option<&SecretStore>,
-    mem: &std::sync::Mutex<Option<String>>,
+    mem: &std::sync::Mutex<HonchoCursorMap>,
+    key: &str,
 ) -> Option<String> {
     if let Some(ss) = secret_store {
-        match ss.get_json::<String>(HONCHO_CURSOR_KEY).await {
+        match ss.get_json::<String>(key).await {
             Ok(Some(c)) => return Some(c),
             Ok(None) => {}
-            Err(e) => warn!("honcho: failed to read sync cursor, treating as unset: {}", e),
+            Err(e) => warn!(
+                "honcho: failed to read sync cursor, treating as unset: {}",
+                e
+            ),
         }
     }
-    mem.lock().unwrap().clone()
+    mem.lock().unwrap().get(key).cloned()
 }
 
 async fn store_honcho_cursor(
     secret_store: Option<&SecretStore>,
-    mem: &std::sync::Mutex<Option<String>>,
+    mem: &std::sync::Mutex<HonchoCursorMap>,
+    key: &str,
     value: &str,
 ) {
     // Guard dropped before the await — never hold a std Mutex across .await.
-    *mem.lock().unwrap() = Some(value.to_string());
+    mem.lock()
+        .unwrap()
+        .insert(key.to_string(), value.to_string());
     if let Some(ss) = secret_store {
-        if let Err(e) = ss.set_json(HONCHO_CURSOR_KEY, &value.to_string()).await {
+        if let Err(e) = ss.set_json(key, &value.to_string()).await {
             warn!("honcho: failed to persist sync cursor: {}", e);
         }
     } else {
@@ -415,7 +437,10 @@ async fn store_honcho_cursor(
 /// the high-water `cursor`. An unset cursor (first tick after connect) selects
 /// everything so Honcho gets the full backlog. `updated_at` is RFC3339 UTC, so
 /// a lexicographic compare is ordering-correct.
-fn select_new_entries<'a>(entries: &'a [MemoryEntry], cursor: Option<&str>) -> Vec<&'a MemoryEntry> {
+fn select_new_entries<'a>(
+    entries: &'a [MemoryEntry],
+    cursor: Option<&str>,
+) -> Vec<&'a MemoryEntry> {
     entries
         .iter()
         .filter(|e| match cursor {
@@ -624,7 +649,7 @@ async fn sync_honcho(
     entries: &[MemoryEntry],
     secret_store: Option<&SecretStore>,
     screenpipe_dir: &std::path::Path,
-    mem_cursor: &std::sync::Mutex<Option<String>>,
+    mem_cursor: &std::sync::Mutex<HonchoCursorMap>,
 ) -> ExternalSyncResult {
     let outcome = sync_honcho_inner(entries, secret_store, screenpipe_dir, mem_cursor).await;
 
@@ -648,7 +673,7 @@ async fn sync_honcho_inner(
     entries: &[MemoryEntry],
     secret_store: Option<&SecretStore>,
     screenpipe_dir: &std::path::Path,
-    mem_cursor: &std::sync::Mutex<Option<String>>,
+    mem_cursor: &std::sync::Mutex<HonchoCursorMap>,
 ) -> Result<SyncOutcome> {
     let credentials = match load_connection(secret_store, screenpipe_dir, "honcho").await {
         Some(SavedConnection {
@@ -670,6 +695,7 @@ async fn sync_honcho_inner(
     let cfg = honcho_conn::resolve_config(&credentials);
     let endpoint = cfg.api_url.clone();
     let peer_name = cfg.peer_name.clone();
+    let cursor_key = honcho_cursor_key(&endpoint, &cfg.workspace, &peer_name);
 
     let client = HonchoClient::new(HonchoClientConfig {
         api_url: cfg.api_url,
@@ -695,7 +721,7 @@ async fn sync_honcho_inner(
         .await?;
 
     // Incremental delivery: only rows updated since the high-water cursor.
-    let cursor = load_honcho_cursor(secret_store, mem_cursor).await;
+    let cursor = load_honcho_cursor(secret_store, mem_cursor, &cursor_key).await;
     let selected = select_new_entries(entries, cursor.as_deref());
 
     if selected.is_empty() {
@@ -717,7 +743,7 @@ async fn sync_honcho_inner(
     // returns early and leaves the cursor put, so the rows retry next tick
     // (at-least-once delivery).
     if let Some(new_max) = selected.iter().map(|e| e.updated_at.as_str()).max() {
-        store_honcho_cursor(secret_store, mem_cursor, new_max).await;
+        store_honcho_cursor(secret_store, mem_cursor, &cursor_key, new_max).await;
     }
 
     Ok(SyncOutcome::Pushed {
@@ -1041,7 +1067,10 @@ mod tests {
     #[test]
     fn base_url_is_versioned_and_workspace_scoped() {
         let c = honcho_client("http://localhost:8000", "screenpipe");
-        assert_eq!(c.base_url(), "http://localhost:8000/v3/workspaces/screenpipe");
+        assert_eq!(
+            c.base_url(),
+            "http://localhost:8000/v3/workspaces/screenpipe"
+        );
     }
 
     #[test]
@@ -1049,7 +1078,10 @@ mod tests {
         // A user pasting "http://localhost:8000/" must not produce a double
         // slash before the version segment.
         let c = honcho_client("http://localhost:8000/", "screenpipe");
-        assert_eq!(c.base_url(), "http://localhost:8000/v3/workspaces/screenpipe");
+        assert_eq!(
+            c.base_url(),
+            "http://localhost:8000/v3/workspaces/screenpipe"
+        );
     }
 
     #[test]
@@ -1120,19 +1152,35 @@ mod tests {
     async fn in_memory_cursor_roundtrips_without_secret_store() {
         // Without a SecretStore the cursor lives only in the passed cell;
         // store-then-load must observe the same value.
-        let cell = std::sync::Mutex::new(None);
-        assert_eq!(load_honcho_cursor(None, &cell).await, None);
-        store_honcho_cursor(None, &cell, "2026-05-01T00:00:00Z").await;
+        let cell = std::sync::Mutex::new(HashMap::new());
+        let key = honcho_cursor_key("https://api.honcho.dev", "screenpipe", "user-default");
+        assert_eq!(load_honcho_cursor(None, &cell, &key).await, None);
+        store_honcho_cursor(None, &cell, &key, "2026-05-01T00:00:00Z").await;
         assert_eq!(
-            load_honcho_cursor(None, &cell).await,
+            load_honcho_cursor(None, &cell, &key).await,
             Some("2026-05-01T00:00:00Z".to_string())
         );
     }
 
     #[tokio::test]
+    async fn in_memory_cursor_is_scoped_to_honcho_target() {
+        let cell = std::sync::Mutex::new(HashMap::new());
+        let first = honcho_cursor_key("https://api.honcho.dev", "screenpipe", "user-default");
+        let second = honcho_cursor_key("https://api.honcho.dev", "other-workspace", "user-default");
+
+        store_honcho_cursor(None, &cell, &first, "2026-05-01T00:00:00Z").await;
+
+        assert_eq!(
+            load_honcho_cursor(None, &cell, &first).await,
+            Some("2026-05-01T00:00:00Z".to_string())
+        );
+        assert_eq!(load_honcho_cursor(None, &cell, &second).await, None);
+    }
+
+    #[tokio::test]
     async fn sync_honcho_skips_when_connection_absent() {
         let dir = tempfile::tempdir().unwrap();
-        let cell = std::sync::Mutex::new(None);
+        let cell = std::sync::Mutex::new(HashMap::new());
 
         // Never configured — must report Skipped without touching the network.
         let result = sync_honcho(
@@ -1151,13 +1199,13 @@ mod tests {
             other => panic!("expected Skipped, got {:?}", other),
         }
         // Cursor must be untouched when we never even attempted a post.
-        assert_eq!(*cell.lock().unwrap(), None);
+        assert!(cell.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn sync_honcho_skips_when_disabled() {
         let dir = tempfile::tempdir().unwrap();
-        let cell = std::sync::Mutex::new(None);
+        let cell = std::sync::Mutex::new(HashMap::new());
 
         let store_path = dir.path().join("connections.json");
         let saved = json!({
@@ -1216,23 +1264,27 @@ mod tests {
         });
         std::fs::write(dir.path().join("connections.json"), saved.to_string()).unwrap();
 
-        let cell = std::sync::Mutex::new(None);
+        let cell = std::sync::Mutex::new(HashMap::new());
         let entries = vec![
             entry_at("fact a", "2026-01-01T00:00:00Z"),
             entry_at("fact b", "2026-02-01T00:00:00Z"),
         ];
+        let cursor_key = honcho_cursor_key(&server.uri(), "screenpipe", "user-default");
 
         // First tick: cursor unset → full backlog posted, cursor advances to max.
         let first = sync_honcho(&entries, None, dir.path(), &cell).await;
         match first.outcome {
-            Ok(SyncOutcome::Pushed { entries: n, endpoint }) => {
+            Ok(SyncOutcome::Pushed {
+                entries: n,
+                endpoint,
+            }) => {
                 assert_eq!(n, 2);
                 assert_eq!(endpoint, server.uri());
             }
             other => panic!("expected Pushed, got {:?}", other),
         }
         assert_eq!(
-            *cell.lock().unwrap(),
+            cell.lock().unwrap().get(&cursor_key).cloned(),
             Some("2026-02-01T00:00:00Z".to_string()),
             "cursor must advance to the newest posted updated_at"
         );
@@ -1281,7 +1333,7 @@ mod tests {
         });
         std::fs::write(dir.path().join("connections.json"), saved.to_string()).unwrap();
 
-        let cell = std::sync::Mutex::new(None);
+        let cell = std::sync::Mutex::new(HashMap::new());
         let entries = vec![entry_at("fact a", "2026-01-01T00:00:00Z")];
 
         let result = sync_honcho(&entries, None, dir.path(), &cell).await;
@@ -1291,7 +1343,14 @@ mod tests {
             result.outcome
         );
         assert_eq!(
-            *cell.lock().unwrap(),
+            cell.lock()
+                .unwrap()
+                .get(&honcho_cursor_key(
+                    &server.uri(),
+                    "screenpipe",
+                    "user-default"
+                ))
+                .cloned(),
             None,
             "cursor must stay unset when the post fails"
         );
