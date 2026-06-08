@@ -6,7 +6,8 @@
 import React, { forwardRef, useEffect } from "react";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import Fuse from "fuse.js";
+import { usePlatform } from "@/lib/hooks/use-platform";
+import Fuse, { type IFuseOptions } from "fuse.js";
 
 // Fuzzy match config. Mirrors the WinSTT / MetaMask / KittyCAD desktop patterns:
 //   - threshold 0.3   accepts typos like "dispaly" → "display" without flooding
@@ -15,7 +16,7 @@ import Fuse from "fuse.js";
 // We layer this BEHIND a substring fast-path so prefix matches always win and
 // score deterministically (Fuse's score for "gen" vs "General" is ~0.0 same as
 // "gen" vs "Generate" — the substring path disambiguates).
-const FUSE_OPTIONS: import("fuse.js").IFuseOptions<IndexedSettingsField> = {
+const FUSE_OPTIONS: IFuseOptions<IndexedSettingsField> = {
   // 0.4 is the production-tested sweet spot across the real ~50-item index:
   //   - 0.3 misses common typos like "fpz", "signot"
   //   - 0.5+ starts false-positiving ("actv" -> Notifications)
@@ -244,6 +245,27 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
  * @param label   the field label to locate (matches SettingsField.label)
  * @param root    optional scroll/search root; defaults to document
  */
+// Tracks the currently-flashing element + its timer at module scope so we don't
+// mutate the DOM node itself. Only one field flashes at a time, so a single slot
+// is enough: a new flash cancels the previous one and clears its ring first.
+let activeFlash: { el: HTMLElement; timer: number } | null = null;
+
+function flashElement(el: HTMLElement): void {
+  // Cancel + clear any in-flight flash (same OR different element) so a rapid
+  // second search can't leave a stale ring or have an old timer wipe the new one.
+  if (activeFlash) {
+    window.clearTimeout(activeFlash.timer);
+    activeFlash.el.style.boxShadow = "";
+  }
+  el.style.transition = "box-shadow 0.3s ease";
+  el.style.boxShadow = "0 0 0 2px hsl(var(--primary))";
+  const timer = window.setTimeout(() => {
+    el.style.boxShadow = "";
+    if (activeFlash?.el === el) activeFlash = null;
+  }, 1600);
+  activeFlash = { el, timer };
+}
+
 export function scrollToSettingsField(label: string, root: ParentNode = document): void {
   const want = label.trim().toLowerCase();
   // Tags used for field titles across the section components. Excludes `div`
@@ -284,18 +306,9 @@ export function scrollToSettingsField(label: string, root: ParentNode = document
       target;
     scrollTarget.scrollIntoView({ behavior: "smooth", block: "center" });
 
-    // Flash a highlight ring so the eye lands on it, then fade out. We stash the
-    // timeout id ON the element so flashing the SAME element again clears its
-    // own prior timer (no stale timeout removing a fresh highlight — the
-    // same-element race). Each element manages only its own highlight.
-    const flash = scrollTarget as HTMLElement & { _flashTimer?: number };
-    if (flash._flashTimer) window.clearTimeout(flash._flashTimer);
-    flash.style.transition = "box-shadow 0.3s ease";
-    flash.style.boxShadow = "0 0 0 2px hsl(var(--primary))";
-    flash._flashTimer = window.setTimeout(() => {
-      flash.style.boxShadow = "";
-      flash._flashTimer = undefined;
-    }, 1600);
+    // Flash a highlight ring so the eye lands on it, then fade out. Timer state
+    // lives at module scope (see flashElement) instead of on the DOM node.
+    flashElement(scrollTarget);
   };
 
   // Two rAFs: first lets React commit the section switch, second lets layout
@@ -385,6 +398,7 @@ type InputProps = {
 
 export const SettingsSearchInput = forwardRef<HTMLInputElement, InputProps>(
   function SettingsSearchInput({ value, onChange, onKeyDown, translucent, className }, ref) {
+    const { isMac } = usePlatform();
     return (
       <div className={cn("relative", className)}>
         <Search
@@ -442,7 +456,7 @@ export const SettingsSearchInput = forwardRef<HTMLInputElement, InputProps>(
                 : "border-border/60 text-muted-foreground/60 bg-card",
             )}
           >
-            ⌘K
+            {isMac ? "⌘K" : "Ctrl K"}
           </kbd>
         )}
       </div>
