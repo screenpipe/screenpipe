@@ -21,6 +21,7 @@ import {
   ChevronLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
 import { useRouter } from "next/navigation";
@@ -282,14 +283,14 @@ function SettingsContent() {
   // Reset highlight to top whenever the query changes.
   useEffect(() => { setActiveIndex(0); }, [searchQuery]);
 
-  const pickResult = (id: string, fieldLabel?: string) => {
-    setSection(id as SettingsSection);
+  const pickResult = (result: { item: { id: string }; matchedFieldLabel?: string }) => {
+    setSection(result.item.id as SettingsSection);
     setSearchQuery("");
     searchInputRef.current?.blur();
     // If a specific field matched (not just the section name), scroll to it once
     // the target section has mounted. scrollToSettingsField defers via rAF and
     // retries a few frames in case the section mounts asynchronously.
-    if (fieldLabel) scrollToSettingsField(fieldLabel);
+    if (result.matchedFieldLabel) scrollToSettingsField(result.matchedFieldLabel);
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -307,7 +308,7 @@ function SettingsContent() {
     } else if (e.key === "Enter") {
       e.preventDefault();
       const r = results[activeIndex];
-      if (r) pickResult(r.item.id, r.matchedFieldLabel);
+      if (r) pickResult(r);
     }
   };
 
@@ -320,6 +321,15 @@ function SettingsContent() {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod || e.shiftKey || e.altKey) return;
       if (e.key.toLowerCase() !== "k") return;
+      // Don't hijack ⌘K while the user is typing in another field (e.g. the
+      // Custom Vocabulary or blocklist inputs). Skip when the event originates
+      // from an editable element that ISN'T our own search box.
+      const t = e.target as HTMLElement | null;
+      const editable =
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        (t?.isContentEditable ?? false);
+      if (editable && t !== searchInputRef.current) return;
       e.preventDefault();
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
@@ -367,27 +377,43 @@ function SettingsContent() {
           </button>
         </div>
 
-        {/* Search — input + floating result popover. Nav below stays mounted. */}
-        <div className="relative px-3 pt-3 pb-2">
-          <SettingsSearchInput
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={setSearchQuery}
-            onKeyDown={onSearchKeyDown}
-            translucent={isTranslucent}
-          />
-          <div className="absolute left-3 right-3 top-full">
-            <SettingsSearchPopover
-              query={searchQuery}
-              results={results}
-              activeIndex={activeIndex}
-              onHover={setActiveIndex}
-              onPick={(it) => pickResult(it.id, results.find((r) => r.item.id === it.id)?.matchedFieldLabel)}
-              renderIcon={(it) => (allItems.find((a) => a.id === it.id)?.icon ?? null)}
-              translucent={isTranslucent}
-            />
-          </div>
-        </div>
+        {/* Search — input + floating result popover. Nav below stays mounted.
+            Uses a Radix Popover Portal so the dropdown renders to <body> and is
+            NOT clipped by the sidebar's overflow-x-hidden; width tracks the input
+            (via --radix-popover-trigger-width) with a 320px floor. */}
+        <PopoverPrimitive.Root open={!!searchQuery}>
+          <PopoverPrimitive.Trigger asChild>
+            <div className="px-3 pt-3 pb-2">
+              <SettingsSearchInput
+                ref={searchInputRef}
+                value={searchQuery}
+                onChange={setSearchQuery}
+                onKeyDown={onSearchKeyDown}
+                translucent={isTranslucent}
+              />
+            </div>
+          </PopoverPrimitive.Trigger>
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content
+              align="start"
+              sideOffset={4}
+              onOpenAutoFocus={(e) => e.preventDefault()}
+              onCloseAutoFocus={(e) => e.preventDefault()}
+              className="z-50"
+              style={{ width: "var(--radix-popover-trigger-width)", minWidth: "320px" }}
+            >
+              <SettingsSearchPopover
+                query={searchQuery}
+                results={results}
+                activeIndex={activeIndex}
+                onHover={setActiveIndex}
+                onPick={pickResult}
+                renderIcon={(it) => (allItems.find((a) => a.id === it.id)?.icon ?? null)}
+                translucent={isTranslucent}
+              />
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
 
         {/* Nav groups — always rendered; popover overlays them when searching. */}
         <div className="flex-1 p-2 space-y-4 overflow-y-auto">

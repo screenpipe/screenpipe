@@ -221,6 +221,16 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
  * No per-field anchor attributes needed because the search index labels are kept
  * identical to the rendered headings.
  *
+ * TRADEOFF / known limitation: text-based lookup is intentionally chosen over
+ * explicit DOM anchors to avoid editing ~50 field wrappers across 12 files. The
+ * cost: it depends on index labels matching rendered text exactly, and would
+ * break under i18n/localization (not present in this codebase today). To harden
+ * later, add `anchor?: string` ids to field wrappers (the SettingsField type
+ * already reserves `anchor`) and switch this to `getElementById(anchor)`.
+ * The match restricts to elements whose OWN direct text equals the label, so a
+ * wrapping container never false-matches; duplicate labels across sections are
+ * not a concern because we only ever search within the already-switched section.
+ *
  * Timing: call this AFTER the section switch has committed and the target section
  * has mounted. The caller schedules it via requestAnimationFrame (double rAF) so
  * the new section's DOM exists. We also retry a few frames in case the section
@@ -231,9 +241,10 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
  */
 export function scrollToSettingsField(label: string, root: ParentNode = document): void {
   const want = label.trim().toLowerCase();
-  // Headings used across the section components. Kept broad so we find the row
-  // regardless of which tag a given section used for its title.
-  const SELECTOR = "h1,h2,h3,h4,h5,p,label,span,div";
+  // Tags used for field titles across the section components. Excludes `div`
+  // (too broad / costly) — every field heading we index uses one of these. The
+  // own-direct-text check below still guards against false matches.
+  const SELECTOR = "h1,h2,h3,h4,h5,p,label,span";
   let attempts = 0;
 
   const tryScroll = () => {
@@ -268,11 +279,18 @@ export function scrollToSettingsField(label: string, root: ParentNode = document
       target;
     scrollTarget.scrollIntoView({ behavior: "smooth", block: "center" });
 
-    // Flash a highlight ring so the eye lands on it, then fade out.
-    const flash = scrollTarget;
+    // Flash a highlight ring so the eye lands on it, then fade out. We stash the
+    // timeout id ON the element so flashing the SAME element again clears its
+    // own prior timer (no stale timeout removing a fresh highlight — the
+    // same-element race). Each element manages only its own highlight.
+    const flash = scrollTarget as HTMLElement & { _flashTimer?: number };
+    if (flash._flashTimer) window.clearTimeout(flash._flashTimer);
     flash.style.transition = "box-shadow 0.3s ease";
     flash.style.boxShadow = "0 0 0 2px hsl(var(--primary))";
-    window.setTimeout(() => { flash.style.boxShadow = ""; }, 1600);
+    flash._flashTimer = window.setTimeout(() => {
+      flash.style.boxShadow = "";
+      flash._flashTimer = undefined;
+    }, 1600);
   };
 
   // Two rAFs: first lets React commit the section switch, second lets layout
@@ -360,7 +378,9 @@ type PopoverProps<T extends SearchableNavItem> = {
   results: SearchResult<T>[];
   activeIndex: number;
   onHover: (i: number) => void;
-  onPick: (item: T) => void;
+  // Receives the full result (not just item) so callers get the matched field
+  // label directly — no re-lookup by id, which avoids any ambiguity.
+  onPick: (result: SearchResult<T>) => void;
   renderIcon?: (item: T) => React.ReactNode;
   translucent: boolean;
 };
@@ -374,9 +394,10 @@ export function SettingsSearchPopover<T extends SearchableNavItem>({
       role="listbox"
       data-testid="settings-search-results"
       className={cn(
-        // Floating overlay: absolutely positioned under the input, ABOVE the nav.
-        // z-50 so it sits over the section list. max-h + overflow for long result sets.
-        "absolute left-0 right-0 top-full mt-1 z-50 rounded-md border shadow-lg overflow-hidden",
+        // Positioning + width are owned by the Radix Popover Content wrapper in
+        // the caller (Portal to <body>, so no sidebar overflow clipping). This
+        // element just fills that box and styles the surface.
+        "w-full rounded-md border shadow-lg overflow-hidden",
         translucent
           ? "vibrant-sidebar-border bg-background/95 backdrop-blur-md"
           : "border-border bg-popover",
@@ -396,7 +417,7 @@ export function SettingsSearchPopover<T extends SearchableNavItem>({
               aria-selected={i === activeIndex}
               data-testid={`settings-search-result-${r.item.id}`}
               onMouseEnter={() => onHover(i)}
-              onClick={() => onPick(r.item)}
+              onClick={() => onPick(r)}
               className={cn(
                 "w-full flex items-start gap-2.5 px-3 py-2 text-left transition-colors",
                 i === activeIndex
