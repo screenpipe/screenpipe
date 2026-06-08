@@ -36,7 +36,7 @@ import { StorageSection, searchIndex as storageSearchIndex } from "@/components/
 import { NotificationsSettings, searchIndex as notificationsSearchIndex } from "@/components/settings/notifications-settings";
 import { UsageSection, searchIndex as usageSearchIndex } from "@/components/settings/usage-section";
 import { SpeakersSection, searchIndex as speakersSearchIndex } from "@/components/settings/speakers-section";
-import { SettingsSearchInput, SettingsSearchPopover, searchSettingsNav, type IndexedSettingsField, type SettingsField } from "@/components/settings/settings-search";
+import { SettingsSearchInput, SettingsSearchPopover, searchSettingsNav, scrollToSettingsField, type IndexedSettingsField, type SettingsField } from "@/components/settings/settings-search";
 
 // Settings search index for the inline ReferralSection defined further down in
 // this file. Lives here because the section itself lives here; same co-location
@@ -282,10 +282,14 @@ function SettingsContent() {
   // Reset highlight to top whenever the query changes.
   useEffect(() => { setActiveIndex(0); }, [searchQuery]);
 
-  const pickResult = (id: string) => {
+  const pickResult = (id: string, fieldLabel?: string) => {
     setSection(id as SettingsSection);
     setSearchQuery("");
     searchInputRef.current?.blur();
+    // If a specific field matched (not just the section name), scroll to it once
+    // the target section has mounted. scrollToSettingsField defers via rAF and
+    // retries a few frames in case the section mounts asynchronously.
+    if (fieldLabel) scrollToSettingsField(fieldLabel);
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -303,7 +307,7 @@ function SettingsContent() {
     } else if (e.key === "Enter") {
       e.preventDefault();
       const r = results[activeIndex];
-      if (r) pickResult(r.item.id);
+      if (r) pickResult(r.item.id, r.matchedFieldLabel);
     }
   };
 
@@ -378,7 +382,7 @@ function SettingsContent() {
               results={results}
               activeIndex={activeIndex}
               onHover={setActiveIndex}
-              onPick={(it) => pickResult(it.id)}
+              onPick={(it) => pickResult(it.id, results.find((r) => r.item.id === it.id)?.matchedFieldLabel)}
               renderIcon={(it) => (allItems.find((a) => a.id === it.id)?.icon ?? null)}
               translucent={isTranslucent}
             />

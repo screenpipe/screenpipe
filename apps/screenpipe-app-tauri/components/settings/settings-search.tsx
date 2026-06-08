@@ -214,6 +214,72 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
   );
 }
 
+/**
+ * Scroll the settings content so the field titled `label` is visible, and flash
+ * a brief highlight ring so the user's eye lands on it. Text-based lookup: we
+ * match the rendered heading whose trimmed text equals `label` (case-insensitive).
+ * No per-field anchor attributes needed because the search index labels are kept
+ * identical to the rendered headings.
+ *
+ * Timing: call this AFTER the section switch has committed and the target section
+ * has mounted. The caller schedules it via requestAnimationFrame (double rAF) so
+ * the new section's DOM exists. We also retry a few frames in case the section
+ * mounts asynchronously (lazy data, layout).
+ *
+ * @param label   the field label to locate (matches SettingsField.label)
+ * @param root    optional scroll/search root; defaults to document
+ */
+export function scrollToSettingsField(label: string, root: ParentNode = document): void {
+  const want = label.trim().toLowerCase();
+  // Headings used across the section components. Kept broad so we find the row
+  // regardless of which tag a given section used for its title.
+  const SELECTOR = "h1,h2,h3,h4,h5,p,label,span,div";
+  let attempts = 0;
+
+  const tryScroll = () => {
+    attempts += 1;
+    let target: HTMLElement | null = null;
+    const nodes = root.querySelectorAll<HTMLElement>(SELECTOR);
+    for (const el of nodes) {
+      // Use the element's OWN direct text (not nested) so we match the heading
+      // itself, not a wrapping container that also contains the heading.
+      const own = Array.from(el.childNodes)
+        .filter((n) => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.textContent ?? "")
+        .join("")
+        .trim()
+        .toLowerCase();
+      if (own === want) { target = el; break; }
+    }
+
+    if (!target) {
+      // Section may still be mounting — retry a few frames before giving up.
+      if (attempts < 10) requestAnimationFrame(tryScroll);
+      return;
+    }
+
+    // Scroll the nearest card/row wrapper into view, centered, so the field
+    // isn't jammed against the top edge. Screenpipe Cards render with a `border`
+    // + `bg-card` (sharp corners, no rounded class), so we climb to the nearest
+    // bordered card if present, else use the heading itself.
+    const scrollTarget =
+      target.closest<HTMLElement>(".bg-card") ??
+      target.closest<HTMLElement>("[class*='border']") ??
+      target;
+    scrollTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    // Flash a highlight ring so the eye lands on it, then fade out.
+    const flash = scrollTarget;
+    flash.style.transition = "box-shadow 0.3s ease";
+    flash.style.boxShadow = "0 0 0 2px hsl(var(--primary))";
+    window.setTimeout(() => { flash.style.boxShadow = ""; }, 1600);
+  };
+
+  // Two rAFs: first lets React commit the section switch, second lets layout
+  // settle before we measure/scroll.
+  requestAnimationFrame(() => requestAnimationFrame(tryScroll));
+}
+
 type InputProps = {
   value: string;
   onChange: (v: string) => void;
