@@ -169,6 +169,14 @@ function isUnrestricted(perms?: PipePermissions): boolean {
   );
 }
 
+export function getPipeInstallRisk(pipe: { permissions?: PipePermissions; author_verified?: boolean | null }): "safe" | "warning" | "high" {
+  const unrestricted = isUnrestricted(pipe.permissions);
+  const verified = !!pipe.author_verified;
+  if (unrestricted && !verified) return "high";
+  if (unrestricted || !verified) return "warning";
+  return "safe";
+}
+
 function getReadmeFromPipeMd(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("---")) return trimmed;
@@ -366,7 +374,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   // Install state
   const [installing, setInstalling] = useState<string | null>(null);
-  const [sourceReviewed, setSourceReviewed] = useState(false);
+  const [pendingInstall, setPendingInstall] = useState<StorePipe | PipeDetail | null>(null);
+  const [installRiskAcknowledged, setInstallRiskAcknowledged] = useState(false);
 
   // Review state
   const [reviewExpanded, setReviewExpanded] = useState(false);
@@ -493,7 +502,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const openDetail = async (slug: string) => {
     setShowDetail(true);
     setDetailLoading(true);
-    setSourceReviewed(false);
     setReviewExpanded(false);
     setSourceExpanded(false);
     setReviewRating(0);
@@ -516,6 +524,42 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     } finally {
       setDetailLoading(false);
     }
+  };
+
+  const requestInstall = (pipe: StorePipe | PipeDetail) => {
+    const risk = getPipeInstallRisk(pipe);
+    if (risk === "safe" || !!availableUpdates[pipe.slug]) {
+      void handleInstall(pipe.slug);
+      return;
+    }
+    setPendingInstall(pipe);
+    setInstallRiskAcknowledged(false);
+  };
+
+  const closeInstallGate = () => {
+    setPendingInstall(null);
+    setInstallRiskAcknowledged(false);
+  };
+
+  const confirmPendingInstall = () => {
+    if (!pendingInstall) return;
+    const risk = getPipeInstallRisk(pendingInstall);
+    if (risk === "high" && !installRiskAcknowledged) return;
+    const slug = pendingInstall.slug;
+    closeInstallGate();
+    void handleInstall(slug);
+  };
+
+  const reviewPendingInstallSource = () => {
+    if (!pendingInstall) return;
+    const slug = pendingInstall.slug;
+    closeInstallGate();
+    if (showDetail && selectedPipe?.slug === slug) {
+      setSourceExpanded(true);
+      return;
+    }
+    void openDetail(slug);
+    setSourceExpanded(true);
   };
 
   // Install pipe
@@ -657,6 +701,91 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     });
   }, [pipes, category]);
 
+  const installGateDialog = (
+    <Dialog open={!!pendingInstall} onOpenChange={(open) => !open && closeInstallGate()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="text-base">
+            {pendingInstall && getPipeInstallRisk(pendingInstall) === "high"
+              ? "review full-access pipe"
+              : "review pipe access"}
+          </DialogTitle>
+          <DialogDescription className="text-sm">
+            {pendingInstall && getPipeInstallRisk(pendingInstall) === "high"
+              ? "this pipe is from an unverified publisher and has full access to your screen data. make sure you trust it before installing."
+              : "this pipe needs a quick review before installation so you understand what data it can access."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {pendingInstall ? (
+          <div className="space-y-4">
+            <div className="border border-border rounded-none p-4 space-y-1.5">
+              <div className="text-sm font-medium">{pendingInstall.title}</div>
+              <div className="text-xs text-muted-foreground">
+                by {pendingInstall.author || "community publisher"}
+              </div>
+            </div>
+
+            <PermissionsReview
+              permissions={pendingInstall.permissions}
+              authorVerified={pendingInstall.author_verified}
+            />
+
+            {getPipeInstallRisk(pendingInstall) === "high" && (
+              <div className="border border-foreground bg-muted/50 rounded-none p-4 space-y-3">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  this pipe can access all your screen text, audio, keyboard input, and raw queries.
+                </p>
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="pipe-risk-ack"
+                    data-testid="pipe-risk-ack"
+                    checked={installRiskAcknowledged}
+                    onCheckedChange={(value) => setInstallRiskAcknowledged(value === true)}
+                  />
+                  <Label htmlFor="pipe-risk-ack" className="text-xs leading-relaxed">
+                    I understand this pipe can access all my data.
+                  </Label>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button variant="ghost" onClick={closeInstallGate}>
+            cancel
+          </Button>
+          <Button
+            variant="outline"
+            data-testid="pipe-risk-review-source"
+            onClick={reviewPendingInstallSource}
+          >
+            review source
+          </Button>
+          <Button
+            data-testid="pipe-risk-install-confirm"
+            disabled={
+              !pendingInstall ||
+              installing === pendingInstall.slug ||
+              (getPipeInstallRisk(pendingInstall) === "high" && !installRiskAcknowledged)
+            }
+            onClick={confirmPendingInstall}
+          >
+            {pendingInstall && installing === pendingInstall.slug ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                installing...
+              </>
+            ) : (
+              "install anyway"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   // If showing detail view, render full-width detail panel
   if (showDetail) {
     return (
@@ -680,9 +809,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <PipeDetailPanel
             pipe={selectedPipe}
             installing={installing}
-            sourceReviewed={sourceReviewed}
-            onSourceReviewedChange={setSourceReviewed}
-            onInstall={handleInstall}
+            onInstall={() => requestInstall(selectedPipe)}
             isInstalled={installedNames.has(selectedPipe.slug)}
             hasUpdate={!!availableUpdates[selectedPipe.slug]}
             sourceExpanded={sourceExpanded}
@@ -693,6 +820,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             onRefresh={() => openDetail(selectedPipe.slug)}
           />
         ) : null}
+
+        {installGateDialog}
       </div>
     );
   }
@@ -812,7 +941,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               pipe={pipe}
               isInstalled={installedNames.has(pipe.slug)}
               hasUpdate={!!availableUpdates[pipe.slug]}
-              onInstall={() => handleInstall(pipe.slug)}
+              onInstall={() => requestInstall(pipe)}
               installing={installing === pipe.slug}
               onClick={() => openDetail(pipe.slug)}
             />
@@ -831,6 +960,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           toast({ title: "pipe published to store" });
         }}
       />
+
+      {installGateDialog}
 
     </div>
   );
@@ -934,8 +1065,6 @@ function PipeCard({
 function PipeDetailPanel({
   pipe,
   installing,
-  sourceReviewed,
-  onSourceReviewedChange,
   onInstall,
   isInstalled,
   hasUpdate,
@@ -947,9 +1076,7 @@ function PipeDetailPanel({
 }: {
   pipe: PipeDetail;
   installing: string | null;
-  sourceReviewed: boolean;
-  onSourceReviewedChange: (v: boolean) => void;
-  onInstall: (slug: string) => void;
+  onInstall: () => void;
   isInstalled: boolean;
   hasUpdate?: boolean;
   sourceExpanded: boolean;
@@ -961,7 +1088,6 @@ function PipeDetailPanel({
 }) {
   const { toast } = useToast();
   const unrestricted = isUnrestricted(pipe.permissions);
-  const needsReview = unrestricted && !pipe.author_verified;
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
 
   const [editing, setEditing] = useState(false);
@@ -1195,9 +1321,9 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
                   hasUpdate && "bg-amber-500 hover:bg-amber-600 text-white"
                 )}
                 disabled={
-                  installing === pipe.slug || (isInstalled && !hasUpdate) || (needsReview && !sourceReviewed)
+                  installing === pipe.slug || (isInstalled && !hasUpdate)
                 }
-                onClick={() => onInstall(pipe.slug)}
+                onClick={onInstall}
               >
                 {installing === pipe.slug ? (
                   <>
@@ -1351,17 +1477,10 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
               this pipe has no data access restrictions. it can access all your
               screen text, audio, keyboard input, and raw database queries.
             </p>
-            {needsReview && (
-              <div className="flex items-center gap-2 pt-1">
-                <Checkbox
-                  id="source-reviewed"
-                  checked={sourceReviewed}
-                  onCheckedChange={(v) => onSourceReviewedChange(v === true)}
-                />
-                <Label htmlFor="source-reviewed" className="text-xs">
-                  I have reviewed the source code below
-                </Label>
-              </div>
+            {!pipe.author_verified && (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                this publisher is not verified. use the source section below if you want to inspect the pipe before installing.
+              </p>
             )}
           </div>
         )}
