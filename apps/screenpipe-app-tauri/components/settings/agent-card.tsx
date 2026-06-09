@@ -33,84 +33,17 @@ import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 
 // ---------------------------------------------------------------------------
-// Canonical screenpipe SKILL.md files — kept in sync with docs.screenpi.pe/openclaw.
-// Two flavors: API (read screen history over the local REST API) and CLI (manage
-// pipes + connections via the bundled CLI). Agent cards offer both.
+// Canonical screenpipe SKILL.md content. Re-exported from a generated module so
+// the "copy / save SKILL.md" text the cards serve is always the source of truth
+// from the repo: .claude/skills/{screenpipe-api,screenpipe-cli}/SKILL.md
+// (the same folders the `... skills install github:...` one-liners install from).
+// Regenerated on prebuild by scripts/gen-skill-content.js. Do not hand-edit copies.
 // ---------------------------------------------------------------------------
 
-export const SCREENPIPE_API_SKILL_MD = `---
-name: screenpipe-api
-description: Search screen recordings and audio transcriptions from the user's computer
-tools:
-  - Bash
----
-# screenpipe API skill
-
-Query the user's screen history via the local API at http://localhost:3030.
-
-## search content
-\`\`\`bash
-curl -s "http://localhost:3030/search?q=QUERY&limit=20"
-\`\`\`
-
-## get recent activity
-\`\`\`bash
-curl -s "http://localhost:3030/search?limit=10&content_type=ocr"
-\`\`\`
-
-## activity summary
-\`\`\`bash
-curl -s "http://localhost:3030/activity-summary?start_time=2024-01-15T10:00:00Z&end_time=2024-01-15T18:00:00Z"
-\`\`\`
-
-## list meetings
-\`\`\`bash
-curl -s "http://localhost:3030/meetings?limit=20"
-\`\`\`
-`;
-
-export const SCREENPIPE_CLI_SKILL_MD = `---
-name: screenpipe-cli
-description: Manage screenpipe pipes (scheduled AI automations) and connections (Telegram, Slack, Discord, ...) from the command line
-tools:
-  - Bash
----
-# screenpipe CLI skill
-
-Run commands with \`bun x screenpipe@latest\` — no separate install needed. Always run
-from a clean temp dir to avoid node_modules conflicts:
-
-\`\`\`bash
-cd "$(mktemp -d)" && bun x screenpipe@latest <command>
-\`\`\`
-
-## pipes — scheduled AI automations
-
-Each pipe is a markdown file at \`~/.screenpipe/pipes/<name>/pipe.md\` (YAML frontmatter +
-prompt) that runs on a schedule.
-
-\`\`\`bash
-bun x screenpipe@latest pipe list            # list pipes (compact)
-bun x screenpipe@latest pipe run <name>      # run once now (test)
-bun x screenpipe@latest pipe logs <name>     # view execution logs
-bun x screenpipe@latest pipe enable <name>   # enable on schedule
-bun x screenpipe@latest pipe disable <name>  # disable
-bun x screenpipe@latest pipe install <url>   # install from GitHub or local path
-\`\`\`
-
-## connections — integrations
-
-\`\`\`bash
-bun x screenpipe@latest connection list          # list integrations + status
-bun x screenpipe@latest connection get <id>      # show saved config (self-describing)
-bun x screenpipe@latest connection set <id> k=v  # save credentials
-bun x screenpipe@latest connection test <id>     # verify it works
-\`\`\`
-
-Connection ids: \`telegram\`, \`slack\`, \`discord\`, \`email\`, \`todoist\`, \`teams\`,
-\`google-calendar\`, \`openclaw\`. Don't guess credential shapes — run \`connection get <id>\`;
-each entry self-describes its fields and example bodies.
-`;
+export {
+  SCREENPIPE_API_SKILL_MD,
+  SCREENPIPE_CLI_SKILL_MD,
+} from "@/lib/generated/screenpipe-skills";
 
 // ---------------------------------------------------------------------------
 // Shared types

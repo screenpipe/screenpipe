@@ -27,9 +27,10 @@
     "typecheck": "bunx tsc --noEmit",
     "bindings:check": "cargo test -p screenpipe-app tauri_bindings_are_current --manifest-path src-tauri/Cargo.toml -- --nocapture",
     "bindings:generate": "UPDATE_TAURI_BINDINGS=1 cargo test -p screenpipe-app export_typescript_bindings --manifest-path src-tauri/Cargo.toml -- --nocapture",
+    "skills:generate": "bun scripts/gen-skill-content.js",
     "build": "next build",
-    "predev": "bun scripts/pre_build.js",
-    "prebuild": "bun scripts/pre_build.js",
+    "predev": "bun scripts/gen-skill-content.js && bun scripts/pre_build.js",
+    "prebuild": "bun scripts/gen-skill-content.js && bun scripts/pre_build.js",
     "tauri": "tauri",
     "tauri:build": "scripts/build_macos.sh",
     "clean": "rm -rf out && cargo clean && rm -rf src-tauri/{screenpipe-*,tesseract-*,ffmpeg*,openblas*,bun*,ollama*,ui_monitor*} node_modules"
