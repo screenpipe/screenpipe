@@ -67,7 +67,7 @@ async calendarGetEvents(hoursBack: number | null, hoursAhead: number | null) : P
 /**
  * Reset TCC (privacy) permission for Calendars on this app's bundle ID.
  *
- * Why: users (Mike, Jarad, Ruark, Louis's own Mac mini) clicked
+ * Why: multiple users (including Louis's own Mac mini) clicked
  * "Fix Calendar Permission" → macOS opened the Calendars privacy pane
  * with an EMPTY app list, so they had no way to grant access. Root cause
  * is a stale TCC record (dev-build → prod-build reinstall, OS update,
@@ -204,6 +204,9 @@ async checkInputMonitoringPermissionCmd() : Promise<OSPermissionStatus> {
  */
 async checkMicrophonePermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_microphone_permission");
+},
+async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_permission", { permission });
 },
 /**
  * Check only screen recording permission (no dialog trigger)
@@ -713,9 +716,9 @@ async icsCalendarGetEntries() : Promise<Result<IcsCalendarEntry[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async icsCalendarGetUpcoming() : Promise<Result<CalendarEventItem[], string>> {
+async icsCalendarGetUpcoming(hoursBack: number | null, hoursAhead: number | null) : Promise<Result<CalendarEventItem[], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming") };
+    return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_upcoming", { hoursBack, hoursAhead }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -732,6 +735,19 @@ async icsCalendarSaveEntries(entries: IcsCalendarEntry[]) : Promise<Result<null,
 async icsCalendarTestUrl(url: string) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ics_calendar_test_url", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Copy a skill folder into the screenpipe store. `source_path` is the folder
+ * that directly contains `SKILL.md` (from a scan result or the folder picker).
+ * Re-importing the same name refreshes it.
+ */
+async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("import_skill", { sourcePath }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -770,6 +786,17 @@ async isServerRunning() : Promise<Result<boolean, string>> {
 async listCacheFiles() : Promise<Result<CacheFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_cache_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List skills currently in the screenpipe store.
+ */
+async listImportedSkills() : Promise<Result<ImportedSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_imported_skills") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1353,6 +1380,14 @@ async reencryptStore() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async refreshTrayMenu() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_tray_menu") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Wipe the persisted API auth key and write a fresh `sp-<uuid8>` to the
  * secret store. Returns the new key. The running server keeps its old key
@@ -1430,6 +1465,19 @@ async remoteSyncStopScheduler() : Promise<Result<null, string>> {
 async remoteSyncTest(config: RemoteSyncConfig) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remote_sync_test", { config }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Remove a skill from the store. The pi executor's sync drops the mirrored
+ * copies from new sessions; we also clear the chat agent's live copy so it
+ * disappears without waiting for a restart.
+ */
+async removeImportedSkill(name: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_imported_skill", { name }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1514,6 +1562,14 @@ async resetOnboarding() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async resetPermission(permission: OSPermission) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reset_permission", { permission }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Resize the Search NSPanel. Regular Tauri setSize doesn't work on NSPanels.
  */
@@ -1585,6 +1641,17 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Scan the standard locations for skill folders the user could import.
+ */
+async scanDeviceSkills() : Promise<Result<DeviceSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("scan_device_skills") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2098,6 +2165,30 @@ export type CalendarStatus = { available: boolean; authorized: boolean; authoriz
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 /**
+ * A skill folder discovered somewhere on the user's device.
+ */
+export type DeviceSkill = {
+/**
+ * Display name (from frontmatter `name:`, falling back to the folder name).
+ */
+name: string;
+/**
+ * One-line summary from frontmatter `description:` (may be empty).
+ */
+description: string;
+/**
+ * Absolute path to the skill folder (the one containing `SKILL.md`).
+ */
+path: string;
+/**
+ * Human label for where it was found, e.g. `~/.claude/skills`.
+ */
+source: string;
+/**
+ * True when a skill of the same normalized name is already imported.
+ */
+imported: boolean }
+/**
  * An SSH host discovered from ~/.ssh/config or ~/.ssh/known_hosts.
  */
 export type DiscoveredHost = { host: string; port: number; user: string | null; key_path: string | null; source: string;
@@ -2112,6 +2203,14 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
+/**
+ * A skill currently sitting in the screenpipe store.
+ */
+export type ImportedSkill = { name: string; description: string;
+/**
+ * Absolute path inside `<data_dir>/skills/`.
+ */
+path: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
@@ -2126,7 +2225,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null;
  * since the user can't fix it by reconnecting in the broken bundle.
  */
 needs_attention?: boolean }
-export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring"
+export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
@@ -2277,17 +2376,19 @@ audioDevices: string[];
 useSystemDefaultAudio: boolean;
 /**
  * Experimental: capture System Audio via the CoreAudio Process Tap API
- * (macOS 14.4+) instead of ScreenCaptureKit. Avoids SCK's display
- * enumeration failures after sleep/wake, the GPU/compositor wake
- * overhead, and — most importantly — captures audio that's been
- * routed to a Bluetooth headset via HFP (which SCK can't see; see
- * Ruark Ferreira's 2026-04-24 Zoom call where AirPods-as-input
- * silently routed output away from the SCK-visible mixer).
+ * (macOS 14.4+) instead of ScreenCaptureKit. The tap sidesteps SCK's
+ * display-enumeration failures after sleep/wake and the GPU/compositor
+ * wake overhead, but it cannot see audio rendered through a
+ * VoiceProcessing AudioUnit (Zoom / Google Meet / Microsoft Teams all
+ * use one for echo cancellation), so on meeting audio it silently
+ * captures zeroed buffers even though tap creation succeeds.
  *
- * Default `true`: if tap creation fails for any reason (permission,
- * macOS <14.4, OS quirk), stream.rs falls back to the SCK path
- * automatically — so flipping the default on can't regress anyone.
- * Ignored on non-macOS platforms.
+ * Default `false` (see `default_experimental_coreaudio_system_audio`).
+ * SCK captures at the display compositor, which does see VoiceProcessing
+ * output, so it is the right default for anyone on calls. Users who hit
+ * SCK's sleep/wake display-enumeration bug can still opt in; when the tap
+ * is on and creation fails (permission, macOS <14.4, OS quirk), stream.rs
+ * falls back to the SCK path automatically. Ignored on non-macOS platforms.
  */
 experimentalCoreaudioSystemAudio?: boolean;
 /**
@@ -2372,6 +2473,17 @@ disableSnapshotCompaction?: boolean;
  */
 disableMeetingDetector?: boolean;
 /**
+ * Apps / meeting services to exclude from automatic meeting detection
+ * while leaving detection on for everything else. Case-insensitive
+ * substring match against the running app's name/process AND the matched
+ * detection profile's identifiers (native names + browser URL patterns),
+ * so an entry can be what the user sees ("Discord") or a service domain
+ * ("meet.google.com"). Use when one app trips the detector spuriously
+ * (an always-open Teams, a Discord call you don't want logged) but you
+ * still want Zoom/Meet/etc. detected. Empty = detect all known apps.
+ */
+ignoredMeetingApps?: string[];
+/**
  * Override `EventDrivenCaptureConfig::idle_capture_interval_ms` (milliseconds).
  * None = follow active PowerProfile.
  */
@@ -2410,21 +2522,16 @@ hdRecordingDefault?: string;
  */
 hdRecordingIntervalMs?: number;
 /**
- * Override `EventDrivenCaptureConfig::capture_on_keystroke`.
- * None = engine default (false). When true, non-printable key events
- * (Arrow / Enter / Tab / Esc, modifier combos like Ctrl+S) fire a paired
- * capture so `ui_events.frame_id` is populated for the originating row.
- * Off by default — fast typing can generate a storm of captures even
- * with the 200ms `min_capture_interval_ms` debounce.
+ * Legacy key-trigger override retained for settings compatibility.
+ * Recording sessions keep keyboard-triggered capture on; raw key/text DB
+ * rows are controlled separately by `disableKeyboardCapture`.
  */
 captureOnKeystroke?: boolean | null;
 /**
  * Override `EventDrivenCaptureConfig::capture_on_clipboard`.
  * None = engine default (false). When true, clipboard changes fire a
- * paired capture so `ui_events.frame_id` is populated for the
- * clipboard row. Off by default — adds 50-150ms of blocking work per
- * Ctrl+C/X/V (more with OCR fallback) which can cause visible HID lag
- * on some USB devices.
+ * paired capture. Clipboard DB rows are still controlled separately by
+ * `disableClipboardCapture`.
  */
 captureOnClipboard?: boolean | null;
 /**
@@ -2477,19 +2584,18 @@ ignoreIncognitoWindows: boolean;
  */
 pauseOnDrmContent?: boolean;
 /**
- * Skip clipboard capture in the UI recorder. Defaults to `true`
- * (clipboard capture OFF) — passwords / API keys / private keys
- * frequently pass through the clipboard, so it's opt-in via the
- * "Capture clipboard" toggle.
+ * Skip persisting clipboard rows/content in the UI recorder. Defaults to
+ * `true` (clipboard DB capture OFF) — passwords / API keys / private keys
+ * frequently pass through the clipboard. Clipboard operations can still
+ * wake event-driven capture when `captureOnClipboard` is enabled.
  */
 disableClipboardCapture?: boolean;
 /**
- * Skip keyboard / typed-text capture in the UI recorder
- * (`UiCaptureConfig::capture_text`). Defaults to `true` (keyboard
- * capture OFF) — the raw keystroke stream is the highest-risk,
- * most-redundant signal (secrets get typed), and the accessibility
- * tree + OCR still capture on-screen text so Rewind/Ask keep working.
- * Opt-in via the "Capture keyboard" toggle.
+ * Skip persisting keyboard / typed-text rows in the UI recorder.
+ * Defaults to `true` (keyboard DB capture OFF). Keyboard events still
+ * wake event-driven capture, and the accessibility tree + OCR still
+ * capture on-screen text so Rewind/Ask keep working.
+ * Opt in to keyboard DB rows via the "Capture keyboard" toggle.
  */
 disableKeyboardCapture?: boolean;
 /**
@@ -2716,7 +2822,14 @@ hideThinkingBlocks?: boolean;
 /**
  * UI theme: "light", "dark", or "system".
  */
-uiTheme?: string }
+uiTheme?: string;
+/**
+ * Windows-only: when true, clicking the X on the Home window hides it to
+ * the system tray (and removes it from the taskbar) instead of minimizing.
+ * Read by the CloseRequested handler in main.rs. Default off (historical
+ * minimize-to-taskbar behavior).
+ */
+minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type Suggestion = { text: string;
 /**
@@ -2739,7 +2852,7 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
  * Sync status response.
  */
 export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: number | null; storageLimit: number | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
-export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null }
+export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null; app_entitled: boolean | null; subscription_plan: string | null; entitlement: JsonValue | null }
 export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: number } | { kind: "image"; data_url: string; name: string; path: string } |
 /**
  * Non-text, non-image file (random binary). The UI surfaces a

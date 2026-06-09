@@ -783,6 +783,14 @@ function HomeContent() {
     return () => window.removeEventListener("open-settings", handler);
   }, [openSettings, setActiveSection]);
 
+  // "Try in Chat" from connections page — switch to chat view so the
+  // pre-filled prompt (set by standalone-chat.tsx) becomes visible.
+  useEffect(() => {
+    const handler = () => setActiveSection("home");
+    window.addEventListener("try-in-chat", handler);
+    return () => window.removeEventListener("try-in-chat", handler);
+  }, [setActiveSection]);
+
   const renderMainSection = () => {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
       return (
@@ -947,12 +955,12 @@ function HomeContent() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
                   search
-                  <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
-                    {formatShortcutDisplay(
-                      settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
-                      isMac,
-                    )}
-                  </kbd>
+                  {!settings.disabledShortcuts.includes("searchShortcut") &&
+                  settings.searchShortcut ? (
+                    <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                      {formatShortcutDisplay(settings.searchShortcut, isMac)}
+                    </kbd>
+                  ) : null}
                 </TooltipContent>
               </Tooltip>
             </>
@@ -1162,12 +1170,12 @@ function HomeContent() {
                       </TooltipTrigger>
                       <TooltipContent side="right" className="text-xs">
                         search
-                        <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
-                          {formatShortcutDisplay(
-                            settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
-                            isMac,
-                          )}
-                        </kbd>
+                        {!settings.disabledShortcuts.includes("searchShortcut") &&
+                        settings.searchShortcut ? (
+                          <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                            {formatShortcutDisplay(settings.searchShortcut, isMac)}
+                          </kbd>
+                        ) : null}
                       </TooltipContent>
                     </Tooltip>
                     {/* Divider between the search affordance and the

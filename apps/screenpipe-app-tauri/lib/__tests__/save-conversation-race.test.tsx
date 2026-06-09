@@ -43,14 +43,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useRef } from "react";
+import {
+  deleteCachedBrowserState,
+  setCachedBrowserState,
+} from "../browser-state-cache";
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 // Capture every disk write so the test can assert (id, messages) pairs.
-const saveCalls: Array<{ id: string; messages: any[] }> = [];
+const saveCalls: Array<{ id: string; messages: any[]; browserState?: any }> = [];
 
 vi.mock("@/lib/chat-storage", () => ({
   saveConversationFile: vi.fn(async (conv: any) => {
-    saveCalls.push({ id: conv.id, messages: conv.messages });
+    saveCalls.push({ id: conv.id, messages: conv.messages, browserState: conv.browserState });
   }),
   loadConversationFile: vi.fn(async () => null),
   deleteConversationFile: vi.fn(async () => undefined),
@@ -131,6 +135,8 @@ function useHarness(args: {
 
 beforeEach(() => {
   saveCalls.length = 0;
+  deleteCachedBrowserState("chat-A");
+  deleteCachedBrowserState("fresh-sid");
 });
 
 afterEach(() => {
@@ -197,5 +203,35 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
 
     expect(saveCalls).toHaveLength(1);
     expect(saveCalls[0].id).toBe("fresh-sid");
+  });
+
+  it("preserves browserState from the shadow cache when the disk file does not exist yet", async () => {
+    const messages = [{ id: "u1", role: "user" as const, content: "hello", timestamp: 1 }];
+    setCachedBrowserState("fresh-sid", {
+      url: "https://example.com/browser-state-shadow",
+      updatedAt: 1_234,
+      width: 512,
+      collapsed: true,
+    });
+
+    const { result } = renderHook(() =>
+      useHarness({
+        initialMessages: messages,
+        initialConversationId: null,
+        initialPiSessionId: "fresh-sid",
+      }),
+    );
+
+    await act(async () => {
+      await result.current.hook.saveConversation(messages);
+    });
+
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].browserState).toEqual({
+      url: "https://example.com/browser-state-shadow",
+      updatedAt: 1_234,
+      width: 512,
+      collapsed: true,
+    });
   });
 });

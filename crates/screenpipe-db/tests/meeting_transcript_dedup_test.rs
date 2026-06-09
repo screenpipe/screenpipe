@@ -32,7 +32,7 @@ mod tests {
 
     fn input_device() -> AudioDevice {
         AudioDevice {
-            name: "Ruark’s AirPods".to_string(),
+            name: "AirPods".to_string(),
             device_type: DeviceType::Input,
         }
     }
@@ -71,7 +71,7 @@ mod tests {
                 "screenpipe-cloud",
                 Some("nova-3"),
                 &format!("deepgram:0:{}", i * 1000),
-                "Ruark’s AirPods",
+                "AirPods",
                 "input",
                 None,
                 &format!("me talking part {i}"),
@@ -109,7 +109,7 @@ mod tests {
         // SHOULD still be deduped away (same direction, real duplicate).
         let in_chunk = db
             .insert_audio_chunk(
-                "Ruark’s AirPods (input)_dupe.mp4",
+                "AirPods (input)_dupe.mp4",
                 Some(base + Duration::seconds(4)),
             )
             .await

@@ -9,7 +9,7 @@ use crate::health::{
     set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
 use crate::recording::{local_api_context_from_app, RecordingState};
-use crate::store::{get_store, OnboardingStore, SettingsStore};
+use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window::ShowRewindWindow;
 use anyhow::Result;
@@ -46,8 +46,11 @@ struct TrayMenuData {
     search_shortcut: String,
     chat_shortcut: String,
     cloud_subscribed: bool,
+    /// Internal plan id from /api/user (standard|pro|team|enterprise|lifetime|none).
+    subscription_plan: Option<String>,
     has_permission_issue: bool,
     app_ui_hidden: bool,
+    disable_timeline: bool,
 }
 
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
@@ -65,35 +68,51 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         ("Control+Super+S", "Control+Super+K", "Control+Super+L")
     };
 
-    let (show_shortcut, search_shortcut, chat_shortcut) = if let Ok(store) = get_store(app, None) {
-        (
-            store
-                .get("showScreenpipeShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_show.to_string()),
-            store
-                .get("searchShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_search.to_string()),
-            store
-                .get("showChatShortcut")
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| default_chat.to_string()),
-        )
+    let settings = SettingsStore::get(app)
+        .unwrap_or_default()
+        .unwrap_or_default();
+
+    let mut show_shortcut = if settings.show_screenpipe_shortcut.trim().is_empty() {
+        default_show.to_string()
     } else {
-        (
-            default_show.to_string(),
-            default_search.to_string(),
-            default_chat.to_string(),
-        )
+        settings.show_screenpipe_shortcut.clone()
+    };
+    let mut search_shortcut = if settings.search_shortcut.trim().is_empty() {
+        default_search.to_string()
+    } else {
+        settings.search_shortcut.clone()
+    };
+    let mut chat_shortcut = if settings.show_chat_shortcut.trim().is_empty() {
+        default_chat.to_string()
+    } else {
+        settings.show_chat_shortcut.clone()
     };
 
-    let cloud_subscribed = SettingsStore::get(app)
-        .unwrap_or_default()
-        .unwrap_or_default()
-        .user
-        .cloud_subscribed
-        == Some(true);
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "showScreenpipeShortcut")
+    {
+        show_shortcut.clear();
+    }
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "searchShortcut")
+    {
+        search_shortcut.clear();
+    }
+    if settings
+        .disabled_shortcuts
+        .iter()
+        .any(|shortcut| shortcut == "showChatShortcut")
+    {
+        chat_shortcut.clear();
+    }
+
+    let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
+    let subscription_plan = settings.user.subscription_plan.clone();
+    let disable_timeline = settings.recording.disable_timeline;
 
     let app_ui_hidden = is_app_ui_hidden();
 
@@ -117,8 +136,25 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         search_shortcut,
         chat_shortcut,
         cloud_subscribed,
+        subscription_plan,
         has_permission_issue,
         app_ui_hidden,
+        disable_timeline,
+    }
+}
+
+/// Map an internal plan id to the public pricing-page display name.
+/// The pricing page renames the tiers: standard→"Basic", pro→"Business",
+/// enterprise→"Enterprise". Keep in sync with `planDisplayName` in
+/// lib/app-entitlement.ts.
+fn plan_display_name(plan: Option<&str>) -> &'static str {
+    match plan.unwrap_or("none").to_ascii_lowercase().as_str() {
+        "standard" => "Basic",
+        "pro" => "Business",
+        "team" => "Team",
+        "enterprise" => "Enterprise",
+        "lifetime" => "Lifetime",
+        _ => "Free",
     }
 }
 
@@ -202,7 +238,7 @@ fn send_notify(title: impl Into<String>, body: impl Into<String>) {
 }
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
-fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
+pub(crate) fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
     let update_item = UPDATE_MENU_ITEM
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -343,8 +379,10 @@ struct MenuState {
     has_permission_issue: bool,
     /// Device names + active status for change detection
     devices: Vec<(String, bool)>,
-    /// Whether user has a pro subscription (triggers menu rebuild on login)
+    /// Whether user has a cloud (Business+) subscription (triggers menu rebuild on login)
     cloud_subscribed: bool,
+    /// Plan id (Free/Basic/Business/…) so plan-label changes also rebuild the menu
+    subscription_plan: Option<String>,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -561,25 +599,25 @@ fn create_dynamic_menu(
     // --- Primary actions (most-used first) ---
     // Use native accelerators for right-aligned shortcut display (like Notion Calendar)
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_chat") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show_chat", "Chat")
-                .accelerator(&to_accelerator(&chat_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show_chat", "Chat");
+        if !chat_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(chat_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_search") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show_search", "Search")
-                .accelerator(&to_accelerator(&search_shortcut))
-                .build(app)?,
-        );
+        let mut item = MenuItemBuilder::with_id("show_search", "Search");
+        if !search_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(search_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
-    if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("show", "Timeline")
-                .accelerator(&to_accelerator(&show_shortcut))
-                .build(app)?,
-        );
+    if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") && !data.disable_timeline {
+        let mut item = MenuItemBuilder::with_id("show", "Timeline");
+        if !show_shortcut.is_empty() {
+            item = item.accelerator(&to_accelerator(show_shortcut));
+        }
+        menu_builder = menu_builder.item(&item.build(app)?);
     }
 
     // --- Recording status + devices ---
@@ -671,22 +709,19 @@ fn create_dynamic_menu(
 
     // --- Plan / usage info ---
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_plan") {
-        let is_pro = data.cloud_subscribed;
+        let plan_label = plan_display_name(data.subscription_plan.as_deref());
+        let has_cloud = data.cloud_subscribed;
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
-        if is_pro {
-            menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id("plan_info", "Pro plan")
-                    .enabled(false)
-                    .build(app)?,
-            );
-        } else {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("plan_info", format!("{} plan", plan_label))
+                .enabled(false)
+                .build(app)?,
+        );
+        // Anyone without cloud (Free, Basic, or Lifetime-only) can move up to
+        // Business to add cloud sync, cloud AI, and integrations.
+        if !has_cloud {
             menu_builder = menu_builder
-                .item(
-                    &MenuItemBuilder::with_id("plan_info", "Free plan")
-                        .enabled(false)
-                        .build(app)?,
-                )
-                .item(&MenuItemBuilder::with_id("upgrade", "⚡ Upgrade to Pro").build(app)?);
+                .item(&MenuItemBuilder::with_id("upgrade", "⚡ Upgrade to Business").build(app)?);
         }
     }
 
@@ -1374,6 +1409,7 @@ async fn update_menu_if_needed(
             .map(|d| (d.name.clone(), d.active))
             .collect(),
         cloud_subscribed: data.cloud_subscribed,
+        subscription_plan: data.subscription_plan.clone(),
     };
 
     // Compare with last state (poison-safe: run handler must not panic)

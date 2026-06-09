@@ -41,6 +41,7 @@ pub mod logseq;
 pub mod loops;
 pub mod make;
 pub mod microsoft365;
+pub mod mochi;
 pub mod monday;
 pub mod n8n;
 pub mod notion;
@@ -77,6 +78,7 @@ pub mod zoom;
 use crate::oauth;
 use anyhow::Result;
 use async_trait::async_trait;
+use screenpipe_core::connections::sync as core_connections_sync;
 use screenpipe_secrets::SecretStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -162,17 +164,11 @@ pub enum ProxyAuth {
 /// whenever the last successful refresh is older than this duration, even
 /// if the access token is still valid. The value should leave headroom
 /// against the provider's published limit (e.g. Zoom's 15h ⇒ 12h floor).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RefreshPolicy {
     /// Maximum gap between successful refreshes. `None` = no keep-alive
     /// pressure beyond the access-token-expiry path.
     pub keep_alive: Option<std::time::Duration>,
-}
-
-impl Default for RefreshPolicy {
-    fn default() -> Self {
-        Self { keep_alive: None }
-    }
 }
 
 #[async_trait]
@@ -315,6 +311,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(google_sheets::GoogleSheets),
         Box::new(quickbooks::QuickBooks),
         Box::new(readwise::Readwise),
+        Box::new(mochi::Mochi),
         Box::new(loops::Loops),
         Box::new(resend::Resend),
         Box::new(supabase::Supabase),
@@ -484,13 +481,19 @@ impl ConnectionManager {
             enabled: true,
             credentials: creds,
         };
-        save_connection(
+        let result = save_connection(
             self.secret_store.as_deref(),
             &self.screenpipe_dir,
             id,
             &conn,
         )
-        .await
+        .await;
+
+        if result.is_ok() {
+            core_connections_sync::clear_connection_tombstone(&self.screenpipe_dir, id);
+        }
+
+        result
     }
 
     pub async fn get_credentials(&self, id: &str) -> Result<Option<Map<String, Value>>> {
@@ -547,7 +550,12 @@ impl ConnectionManager {
     }
 
     pub async fn disconnect(&self, id: &str) -> Result<()> {
-        remove_connection(self.secret_store.as_deref(), &self.screenpipe_dir, id).await
+        let result =
+            remove_connection(self.secret_store.as_deref(), &self.screenpipe_dir, id).await;
+        if result.is_ok() {
+            core_connections_sync::record_connection_tombstone(&self.screenpipe_dir, id);
+        }
+        result
     }
 
     pub async fn test(&self, id: &str, creds: &Map<String, Value>) -> Result<String> {
@@ -570,13 +578,19 @@ impl ConnectionManager {
             enabled: true,
             credentials: creds,
         };
-        save_connection(
+        let result = save_connection(
             self.secret_store.as_deref(),
             &self.screenpipe_dir,
             &key,
             &conn,
         )
-        .await
+        .await;
+
+        if result.is_ok() {
+            core_connections_sync::clear_connection_tombstone(&self.screenpipe_dir, &key);
+        }
+
+        result
     }
 
     /// Return all saved instances for the given integration id.
@@ -595,7 +609,12 @@ impl ConnectionManager {
     /// Remove a specific instance (or the default) for the given integration.
     pub async fn disconnect_instance(&self, id: &str, instance: Option<&str>) -> Result<()> {
         let key = make_key(id, instance);
-        remove_connection(self.secret_store.as_deref(), &self.screenpipe_dir, &key).await
+        let result =
+            remove_connection(self.secret_store.as_deref(), &self.screenpipe_dir, &key).await;
+        if result.is_ok() {
+            core_connections_sync::record_connection_tombstone(&self.screenpipe_dir, &key);
+        }
+        result
     }
 
     fn find(&self, id: &str) -> Result<&dyn Integration> {
@@ -659,7 +678,20 @@ pub async fn render_context(
         }
     }
 
-    if cred_connected.is_empty() && oauth_connected.is_empty() {
+    let ics_settings =
+        crate::ics_calendar::load_ics_calendar_settings_from_store(screenpipe_dir).ok();
+    let ics_enabled: Vec<_> = ics_settings
+        .as_ref()
+        .map(|settings| {
+            settings
+                .entries
+                .iter()
+                .filter(|entry| entry.enabled)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if cred_connected.is_empty() && oauth_connected.is_empty() && ics_enabled.is_empty() {
         return String::new();
     }
 
@@ -711,6 +743,25 @@ pub async fn render_context(
         } else {
             // OAuth without proxy — still don't expose the token
             out.push_str("  (connected via OAuth — use the endpoints listed above; no raw token is exposed)\n");
+        }
+    }
+
+    if !ics_enabled.is_empty() {
+        out.push_str("\n### ICS Calendar\n");
+        out.push_str(
+            "Read-only access to subscribed ICS/webcal calendar feeds. \
+             Use GET /connections/ics-calendar/events?hours_back=0&hours_ahead=72 \
+             to list upcoming events, and GET /connections/ics-calendar/status for feed status. \
+             Feed URLs are private and are not exposed.\n",
+        );
+        out.push_str(&format!("  connected feeds: {}\n", ics_enabled.len()));
+        let names = ics_enabled
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            out.push_str(&format!("  feed names: {}\n", names.join(", ")));
         }
     }
 

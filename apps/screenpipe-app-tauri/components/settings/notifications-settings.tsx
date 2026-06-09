@@ -6,6 +6,19 @@
 import React from "react";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Capture stalls" },
+  { label: "App updates" },
+  { label: "Pipe suggestions" },
+  { label: "Pipe notifications" },
+  { label: "Display changes" },
+  { label: "Meeting live notes" },
+  { label: "Meeting audio not capturing" },
+  { label: "Live transcript not flowing" },
+];
 import {
   Select,
   SelectContent,

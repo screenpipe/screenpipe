@@ -23,6 +23,7 @@ log = "0.4"
 anyhow = "1.0"
 screenpipe-core = { path = "../screenpipe-core" }
 screenpipe-secrets = { path = "../screenpipe-secrets" }
+screenpipe-vault = { path = "../screenpipe-vault" }
 tracing = { workspace = true }
 # NOTE: dropped the `rsa` feature — it pulls `rsa = "0.10.0-rc.12"` which
 # has a `match`-arm type error against the pinned `pkcs8 = 0.11`. Ring
@@ -34,6 +35,8 @@ russh = { version = "0.60", default-features = false, features = ["ring", "flate
 russh-sftp = "2.1"
 dirs = "6"
 chrono = "0.4"
+chrono-tz = "0.10"
+icalendar = "0.17"
 async-trait = "0.1"
 once_cell = "1"
 uuid = { version = "1.5.0", features = ["v4"] }
@@ -54,7 +57,7 @@ default = []
 specta = ["dep:specta"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
-eventkit-rs = "0.1"
+eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52787c8435d734ed443e2d5641f45b0177cae", default-features = false, features = ["events"] }
 objc2 = "0.6"
 objc2-event-kit = "0.3"
 objc2-foundation = "0.3"

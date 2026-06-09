@@ -82,17 +82,19 @@ pub struct RecordingSettings {
     pub use_system_default_audio: bool,
 
     /// Experimental: capture System Audio via the CoreAudio Process Tap API
-    /// (macOS 14.4+) instead of ScreenCaptureKit. Avoids SCK's display
-    /// enumeration failures after sleep/wake, the GPU/compositor wake
-    /// overhead, and — most importantly — captures audio that's been
-    /// routed to a Bluetooth headset via HFP (which SCK can't see; see
-    /// Ruark Ferreira's 2026-04-24 Zoom call where AirPods-as-input
-    /// silently routed output away from the SCK-visible mixer).
+    /// (macOS 14.4+) instead of ScreenCaptureKit. The tap sidesteps SCK's
+    /// display-enumeration failures after sleep/wake and the GPU/compositor
+    /// wake overhead, but it cannot see audio rendered through a
+    /// VoiceProcessing AudioUnit (Zoom / Google Meet / Microsoft Teams all
+    /// use one for echo cancellation), so on meeting audio it silently
+    /// captures zeroed buffers even though tap creation succeeds.
     ///
-    /// Default `true`: if tap creation fails for any reason (permission,
-    /// macOS <14.4, OS quirk), stream.rs falls back to the SCK path
-    /// automatically — so flipping the default on can't regress anyone.
-    /// Ignored on non-macOS platforms.
+    /// Default `false` (see `default_experimental_coreaudio_system_audio`).
+    /// SCK captures at the display compositor, which does see VoiceProcessing
+    /// output, so it is the right default for anyone on calls. Users who hit
+    /// SCK's sleep/wake display-enumeration bug can still opt in; when the tap
+    /// is on and creation fails (permission, macOS <14.4, OS quirk), stream.rs
+    /// falls back to the SCK path automatically. Ignored on non-macOS platforms.
     #[serde(
         rename = "experimentalCoreaudioSystemAudio",
         default = "default_experimental_coreaudio_system_audio"
@@ -181,6 +183,17 @@ pub struct RecordingSettings {
     #[serde(rename = "disableMeetingDetector", default)]
     pub disable_meeting_detector: bool,
 
+    /// Apps / meeting services to exclude from automatic meeting detection
+    /// while leaving detection on for everything else. Case-insensitive
+    /// substring match against the running app's name/process AND the matched
+    /// detection profile's identifiers (native names + browser URL patterns),
+    /// so an entry can be what the user sees ("Discord") or a service domain
+    /// ("meet.google.com"). Use when one app trips the detector spuriously
+    /// (an always-open Teams, a Discord call you don't want logged) but you
+    /// still want Zoom/Meet/etc. detected. Empty = detect all known apps.
+    #[serde(rename = "ignoredMeetingApps", default)]
+    pub ignored_meeting_apps: Vec<String>,
+
     // ── Mitsukeru fork: event-driven capture overrides ─────────────────
     // ミツケル拡張：PowerProfile に依らず個別パラメータを直接指定するための上書き値。
     // None の場合は通常通り PowerProfile が決定。デスクトップ常時記録のような用途で
@@ -229,21 +242,16 @@ pub struct RecordingSettings {
     )]
     pub hd_recording_interval_ms: u64,
 
-    /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
-    /// None = engine default (false). When true, non-printable key events
-    /// (Arrow / Enter / Tab / Esc, modifier combos like Ctrl+S) fire a paired
-    /// capture so `ui_events.frame_id` is populated for the originating row.
-    /// Off by default — fast typing can generate a storm of captures even
-    /// with the 200ms `min_capture_interval_ms` debounce.
+    /// Legacy key-trigger override retained for settings compatibility.
+    /// Recording sessions keep keyboard-triggered capture on; raw key/text DB
+    /// rows are controlled separately by `disableKeyboardCapture`.
     #[serde(rename = "captureOnKeystroke", default)]
     pub capture_on_keystroke: Option<bool>,
 
     /// Override `EventDrivenCaptureConfig::capture_on_clipboard`.
     /// None = engine default (false). When true, clipboard changes fire a
-    /// paired capture so `ui_events.frame_id` is populated for the
-    /// clipboard row. Off by default — adds 50-150ms of blocking work per
-    /// Ctrl+C/X/V (more with OCR fallback) which can cause visible HID lag
-    /// on some USB devices.
+    /// paired capture. Clipboard DB rows are still controlled separately by
+    /// `disableClipboardCapture`.
     #[serde(rename = "captureOnClipboard", default)]
     pub capture_on_clipboard: Option<bool>,
 
@@ -303,19 +311,18 @@ pub struct RecordingSettings {
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
 
-    /// Skip clipboard capture in the UI recorder. Defaults to `true`
-    /// (clipboard capture OFF) — passwords / API keys / private keys
-    /// frequently pass through the clipboard, so it's opt-in via the
-    /// "Capture clipboard" toggle.
+    /// Skip persisting clipboard rows/content in the UI recorder. Defaults to
+    /// `true` (clipboard DB capture OFF) — passwords / API keys / private keys
+    /// frequently pass through the clipboard. Clipboard operations can still
+    /// wake event-driven capture when `captureOnClipboard` is enabled.
     #[serde(rename = "disableClipboardCapture", default = "default_true")]
     pub disable_clipboard_capture: bool,
 
-    /// Skip keyboard / typed-text capture in the UI recorder
-    /// (`UiCaptureConfig::capture_text`). Defaults to `true` (keyboard
-    /// capture OFF) — the raw keystroke stream is the highest-risk,
-    /// most-redundant signal (secrets get typed), and the accessibility
-    /// tree + OCR still capture on-screen text so Rewind/Ask keep working.
-    /// Opt-in via the "Capture keyboard" toggle.
+    /// Skip persisting keyboard / typed-text rows in the UI recorder.
+    /// Defaults to `true` (keyboard DB capture OFF). Keyboard events still
+    /// wake event-driven capture, and the accessibility tree + OCR still
+    /// capture on-screen text so Rewind/Ask keep working.
+    /// Opt in to keyboard DB rows via the "Capture keyboard" toggle.
     #[serde(rename = "disableKeyboardCapture", default = "default_true")]
     pub disable_keyboard_capture: bool,
 
@@ -550,6 +557,7 @@ impl Default for RecordingSettings {
             max_snapshot_width: default_max_snapshot_width(),
             disable_snapshot_compaction: false,
             disable_meeting_detector: false,
+            ignored_meeting_apps: vec![],
             idle_capture_interval_ms: None,
             visual_check_interval_ms: None,
             visual_change_threshold: None,

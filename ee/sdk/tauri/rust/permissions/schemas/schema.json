@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the screenpipe_events command without any pre-configured scope."
         },
         {
+          "description": "Enables the screenpipe_identify command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-screenpipe-identify",
+          "markdownDescription": "Enables the screenpipe_identify command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the screenpipe_identify command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-screenpipe-identify",
+          "markdownDescription": "Denies the screenpipe_identify command without any pre-configured scope."
+        },
+        {
           "description": "Enables the screenpipe_permissions command without any pre-configured scope.",
           "type": "string",
           "const": "allow-screenpipe-permissions",
@@ -391,10 +403,10 @@
           "markdownDescription": "Denies the screenpipe_stop command without any pre-configured scope."
         },
         {
-          "description": "Allows every screenpipe plugin command — recorder lifecycle, snapshots, reveal, and the event taxonomy.\n#### This default permission set includes:\n\n- `allow-screenpipe-permissions`\n- `allow-screenpipe-start`\n- `allow-screenpipe-stop`\n- `allow-screenpipe-status`\n- `allow-screenpipe-snapshot`\n- `allow-screenpipe-reveal`\n- `allow-screenpipe-dispose`\n- `allow-screenpipe-events`",
+          "description": "Allows every screenpipe plugin command — recorder lifecycle, snapshots, reveal, and the event taxonomy.\n#### This default permission set includes:\n\n- `allow-screenpipe-permissions`\n- `allow-screenpipe-start`\n- `allow-screenpipe-stop`\n- `allow-screenpipe-status`\n- `allow-screenpipe-snapshot`\n- `allow-screenpipe-reveal`\n- `allow-screenpipe-dispose`\n- `allow-screenpipe-events`\n- `allow-screenpipe-identify`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows every screenpipe plugin command — recorder lifecycle, snapshots, reveal, and the event taxonomy.\n#### This default permission set includes:\n\n- `allow-screenpipe-permissions`\n- `allow-screenpipe-start`\n- `allow-screenpipe-stop`\n- `allow-screenpipe-status`\n- `allow-screenpipe-snapshot`\n- `allow-screenpipe-reveal`\n- `allow-screenpipe-dispose`\n- `allow-screenpipe-events`"
+          "markdownDescription": "Allows every screenpipe plugin command — recorder lifecycle, snapshots, reveal, and the event taxonomy.\n#### This default permission set includes:\n\n- `allow-screenpipe-permissions`\n- `allow-screenpipe-start`\n- `allow-screenpipe-stop`\n- `allow-screenpipe-status`\n- `allow-screenpipe-snapshot`\n- `allow-screenpipe-reveal`\n- `allow-screenpipe-dispose`\n- `allow-screenpipe-events`\n- `allow-screenpipe-identify`"
         }
       ]
     }

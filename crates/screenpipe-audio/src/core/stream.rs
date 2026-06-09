@@ -81,10 +81,12 @@ pub struct AudioStream {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StopMode {
     Immediate,
+    #[cfg(any(not(all(target_os = "linux", feature = "pulseaudio")), test))]
     DeferredDeviceDisconnect,
 }
 
 impl StopMode {
+    #[cfg(any(not(all(target_os = "linux", feature = "pulseaudio")), test))]
     fn teardown_delay(self) -> Option<std::time::Duration> {
         match self {
             StopMode::Immediate => None,
@@ -98,15 +100,21 @@ impl StopMode {
 
 enum StreamControl {
     Stop {
-        response: oneshot::Sender<()>,
-        mode: StopMode,
+        _response: oneshot::Sender<()>,
+        _mode: StopMode,
     },
 }
 
 impl StreamControl {
     fn stop(mode: StopMode) -> (Self, oneshot::Receiver<()>) {
         let (tx, rx) = oneshot::channel();
-        (Self::Stop { response: tx, mode }, rx)
+        (
+            Self::Stop {
+                _response: tx,
+                _mode: mode,
+            },
+            rx,
+        )
     }
 
     fn stop_without_wait(mode: StopMode) -> Self {
@@ -227,6 +235,7 @@ impl AudioStream {
 
     /// Start the standard cpal/SCK audio stream. Shared by all platforms
     /// and used as fallback when Process Tap is unavailable or fails.
+    #[allow(clippy::too_many_arguments)]
     #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
     async fn start_cpal_stream(
         device: &Arc<AudioDevice>,
@@ -502,7 +511,11 @@ impl AudioStream {
                     );
                 }
 
-                if let Ok(StreamControl::Stop { response, mode }) = stream_control_rx.recv() {
+                if let Ok(StreamControl::Stop {
+                    _response: response,
+                    _mode: mode,
+                }) = stream_control_rx.recv()
+                {
                     if let Some(delay) = mode.teardown_delay() {
                         std::thread::sleep(delay);
                     }
@@ -840,13 +853,13 @@ where
 {
     #[cfg(target_os = "macos")]
     {
-        return build_cpal_input_stream(
+        build_cpal_input_stream(
             device,
             stream_config,
             data_callback,
             error_callback,
             macos_voice_processing_config(macos_input_vpio),
-        );
+        )
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -944,7 +957,7 @@ mod from_wav_tests {
     #[test]
     fn stop_without_wait_preserves_requested_mode() {
         match StreamControl::stop_without_wait(StopMode::DeferredDeviceDisconnect) {
-            StreamControl::Stop { mode, .. } => {
+            StreamControl::Stop { _mode: mode, .. } => {
                 assert_eq!(mode, StopMode::DeferredDeviceDisconnect);
             }
         }

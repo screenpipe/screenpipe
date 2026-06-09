@@ -6,11 +6,10 @@ use axum::{
     body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        State,
     },
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 
 use chrono::{DateTime, Utc};
@@ -714,34 +713,6 @@ async fn send_batch(
     sender.send(Message::Text(json)).await?;
     buffer.clear();
     Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct VideoExportRequest {
-    #[serde(default, deserialize_with = "deserialize_frame_ids_optional")]
-    frame_ids: Vec<i64>,
-    #[serde(default = "default_fps")]
-    fps: f64,
-}
-
-fn default_fps() -> f64 {
-    0.5
-}
-
-fn deserialize_frame_ids_optional<'de, D>(deserializer: D) -> Result<Vec<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s: Option<String> = Option::deserialize(deserializer)?;
-    match s {
-        Some(s) if !s.is_empty() => s
-            .split(',')
-            .map(|id| id.trim().parse::<i64>())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(serde::de::Error::custom),
-        _ => Ok(Vec::new()),
-    }
 }
 
 #[cfg(test)]

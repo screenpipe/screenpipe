@@ -964,7 +964,7 @@ pub async fn run_frame_ocr(
     .unwrap_or_else(|_| (String::new(), "[]".to_string()));
 
     #[cfg(target_os = "windows")]
-    let ocr_result = match screenpipe_screen::perform_ocr_windows(&image).await {
+    let ocr_result = match screenpipe_screen::perform_ocr_windows(&image, &[]).await {
         Ok((text, json, _confidence)) => (text, json),
         Err(e) => {
             error!("Windows on-demand OCR failed: {}", e);

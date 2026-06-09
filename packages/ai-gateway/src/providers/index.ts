@@ -66,6 +66,12 @@ function requireSecret(value: unknown, message: string): string {
 }
 
 export function createProvider(model: string, env: Env): AIProvider {
+	// SCREENPIPE-AI-PROXY-1R: model can arrive undefined/empty on malformed
+	// request paths; fail with a clear message instead of a cryptic
+	// "Cannot read properties of undefined (reading 'toLowerCase')".
+	if (typeof model !== 'string' || model.length === 0) {
+		throw new Error('createProvider: a non-empty model string is required');
+	}
 	model = resolveModelAlias(model);
 
 	// Screenpipe event classifier — routes to self-hosted vLLM

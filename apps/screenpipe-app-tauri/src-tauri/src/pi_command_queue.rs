@@ -128,6 +128,11 @@ pub struct PiQueueState {
     /// authoritative done signal; the response-fallback only matters for
     /// new_session/abort, which never fire agent_start.
     agent_active: AtomicBool,
+    /// True while a steer command has been written to stdin via
+    /// `send_immediate` but the new turn's `agent_start` has not yet fired.
+    /// Prevents the drain loop from writing the next queued prompt during
+    /// the brief `agent_end` → `agent_start` transition.
+    steer_in_flight: AtomicBool,
 }
 
 impl PiQueueState {
@@ -142,6 +147,7 @@ impl PiQueueState {
             cancelled: std::sync::Mutex::new(HashSet::new()),
             queued_payloads: std::sync::Mutex::new(HashMap::new()),
             agent_active: AtomicBool::new(false),
+            steer_in_flight: AtomicBool::new(false),
         })
     }
 
@@ -166,6 +172,25 @@ impl PiQueueState {
         self.agent_active.load(Ordering::SeqCst)
     }
 
+    /// Mark that a steer command is in flight (written to stdin, awaiting
+    /// `agent_start`). The drain loop checks this alongside `agent_active`.
+    pub fn set_steer_in_flight(&self) {
+        self.steer_in_flight.store(true, Ordering::SeqCst);
+        self.done_notify.notify_waiters();
+    }
+
+    /// Clear the steer-in-flight guard. Called on `agent_start`, write
+    /// failure, process termination, and the bounded 30s timeout.
+    pub fn clear_steer_in_flight(&self) {
+        self.steer_in_flight.store(false, Ordering::SeqCst);
+        self.done_notify.notify_waiters();
+    }
+
+    /// Whether a steer command is awaiting its `agent_start`.
+    pub fn is_steer_in_flight(&self) -> bool {
+        self.steer_in_flight.load(Ordering::SeqCst)
+    }
+
     /// Called by the stdout reader when the process terminates (EOF).
     pub fn signal_terminated(&self) {
         let _ = self.alive.send(false);
@@ -183,6 +208,7 @@ impl PiQueueState {
         // Clear the agent-active flag so a future restart doesn't start out
         // in a stuck "active" state if the process died mid-stream.
         self.agent_active.store(false, Ordering::SeqCst);
+        self.clear_steer_in_flight();
     }
 
     /// Subscribe to queue-pending changes. Each receive yields the current
@@ -358,6 +384,11 @@ impl PiQueueHandle {
             .unwrap_or("?")
             .to_string();
         let cmd_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+        // Set the guard *before* writing so the drain loop sees it even if
+        // agent_end (old turn) fires before agent_start (steer turn).
+        if cmd_type == "steer" {
+            self.state.set_steer_in_flight();
+        }
         let mut stdin_guard = stdin.lock().await;
         info!(
             "pi_command_queue: writing immediate {} ({}), {} bytes",
@@ -365,9 +396,14 @@ impl PiQueueHandle {
             req_id,
             cmd_str.len()
         );
-        writeln!(*stdin_guard, "{}", cmd_str)
-            .and_then(|_| stdin_guard.flush())
-            .map_err(|e| format!("stdin write failed: {}", e))
+        let write_result = writeln!(*stdin_guard, "{}", cmd_str)
+            .and_then(|_| stdin_guard.flush());
+        if write_result.is_err() {
+            if cmd_type == "steer" {
+                self.state.clear_steer_in_flight();
+            }
+        }
+        write_result.map_err(|e| format!("stdin write failed: {}", e))
     }
 
     /// Abort only the active Pi turn. Unlike `abort`, this does not drain or
@@ -497,12 +533,47 @@ pub fn spawn_queue(
                         .to_string();
 
                     // Prompt commands must be serialized against the currently
-                    // active agent turn. We cannot rely on response ACK order:
-                    // ACK can arrive before pi-mono actually starts streaming.
-                    if is_prompt && state.is_agent_active() {
-                        let ok =
-                            wait_for_done_or_terminated(&state, &mut alive_rx, &cmd_type).await;
-                        if !ok {
+                    // active agent turn *and* any in-flight steer command.
+                    // We cannot rely on response ACK order: ACK can arrive
+                    // before pi-mono actually starts streaming.
+                    {
+                        let mut died_during_wait = false;
+                        while is_prompt
+                            && (state.is_agent_active() || state.is_steer_in_flight())
+                        {
+                            // When only steer_in_flight holds us (agent finished
+                            // but steer's agent_start hasn't arrived yet), use a
+                            // short 30s timeout. If agent_start never fires (Pi
+                            // rejected the steer silently), force-clear and let
+                            // the queue proceed.
+                            if state.is_steer_in_flight() && !state.is_agent_active() {
+                                tokio::select! {
+                                    _ = state.done_notify.notified() => {}
+                                    _ = state.terminated_notify.notified() => {
+                                        died_during_wait = true;
+                                        break;
+                                    }
+                                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                                        warn!(
+                                            "pi_command_queue: steer_in_flight stuck 30s, force-clearing"
+                                        );
+                                        state.clear_steer_in_flight();
+                                    }
+                                }
+                            } else {
+                                let ok = wait_for_done_or_terminated(
+                                    &state,
+                                    &mut alive_rx,
+                                    &cmd_type,
+                                )
+                                .await;
+                                if !ok {
+                                    died_during_wait = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if died_during_wait {
                             if let Some(pid) = &prompt_id {
                                 state.dequeue_prompt(pid);
                             }
@@ -511,19 +582,19 @@ pub fn spawn_queue(
                                 .send(Err("Pi process died while processing".to_string()));
                             continue;
                         }
+                    }
 
-                        // The first queued prompt can already be popped from
-                        // the mpsc channel and parked here waiting for the
-                        // current turn to finish. If the user deletes it
-                        // during that wait, the original tombstone check above
-                        // is now stale. Re-check before writing so "Delete"
-                        // really prevents the prompt from ever reaching Pi.
-                        if let Some(pid) = &prompt_id {
-                            if state.take_cancelled(pid) {
-                                state.dequeue_prompt(pid);
-                                let _ = cmd.reply.send(Err("cancelled".to_string()));
-                                continue;
-                            }
+                    // The first queued prompt can already be popped from
+                    // the mpsc channel and parked here waiting for the
+                    // current turn to finish. If the user deletes it
+                    // during that wait, the original tombstone check above
+                    // is now stale. Re-check before writing so "Delete"
+                    // really prevents the prompt from ever reaching Pi.
+                    if let Some(pid) = &prompt_id {
+                        if state.take_cancelled(pid) {
+                            state.dequeue_prompt(pid);
+                            let _ = cmd.reply.send(Err("cancelled".to_string()));
+                            continue;
                         }
                     }
 
@@ -834,5 +905,98 @@ mod tests {
         let _ = h1.await;
         let _ = h2.await;
         let _ = abort_handle.await;
+    }
+
+    /// The real regression guard for native-steer queue serialization: drive
+    /// the actual `spawn_queue` drain loop and prove a queued follow-up stays
+    /// blocked while `steer_in_flight` is set, then is written once the guard
+    /// clears. This exercises the `while is_prompt && (is_agent_active() ||
+    /// is_steer_in_flight())` gate and the steer-only `select!` — not just the
+    /// atomic, which is why it would catch a regression in the drain loop
+    /// itself (e.g. dropping the `is_steer_in_flight()` term).
+    ///
+    /// Unix-only because it needs a real writable child stdin; `cat` drains
+    /// whatever the loop writes and exits on EOF.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_steer_in_flight_blocks_drain_loop_until_cleared() {
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat as a fake pi stdin");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue(stdin, state.clone(), 0);
+
+        // Simulate the agent_end -> agent_start gap: a steer has been written
+        // to stdin but its turn hasn't started, and the prior turn already
+        // ended (agent NOT active). This is exactly the window the guard
+        // exists to cover.
+        state.set_steer_in_flight();
+
+        let (_id, mut reply_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "queued-follow-up" }),
+                WaitMode::Prompt,
+                "queued-follow-up".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        // The drain loop must park in the steer wait and never write the
+        // follow-up while the steer is in flight.
+        let blocked =
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut reply_rx).await;
+        assert!(
+            blocked.is_err(),
+            "follow-up must stay queued while a steer is in flight"
+        );
+        assert!(state.is_steer_in_flight(), "guard should still be set");
+
+        // The steered turn started (in prod, agent_start/message_start clears
+        // the guard). Clearing it must wake the drain loop and release the
+        // follow-up — proving the `select!` is wired to `done_notify`.
+        state.clear_steer_in_flight();
+
+        let released = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx)
+            .await
+            .expect("follow-up must be released once the steer clears")
+            .expect("reply channel stayed open");
+        assert!(
+            released.is_ok(),
+            "follow-up should be written after the steer cleared, got {released:?}"
+        );
+
+        // Tear down: end the post-write wait the loop entered, close the
+        // channel so the loop exits, and reap cat.
+        state.signal_terminated();
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Process death must clear the steer guard. Otherwise a steer that dies
+    /// before its `agent_start` arrives would leave `steer_in_flight` set, and
+    /// every subsequent queued prompt would eat the full 30s fallback timeout.
+    #[tokio::test]
+    async fn test_signal_terminated_clears_steer_in_flight() {
+        let state = PiQueueState::new();
+        assert!(!state.is_steer_in_flight(), "starts clear");
+
+        state.set_steer_in_flight();
+        assert!(state.is_steer_in_flight(), "set takes effect");
+
+        state.signal_terminated();
+        assert!(
+            !state.is_steer_in_flight(),
+            "process termination must clear the in-flight steer guard"
+        );
     }
 }

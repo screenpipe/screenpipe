@@ -21,7 +21,12 @@ if (!bin) {
   process.exit(1);
 }
 
-const child = spawn(bin, process.argv.slice(2), { stdio: "inherit" });
+// Tag engine telemetry as the npm/bunx CLI (vs desktop-app / source) so WAU can
+// be split by distribution. Respect an explicit override if one is already set.
+const child = spawn(bin, process.argv.slice(2), {
+  stdio: "inherit",
+  env: { ...process.env, SCREENPIPE_DISTRIBUTION: process.env.SCREENPIPE_DISTRIBUTION || "cli" },
+});
 let forwardingSignal = null;
 
 child.on("error", (error) => {

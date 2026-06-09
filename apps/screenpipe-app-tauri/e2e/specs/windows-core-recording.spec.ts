@@ -34,17 +34,35 @@ import {
 const seedFlags = E2E_SEED_FLAGS.split(",").map((s) => s.trim().toLowerCase());
 const recordingDisabled = seedFlags.includes("no-recording");
 const canRun = process.platform === "win32" && !recordingDisabled;
+const eventTriggerCaptureEnabled = seedFlags.includes("event-trigger-capture");
+const canRunEventTriggerCapture = canRun && eventTriggerCaptureEnabled;
+const keyboardDbCaptureEnabled = seedFlags.includes("keyboard-db-capture");
 
 type HealthBody = {
   status?: string;
   frame_status?: string;
   audio_status?: string;
+  pipeline?: {
+    frames_captured?: number;
+    frames_db_written?: number;
+  } | null;
 };
 
 type MarkerProbe = {
   health: HealthBody;
   markerSinceIso: string;
   rows: unknown[];
+};
+
+type InputEventContent = {
+  id?: number;
+  timestamp?: string;
+  event_type?: string;
+  app_name?: string | null;
+  window_title?: string | null;
+  text_content?: string | null;
+  key_code?: number | null;
+  frame_id?: number | null;
 };
 
 function apiUrl(cfg: LocalApiConfig, path: string): string {
@@ -61,26 +79,11 @@ function collectText(value: unknown): string {
   return String(value);
 }
 
-function spawnWindowsMarkerWindow(marker: string): () => void {
-  const safeMarker = marker.replace(/'/g, "''");
-  const script = `
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$form = New-Object System.Windows.Forms.Form
-$form.Text = 'Screenpipe E2E Capture Marker'
-$form.StartPosition = 'CenterScreen'
-$form.Width = 1000
-$form.Height = 380
-$form.TopMost = $true
-$label = New-Object System.Windows.Forms.Label
-$label.Dock = 'Fill'
-$label.Font = New-Object System.Drawing.Font('Arial', 34, [System.Drawing.FontStyle]::Bold)
-$label.TextAlign = 'MiddleCenter'
-$label.Text = '${safeMarker}'
-$form.Controls.Add($label)
-[void]$form.ShowDialog()
-`;
+function psString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
 
+function spawnDetachedPowerShell(script: string): () => void {
   const child = spawn(
     "powershell.exe",
     ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -100,6 +103,223 @@ $form.Controls.Add($label)
   };
 }
 
+function spawnWindowsMarkerWindow(marker: string): () => void {
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'Screenpipe E2E Capture Marker'
+$form.StartPosition = 'CenterScreen'
+$form.Width = 1000
+$form.Height = 380
+$form.TopMost = $true
+$label = New-Object System.Windows.Forms.Label
+$label.Dock = 'Fill'
+$label.Font = New-Object System.Drawing.Font('Arial', 34, [System.Drawing.FontStyle]::Bold)
+$label.TextAlign = 'MiddleCenter'
+$label.Text = ${psString(marker)}
+$form.Controls.Add($label)
+[void]$form.ShowDialog()
+`;
+
+  return spawnDetachedPowerShell(script);
+}
+
+function spawnWindowsFocusProbe(marker: string): () => void {
+  const titleA = `${marker} focus alpha`;
+  const titleB = `${marker} focus beta`;
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ScreenpipeE2EForeground {
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$formA = New-Object System.Windows.Forms.Form
+$formA.Text = ${psString(titleA)}
+$formA.StartPosition = 'CenterScreen'
+$formA.Width = 720
+$formA.Height = 240
+$formA.TopMost = $true
+$labelA = New-Object System.Windows.Forms.Label
+$labelA.Dock = 'Fill'
+$labelA.Font = New-Object System.Drawing.Font('Arial', 24, [System.Drawing.FontStyle]::Bold)
+$labelA.TextAlign = 'MiddleCenter'
+$labelA.Text = ${psString(titleA)}
+$formA.Controls.Add($labelA)
+
+$formB = New-Object System.Windows.Forms.Form
+$formB.Text = ${psString(titleB)}
+$formB.StartPosition = 'CenterScreen'
+$formB.Width = 720
+$formB.Height = 240
+$formB.Left = $formA.Left + 60
+$formB.Top = $formA.Top + 60
+$formB.TopMost = $true
+$labelB = New-Object System.Windows.Forms.Label
+$labelB.Dock = 'Fill'
+$labelB.Font = New-Object System.Drawing.Font('Arial', 24, [System.Drawing.FontStyle]::Bold)
+$labelB.TextAlign = 'MiddleCenter'
+$labelB.Text = ${psString(titleB)}
+$formB.Controls.Add($labelB)
+
+$script:step = 0
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 700
+$timer.Add_Tick({
+  if ($script:step -eq 0) {
+    [void][ScreenpipeE2EForeground]::SetForegroundWindow($formA.Handle)
+    $formA.Activate()
+  } elseif ($script:step -eq 1) {
+    [void][ScreenpipeE2EForeground]::SetForegroundWindow($formB.Handle)
+    $formB.Activate()
+  } elseif ($script:step -eq 2) {
+    [void][ScreenpipeE2EForeground]::SetForegroundWindow($formA.Handle)
+    $formA.Activate()
+  } elseif ($script:step -eq 3) {
+    [void][ScreenpipeE2EForeground]::SetForegroundWindow($formB.Handle)
+    $formB.Activate()
+  } else {
+    $timer.Stop()
+  }
+  $script:step += 1
+})
+$formA.Show()
+$formB.Show()
+$timer.Start()
+[System.Windows.Forms.Application]::Run()
+`;
+
+  return spawnDetachedPowerShell(script);
+}
+
+function spawnWindowsKeyProbe(marker: string): () => void {
+  const title = `${marker} key window`;
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ScreenpipeE2EForeground {
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$form = New-Object System.Windows.Forms.Form
+$form.Text = ${psString(title)}
+$form.StartPosition = 'CenterScreen'
+$form.Width = 820
+$form.Height = 320
+$form.TopMost = $true
+$label = New-Object System.Windows.Forms.Label
+$label.Dock = 'Top'
+$label.Height = 110
+$label.Font = New-Object System.Drawing.Font('Arial', 22, [System.Drawing.FontStyle]::Bold)
+$label.TextAlign = 'MiddleCenter'
+$label.Text = ${psString(`${marker} waiting`)}
+$textbox = New-Object System.Windows.Forms.TextBox
+$textbox.Dock = 'Fill'
+$textbox.Multiline = $true
+$textbox.Font = New-Object System.Drawing.Font('Consolas', 18)
+$textbox.Text = ${psString(`${marker} textbox`)}
+$form.Controls.Add($textbox)
+$form.Controls.Add($label)
+
+$script:step = -3
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 750
+$timer.Add_Tick({
+  [void][ScreenpipeE2EForeground]::SetForegroundWindow($form.Handle)
+  $form.Activate()
+  $textbox.Focus()
+  if ($script:step -lt 0) {
+    $label.Text = ${psString(`${marker} ready`)}
+  } elseif ($script:step -eq 0) {
+    $label.Text = ${psString(`${marker} first key`)}
+    [System.Windows.Forms.SendKeys]::SendWait('{F5}')
+  } elseif ($script:step -eq 1) {
+    $label.Text = ${psString(`${marker} second key`)}
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+  } elseif ($script:step -eq 2) {
+    $label.Text = ${psString(`${marker} modifier key`)}
+    [System.Windows.Forms.SendKeys]::SendWait('^s')
+  } else {
+    $timer.Stop()
+  }
+  $script:step += 1
+})
+$form.Show()
+$timer.Start()
+[System.Windows.Forms.Application]::Run($form)
+`;
+
+  return spawnDetachedPowerShell(script);
+}
+
+function spawnWindowsClipboardProbe(marker: string): () => void {
+  const title = `${marker} clipboard window`;
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ScreenpipeE2EForeground {
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$form = New-Object System.Windows.Forms.Form
+$form.Text = ${psString(title)}
+$form.StartPosition = 'CenterScreen'
+$form.Width = 820
+$form.Height = 320
+$form.TopMost = $true
+$label = New-Object System.Windows.Forms.Label
+$label.Dock = 'Top'
+$label.Height = 110
+$label.Font = New-Object System.Drawing.Font('Arial', 22, [System.Drawing.FontStyle]::Bold)
+$label.TextAlign = 'MiddleCenter'
+$label.Text = ${psString(`${marker} waiting`)}
+$textbox = New-Object System.Windows.Forms.TextBox
+$textbox.Dock = 'Fill'
+$textbox.Multiline = $true
+$textbox.Font = New-Object System.Drawing.Font('Consolas', 18)
+$textbox.Text = ${psString(`${marker} clipboard payload`)}
+$form.Controls.Add($textbox)
+$form.Controls.Add($label)
+
+$script:step = -4
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 750
+$timer.Add_Tick({
+  [void][ScreenpipeE2EForeground]::SetForegroundWindow($form.Handle)
+  $form.Activate()
+  $textbox.Focus()
+  if ($script:step -lt 0) {
+    $label.Text = ${psString(`${marker} ready`)}
+  } elseif ($script:step -eq 0) {
+    $label.Text = ${psString(`${marker} copy`)}
+    $textbox.SelectAll()
+    [System.Windows.Forms.SendKeys]::SendWait('^c')
+  } else {
+    $timer.Stop()
+  }
+  $script:step += 1
+})
+$form.Show()
+$timer.Start()
+[System.Windows.Forms.Application]::Run($form)
+`;
+
+  return spawnDetachedPowerShell(script);
+}
+
 async function getHealth(port: number): Promise<HealthBody> {
   const res = await fetchJson(`http://127.0.0.1:${port}/health`);
   if (!res.ok || typeof res.body !== "object" || res.body == null) {
@@ -108,6 +328,115 @@ async function getHealth(port: number): Promise<HealthBody> {
     );
   }
   return res.body as HealthBody;
+}
+
+function asInputEventContent(row: unknown): InputEventContent | null {
+  if (typeof row !== "object" || row == null) return null;
+  const record = row as Record<string, unknown>;
+  const content = record.content;
+  if (record.type === "Input" && typeof content === "object" && content != null) {
+    return content as InputEventContent;
+  }
+  if (typeof record.event_type === "string") {
+    return record as InputEventContent;
+  }
+  return null;
+}
+
+async function inputRowsSince(
+  cfg: LocalApiConfig,
+  sinceIso: string,
+  q: string,
+): Promise<InputEventContent[]> {
+  const res = await fetchJson(
+    apiUrl(
+      cfg,
+      `/search?content_type=input&limit=50&q=${encodeURIComponent(q)}&start_time=${encodeURIComponent(sinceIso)}`,
+    ),
+    authHeaders(cfg.key),
+  );
+  if (!res.ok) return [];
+  const data = (res.body as { data?: unknown[] } | null)?.data;
+  if (!Array.isArray(data)) return [];
+  return data.map(asInputEventContent).filter((row): row is InputEventContent => row !== null);
+}
+
+async function frameTimestampMs(cfg: LocalApiConfig, frameId: number): Promise<number | null> {
+  const res = await fetchJson(
+    apiUrl(cfg, `/frames/${frameId}/metadata`),
+    authHeaders(cfg.key),
+  );
+  if (!res.ok || typeof res.body !== "object" || res.body == null) return null;
+  const timestamp = (res.body as { timestamp?: unknown }).timestamp;
+  if (typeof timestamp !== "string") return null;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function waitForLinkedFreshInputEvent(
+  cfg: LocalApiConfig,
+  sinceIso: string,
+  query: string,
+  predicate: (row: InputEventContent) => boolean,
+  label: string,
+  timeoutMs = t(75_000),
+): Promise<InputEventContent[]> {
+  const sinceMs = Date.parse(sinceIso);
+  let latestRows: InputEventContent[] = [];
+  let freshLinkedRows: InputEventContent[] = [];
+
+  await browser.waitUntil(
+    async () => {
+      latestRows = await inputRowsSince(cfg, sinceIso, query);
+      const candidates = latestRows.filter(
+        (row) => predicate(row) && typeof row.frame_id === "number" && row.frame_id > 0,
+      );
+      freshLinkedRows = [];
+      for (const row of candidates) {
+        const frameMs = await frameTimestampMs(cfg, row.frame_id!);
+        if (frameMs != null && frameMs >= sinceMs) {
+          freshLinkedRows.push(row);
+        }
+      }
+      return freshLinkedRows.length > 0;
+    },
+    {
+      timeout: timeoutMs,
+      interval: 2_000,
+      timeoutMsg: `${label} input event never received a fresh linked frame_id`,
+    },
+  );
+
+  return freshLinkedRows.length > 0 ? freshLinkedRows : latestRows;
+}
+
+function framesDbWritten(health: HealthBody): number {
+  return typeof health.pipeline?.frames_db_written === "number"
+    ? health.pipeline.frames_db_written
+    : 0;
+}
+
+async function waitForFrameWriteAfter(
+  cfg: LocalApiConfig,
+  beforeFrames: number,
+  label = "event trigger",
+  timeoutMs = t(75_000),
+): Promise<HealthBody> {
+  let latestHealth = await getHealth(cfg.port);
+
+  await browser.waitUntil(
+    async () => {
+      latestHealth = await getHealth(cfg.port);
+      return framesDbWritten(latestHealth) > beforeFrames;
+    },
+    {
+      timeout: timeoutMs,
+      interval: 1_500,
+      timeoutMsg: `${label} did not produce a newly written frame`,
+    },
+  );
+
+  return latestHealth;
 }
 
 async function tryWaitForFrameCapture(
@@ -323,6 +652,106 @@ describe("Windows core recording pipeline", function () {
 
     expect(Array.isArray(probe.rows)).toBe(true);
     expect(probe.rows.length).toBeGreaterThan(0);
+  });
+
+  it("links window focus events to captured frames", async function () {
+    if (!canRunEventTriggerCapture || !cfg) this.skip();
+
+    const health = await tryWaitForFrameCapture(cfg, t(45_000));
+    if (health.frame_status !== "ok") this.skip();
+
+    const marker = `SCREENPIPE FOCUS TRIGGER ${Date.now()}`;
+    const sinceIso = new Date(Date.now() - 1_000).toISOString();
+    cleanupMarkerWindow = spawnWindowsFocusProbe(marker);
+
+    const rows = await waitForLinkedFreshInputEvent(
+      cfg,
+      sinceIso,
+      marker,
+      (row) =>
+        row.event_type === "window_focus" &&
+        (row.window_title ?? "").toLowerCase().includes(marker.toLowerCase()),
+      "window_focus",
+    );
+
+    const linked = rows.find((row) => row.event_type === "window_focus");
+    expect(linked?.frame_id).toBeGreaterThan(0);
+  });
+
+  it("uses keystrokes as capture triggers without storing raw key rows by default", async function () {
+    if (!canRunEventTriggerCapture || !cfg) this.skip();
+    if (keyboardDbCaptureEnabled) this.skip();
+
+    const health = await tryWaitForFrameCapture(cfg, t(45_000));
+    if (health.frame_status !== "ok") this.skip();
+
+    const marker = `SCREENPIPE KEY TRIGGER ${Date.now()}`;
+    const sinceIso = new Date(Date.now() - 1_000).toISOString();
+    cleanupMarkerWindow = spawnWindowsKeyProbe(marker);
+    await browser.pause(t(1_500));
+    const beforeFrames = framesDbWritten(await getHealth(cfg.port));
+
+    const afterHealth = await waitForFrameWriteAfter(cfg, beforeFrames);
+    expect(framesDbWritten(afterHealth)).toBeGreaterThan(beforeFrames);
+
+    await browser.pause(t(2_500));
+    const keyRows = (await inputRowsSince(cfg, sinceIso, marker)).filter(
+      (row) =>
+        row.event_type === "key" &&
+        (row.window_title ?? "").toLowerCase().includes(marker.toLowerCase()),
+    );
+
+    expect(keyRows.length).toBe(0);
+  });
+
+  it("uses clipboard operations as capture triggers without storing clipboard rows by default", async function () {
+    if (!canRunEventTriggerCapture || !cfg) this.skip();
+
+    const health = await tryWaitForFrameCapture(cfg, t(45_000));
+    if (health.frame_status !== "ok") this.skip();
+
+    const marker = `SCREENPIPE CLIPBOARD TRIGGER ${Date.now()}`;
+    const sinceIso = new Date(Date.now() - 1_000).toISOString();
+    cleanupMarkerWindow = spawnWindowsClipboardProbe(marker);
+    await browser.pause(t(1_500));
+    const beforeFrames = framesDbWritten(await getHealth(cfg.port));
+
+    const afterHealth = await waitForFrameWriteAfter(cfg, beforeFrames, "clipboard trigger");
+    expect(framesDbWritten(afterHealth)).toBeGreaterThan(beforeFrames);
+
+    await browser.pause(t(2_500));
+    const clipboardRows = (await inputRowsSince(cfg, sinceIso, marker)).filter(
+      (row) =>
+        row.event_type === "clipboard" &&
+        ((row.window_title ?? "").toLowerCase().includes(marker.toLowerCase()) ||
+          (row.text_content ?? "").toLowerCase().includes(marker.toLowerCase())),
+    );
+
+    expect(clipboardRows.length).toBe(0);
+  });
+
+  it("links opt-in raw key rows to captured frames", async function () {
+    if (!canRunEventTriggerCapture || !keyboardDbCaptureEnabled || !cfg) this.skip();
+
+    const health = await tryWaitForFrameCapture(cfg, t(45_000));
+    if (health.frame_status !== "ok") this.skip();
+
+    const marker = `SCREENPIPE KEY DB TRIGGER ${Date.now()}`;
+    const sinceIso = new Date(Date.now() - 1_000).toISOString();
+    cleanupMarkerWindow = spawnWindowsKeyProbe(marker);
+
+    const rows = await waitForLinkedFreshInputEvent(
+      cfg,
+      sinceIso,
+      marker,
+      (row) =>
+        row.event_type === "key" &&
+        (row.window_title ?? "").toLowerCase().includes(marker.toLowerCase()),
+      "key",
+    );
+
+    const linked = rows.find((row) => row.event_type === "key");
+    expect(linked?.frame_id).toBeGreaterThan(0);
   });
 
   it("finds captured OCR through query search and recent-time filtering", async function () {

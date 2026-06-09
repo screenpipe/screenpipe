@@ -13,6 +13,7 @@ edition.workspace = true
 
 [dependencies]
 # Re-exports & shared deps
+aho-corasick = "1"
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
@@ -25,6 +26,7 @@ regex = "1"
 reqwest = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
+sha3 = "0.10"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
 thiserror = "1"
 # Tinfoil enclave attestation: AMD SEV-SNP attestation + Sigstore code-

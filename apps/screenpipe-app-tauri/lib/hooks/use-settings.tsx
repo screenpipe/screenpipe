@@ -7,16 +7,20 @@ import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
+import { emit, listen } from "@tauri-apps/api/event";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
+import { normalizeAppUser } from "@/lib/app-entitlement";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
 	EnterpriseAppUpdatePolicy,
 	EnterpriseInstallMetadata,
 } from "@ee/lib/app-update-policy";
+import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -231,6 +235,13 @@ export type Settings = SettingsStore & {
 	 * Independent of pipeSyncEnabled — a user might want their memories on
 	 * every device but keep pipes device-local, or vice versa. Pro-gated. */
 	memoriesSyncEnabled?: boolean;
+	/** Sync connected-account credentials (OAuth tokens + manual API keys)
+	 * across devices. Off by default and kept separate from pipes/memories on
+	 * purpose: it syncs secrets, so enabling it is a distinct informed choice.
+	 * Credentials are end-to-end encrypted in the sync blob. Pro-gated. */
+	connectionsSyncEnabled?: boolean;
+	/** Font size for the entire app UI */
+	fontSize?: FontSize;
 	/** OpenAI-compatible transcription endpoint URL */
 	openaiCompatibleEndpoint?: string;
 	/** OpenAI-compatible transcription API key */
@@ -353,6 +364,10 @@ export type Settings = SettingsStore & {
 	 *  logged into. Revocable from the owned-browser cookie menu.
 	 *  Undefined = not decided yet, false = disabled, true = enabled. */
 	browserCookieAccessGranted?: boolean;
+	/** Windows-only: when true, closing the Home window hides it to the system
+	 * tray (and removes it from the taskbar) instead of minimizing. The Rust
+	 * close handler in src-tauri/src/main.rs reads this directly. Default off. */
+	minimizeToTrayOnClose?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -515,6 +530,7 @@ let DEFAULT_SETTINGS: Settings = {
 			],
 			includedWindows: [],
 			ignoredUrls: [],
+			ignoredMeetingApps: [],
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
@@ -548,7 +564,10 @@ let DEFAULT_SETTINGS: Settings = {
 				website: null,
 				contact: null,
 				cloud_subscribed: null,
-				credits_balance: null
+				credits_balance: null,
+				app_entitled: null,
+				subscription_plan: null,
+				entitlement: null
 			},
 			showScreenpipeShortcut: "Control+Super+S",
 			startRecordingShortcut: "Super+Alt+U",
@@ -589,6 +608,7 @@ let DEFAULT_SETTINGS: Settings = {
 			encryptStore: true,
 			hdRecordingDefault: "ask",
 			hdRecordingIntervalMs: 100,
+			fontSize: "16px",
 		};
 
 export function createDefaultSettingsObject(): Settings {
@@ -674,8 +694,8 @@ function createSettingsStore() {
 		// cancellation — so the tap silently captured zeroed buffers on every
 		// meeting. Users who explicitly want the tap (e.g. to dodge SCK's
 		// sleep/wake display-enumeration bug) can re-enable it in Settings.
-		// Reported by Ruark Ferreira on 2026-04-24 after his v2.4.46 calls
-		// kept dropping other participants.
+		// Reported on 2026-04-24 after v2.4.46 calls kept dropping
+		// other participants.
 		if (!(settings as any).coreaudioTapMigrationV2) {
 			settings.experimentalCoreaudioSystemAudio = false;
 			(settings as any).coreaudioTapMigrationV2 = true;
@@ -918,7 +938,7 @@ interface SettingsContextType {
 	resetSettings: () => Promise<void>;
 	resetSetting: <K extends keyof Settings>(key: K) => Promise<void>;
 	reloadStore: () => Promise<void>;
-	loadUser: (token: string) => Promise<void>;
+	loadUser: (token: string, verify?: boolean) => Promise<void>;
 	getDataDir: () => Promise<string>;
 	isSettingsLoaded: boolean;
 	loadingError: string | null;
@@ -985,6 +1005,15 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	// Install global fetch interceptor to catch 401s from screenpi.pe
 	const settingsRef = useRef(settings);
 	settingsRef.current = settings;
+
+	// Monotonic auth generation, bumped on every explicit sign-out. A
+	// loadUser() call snapshots this at entry; if a sign-out bumps it while the
+	// network request is still in flight, loadUser refuses to write the user
+	// back. Without this, a slow refresh that started before the user clicked
+	// "logout" resurrects the just-cleared session — the user had to click
+	// logout twice. Regression test: e2e/specs/zz-logout-resurrect.spec.ts.
+	const authGenerationRef = useRef(0);
+
 	useEffect(() => {
 		installAuthInterceptor(
 			() => settingsRef.current.user?.token ?? undefined,
@@ -1001,6 +1030,19 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			}
 		);
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Cross-window sign-out: when any window broadcasts a sign-out (logout
+	// button or 401 interceptor), bump THIS window's auth generation so an
+	// in-flight loadUser here also aborts instead of writing the user back
+	// into the shared store. Pairs with the emit() in updateSettings.
+	useEffect(() => {
+		const unlistenPromise = listen("screenpipe-auth-signout", () => {
+			authGenerationRef.current += 1;
+		});
+		return () => {
+			unlistenPromise.then((un) => un()).catch(() => {});
+		};
+	}, []);
 
 	// Auto-refresh user data from API when app starts with a stored token.
 	// This ensures subscription status (cloud_subscribed) stays current —
@@ -1070,6 +1112,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			website: settings.user?.website,
 			contact: settings.user?.contact,
 			cloud_subscribed: !!settings.user?.cloud_subscribed,
+			app_entitled: !!(settings.user as any)?.app_entitled,
+			subscription_plan: (settings.user as any)?.subscription_plan,
 			machine_analytics_id: settings.analyticsId,
 		};
 
@@ -1081,7 +1125,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				posthog.identify(distinctId, baseProps);
 			});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed]);
+	}, [settings.analyticsId, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {
@@ -1128,7 +1172,25 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
+	useEffect(() => {
+		applyFontSize(settings.fontSize);
+	}, [settings.fontSize]);
+
 	const updateSettings = async (updates: Partial<Settings>) => {
+		// Sign-out (user → null) must invalidate any loadUser() request that is
+		// currently in flight so the cleared session can't be resurrected when a
+		// slow refresh resolves afterwards. Bump synchronously — before the first
+		// await — so even the logout button's fire-and-forget call wins the race.
+		if ("user" in updates && !updates.user) {
+			authGenerationRef.current += 1;
+			// Broadcast to the other windows. Each non-overlay window has its own
+			// SettingsProvider + DeeplinkHandler, so a login's deep-link fires a
+			// loadUser in EVERY window. Without this, a logout in this window
+			// wouldn't invalidate an in-flight loadUser in another window, which
+			// would write the user back into the shared store and resurrect the
+			// session. Fire-and-forget; the listener above bumps each window's ref.
+			emit("screenpipe-auth-signout").catch(() => {});
+		}
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
 
@@ -1173,14 +1235,21 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		return `${homeDirPath}/.screenpipe`;
 	};
 
-	const loadUser = async (token: string) => {
+	const loadUser = async (token: string, verify = false) => {
+		// Snapshot the auth generation at the start of the request. If the user
+		// signs out while this fetch is in flight, the generation changes and we
+		// abort the write below instead of resurrecting the cleared session.
+		const generation = authGenerationRef.current;
 		try {
-			const response = await fetch(`https://screenpi.pe/api/user`, {
+			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpi.pe"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ token }),
+				// verify=true asks the server to consult Stripe directly (used by the
+				// entitlement gate right after purchase); normal polls omit it to keep
+				// the hot path off Stripe.
+				body: JSON.stringify({ token, ...(verify ? { verify: true } : {}) }),
 			});
 
 			if (!response.ok) {
@@ -1189,10 +1258,15 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			}
 
 			const data = await response.json();
-			const userData = {
-				...data.user,
-				token
-			} as User;
+			const userData = normalizeAppUser(data.user, token) as User;
+
+			// The user signed out while this request was in flight — writing
+			// userData now would resurrect the cleared session (the "logout needs
+			// two clicks" bug). Abort silently; the sign-out already won.
+			if (authGenerationRef.current !== generation) {
+				console.log("loadUser: sign-out during fetch — not restoring session");
+				return;
+			}
 
 			// if user was not logged in, send posthog event and bridge identity
 			if (!settings.user?.id) {

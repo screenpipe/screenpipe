@@ -88,18 +88,13 @@ pub struct UiRecorderConfig {
     pub capture_scroll: bool,
     /// Capture element context via accessibility
     pub capture_context: bool,
-    /// Mirror of `EventDrivenCaptureConfig::capture_on_keystroke`. The
-    /// recorder reads this to skip minting a correlation_id for `Key`
-    /// events when the gate is off — otherwise every keystroke would
-    /// stash a `pending_event` in the frame linker that can only ever
-    /// TTL-evict (the capture loop drops the trigger at the same gate).
-    /// Default false to match the capture-loop default.
+    /// Mirror of `EventDrivenCaptureConfig::capture_on_keystroke`. When on,
+    /// keyboard activity may send trigger-only capture messages even if
+    /// keyboard rows are not persisted.
     pub capture_on_keystroke: bool,
-    /// Mirror of `EventDrivenCaptureConfig::capture_on_clipboard`. Same
-    /// rationale as `capture_on_keystroke` — when the capture loop is
-    /// configured to skip Clipboard triggers, the recorder must also
-    /// skip minting the corr_id so the linker doesn't accumulate
-    /// pending_events that never pair.
+    /// Mirror of `EventDrivenCaptureConfig::capture_on_clipboard`. When on,
+    /// clipboard activity may send trigger-only capture messages even if
+    /// clipboard rows are not persisted.
     pub capture_on_clipboard: bool,
     /// Additional apps to exclude
     pub excluded_apps: Vec<String>,
@@ -119,6 +114,14 @@ pub struct UiRecorderConfig {
     pub tree_walk_interval_ms: u64,
     /// Record input events to DB (false = still capture for wake signal but don't write)
     pub record_input_events: bool,
+    /// Persist keyboard-derived rows (`text` / `key`) to DB. When false,
+    /// keyboard events can still wake event-driven capture, but private input
+    /// payloads are not written.
+    pub record_keyboard_events: bool,
+    /// Persist clipboard rows to DB. When false, clipboard operations can
+    /// still wake event-driven capture, but clipboard payloads/operation rows
+    /// are not written.
+    pub record_clipboard_events: bool,
     /// Prioritize input latency over event metadata completeness.
     /// Maps to `UiCaptureConfig.prioritize_input_latency`. See that field for details.
     pub prioritize_input_latency: bool,
@@ -141,11 +144,11 @@ impl Default for UiRecorderConfig {
             capture_clipboard: true,
             capture_clipboard_content: true,
             capture_app_switch: true,
-            capture_window_focus: false,
+            capture_window_focus: true,
             capture_scroll: false,
             capture_context: true,
-            capture_on_keystroke: false,
-            capture_on_clipboard: false,
+            capture_on_keystroke: true,
+            capture_on_clipboard: true,
             excluded_apps: Vec::new(),
             excluded_windows: Vec::new(),
             ignored_windows: Vec::new(),
@@ -155,6 +158,8 @@ impl Default for UiRecorderConfig {
             enable_tree_walker: true,
             tree_walk_interval_ms: 3000,
             record_input_events: true,
+            record_keyboard_events: true,
+            record_clipboard_events: true,
             prioritize_input_latency: false,
             extraction_thread_priority: ExtractionThreadPriority::BelowNormal,
             pause_extraction_on_input_ms: 150,
@@ -171,10 +176,15 @@ impl UiRecorderConfig {
         config.capture_mouse_move = self.capture_mouse_move;
         config.capture_text = self.capture_text;
         config.capture_keystrokes = self.capture_keystrokes;
-        config.capture_clipboard = self.capture_clipboard;
-        config.capture_clipboard_content = self.capture_clipboard_content;
+        // Clipboard detection is needed for trigger-only captures even when
+        // clipboard event storage/content is disabled for privacy.
+        config.capture_clipboard = self.capture_clipboard || self.capture_on_clipboard;
+        config.capture_clipboard_content = self.capture_clipboard && self.capture_clipboard_content;
         config.capture_app_switch = self.capture_app_switch;
-        config.capture_window_focus = self.capture_window_focus;
+        // Window focus changes are workflow boundaries. Keep them enabled
+        // for both CLI and desktop-app runs even if an older caller carries
+        // a false value in UiRecorderConfig.
+        config.capture_window_focus = true;
         config.capture_scroll = self.capture_scroll;
         config.capture_context = self.capture_context;
         config.prioritize_input_latency = self.prioritize_input_latency;
@@ -506,10 +516,9 @@ pub async fn start_ui_recording(
     let batch_size = config.batch_size;
     let batch_timeout = Duration::from_millis(config.batch_timeout_ms);
     let record_input_events = config.record_input_events;
-    let trigger_gates = TriggerGates {
-        capture_on_keystroke: config.capture_on_keystroke,
-        capture_on_clipboard: config.capture_on_clipboard,
-    };
+    let record_keyboard_events = config.record_keyboard_events;
+    let record_clipboard_events = config.record_clipboard_events;
+    let trigger_gates = TriggerGates;
 
     // Start the recording
     let handle = match recorder.start() {
@@ -562,6 +571,25 @@ pub async fn start_ui_recording(
             match handle.recv_timeout(Duration::from_millis(100)) {
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
+                    let app_lower = db_event
+                        .app_name
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase();
+                    let title_lower = db_event
+                        .window_title
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase();
+                    let is_ignored =
+                        window_pattern::matches_any(&ignored_patterns, &app_lower, &title_lower);
+                    let should_record_event = record_input_events
+                        && !is_ignored
+                        && should_record_input_event(
+                            &db_event,
+                            record_keyboard_events,
+                            record_clipboard_events,
+                        );
 
                     // Decide whether this event warrants a capture and, if so,
                     // mint a correlation id that travels with the trigger AND
@@ -590,7 +618,8 @@ pub async fn start_ui_recording(
                         .as_ref()
                         .map(|tx| tx.receiver_count() > 0)
                         .unwrap_or(false);
-                    let want_corr_id = (trigger_kind.is_some() || is_scroll)
+                    let want_corr_id = should_record_event
+                        && (trigger_kind.is_some() || is_scroll)
                         && has_trigger_receivers
                         && linker_tx.is_some();
                     let mut correlation_id = if want_corr_id {
@@ -603,43 +632,25 @@ pub async fn start_ui_recording(
                         if let Some(corr_id) = correlation_id {
                             scroll_burst.record(corr_id);
                         }
-                    } else if let (Some(ref trigger_tx), Some(trigger), Some(corr_id)) =
-                        (&capture_trigger_tx, trigger_kind, correlation_id)
+                    } else if let (Some(ref trigger_tx), Some(trigger)) =
+                        (&capture_trigger_tx, trigger_kind)
                     {
                         use crate::event_driven_capture::CaptureTriggerMsg;
                         // If `send` returns Err the broadcast lost its
                         // receivers between the count check above and now —
                         // blank the corr_id so the batch flush doesn't
                         // notify the linker about a doomed event.
-                        if trigger_tx
-                            .send(CaptureTriggerMsg::with_correlation(trigger, corr_id))
-                            .is_err()
-                        {
+                        let msg = match correlation_id {
+                            Some(corr_id) => CaptureTriggerMsg::with_correlation(trigger, corr_id),
+                            None => CaptureTriggerMsg::new(trigger),
+                        };
+                        if trigger_tx.send(msg).is_err() {
                             correlation_id = None;
                         }
                     }
 
-                    if record_input_events {
-                        // Don't store input events from ignored windows/apps.
-                        // Supports both legacy and scoped `App::Title` patterns.
-                        let app_lower = db_event
-                            .app_name
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase();
-                        let title_lower = db_event
-                            .window_title
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase();
-                        let is_ignored = window_pattern::matches_any(
-                            &ignored_patterns,
-                            &app_lower,
-                            &title_lower,
-                        );
-                        if !is_ignored {
-                            batch.push(db_event, correlation_id);
-                        }
+                    if should_record_event {
+                        batch.push(db_event, correlation_id);
                     }
 
                     // Flush if batch is full
@@ -761,6 +772,20 @@ pub async fn start_ui_recording(
 // Tree walker is disabled — paired_capture.rs handles accessibility capture.
 // Keeping this comment as a tombstone for git blame.
 
+fn should_record_input_event(
+    db_event: &InsertUiEvent,
+    record_keyboard_events: bool,
+    record_clipboard_events: bool,
+) -> bool {
+    match db_event.event_type {
+        screenpipe_db::UiEventType::Key | screenpipe_db::UiEventType::Text => {
+            record_keyboard_events
+        }
+        screenpipe_db::UiEventType::Clipboard => record_clipboard_events,
+        _ => true,
+    }
+}
+
 async fn flush_batch(
     db: &Arc<DatabaseManager>,
     batch: &mut EventBatch,
@@ -822,16 +847,15 @@ async fn flush_batch(
     batch.clear();
 }
 
-/// Trigger-side gate values mirrored from `EventDrivenCaptureConfig`.
-/// Used by [`capture_trigger_kind`] to suppress correlation_id minting
-/// for trigger kinds the capture loop is configured to drop. Without
-/// this the recorder would stash one `pending_event` per gated trigger
-/// in the frame linker — harmless functionally (they TTL-evict) but
-/// wasted work at high keystroke/clipboard rates.
+/// Marker for legacy trigger-side gates. Key and clipboard events are
+/// privacy-sensitive for storage, not for workflow checkpointing, so
+/// [`capture_trigger_kind`] intentionally lets them trigger even when older
+/// callers think these gates are off.
 #[derive(Debug, Clone, Copy, Default)]
-struct TriggerGates {
-    capture_on_keystroke: bool,
-    capture_on_clipboard: bool,
+struct TriggerGates;
+
+fn event_target_point(db_event: &InsertUiEvent) -> Option<(i32, i32)> {
+    Some((db_event.x?, db_event.y?))
 }
 
 /// Decide which `CaptureTrigger` (if any) this event should fire
@@ -846,7 +870,7 @@ struct TriggerGates {
 fn capture_trigger_kind(
     db_event: &InsertUiEvent,
     ignored_patterns: &[WindowPattern],
-    gates: TriggerGates,
+    _gates: TriggerGates,
 ) -> Option<crate::event_driven_capture::CaptureTrigger> {
     use crate::event_driven_capture::CaptureTrigger;
     // Both AppSwitch and WindowFocus events carry app_name (set by the
@@ -857,30 +881,36 @@ fn capture_trigger_kind(
     let app_lower = app.to_lowercase();
     let title_lower = title.to_lowercase();
     let is_ignored = window_pattern::matches_any(ignored_patterns, &app_lower, &title_lower);
+    let target = event_target_point(db_event);
     match &db_event.event_type {
         screenpipe_db::UiEventType::AppSwitch => {
             if is_ignored {
                 None
             } else {
-                Some(CaptureTrigger::AppSwitch { app_name: app })
+                Some(CaptureTrigger::AppSwitch {
+                    app_name: app,
+                    target,
+                })
             }
         }
         screenpipe_db::UiEventType::WindowFocus => {
             if is_ignored {
                 None
             } else {
-                Some(CaptureTrigger::WindowFocus { window_name: title })
+                Some(CaptureTrigger::WindowFocus {
+                    window_name: title,
+                    target,
+                })
             }
         }
-        screenpipe_db::UiEventType::Click => Some(CaptureTrigger::Click),
-        // Clipboard rows are always written to the DB when clipboard
-        // capture is enabled. The frame linkage is gated separately:
-        // when `capture_on_clipboard` is off the capture loop drops the
-        // trigger, so we skip minting a corr_id here too.
-        screenpipe_db::UiEventType::Clipboard if gates.capture_on_clipboard => {
-            Some(CaptureTrigger::Clipboard)
-        }
-        screenpipe_db::UiEventType::Clipboard => None,
+        screenpipe_db::UiEventType::Click => Some(
+            target
+                .map(|(x, y)| CaptureTrigger::Click { x, y })
+                .unwrap_or(CaptureTrigger::Manual),
+        ),
+        // Clipboard operations can be trigger-only when DB persistence is
+        // disabled. Storage privacy never suppresses the workflow checkpoint.
+        screenpipe_db::UiEventType::Clipboard => Some(CaptureTrigger::Clipboard),
         // Text events are already burst-end-debounced by the a11y layer
         // (`text_timeout_ms`, default 300ms) — one row per typing burst,
         // so one TypingPause trigger per row is the correct semantic.
@@ -890,14 +920,9 @@ fn capture_trigger_kind(
         // recent Scroll's correlation_id until the burst ends, then
         // emits a single ScrollStop trigger.
         screenpipe_db::UiEventType::Scroll => None,
-        // Key events fire a KeyPress trigger only when the capture loop
-        // is configured to honor them. With the gate off we don't mint a
-        // corr_id, so the row stays NULL without leaving a doomed
-        // pending_event in the frame linker.
-        screenpipe_db::UiEventType::Key if gates.capture_on_keystroke => {
-            Some(CaptureTrigger::KeyPress)
-        }
-        screenpipe_db::UiEventType::Key => None,
+        // Key events fire a KeyPress trigger even when privacy settings
+        // suppress storing the key row.
+        screenpipe_db::UiEventType::Key => Some(CaptureTrigger::KeyPress),
         // Move/Idle never trigger.
         _ => None,
     }
@@ -1054,21 +1079,14 @@ mod capture_trigger_kind_tests {
         }
     }
 
-    fn gates(keystroke: bool, clipboard: bool) -> TriggerGates {
-        TriggerGates {
-            capture_on_keystroke: keystroke,
-            capture_on_clipboard: clipboard,
-        }
+    fn gates(_keystroke: bool, _clipboard: bool) -> TriggerGates {
+        TriggerGates
     }
 
     #[test]
-    fn key_event_suppressed_when_keystroke_gate_off() {
-        // When `capture_on_keystroke` is false the capture loop drops
-        // the trigger at the reducer — so we must also drop it here
-        // and not mint a corr_id that would just TTL-evict in the
-        // frame linker.
+    fn key_event_triggers_even_when_legacy_gate_off() {
         let result = capture_trigger_kind(&evt(UiEventType::Key), &[], gates(false, true));
-        assert!(result.is_none(), "Key with gate off must not trigger");
+        assert!(matches!(result, Some(CaptureTrigger::KeyPress)));
     }
 
     #[test]
@@ -1078,15 +1096,99 @@ mod capture_trigger_kind_tests {
     }
 
     #[test]
-    fn clipboard_event_suppressed_when_clipboard_gate_off() {
+    fn sensitive_rows_follow_recording_gates() {
+        assert!(!should_record_input_event(
+            &evt(UiEventType::Key),
+            false,
+            true
+        ));
+        assert!(!should_record_input_event(
+            &evt(UiEventType::Text),
+            false,
+            true
+        ));
+        assert!(!should_record_input_event(
+            &evt(UiEventType::Clipboard),
+            true,
+            false
+        ));
+        assert!(should_record_input_event(
+            &evt(UiEventType::Key),
+            true,
+            false
+        ));
+        assert!(should_record_input_event(
+            &evt(UiEventType::Text),
+            true,
+            false
+        ));
+        assert!(should_record_input_event(
+            &evt(UiEventType::Clipboard),
+            false,
+            true
+        ));
+        assert!(should_record_input_event(
+            &evt(UiEventType::WindowFocus),
+            false,
+            false
+        ));
+        assert!(should_record_input_event(
+            &evt(UiEventType::Click),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn key_event_can_trigger_without_being_stored() {
+        let event = evt(UiEventType::Key);
+
+        assert!(!should_record_input_event(&event, false, true));
+        assert!(matches!(
+            capture_trigger_kind(&event, &[], gates(true, true)),
+            Some(CaptureTrigger::KeyPress)
+        ));
+    }
+
+    #[test]
+    fn clipboard_event_triggers_even_when_legacy_gate_off() {
         let result = capture_trigger_kind(&evt(UiEventType::Clipboard), &[], gates(false, false));
-        assert!(result.is_none(), "Clipboard with gate off must not trigger");
+        assert!(matches!(result, Some(CaptureTrigger::Clipboard)));
+    }
+
+    #[test]
+    fn click_event_carries_target_coordinates() {
+        let mut e = evt(UiEventType::Click);
+        e.x = Some(123);
+        e.y = Some(456);
+        let result = capture_trigger_kind(&e, &[], gates(false, false));
+        assert!(matches!(
+            result,
+            Some(CaptureTrigger::Click { x: 123, y: 456 })
+        ));
+    }
+
+    #[test]
+    fn click_event_without_coordinates_still_captures() {
+        let result = capture_trigger_kind(&evt(UiEventType::Click), &[], gates(false, false));
+        assert!(matches!(result, Some(CaptureTrigger::Manual)));
     }
 
     #[test]
     fn clipboard_event_fires_when_clipboard_gate_on() {
         let result = capture_trigger_kind(&evt(UiEventType::Clipboard), &[], gates(false, true));
         assert!(matches!(result, Some(CaptureTrigger::Clipboard)));
+    }
+
+    #[test]
+    fn clipboard_event_can_trigger_without_being_stored() {
+        let event = evt(UiEventType::Clipboard);
+
+        assert!(!should_record_input_event(&event, true, false));
+        assert!(matches!(
+            capture_trigger_kind(&event, &[], gates(true, true)),
+            Some(CaptureTrigger::Clipboard)
+        ));
     }
 
     #[test]
@@ -1195,6 +1297,32 @@ mod scroll_burst_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_focus_capture_is_always_enabled() {
+        assert!(UiRecorderConfig::default().capture_window_focus);
+
+        let config = UiRecorderConfig {
+            capture_window_focus: false,
+            ..Default::default()
+        };
+        assert!(config.to_ui_config().capture_window_focus);
+    }
+
+    #[test]
+    fn clipboard_trigger_detection_does_not_require_clipboard_storage() {
+        let config = UiRecorderConfig {
+            capture_clipboard: false,
+            capture_clipboard_content: true,
+            capture_on_clipboard: true,
+            ..Default::default()
+        };
+
+        let ui_config = config.to_ui_config();
+
+        assert!(ui_config.capture_clipboard);
+        assert!(!ui_config.capture_clipboard_content);
+    }
 
     #[test]
     fn test_stop_flag_sets_on_stop() {

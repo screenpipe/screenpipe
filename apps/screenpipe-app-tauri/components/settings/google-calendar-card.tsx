@@ -169,9 +169,9 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
         const msg = String(res.error ?? "");
         const isProGate = msg.toLowerCase().includes("pro subscription");
         toast({
-          title: isProGate ? "pro required" : "google calendar connect failed",
+          title: isProGate ? "business required" : "google calendar connect failed",
           description: isProGate
-            ? "OAuth integrations need Pro. Upgrade to connect Google Calendar."
+            ? "OAuth integrations need Business. Upgrade to connect Google Calendar."
             : msg || "Unknown error",
           variant: "destructive",
         });

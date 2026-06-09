@@ -37,6 +37,12 @@ import {
   loadConversationFile,
   updateConversationFlags,
 } from "@/lib/chat-storage";
+import {
+  getCachedBrowserStateEntry,
+  markCachedBrowserStateCleared,
+  resolveNewestBrowserState,
+  setCachedBrowserState,
+} from "@/lib/browser-state-cache";
 import { Button } from "@/components/ui/button";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -175,8 +181,12 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       (async () => {
         try {
           const conv = await loadConversationFile(conversationId);
-          const prev = conv?.browserState;
+          const prev = resolveNewestBrowserState(
+            conv?.browserState,
+            getCachedBrowserStateEntry(conversationId),
+          );
           if (patch.url === null) {
+            markCachedBrowserStateCleared(conversationId);
             await updateConversationFlags(conversationId, {
               browserState: undefined,
             });
@@ -184,13 +194,15 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
           }
           const url = patch.url ?? prev?.url;
           if (!url) return; // can't have a panel state without a URL
+          const nextState = {
+            url,
+            updatedAt: Date.now(),
+            width: patch.width ?? prev?.width,
+            collapsed: patch.collapsed ?? prev?.collapsed,
+          };
+          setCachedBrowserState(conversationId, nextState);
           await updateConversationFlags(conversationId, {
-            browserState: {
-              url,
-              updatedAt: Date.now(),
-              width: patch.width ?? prev?.width,
-              collapsed: patch.collapsed ?? prev?.collapsed,
-            },
+            browserState: nextState,
           });
         } catch (e) {
           console.error("persist browserState failed", e);
@@ -496,7 +508,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     (async () => {
       const conv = await loadConversationFile(conversationId).catch(() => null);
       if (cancelled) return;
-      const state = conv?.browserState;
+      const state = resolveNewestBrowserState(
+        conv?.browserState,
+        getCachedBrowserStateEntry(conversationId),
+      );
       const url = state?.url;
       const width = state?.width ?? DEFAULT_WIDTH;
       const wasCollapsed = state?.collapsed === true;

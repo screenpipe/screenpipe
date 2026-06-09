@@ -678,21 +678,23 @@ fn monitor_keyboards(
 
                     // Modifier + key → record as Key event
                     if ctrl_held || super_held {
-                        let event = UiEvent {
-                            id: None,
-                            timestamp: Utc::now(),
-                            relative_ms: t,
-                            data: EventData::Key {
-                                key_code: code,
-                                modifiers: mods.0,
-                            },
-                            app_name,
-                            window_title,
-                            browser_url: None,
-                            element: None,
-                            frame_id: None,
-                        };
-                        let _ = tx.try_send(event);
+                        if config.capture_keystrokes {
+                            let event = UiEvent {
+                                id: None,
+                                timestamp: Utc::now(),
+                                relative_ms: t,
+                                data: EventData::Key {
+                                    key_code: code,
+                                    modifiers: mods.0,
+                                },
+                                app_name,
+                                window_title,
+                                browser_url: None,
+                                element: None,
+                                frame_id: None,
+                            };
+                            let _ = tx.try_send(event);
+                        }
                     } else if config.capture_text {
                         // Normal key → aggregate into text buffer
                         if let Some(c) = evdev_key_to_char(key, shift_held) {
@@ -714,6 +716,22 @@ fn monitor_keyboards(
                             };
                             let _ = tx.try_send(event);
                         }
+                    } else if config.capture_keystrokes {
+                        let event = UiEvent {
+                            id: None,
+                            timestamp: Utc::now(),
+                            relative_ms: t,
+                            data: EventData::Key {
+                                key_code: code,
+                                modifiers: mods.0,
+                            },
+                            app_name,
+                            window_title,
+                            browser_url: None,
+                            element: None,
+                            frame_id: None,
+                        };
+                        let _ = tx.try_send(event);
                     }
                 }
             }

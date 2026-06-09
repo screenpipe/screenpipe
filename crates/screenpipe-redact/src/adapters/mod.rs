@@ -38,6 +38,7 @@
 //! pulls the right binary across both modalities. **No CUDA /
 //! Vulkan / GPU-vendor SDKs bundled.**
 
+pub mod national_id;
 pub mod regex;
 pub mod tinfoil;
 pub mod tinfoil_image;

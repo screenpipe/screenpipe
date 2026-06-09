@@ -97,6 +97,7 @@ type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 /// inject helper in `owned_browser.rs` can stay one impl per platform
 /// while the reader and the agent see the same struct.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub struct Cookie {
     pub name: String,
     pub value: String,
@@ -166,11 +167,6 @@ pub async fn safe_storage_likely_prompts_for_host(host: &str) -> bool {
     tokio::task::spawn_blocking(move || safe_storage_likely_prompts_for_host_impl(&host_owned))
         .await
         .unwrap_or(true)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn safe_storage_likely_prompts_for_host(_host: &str) -> bool {
-    false
 }
 
 #[cfg(target_os = "windows")]

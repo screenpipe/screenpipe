@@ -224,7 +224,7 @@ function SyncOnboarding({ onSubscribe, onRefresh, isLoading, isRefreshing, isLog
           <div>
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-primary" />
-              <span className="font-medium">Screenpipe Pro</span>
+              <span className="font-medium">Screenpipe Business</span>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
               50GB storage · 3 devices · Priority support
@@ -232,13 +232,13 @@ function SyncOnboarding({ onSubscribe, onRefresh, isLoading, isRefreshing, isLog
           </div>
           <div className="text-right">
             <div className="text-lg font-bold">
-              ${isAnnual ? "19" : "29"}
+              ${isAnnual ? "42" : "50"}
               <span className="text-sm font-normal text-muted-foreground">
                 /mo
               </span>
             </div>
             {isAnnual && (
-              <p className="text-xs text-primary">$228/year - Save 34%</p>
+              <p className="text-xs text-primary">$500/year - Save 17%</p>
             )}
           </div>
         </div>

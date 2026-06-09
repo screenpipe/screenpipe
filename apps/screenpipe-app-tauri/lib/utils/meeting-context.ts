@@ -358,6 +358,10 @@ interface SummarizeInput {
   meeting: MeetingRecord;
   context: MeetingContext;
   transcript?: MeetingAudioChunk[] | null;
+  /** Image data URLs extracted from the user's meeting note and attached to
+   * the chat turn. Used only to tell the model that placeholders in `notes:`
+   * have corresponding images. */
+  noteImages?: string[] | null;
   /** Replace the built-in directive with the body of a user-chosen summary
    * pipe (e.g. one selected from the Meeting summary pipe picker). The
    * meeting id is prepended so the pipe body doesn't have to look it up. */
@@ -374,6 +378,7 @@ export function buildEnrichedSummarizePrompt({
   meeting,
   context,
   transcript,
+  noteImages,
   directiveOverride,
 }: SummarizeInput): string {
   const start = new Date(meeting.meeting_start);
@@ -388,9 +393,18 @@ export function buildEnrichedSummarizePrompt({
   ];
   if (meeting.title) meetingLines.push(`title: ${meeting.title}`);
   if (meeting.attendees) meetingLines.push(`attendees: ${meeting.attendees}`);
-  if (meeting.note) meetingLines.push(`notes: ${meeting.note}`);
+  if (meeting.note) {
+    meetingLines.push(`notes: ${replaceNoteImageDataUrlsWithPlaceholders(meeting.note)}`);
+  }
 
   const sections: string[] = [`meeting:\n${meetingLines.join("\n")}`];
+  const attachedNoteImageCount =
+    noteImages?.length ?? extractImageDataUrlsFromMarkdown(meeting.note).length;
+  if (attachedNoteImageCount > 0) {
+    sections.push(
+      `meeting note images:\n${attachedNoteImageCount} image${attachedNoteImageCount === 1 ? "" : "s"} from the user's notes are attached to this chat message. use them as part of the meeting-note context when summarizing.`,
+    );
+  }
 
   const a = context.activity;
   if (a) {
@@ -460,6 +474,39 @@ export function buildEnrichedSummarizePrompt({
     : buildMeetingSummarizeInstructions(meeting.id, { followUpAsk: true });
 
   return `${directive}\n\n${sections.join("\n\n")}`;
+}
+
+export function extractImageDataUrlsFromMarkdown(
+  markdown: string | null | undefined,
+  limit = 8,
+): string[] {
+  if (!markdown) return [];
+
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const match of markdown.matchAll(markdownImageDataUrlRegex())) {
+    const url = match[2];
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+    if (urls.length >= limit) break;
+  }
+  return urls;
+}
+
+function replaceNoteImageDataUrlsWithPlaceholders(markdown: string): string {
+  let index = 0;
+  return markdown.replace(markdownImageDataUrlRegex(), (_match, alt: string) => {
+    index += 1;
+    const label = alt.trim();
+    return label
+      ? `[attached image ${index}: ${label}]`
+      : `[attached image ${index}]`;
+  });
+}
+
+function markdownImageDataUrlRegex(): RegExp {
+  return /!\[([^\]]*)\]\(\s*(data:image\/[^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/gi;
 }
 
 /**

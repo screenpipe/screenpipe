@@ -7,14 +7,14 @@
 use screenpipe_config::DbConfig;
 use screenpipe_db::DatabaseManager;
 
-/// In-memory SQLite doesn't support mmap, so mmap_size PRAGMA returns 0.
+/// mmap is disabled (mmap_size = 0) on every tier to prevent DB corruption.
 /// We verify cache_size which works in all modes, and verify the DB
 /// initializes without errors across all tiers.
 
 #[tokio::test]
 async fn low_tier_db_initializes_successfully() {
     let config = DbConfig::for_tier(screenpipe_config::DeviceTier::Low);
-    assert_eq!(config.mmap_size, 32 * 1024 * 1024);
+    assert_eq!(config.mmap_size, 0); // mmap disabled to prevent DB corruption
     assert_eq!(config.cache_size_kb, 8_000);
     assert_eq!(config.read_pool_max, 5);
     assert_eq!(config.write_pool_max, 4);
@@ -28,7 +28,7 @@ async fn low_tier_db_initializes_successfully() {
 #[tokio::test]
 async fn mid_tier_db_initializes_successfully() {
     let config = DbConfig::for_tier(screenpipe_config::DeviceTier::Mid);
-    assert_eq!(config.mmap_size, 128 * 1024 * 1024);
+    assert_eq!(config.mmap_size, 0); // mmap disabled to prevent DB corruption
     assert_eq!(config.cache_size_kb, 32_000);
     assert_eq!(config.read_pool_max, 12);
 
@@ -40,7 +40,7 @@ async fn mid_tier_db_initializes_successfully() {
 #[tokio::test]
 async fn high_tier_db_initializes_successfully() {
     let config = DbConfig::default();
-    assert_eq!(config.mmap_size, 256 * 1024 * 1024);
+    assert_eq!(config.mmap_size, 0); // mmap disabled to prevent DB corruption
     assert_eq!(config.cache_size_kb, 64_000);
     assert_eq!(config.read_pool_max, 27);
 

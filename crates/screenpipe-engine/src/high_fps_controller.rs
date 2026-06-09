@@ -69,7 +69,7 @@ pub const MIN_TIMER_DURATION: Duration = Duration::from_secs(60);
 
 /// Max time a `PrewarmPending` session waits for `meeting_started` before
 /// self-expiring. 30 minutes is the prewarm-notification lookahead ceiling
-///   + a buffer for late starts. If no meeting arrives in this window, the
+/// + a buffer for late starts. If no meeting arrives in this window, the
 ///   session expires without ever upgrading.
 pub const PREWARM_WAIT: Duration = Duration::from_secs(30 * 60);
 

@@ -1,9 +1,10 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, trace};
+
+use crate::telemetry_context::TelemetryContext;
 
 #[cfg(target_os = "macos")]
 use sysinfo::{System, SystemExt};
@@ -24,10 +25,10 @@ pub struct Analytics {
 
 impl Analytics {
     fn new() -> Self {
-        // Try to get analytics ID from env var (passed from Tauri app)
-        // Fall back to random UUID for standalone CLI usage
-        let distinct_id = env::var("SCREENPIPE_ANALYTICS_ID")
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+        // Try env-provided analytics/support IDs first, then fall back to a
+        // random UUID for standalone CLI usage.
+        let distinct_id = TelemetryContext::distinct_id_from_env()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         debug!("Analytics initialized with distinct_id: {}", distinct_id);
 
@@ -69,6 +70,7 @@ pub async fn capture_event(event: &str, properties: Value) {
         obj.insert("distinct_id".to_string(), json!(ANALYTICS.distinct_id));
         obj.insert("$lib".to_string(), json!("screenpipe-engine"));
         obj.insert("release".to_string(), json!(env!("CARGO_PKG_VERSION")));
+        TelemetryContext::from_env().insert_posthog_properties(obj);
     }
 
     let payload = json!({

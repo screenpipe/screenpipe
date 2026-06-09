@@ -171,6 +171,17 @@ describe("toggleNotificationInContent — enable notifications", () => {
     expect(isNotificationsDenied(result)).toBe(false);
   });
 
+  it("keeps compact YAML deny list items under deny when removing notify rule", () => {
+    const input =
+      "---\npermissions:\n  deny:\n  - Api(POST /search)\n  - Api(POST /notify)\n---\n\n# My Pipe";
+    const result = toggleNotificationInContent(input, true);
+    expect(result).not.toContain("Api(POST /notify)");
+    expect(result).toContain("permissions:");
+    expect(result).toContain("deny:");
+    expect(result).toContain("  - Api(POST /search)");
+    expect(isNotificationsDenied(result)).toBe(false);
+  });
+
   it("preserves other frontmatter fields after cleanup", () => {
     const input =
       "---\nschedule: every 30m\nenabled: true\npermissions:\n  deny:\n    - Api(POST /notify)\n---\n\n# My Pipe";
@@ -186,6 +197,18 @@ describe("toggleNotificationInContent — enable notifications", () => {
   it("preserves allow rules when removing deny", () => {
     const input =
       "---\npermissions:\n  allow:\n    - Bash\n  deny:\n    - Api(POST /notify)\n---\n\n# My Pipe";
+    const result = toggleNotificationInContent(input, true);
+    expect(result).toContain("permissions:");
+    expect(result).toContain("allow:");
+    expect(result).toContain("- Bash");
+    expect(result).not.toContain("deny:");
+    expect(result).not.toContain("Api(POST /notify)");
+    expect(isNotificationsDenied(result)).toBe(false);
+  });
+
+  it("removes an empty deny block even when allow follows it", () => {
+    const input =
+      "---\npermissions:\n  deny:\n    - Api(POST /notify)\n  allow:\n    - Bash\n---\n\n# My Pipe";
     const result = toggleNotificationInContent(input, true);
     expect(result).toContain("permissions:");
     expect(result).toContain("allow:");
@@ -354,5 +377,66 @@ Sync screenpipe activity to an Obsidian vault`;
     expect(reenabled).not.toContain("deny:");
     expect(reenabled).toContain("schedule:");
     expect(reenabled).toContain("Sync screenpipe activity");
+  });
+});
+
+describe("edge cases — blank lines and sibling allow blocks", () => {
+  it("detects the notify deny rule across a blank line inside the deny block", () => {
+    const content = [
+      "---",
+      "permissions:",
+      "  deny:",
+      "",
+      "    - Api(POST /notify)",
+      "---",
+      "body",
+    ].join("\n");
+    expect(isNotificationsDenied(content)).toBe(true);
+  });
+
+  it("enable: removes only the notify deny rule and keeps permissions + allow children", () => {
+    const content = [
+      "---",
+      "permissions:",
+      "  allow:",
+      "    - Api(GET /search)",
+      "  deny:",
+      "    - Api(POST /notify)",
+      "---",
+      "body",
+    ].join("\n");
+
+    const result = toggleNotificationInContent(content, true);
+
+    expect(result).toBe(
+      [
+        "---",
+        "permissions:",
+        "  allow:",
+        "    - Api(GET /search)",
+        "---",
+        "body",
+      ].join("\n"),
+    );
+    expect(isNotificationsDenied(result)).toBe(false);
+    expect(result).toContain("Api(GET /search)");
+  });
+
+  it("enable: keeps a deny block that still has a non-notify rule after removing notify", () => {
+    const content = [
+      "---",
+      "permissions:",
+      "  deny:",
+      "    - Api(POST /notify)",
+      "    - Api(POST /shell)",
+      "---",
+      "body",
+    ].join("\n");
+
+    const result = toggleNotificationInContent(content, true);
+
+    expect(result).toContain("deny:");
+    expect(result).toContain("Api(POST /shell)");
+    expect(isNotificationsDenied(result)).toBe(false);
   });
 });

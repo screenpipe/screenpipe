@@ -84,14 +84,14 @@ pub struct RecordingConfig {
     pub ignore_incognito_windows: bool,
     /// Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
     pub pause_on_drm_content: bool,
-    /// Skip clipboard capture in the UI recorder (events + content). Useful
-    /// when piping ~/.screenpipe data into a remote LLM or shipping it off
-    /// the box — passwords / api keys / private keys frequently flow
-    /// through the clipboard.
+    /// Skip persisting clipboard rows/content in the UI recorder. Clipboard
+    /// operations can still wake event-driven capture when clipboard-triggered
+    /// capture is enabled.
     pub disable_clipboard_capture: bool,
-    /// Skip keyboard / typed-text capture in the UI recorder
-    /// (`UiCaptureConfig::capture_text`). The a11y tree + OCR still capture
-    /// on-screen text. See `RecordingSettings.disable_keyboard_capture`.
+    /// Skip persisting keyboard / typed-text rows in the UI recorder
+    /// (`UiRecorderConfig::record_keyboard_events`). Keyboard events still
+    /// wake event-driven capture, and the a11y tree + OCR still capture on-screen text. See
+    /// `RecordingSettings.disable_keyboard_capture`.
     pub disable_keyboard_capture: bool,
     pub languages: Vec<Language>,
 
@@ -161,6 +161,10 @@ pub struct RecordingConfig {
     /// See `RecordingSettings.disable_meeting_detector` for details.
     pub disable_meeting_detector: bool,
 
+    /// Apps / meeting services excluded from meeting detection.
+    /// See `RecordingSettings.ignored_meeting_apps` for matching semantics.
+    pub ignored_meeting_apps: Vec<String>,
+
     /// Mitsukeru fork: overrides for event-driven capture parameters.
     /// None = follow active PowerProfile.
     pub idle_capture_interval_ms: Option<u64>,
@@ -174,11 +178,12 @@ pub struct RecordingConfig {
     /// Capture debounce (ms) installed while an HD session is active.
     /// Clamped to >= 33 ms by the controller.
     pub hd_recording_interval_ms: u64,
-    /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
-    /// None = engine default (false). See `RecordingSettings.capture_on_keystroke`.
+    /// Legacy key-trigger override. Recording sessions keep keyboard-triggered
+    /// capture on; raw key/text DB rows are controlled separately by
+    /// `disable_keyboard_capture`.
     pub capture_on_keystroke: Option<bool>,
     /// Override `EventDrivenCaptureConfig::capture_on_clipboard`.
-    /// None = engine default (false). See `RecordingSettings.capture_on_clipboard`.
+    /// None = engine default (true). See `RecordingSettings.capture_on_clipboard`.
     pub capture_on_clipboard: Option<bool>,
     /// Override `UiRecorderConfig::capture_scroll`.
     /// None = engine default (false). See `RecordingSettings.capture_scroll`.
@@ -331,6 +336,7 @@ impl RecordingConfig {
             max_snapshot_width: settings.max_snapshot_width,
             disable_snapshot_compaction: settings.disable_snapshot_compaction,
             disable_meeting_detector: settings.disable_meeting_detector,
+            ignored_meeting_apps: settings.ignored_meeting_apps.clone(),
             idle_capture_interval_ms: settings.idle_capture_interval_ms,
             visual_check_interval_ms: settings.visual_check_interval_ms,
             visual_change_threshold: settings.visual_change_threshold,
@@ -366,12 +372,10 @@ impl RecordingConfig {
 
     /// Build a `UiRecorderConfig` from this recording config.
     pub fn to_ui_recorder_config(&self) -> crate::ui_recorder::UiRecorderConfig {
-        // `capture_on_keystroke` / `capture_on_clipboard` are mirrored
-        // from the corresponding `EventDrivenCaptureConfig` overrides so
-        // the recorder doesn't mint correlation_ids for triggers the
-        // capture loop will drop. `None` means "engine default" — same
-        // semantics as in `to_vision_manager_config`.
         let defaults = crate::ui_recorder::UiRecorderConfig::default();
+        let capture_on_clipboard = self
+            .capture_on_clipboard
+            .unwrap_or(defaults.capture_on_clipboard);
         crate::ui_recorder::UiRecorderConfig {
             enabled: true,
             enable_tree_walker: true,
@@ -379,23 +383,26 @@ impl RecordingConfig {
             excluded_windows: self.ignored_windows.clone(),
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
-            capture_clipboard: !self.disable_clipboard_capture,
+            capture_clipboard: !self.disable_clipboard_capture || capture_on_clipboard,
             capture_clipboard_content: !self.disable_clipboard_capture,
-            // Keyboard / typed-text capture. Off when disabled — the a11y
-            // tree + OCR still capture on-screen text, this only drops the
-            // raw keystroke stream.
+            // Keyboard events always reach the recorder so they can wake
+            // event-driven capture. Persisting text/key rows remains the
+            // privacy-sensitive opt-in controlled by disable_keyboard_capture.
             capture_text: !self.disable_keyboard_capture,
+            capture_keystrokes: true,
+            record_keyboard_events: !self.disable_keyboard_capture,
+            record_clipboard_events: !self.disable_clipboard_capture,
+            // Event-driven capture relies on same-app title changes reaching
+            // the trigger mapper. The lower-level a11y default keeps this off
+            // for libraries, but recording sessions need it on.
+            capture_window_focus: true,
             // Input-latency tuning. `extraction_thread_priority` is parsed from its
             // string form; an unrecognized value falls back to the enum default.
             prioritize_input_latency: self.prioritize_input_latency,
             extraction_thread_priority: self.extraction_thread_priority.parse().unwrap_or_default(),
             pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
-            capture_on_keystroke: self
-                .capture_on_keystroke
-                .unwrap_or(defaults.capture_on_keystroke),
-            capture_on_clipboard: self
-                .capture_on_clipboard
-                .unwrap_or(defaults.capture_on_clipboard),
+            capture_on_keystroke: true,
+            capture_on_clipboard,
             capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
             ..defaults
         }
@@ -441,6 +448,7 @@ impl RecordingConfig {
             output_path,
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
+            ignored_urls: self.ignored_urls.clone(),
             vision_metrics,
             use_pii_removal: self.use_pii_removal,
             monitor_ids: self.monitor_ids.clone(),
@@ -453,7 +461,7 @@ impl RecordingConfig {
             visual_check_interval_ms: self.visual_check_interval_ms,
             visual_change_threshold: self.visual_change_threshold,
             min_capture_interval_ms: self.min_capture_interval_ms,
-            capture_on_keystroke: self.capture_on_keystroke,
+            capture_on_keystroke: Some(true),
             capture_on_clipboard: self.capture_on_clipboard,
         }
     }
@@ -550,6 +558,10 @@ mod tests {
         assert!(!ui.capture_clipboard);
         assert!(!ui.capture_clipboard_content);
         assert!(!ui.capture_text);
+        assert!(ui.capture_keystrokes);
+        assert!(!ui.record_keyboard_events);
+        assert!(!ui.record_clipboard_events);
+        assert!(ui.capture_window_focus);
         assert_eq!(ui.ignored_windows, settings.ignored_windows);
         assert_eq!(ui.excluded_windows, settings.ignored_windows);
         assert_eq!(ui.included_windows, settings.included_windows);
@@ -562,6 +574,38 @@ mod tests {
             screenpipe_a11y::ExtractionThreadPriority::Lowest
         );
         assert_eq!(ui.pause_extraction_on_input_ms, 400);
+    }
+
+    #[test]
+    fn clipboard_trigger_can_run_without_clipboard_db_rows() {
+        let settings = screenpipe_config::RecordingSettings {
+            disable_clipboard_capture: true,
+            capture_on_clipboard: Some(true),
+            ..Default::default()
+        };
+
+        let ui = build(&settings).to_ui_recorder_config();
+
+        assert!(ui.capture_clipboard);
+        assert!(ui.capture_on_clipboard);
+        assert!(!ui.capture_clipboard_content);
+        assert!(!ui.record_clipboard_events);
+    }
+
+    #[test]
+    fn keyboard_capture_opt_in_enables_text_and_key_rows() {
+        let settings = screenpipe_config::RecordingSettings {
+            disable_keyboard_capture: false,
+            capture_on_keystroke: Some(true),
+            ..Default::default()
+        };
+
+        let ui = build(&settings).to_ui_recorder_config();
+
+        assert!(ui.capture_text);
+        assert!(ui.capture_keystrokes);
+        assert!(ui.record_keyboard_events);
+        assert!(ui.capture_on_keystroke);
     }
 
     #[test]

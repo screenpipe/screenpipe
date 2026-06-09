@@ -835,8 +835,8 @@ describe("Windows user journey", function () {
     await waitForBodyText(
       (bodyText) =>
         bodyText.includes("local disk, cloud archive, and sync") &&
-        bodyText.includes("auto-delete old data") &&
-        bodyText.includes("video + audio only"),
+        bodyText.includes("storage policy") &&
+        bodyText.includes("drop video + audio"),
       "Storage settings did not show the local retention controls",
     );
 

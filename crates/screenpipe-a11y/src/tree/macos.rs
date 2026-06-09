@@ -14,7 +14,7 @@ use chrono::Utc;
 use cidre::{arc::Retained, ax, cf, ns};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 /// Known browser app names (lowercase). Matches vision crate's list.
@@ -326,23 +326,10 @@ impl MacosTreeWalker {
         // 1. Get the focused application via the AX system-wide element.
         // This stays within the accessibility stack instead of relying on
         // NSWorkspace's foreground-app state from a background thread.
-        let sys = ax::UiElement::sys_wide();
-        let focused_app = match sys.focused_app() {
-            Ok(app) => app,
-            Err(_) => return Ok(TreeWalkResult::NotFound),
+        let (focused_app, pid, app_name) = match resolve_focused_ax_app() {
+            Some(focused) => focused,
+            None => return Ok(TreeWalkResult::NotFound),
         };
-        let pid = match focused_app.pid() {
-            Ok(pid) => pid,
-            Err(_) => return Ok(TreeWalkResult::NotFound),
-        };
-        let Some(app) = ns::RunningApp::with_pid(pid) else {
-            return Ok(TreeWalkResult::NotFound);
-        };
-
-        let app_name = app
-            .localized_name()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
 
         // Skip excluded apps (password managers, etc.)
         let app_lower = app_name.to_lowercase();
@@ -384,10 +371,10 @@ impl MacosTreeWalker {
         // we poke it), so we only re-assert it once per TTL per pid. Chromium
         // latches the mode so one poke is plenty; if the renderer ever drops
         // the mode we recover on the next TTL window.
+        let mut ax_mode_changed = false;
         if ENHANCED_MODE_CACHE.should_enable_once(pid) {
             let eui_attr_name = cf::String::from_str("AXEnhancedUserInterface");
             let eui_attr = ax::Attr::with_string(&eui_attr_name);
-            let _ = ax_app.set_attr(eui_attr, cf::Boolean::value_true());
 
             // Also set AXManualAccessibility — the Chromium-specific flag.
             // Newer Electron builds (and Chrome itself) respond to this without
@@ -397,20 +384,43 @@ impl MacosTreeWalker {
             // both: the better-supported flag wins.
             let ama_attr_name = cf::String::from_str("AXManualAccessibility");
             let ama_attr = ax::Attr::with_string(&ama_attr_name);
-            let _ = ax_app.set_attr(ama_attr, cf::Boolean::value_true());
 
-            debug!("enhanced AX mode enabled for pid={} app={}", pid, app_name);
+            let focused_editability = focused_element_editability(&ax_app);
+            if enhanced_ax_mode_already_enabled(&ax_app, eui_attr, ama_attr) {
+                debug!(
+                    "enhanced AX mode already enabled for pid={} app={}; skipping re-assert",
+                    pid, app_name
+                );
+            } else if focused_editability != FocusEditability::NotEditable {
+                // AXEnhancedUserInterface advertises full screen-reader mode,
+                // which is the flag most likely to disturb the focused input.
+                // Keep unsafe/unknown focus paths to Chromium's narrower
+                // AXManualAccessibility flag; Obsidian needs this for its DOM
+                // tree, and it avoids reasserting the broader EUI toggle.
+                ax_mode_changed = ax_app.set_attr(ama_attr, cf::Boolean::value_true()).is_ok();
+                debug!(
+                    "enhanced AX mode manual-only for pid={} app={} because focus is {:?}",
+                    pid, app_name, focused_editability
+                );
+            } else {
+                let eui_set = ax_app.set_attr(eui_attr, cf::Boolean::value_true()).is_ok();
+                let ama_set = ax_app.set_attr(ama_attr, cf::Boolean::value_true()).is_ok();
+                ax_mode_changed = eui_set || ama_set;
+                debug!("enhanced AX mode enabled for pid={} app={}", pid, app_name);
+            }
+        }
+        if ax_mode_changed {
+            // Chromium/Electron materializes the DOM accessibility tree
+            // asynchronously after the flag write. A short one-time settle
+            // avoids turning the first post-start capture into an OCR fallback.
+            std::thread::sleep(Duration::from_millis(150));
         }
 
-        let window_val = match ax_app.attr_value(ax::attr::focused_window()) {
-            Ok(v) => v,
-            Err(_) => return Ok(TreeWalkResult::NotFound),
+        let window_val = match resolve_focused_window(&ax_app, &app_name, pid) {
+            Some(window) => window,
+            None => return Ok(TreeWalkResult::NotFound),
         };
-
-        if window_val.get_type_id() != ax::UiElement::type_id() {
-            return Ok(TreeWalkResult::NotFound);
-        }
-        let window: &ax::UiElement = unsafe { std::mem::transmute(&*window_val) };
+        let window: &ax::UiElement = &window_val;
 
         let mut window_name = get_string_attr(window, ax::attr::title()).unwrap_or_default();
 
@@ -880,8 +890,8 @@ fn vscode_terminal_window_name(ax_app: &ax::UiElement) -> Option<String> {
                         return None;
                     }
                     let search_end = (list_idx + 12).min(steps);
-                    for k in (list_idx + 1)..search_end {
-                        let elem: &ax::UiElement = unsafe { std::mem::transmute(&*ancestors[k]) };
+                    for ancestor in ancestors.iter().take(search_end).skip(list_idx + 1) {
+                        let elem: &ax::UiElement = unsafe { std::mem::transmute(&**ancestor) };
                         for attr in [ax::attr::desc(), ax::attr::title()] {
                             if let Some(val) = get_string_attr(elem, attr) {
                                 if let Some(name) = parse_vscode_terminal_name(&val)
@@ -1048,16 +1058,16 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
         }
     }
     let is_vscode_terminal_list = is_vscode_terminal_list_role(&role_str, depth, &state.app);
-    if is_vscode_terminal_list {
-        if matches!(
+    if is_vscode_terminal_list
+        && matches!(
             state.app,
             AppState::VsCode {
                 mode: VsCodeMode::Editor,
                 ..
             }
-        ) {
-            return; // prune entire terminal subtree — no children walked, no text emitted
-        }
+        )
+    {
+        return; // prune entire terminal subtree — no children walked, no text emitted
     }
 
     // Extract text from this element.
@@ -1397,6 +1407,167 @@ fn get_bool_attr(elem: &ax::UiElement, attr: &ax::Attr) -> Option<bool> {
     })
 }
 
+fn resolve_focused_ax_app() -> Option<(Retained<ax::UiElement>, i32, String)> {
+    let sys = ax::UiElement::sys_wide();
+    if let Ok(focused_app) = sys.focused_app() {
+        if let Ok(pid) = focused_app.pid() {
+            let app_name = ns::RunningApp::with_pid(pid)
+                .and_then(|app| app.localized_name())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            return Some((focused_app, pid, app_name));
+        }
+    }
+
+    // Electron apps can return no AXFocusedApplication even while NSWorkspace
+    // correctly reports them active. Build the app AX element from the active
+    // process pid so Obsidian/Discord can still be walked instead of falling
+    // straight to OCR.
+    let workspace = ns::Workspace::shared();
+    for app in workspace.running_apps().iter() {
+        if !app.is_active() {
+            continue;
+        }
+        let pid = app.pid();
+        let app_name = app
+            .localized_name()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let ax_app = ax::UiElement::with_app_pid(pid);
+        debug!(
+            "focused AX app fallback via NSWorkspace: pid={} app={}",
+            pid, app_name
+        );
+        return Some((ax_app, pid, app_name));
+    }
+
+    None
+}
+
+fn ui_element_attr(elem: &ax::UiElement, attr: &ax::Attr) -> Option<Retained<ax::UiElement>> {
+    let val = elem.attr_value(attr).ok()?;
+    if val.get_type_id() != ax::UiElement::type_id() {
+        return None;
+    }
+    Some(unsafe { std::mem::transmute::<Retained<cf::Type>, Retained<ax::UiElement>>(val) })
+}
+
+fn resolve_focused_window(
+    app: &ax::UiElement,
+    app_name: &str,
+    pid: i32,
+) -> Option<Retained<ax::UiElement>> {
+    if let Some(window) = ui_element_attr(app, ax::attr::focused_window()) {
+        return Some(window);
+    }
+
+    if let Some(window) = ui_element_attr(app, ax::attr::main_window()) {
+        debug!(
+            "focused window fallback: AXMainWindow for pid={} app={}",
+            pid, app_name
+        );
+        return Some(window);
+    }
+
+    if let Some(window) = first_window_from_windows_attr(app) {
+        debug!(
+            "focused window fallback: AXWindows[0] for pid={} app={}",
+            pid, app_name
+        );
+        return Some(window);
+    }
+
+    if let Some(window) = first_window_from_children(app) {
+        debug!(
+            "focused window fallback: app child AXWindow for pid={} app={}",
+            pid, app_name
+        );
+        return Some(window);
+    }
+
+    None
+}
+
+fn first_window_from_windows_attr(app: &ax::UiElement) -> Option<Retained<ax::UiElement>> {
+    let val = app.attr_value(ax::attr::windows()).ok()?;
+    if val.get_type_id() != cf::Array::type_id() {
+        return None;
+    }
+
+    let windows: &cf::ArrayOf<ax::UiElement> = unsafe { std::mem::transmute(&*val) };
+    for window in windows.iter() {
+        if is_window_role(get_string_attr(window, ax::attr::role()).as_deref()) {
+            return Some(window.retained());
+        }
+    }
+    None
+}
+
+fn first_window_from_children(app: &ax::UiElement) -> Option<Retained<ax::UiElement>> {
+    let children = app.children().ok()?;
+    for child in children.iter() {
+        if is_window_role(get_string_attr(child, ax::attr::role()).as_deref()) {
+            return Some(child.retained());
+        }
+    }
+    None
+}
+
+fn is_window_role(role: Option<&str>) -> bool {
+    matches!(role, Some("AXWindow" | "AXDialog" | "AXSheet"))
+}
+
+fn enhanced_ax_mode_already_enabled(
+    app: &ax::UiElement,
+    eui_attr: &ax::Attr,
+    ama_attr: &ax::Attr,
+) -> bool {
+    get_bool_attr(app, eui_attr).unwrap_or(false) || get_bool_attr(app, ama_attr).unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusEditability {
+    Editable,
+    NotEditable,
+    Unknown,
+}
+
+fn focused_element_editability(app: &ax::UiElement) -> FocusEditability {
+    let focused = match app
+        .attr_value(ax::attr::focused_ui_element())
+        .ok()
+        .filter(|v| v.get_type_id() == ax::UiElement::type_id())
+        .or_else(|| {
+            let sys = ax::UiElement::sys_wide();
+            sys.attr_value(ax::attr::focused_ui_element())
+                .ok()
+                .filter(|v| v.get_type_id() == ax::UiElement::type_id())
+        }) {
+        Some(focused) => focused,
+        None => return FocusEditability::Unknown,
+    };
+    let elem: &ax::UiElement = unsafe { std::mem::transmute(&*focused) };
+    if let Some(role) = get_string_attr(elem, ax::attr::role()) {
+        if is_editable_role(&role) {
+            return FocusEditability::Editable;
+        }
+    }
+    let editable_attr_name = cf::String::from_str("AXEditable");
+    let editable_attr = ax::Attr::with_string(&editable_attr_name);
+    if get_bool_attr(elem, editable_attr).unwrap_or(false) {
+        FocusEditability::Editable
+    } else {
+        FocusEditability::NotEditable
+    }
+}
+
+fn is_editable_role(role_str: &str) -> bool {
+    matches!(
+        role_str,
+        "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" | "AXSecureTextField"
+    )
+}
+
 /// Whether a role represents an interactive/actionable element (buttons, inputs, etc.).
 fn is_interactive_role(role_str: &str) -> bool {
     matches!(
@@ -1721,6 +1892,30 @@ mod tests {
         assert_eq!(strip_xterm_ax_hint("zsh"), "zsh");
         assert_eq!(strip_xterm_ax_hint(""), "");
         assert_eq!(strip_xterm_ax_hint("my-session"), "my-session");
+    }
+
+    #[test]
+    fn test_editable_role_detection() {
+        assert!(is_editable_role("AXTextField"));
+        assert!(is_editable_role("AXTextArea"));
+        assert!(is_editable_role("AXComboBox"));
+        assert!(is_editable_role("AXSearchField"));
+        assert!(is_editable_role("AXSecureTextField"));
+
+        assert!(!is_editable_role("AXButton"));
+        assert!(!is_editable_role("AXStaticText"));
+        assert!(!is_editable_role("AXWebArea"));
+    }
+
+    #[test]
+    fn test_window_role_detection() {
+        assert!(is_window_role(Some("AXWindow")));
+        assert!(is_window_role(Some("AXDialog")));
+        assert!(is_window_role(Some("AXSheet")));
+
+        assert!(!is_window_role(Some("AXGroup")));
+        assert!(!is_window_role(Some("AXMenuBar")));
+        assert!(!is_window_role(None));
     }
 
     #[test]

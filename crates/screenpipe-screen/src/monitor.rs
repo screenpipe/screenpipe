@@ -18,6 +18,12 @@ use tracing;
 static CACHED_MONITOR_DESCRIPTIONS: Lazy<RwLock<Vec<String>>> =
     Lazy::new(|| RwLock::new(Vec::new()));
 
+/// macOS display capture is mediated by WindowServer/replayd. Serializing these
+/// calls avoids concurrent multi-monitor spikes while preserving capture order.
+#[cfg(target_os = "macos")]
+static MACOS_CAPTURE_SEMAPHORE: Lazy<tokio::sync::Semaphore> =
+    Lazy::new(|| tokio::sync::Semaphore::new(1));
+
 /// Get cached monitor descriptions without blocking system calls.
 /// Returns the list last updated by `list_monitors_detailed()`.
 pub fn get_cached_monitor_descriptions() -> Vec<String> {
@@ -250,6 +256,10 @@ impl SafeMonitor {
     /// If the cache is empty (shouldn't happen in normal flow), falls back to enumeration.
     #[cfg(target_os = "macos")]
     pub async fn capture_image(&self) -> Result<DynamicImage> {
+        let _permit = MACOS_CAPTURE_SEMAPHORE
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("macOS capture semaphore closed: {}", e))?;
         let monitor_id = self.monitor_id;
         let use_sck = self.use_sck;
         let cached_sck = self.cached_sck.clone();
@@ -488,7 +498,7 @@ impl SafeMonitor {
     }
 
     /// Per-frame xcap capture fallback (no index caching).
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     fn per_frame_capture(monitor_id: u32) -> Result<DynamicImage> {
         let monitors = XcapMonitor::all().map_err(Error::from)?;
         let monitor = monitors

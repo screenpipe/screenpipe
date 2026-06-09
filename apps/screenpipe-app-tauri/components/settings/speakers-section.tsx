@@ -4,6 +4,12 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Speakers", keywords: ["voice", "diarization", "identify"] },
+];
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";

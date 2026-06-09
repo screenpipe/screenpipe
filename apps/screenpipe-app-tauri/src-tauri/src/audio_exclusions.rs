@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs::File;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::path::PathBuf;
 
 const ENV_OVERRIDE: &str = "SCREENPIPE_AUDIO_EXCLUSIONS_PATH";
 const DEFAULT_RELATIVE_PATH: &str = ".screenpipe/audio-exclusions.json";
@@ -133,6 +135,7 @@ pub async fn write_audio_exclusions(apps: Vec<ExcludedApp>) -> Result<(), String
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn bundle_name_from_plist(plist: &plist::Value, app_path: &Path) -> String {
     if let Some(s) = plist
         .as_dictionary()

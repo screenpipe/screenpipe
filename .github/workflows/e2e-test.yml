@@ -104,6 +104,9 @@ jobs:
       shell: bash
 
     - name: Rust cache
+      # cache restore/save is an optimization only; a transient GHA cache
+      # service error must never fail the job (skipped build+tests, red CI)
+      continue-on-error: true
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
@@ -127,7 +130,17 @@ jobs:
         $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
         $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
         $ortDir = "ort-system-lib"
-        Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.22.0.zip"
+        # retry: the GitHub release CDN intermittently returns 504, which would otherwise fail the whole job
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+          try {
+            Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.22.0.zip"
+            break
+          } catch {
+            if ($attempt -eq 5) { throw }
+            Write-Host "onnxruntime download failed on attempt $attempt; retrying..."
+            Start-Sleep -Seconds (10 * $attempt)
+          }
+        }
         if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
         7z x onnxruntime-win-x64-1.22.0.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
         if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }
@@ -151,6 +164,9 @@ jobs:
       uses: tauri-apps/tauri-action@v0.5.17
       env:
         OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
+        # Bypass the billing gate in the e2e build so the suite exercises real
+        # features; the dedicated gate spec re-enables it at runtime.
+        NEXT_PUBLIC_SCREENPIPE_E2E: "true"
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
@@ -456,6 +472,9 @@ jobs:
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
     - name: Rust cache
+      # cache restore/save is an optimization only; a transient GHA cache
+      # service error must never fail the job (skipped build+tests, red CI)
+      continue-on-error: true
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
@@ -489,6 +508,9 @@ jobs:
       uses: tauri-apps/tauri-action@v0.5.17
       env:
         OPENBLAS_PATH: ${{ env.OPENBLAS_PATH }}
+        # Bypass the billing gate in the e2e build so the suite exercises real
+        # features; the dedicated gate spec re-enables it at runtime.
+        NEXT_PUBLIC_SCREENPIPE_E2E: "true"
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
@@ -574,6 +596,9 @@ jobs:
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
     - name: Rust cache
+      # cache restore/save is an optimization only; a transient GHA cache
+      # service error must never fail the job (skipped build+tests, red CI)
+      continue-on-error: true
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
@@ -612,6 +637,9 @@ jobs:
       uses: tauri-apps/tauri-action@v0.5.17
       env:
         SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
+        # Bypass the billing gate in the e2e build so the suite exercises real
+        # features; the dedicated gate spec re-enables it at runtime.
+        NEXT_PUBLIC_SCREENPIPE_E2E: "true"
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"

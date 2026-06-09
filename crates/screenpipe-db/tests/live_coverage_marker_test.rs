@@ -244,4 +244,43 @@ mod tests {
         assert_eq!(second, 0);
         assert_eq!(chunk_status(&db, chunk).await, "transcribed");
     }
+
+    /// The device-name match between a live segment and a chunk's file path must be
+    /// case-insensitive: the chunk file path and the segment's stored device name
+    /// can differ in case. Pre-fix this was a case-sensitive `instr`, so a casing
+    /// difference left the meeting's chunk pending — re-transcribed by the batch
+    /// reconciler and inconsistent with the mirror, which already matched
+    /// case-insensitively.
+    #[tokio::test]
+    async fn matches_device_name_case_insensitively() {
+        let db = setup_test_db().await;
+        let start = Utc::now() - Duration::minutes(10);
+        let end = Utc::now();
+        let meeting_id = insert_meeting(&db, &start.to_rfc3339(), Some(&end.to_rfc3339())).await;
+
+        // Chunk file path stores the device lowercased...
+        let chunk_ts = start + Duration::minutes(5);
+        let chunk = db
+            .insert_audio_chunk("system audio (output)_x.mp4", Some(chunk_ts))
+            .await
+            .unwrap();
+
+        // ...while the live segment's device name is differently cased.
+        let live_ts = chunk_ts + Duration::seconds(2);
+        insert_live_segment_for_device(
+            &db,
+            meeting_id,
+            &live_ts.to_rfc3339(),
+            "System Audio",
+            "output",
+        )
+        .await;
+
+        let updated = db
+            .mark_chunks_covered_by_live(meeting_id, 15.0)
+            .await
+            .unwrap();
+        assert_eq!(updated, 1, "case-different device name must still match");
+        assert_eq!(chunk_status(&db, chunk).await, "transcribed");
+    }
 }

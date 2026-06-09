@@ -537,6 +537,13 @@ impl ShowRewindWindow {
                         ));
                     }
                 }
+                // Windows: if the user opted into `minimizeToTrayOnClose`, the
+                // Home window may have been hidden with skip_taskbar(true) on
+                // close. Clear that flag here so the window reappears in the
+                // taskbar regardless of whether we were previously hidden or
+                // minimized. No-op on macOS/Linux. See main.rs CloseRequested.
+                #[cfg(target_os = "windows")]
+                let _ = window.set_skip_taskbar(false);
                 window.show().ok();
 
                 #[cfg(target_os = "macos")]
@@ -678,6 +685,7 @@ impl ShowRewindWindow {
                     .unwrap_or_default()
                     .unwrap_or_default();
                 let overlay_mode = settings.overlay_mode;
+                #[allow(unused_variables)] // show_in_recording consumed only on Windows (display affinity)
                 let show_in_recording =
                     crate::config::is_e2e_mode() || settings.show_overlay_in_screen_recording;
                 // Record what mode we're creating so we can detect changes later
@@ -718,6 +726,7 @@ impl ShowRewindWindow {
                     #[cfg(not(target_os = "macos"))]
                     let window = {
                         let app_clone = app.clone();
+                        #[cfg(target_os = "windows")]
                         let capturable = show_in_recording;
                         let builder = self
                             .window_builder_with_label(
@@ -1210,6 +1219,7 @@ impl ShowRewindWindow {
                 // Debounce focus-loss so three-finger workspace swipes don't hide mid-animation.
                 // On Linux the main window is a normal decorated window — don't auto-hide on focus loss,
                 // as that makes the window unclickable and breaks the standard desktop UX.
+                #[cfg(not(target_os = "linux"))]
                 let app_clone = app.clone();
                 let window_clone = window.clone();
                 #[cfg(not(target_os = "linux"))]

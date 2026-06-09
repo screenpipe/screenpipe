@@ -52,6 +52,7 @@ import { parsePipeSessionId } from "@/lib/events/types";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
+import { humanizeDow, humanizeSchedule } from "@/lib/utils/schedule-format";
 import {
   PipeActivityIndicator,
   formatPipeElapsed,
@@ -178,70 +179,6 @@ function buildCreatePipeDisplayLabel(prompt: string): string {
   if (!normalized) return "Create pipe";
   const compact = normalized.length > 60 ? `${normalized.slice(0, 57).trimEnd()}...` : normalized;
   return `Create pipe: ${compact}`;
-}
-
-/** Convert a raw schedule string to a short human-readable label. */
-function humanizeSchedule(schedule: string | undefined): string {
-  if (!schedule || schedule === "manual") return "manual";
-  // Simple "every Xm/h/d" patterns
-  const everyMatch = schedule.match(/^every\s+(\d+)\s*(m|h|d|s)/i);
-  if (everyMatch) {
-    const n = parseInt(everyMatch[1]);
-    const unit = everyMatch[2].toLowerCase();
-    if (unit === "m") return n < 60 ? `${n}min` : `${n / 60}h`;
-    if (unit === "h") return `${n}h`;
-    if (unit === "d") return `${n}d`;
-    return schedule;
-  }
-  // "every day at Xpm/am"
-  if (schedule.startsWith("every day")) return schedule;
-  // Cron: try to make it readable
-  const parts = schedule.trim().split(/\s+/);
-  if (parts.length === 5) {
-    const [min, hour, dom, mon, dow] = parts;
-    // */N * * * * → every Nmin
-    if (min.startsWith("*/") && hour === "*" && dom === "*" && mon === "*" && dow === "*") {
-      return `${min.slice(2)}min`;
-    }
-    // 0 */N * * * → every Nh
-    if (min === "0" && hour.startsWith("*/") && dom === "*" && mon === "*" && dow === "*") {
-      return `${hour.slice(2)}h`;
-    }
-    // */N with hour range → e.g. "30min, 3pm-11pm"
-    if (min.startsWith("*/") && hour !== "*") {
-      const interval = `${min.slice(2)}min`;
-      // Try to humanize hour range
-      const humanHours = hour.replace(/(\d+)/g, (_, h: string) => {
-        const n = parseInt(h);
-        return n === 0 ? "12am" : n < 12 ? `${n}am` : n === 12 ? "12pm" : `${n - 12}pm`;
-      }).replace("-", "–");
-      let label = `${interval} · ${humanHours}`;
-      // Add day info if not every day
-      if (dow !== "*") {
-        const dayMap: Record<string, string> = { "0": "Su", "1": "M", "2": "T", "3": "W", "4": "T", "5": "F", "6": "Sa" };
-        if (dow === "1-5") {
-          label += " · Mon–Fri";
-        } else {
-          const days = dow.split(",").map((d: string) => dayMap[d] || d).join("");
-          label += ` · ${days}`;
-        }
-      }
-      return label;
-    }
-    // */N or 0 */N with day restriction
-    if (dow !== "*") {
-      let interval = "";
-      if (min.startsWith("*/")) interval = `${min.slice(2)}min`;
-      else if (min === "0" && hour.startsWith("*/")) interval = `${hour.slice(2)}h`;
-      if (interval) {
-        const dayMap: Record<string, string> = { "0": "Su", "1": "M", "2": "T", "3": "W", "4": "T", "5": "F", "6": "Sa" };
-        const dayLabel = dow === "1-5" ? "Mon–Fri" : dow.split(",").map((d: string) => dayMap[d] || d).join("");
-        return `${interval} · ${dayLabel}`;
-      }
-    }
-  }
-  // Fallback: truncate long crons
-  return schedule.length > 12 ? schedule.slice(0, 12) + "…" : schedule;
 }
 
 function buildOptimizePrompt(pipeName: string): string {
@@ -2000,13 +1937,13 @@ export function PipesSection() {
                               }
                             }
                             const dayLabels = [
-                              { key: 1, label: "M" },
-                              { key: 2, label: "T" },
-                              { key: 3, label: "W" },
-                              { key: 4, label: "T" },
-                              { key: 5, label: "F" },
-                              { key: 6, label: "S" },
-                              { key: 0, label: "S" },
+                              { key: 1, label: "M", name: "Monday" },
+                              { key: 2, label: "T", name: "Tuesday" },
+                              { key: 3, label: "W", name: "Wednesday" },
+                              { key: 4, label: "T", name: "Thursday" },
+                              { key: 5, label: "F", name: "Friday" },
+                              { key: 6, label: "S", name: "Saturday" },
+                              { key: 0, label: "S", name: "Sunday" },
                             ];
 
                             const toggleDay = (dayNum: number) => {
@@ -2106,23 +2043,35 @@ export function PipesSection() {
                               pendingConfigSaves.current[pipeName] = savePromise;
                             };
 
+                            const dowSummary = humanizeDow(currentDow) || "daily";
+
                             return (
-                              <div className="flex items-center gap-1 mt-2">
-                                <span className="text-[10px] text-muted-foreground mr-1">days</span>
-                                {dayLabels.map((d, i) => (
-                                  <button
-                                    key={`${d.key}-${i}`}
-                                    onClick={() => toggleDay(d.key)}
-                                    className={cn(
-                                      "w-6 h-6 text-[10px] font-mono border transition-colors",
-                                      activeDays.has(d.key)
-                                        ? "bg-foreground text-background border-foreground"
-                                        : "border-border text-muted-foreground hover:border-foreground/40"
-                                    )}
-                                  >
-                                    {d.label}
-                                  </button>
-                                ))}
+                              <div className="mt-2 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-1">
+                                {dayLabels.map((d, i) => {
+                                  const on = activeDays.has(d.key);
+                                  return (
+                                    <button
+                                      key={`${d.key}-${i}`}
+                                      onClick={() => toggleDay(d.key)}
+                                      title={`${d.name} — ${on ? "enabled, click to disable" : "disabled, click to enable"}`}
+                                      aria-label={d.name}
+                                      aria-pressed={on}
+                                      className={cn(
+                                        "w-6 h-6 text-[10px] font-mono border rounded-sm transition-colors",
+                                        on
+                                          ? "bg-foreground text-background border-foreground hover:bg-foreground/90"
+                                          : "bg-muted/40 text-muted-foreground border-border hover:bg-muted hover:text-foreground hover:border-foreground/50"
+                                      )}
+                                    >
+                                      {d.label}
+                                    </button>
+                                  );
+                                })}
+                                </div>
+                                <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                                  runs <span className="text-foreground">{dowSummary}</span>
+                                </span>
                               </div>
                             );
                           })()}

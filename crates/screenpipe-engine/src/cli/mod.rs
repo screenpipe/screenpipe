@@ -435,7 +435,11 @@ pub struct RecordArgs {
     /// Which PII classes the AI redaction workers rewrite when enabled.
     /// Comma-separated canonical labels: secret, person, email, phone,
     /// address, sensitive, url, company, repo, handle, channel, id,
-    /// date. `secret` is always included regardless. Default: secret.
+    /// date. Also accepts fine-grained structured-ID sub-types handled by
+    /// the deterministic detector: us_ssn, credit_card, iban, spain_dni,
+    /// brazil_cpf, india_aadhaar, canada_sin, imei (enable one without
+    /// turning on the whole `id` class). `secret` is always included
+    /// regardless. Default: secret.
     #[arg(long, value_delimiter = ',', default_value = "secret")]
     pub pii_redaction_labels: Vec<String>,
 
@@ -464,6 +468,14 @@ pub struct RecordArgs {
     /// URLs to ignore for browser privacy filtering
     #[arg(long)]
     pub ignored_urls: Vec<String>,
+
+    /// Apps / meeting services to exclude from automatic meeting detection
+    /// (case-insensitive contains). Matches the running app's name/process or
+    /// the matched detection profile's identifiers, so an entry can be the app
+    /// (e.g. `discord`, `zoom.us`) or the service/domain (e.g. `google meet`,
+    /// `meet.google.com`). Repeatable. Other meeting apps stay detected.
+    #[arg(long)]
+    pub ignored_meeting_apps: Vec<String>,
 
     /// Deepgram API Key for audio transcription
     #[arg(long = "deepgram-api-key")]
@@ -507,19 +519,15 @@ pub struct RecordArgs {
     #[arg(long)]
     pub min_capture_interval_ms: Option<u64>,
 
-    /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_keystroke`.
-    /// When true, non-printable key events (Arrow/Enter/Tab/Esc, modifier
-    /// combos like Ctrl+S) fire a paired capture so `ui_events.frame_id`
-    /// is populated for the originating row. Off by default — fast typing
-    /// can flood the pipeline even with the min-capture-interval debounce.
+    /// Legacy key-trigger override. Recording sessions keep keyboard-triggered
+    /// capture on; raw key/text DB rows are controlled separately by
+    /// `--disable-keyboard-capture`.
     #[arg(long)]
     pub capture_on_keystroke: Option<bool>,
 
     /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_clipboard`.
-    /// When true, clipboard changes fire a paired capture so the clipboard
-    /// row's `frame_id` is linked. Off by default — adds 50-150ms of
-    /// blocking work per Ctrl+C/X/V (more with OCR fallback) which can
-    /// cause visible HID input lag on some USB devices.
+    /// When true, clipboard changes fire a paired capture. Clipboard DB row
+    /// persistence is controlled separately by `--disable-clipboard-capture`.
     #[arg(long)]
     pub capture_on_clipboard: Option<bool>,
 
@@ -559,6 +567,12 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub enable_sync: bool,
 
+    /// Enable mDNS LAN discovery (advertise this instance + browse for peers).
+    /// Off by default: it opens a multicast socket, which triggers the macOS
+    /// "Local Network" permission prompt. Opt in for multi-device sync.
+    #[arg(long, env = "SCREENPIPE_ENABLE_MDNS", default_value_t = false)]
+    pub enable_mdns: bool,
+
     /// API token for cloud sync
     #[arg(long, env = "SCREENPIPE_SYNC_TOKEN")]
     pub sync_token: Option<String>,
@@ -589,10 +603,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_clipboard_capture: bool,
 
-    /// Disable keyboard / typed-text capture entirely. The UI recorder will
-    /// not record what you type (`capture_text`) — the accessibility tree +
-    /// OCR still capture on-screen text. Useful when piping ~/.screenpipe
-    /// data into a remote LLM (secrets get typed).
+    /// Disable persisting keyboard / typed-text rows. Keyboard events still
+    /// wake event-driven capture, and the accessibility tree + OCR still
+    /// capture on-screen text. Useful when piping ~/.screenpipe data into a
+    /// remote LLM (secrets get typed).
     #[arg(long, default_value_t = false)]
     pub disable_keyboard_capture: bool,
 
@@ -641,6 +655,20 @@ pub struct RecordArgs {
     /// in_meeting override flag stays false.
     #[arg(long, default_value_t = false)]
     pub disable_meeting_detector: bool,
+
+    /// Enable the work-hours recording schedule. When set, capture runs only
+    /// inside the windows defined by `--schedule-rule` and pauses (without
+    /// exiting the process) outside them. Off by default (records 24/7).
+    /// Passing any `--schedule-rule` implies this.
+    #[arg(long, default_value_t = false)]
+    pub schedule_enabled: bool,
+
+    /// A work-hours schedule rule. Repeatable. Format: `day,start,end,mode`
+    /// where day is 0-6 (0=Monday), start/end are local 24h "HH:MM", and mode
+    /// is `all`, `audio_only`, or `screen_only`. Example:
+    /// `--schedule-rule 0,09:00,18:00,all --schedule-rule 1,09:00,18:00,all`.
+    #[arg(long = "schedule-rule", value_parser = parse_schedule_rule)]
+    pub schedule_rules: Vec<screenpipe_config::ScheduleRule>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -667,6 +695,7 @@ pub struct RecordArgSources {
     pub ignored_windows: bool,
     pub included_windows: bool,
     pub ignored_urls: bool,
+    pub ignored_meeting_apps: bool,
     pub deepgram_api_key: bool,
     pub transcription_mode: bool,
     pub disable_telemetry: bool,
@@ -679,6 +708,8 @@ pub struct RecordArgSources {
     pub encrypt_secrets: bool,
     pub disable_snapshot_compaction: bool,
     pub disable_meeting_detector: bool,
+    pub schedule_enabled: bool,
+    pub schedule_rules: bool,
 }
 
 impl RecordArgSources {
@@ -713,6 +744,7 @@ impl RecordArgSources {
             ignored_windows: from_command_line(record, "ignored_windows"),
             included_windows: from_command_line(record, "included_windows"),
             ignored_urls: from_command_line(record, "ignored_urls"),
+            ignored_meeting_apps: from_command_line(record, "ignored_meeting_apps"),
             deepgram_api_key: from_command_line(record, "deepgram_api_key"),
             transcription_mode: from_command_line(record, "transcription_mode"),
             disable_telemetry: from_command_line(record, "disable_telemetry"),
@@ -725,6 +757,8 @@ impl RecordArgSources {
             encrypt_secrets: from_command_line(record, "encrypt_secrets"),
             disable_snapshot_compaction: from_command_line(record, "disable_snapshot_compaction"),
             disable_meeting_detector: from_command_line(record, "disable_meeting_detector"),
+            schedule_enabled: from_command_line(record, "schedule_enabled"),
+            schedule_rules: from_command_line(record, "schedule_rules"),
         }
     }
 
@@ -751,6 +785,7 @@ impl RecordArgSources {
             || self.ignored_windows
             || self.included_windows
             || self.ignored_urls
+            || self.ignored_meeting_apps
             || self.deepgram_api_key
             || self.transcription_mode
             || self.disable_telemetry
@@ -763,11 +798,59 @@ impl RecordArgSources {
             || self.encrypt_secrets
             || self.disable_snapshot_compaction
             || self.disable_meeting_detector
+            || self.schedule_enabled
+            || self.schedule_rules
     }
 }
 
 fn from_command_line(matches: &ArgMatches, id: &str) -> bool {
     matches.value_source(id) == Some(ValueSource::CommandLine)
+}
+
+/// Parse a `--schedule-rule` value: `day,start,end,mode`.
+/// day = 0-6 (0=Monday), start/end = local 24h "HH:MM",
+/// mode = `all` | `audio_only` | `screen_only`.
+fn parse_schedule_rule(s: &str) -> Result<screenpipe_config::ScheduleRule, String> {
+    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+    if parts.len() != 4 {
+        return Err(format!(
+            "expected `day,start,end,mode` (4 comma-separated fields), got {} in '{s}'",
+            parts.len()
+        ));
+    }
+    let day_of_week: u8 = parts[0]
+        .parse()
+        .map_err(|_| format!("day must be 0-6 (0=Monday), got '{}'", parts[0]))?;
+    if day_of_week > 6 {
+        return Err(format!("day must be 0-6 (0=Monday), got '{}'", parts[0]));
+    }
+    let parse_hhmm = |t: &str| -> Result<String, String> {
+        let (h, m) = t
+            .split_once(':')
+            .ok_or_else(|| format!("time must be HH:MM, got '{t}'"))?;
+        let hh: u8 = h.parse().map_err(|_| format!("invalid hour in '{t}'"))?;
+        let mm: u8 = m.parse().map_err(|_| format!("invalid minute in '{t}'"))?;
+        if hh > 23 || mm > 59 {
+            return Err(format!("time out of range, got '{t}'"));
+        }
+        Ok(format!("{hh:02}:{mm:02}"))
+    };
+    let start_time = parse_hhmm(parts[1])?;
+    let end_time = parse_hhmm(parts[2])?;
+    let record_mode = match parts[3] {
+        "all" | "audio_only" | "screen_only" => parts[3].to_string(),
+        other => {
+            return Err(format!(
+                "mode must be all|audio_only|screen_only, got '{other}'"
+            ))
+        }
+    };
+    Ok(screenpipe_config::ScheduleRule {
+        day_of_week,
+        start_time,
+        end_time,
+        record_mode,
+    })
 }
 
 impl RecordArgs {
@@ -783,11 +866,10 @@ impl RecordArgs {
 
     /// Create UI recorder configuration from record arguments
     pub fn to_ui_recorder_config(&self) -> crate::ui_recorder::UiRecorderConfig {
-        // Mirror `--capture-on-keystroke` / `--capture-on-clipboard` into
-        // the recorder so it doesn't mint corr_ids for triggers the
-        // capture loop will drop. None = engine default (false), same as
-        // in `RecordingConfig::to_ui_recorder_config`.
         let defaults = crate::ui_recorder::UiRecorderConfig::default();
+        let capture_on_clipboard = self
+            .capture_on_clipboard
+            .unwrap_or(defaults.capture_on_clipboard);
         crate::ui_recorder::UiRecorderConfig {
             enabled: true,
             enable_tree_walker: true,
@@ -795,19 +877,22 @@ impl RecordArgs {
             excluded_windows: self.ignored_windows.clone(),
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
-            // --disable-clipboard-capture flips both flags off. Defaults are
-            // `true` for both, so opting out has to be explicit.
-            capture_clipboard: !self.disable_clipboard_capture,
+            // Keep operation detection alive when clipboard-triggered capture
+            // is enabled, but do not store rows/content when the user opted out.
+            capture_clipboard: !self.disable_clipboard_capture || capture_on_clipboard,
             capture_clipboard_content: !self.disable_clipboard_capture,
-            // --disable-keyboard-capture drops the typed-text stream; the
-            // a11y tree + OCR still capture on-screen text.
+            // Keyboard events always reach the recorder so they can wake
+            // event-driven capture. --disable-keyboard-capture only stops
+            // text/key rows from being persisted.
             capture_text: !self.disable_keyboard_capture,
-            capture_on_keystroke: self
-                .capture_on_keystroke
-                .unwrap_or(defaults.capture_on_keystroke),
-            capture_on_clipboard: self
-                .capture_on_clipboard
-                .unwrap_or(defaults.capture_on_clipboard),
+            capture_keystrokes: true,
+            record_keyboard_events: !self.disable_keyboard_capture,
+            record_clipboard_events: !self.disable_clipboard_capture,
+            // Same-app title changes must reach the event-driven trigger
+            // mapper so focus changes can produce linked captures.
+            capture_window_focus: true,
+            capture_on_keystroke: true,
+            capture_on_clipboard,
             capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
             ..defaults
         }
@@ -851,6 +936,7 @@ impl RecordArgs {
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
             ignored_urls: self.ignored_urls.clone(),
+            ignored_meeting_apps: self.ignored_meeting_apps.clone(),
             languages: self
                 .language
                 .iter()
@@ -876,6 +962,9 @@ impl RecordArgs {
             disable_clipboard_capture: self.disable_clipboard_capture,
             disable_keyboard_capture: self.disable_keyboard_capture,
             listen_on_lan: self.listen_on_lan,
+            // Passing any `--schedule-rule` implies the schedule is on.
+            schedule_enabled: self.schedule_enabled || !self.schedule_rules.is_empty(),
+            schedule_rules: self.schedule_rules.clone(),
             ..screenpipe_config::RecordingSettings::default()
         }
     }
@@ -1120,6 +1209,9 @@ impl RecordArgs {
         if sources.ignored_urls {
             settings.ignored_urls = self.ignored_urls.clone();
         }
+        if sources.ignored_meeting_apps {
+            settings.ignored_meeting_apps = self.ignored_meeting_apps.clone();
+        }
         if sources.deepgram_api_key {
             settings.deepgram_api_key = self.deepgram_api_key.clone().unwrap_or_default();
         }
@@ -1155,6 +1247,16 @@ impl RecordArgs {
         }
         if sources.disable_meeting_detector {
             settings.disable_meeting_detector = self.disable_meeting_detector;
+        }
+        if sources.schedule_enabled {
+            settings.schedule_enabled = self.schedule_enabled;
+        }
+        if sources.schedule_rules {
+            settings.schedule_rules = self.schedule_rules.clone();
+            // Supplying rules on the CLI implies turning the schedule on.
+            if !self.schedule_rules.is_empty() {
+                settings.schedule_enabled = true;
+            }
         }
     }
 }
@@ -1902,6 +2004,108 @@ mod tests {
                     !settings.pause_on_drm_content,
                     "absent flag should be false in settings"
                 );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_schedule_disabled_by_default() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert!(!args.schedule_enabled);
+                assert!(args.schedule_rules.is_empty());
+                assert!(!args.to_recording_settings().schedule_enabled);
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_schedule_rules_parse_and_auto_enable() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--schedule-rule",
+            "0,09:00,18:00,all",
+            "--schedule-rule",
+            "4,08:30,12:00,screen_only",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert_eq!(args.schedule_rules.len(), 2);
+                let settings = args.to_recording_settings();
+                assert!(
+                    settings.schedule_enabled,
+                    "passing rules should auto-enable the schedule"
+                );
+                assert_eq!(settings.schedule_rules.len(), 2);
+                assert_eq!(settings.schedule_rules[0].day_of_week, 0);
+                assert_eq!(settings.schedule_rules[0].start_time, "09:00");
+                assert_eq!(settings.schedule_rules[0].end_time, "18:00");
+                assert_eq!(settings.schedule_rules[0].record_mode, "all");
+                assert_eq!(settings.schedule_rules[1].day_of_week, 4);
+                assert_eq!(settings.schedule_rules[1].record_mode, "screen_only");
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_schedule_rule_rejects_bad_input() {
+        assert!(
+            Cli::try_parse_from([
+                "screenpipe",
+                "record",
+                "--schedule-rule",
+                "0,09:00,18:00,bogus"
+            ])
+            .is_err(),
+            "invalid mode should fail to parse"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "screenpipe",
+                "record",
+                "--schedule-rule",
+                "9,09:00,18:00,all"
+            ])
+            .is_err(),
+            "day out of range should fail to parse"
+        );
+        assert!(
+            Cli::try_parse_from(["screenpipe", "record", "--schedule-rule", "0,9am,18:00,all"])
+                .is_err(),
+            "non HH:MM time should fail to parse"
+        );
+    }
+
+    #[test]
+    fn test_cli_trigger_sources_survive_sensitive_storage_opt_out() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--capture-on-clipboard",
+            "true",
+            "--disable-keyboard-capture",
+            "--disable-clipboard-capture",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Record(args) => {
+                let ui = args.to_ui_recorder_config();
+                assert!(ui.capture_window_focus);
+                assert!(ui.capture_keystrokes);
+                assert!(ui.capture_on_keystroke);
+                assert!(ui.capture_clipboard);
+                assert!(ui.capture_on_clipboard);
+                assert!(!ui.capture_clipboard_content);
+                assert!(!ui.capture_text);
+                assert!(!ui.record_keyboard_events);
+                assert!(!ui.record_clipboard_events);
             }
             _ => panic!("expected Record command"),
         }

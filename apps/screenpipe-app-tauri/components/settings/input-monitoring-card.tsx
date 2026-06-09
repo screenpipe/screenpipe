@@ -36,11 +36,10 @@ export function InputMonitoringPanel({
   // confused when "granted" lights up but `/health` still reports
   // input_tap_running=false.
   const [grantedThisSession, setGrantedThisSession] = useState(false);
-  // True when the user clicked Enable but the probe still says not granted
-  // afterwards — almost always a TCC ghost record (orphaned grant from a
-  // prior build at the same signature, hidden from System Settings). The
-  // only fix is `tccutil reset ListenEvent <bundle_id>` to clear the
-  // stale row, then re-request so macOS shows the native prompt again.
+  // True when the user clicked Enable but permission is still not granted
+  // afterwards — the OS denied the request (or it was already denied and
+  // the native prompt didn't appear). Prompts the user to open System
+  // Settings and, if a stale TCC record is suspected, to use Reset & try again.
   const [suspectedGhost, setSuspectedGhost] = useState(false);
 
   useEffect(() => {
@@ -152,10 +151,11 @@ export function InputMonitoringPanel({
       {suspectedGhost && !granted ? (
         <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2">
           <p className="text-xs text-red-700 dark:text-red-400">
-            macOS reports permission as granted but a real CGEventTap can&apos;t
-            be created — likely a stale TCC record from a previous build.
-            Click <strong>Reset &amp; try again</strong> to clear it and
-            re-request.
+            Permission could not be activated after requesting it. Toggle
+            <strong> screenpipe </strong> on in System Settings → Privacy &amp;
+            Security → Input Monitoring. If the toggle is already on but
+            capture still fails, click <strong>Reset &amp; try again</strong> to
+            clear a stale TCC record and re-request.
           </p>
         </div>
       ) : null}

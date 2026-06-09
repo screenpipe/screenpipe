@@ -50,8 +50,8 @@ use async_trait::async_trait;
 
 use crate::{RedactError, RedactedSpan, RedactionOutput, Redactor, SpanLabel};
 
-const ONNX_REDACTOR_NAME: &str = "v45_phase4_onnx";
-const ONNX_REDACTOR_VERSION: u32 = 4;
+const ONNX_REDACTOR_NAME: &str = "v45_phase5_pruned";
+const ONNX_REDACTOR_VERSION: u32 = 5;
 
 /// Configuration for an ONNX text redactor.
 #[derive(Debug, Clone)]
@@ -81,8 +81,12 @@ impl OnnxConfig {
     /// `~/.screenpipe/models/v45_phase4_onnx/` by convention.
     pub fn default_model_dir() -> PathBuf {
         dirs::home_dir()
-            .map(|h| h.join(".screenpipe").join("models").join("v45_phase4_onnx"))
-            .unwrap_or_else(|| PathBuf::from(".screenpipe/models/v45_phase4_onnx"))
+            .map(|h| {
+                h.join(".screenpipe")
+                    .join("models")
+                    .join("v45_phase5_pruned")
+            })
+            .unwrap_or_else(|| PathBuf::from(".screenpipe/models/v45_phase5_pruned"))
     }
 
     fn resolve_model_file(&self) -> PathBuf {
@@ -100,36 +104,43 @@ impl OnnxConfig {
         self.model_dir.join("tokenizer.json")
     }
 
-    fn config_path(&self) -> PathBuf {
-        self.model_dir.join("config.json")
-    }
-
     /// HuggingFace repo where the canonical v45 phase 3 ONNX artifacts
     /// live. Pinned to `main` so a model bump goes through a deliberate
     /// code change (URL + expected SHA-256 + [`ONNX_REDACTOR_VERSION`]
     /// all bumped together — same discipline as `RfdetrConfig`).
     pub const HF_REPO_BASE: &'static str =
-        "https://huggingface.co/screenpipe/pii-redactor/resolve/main/v45_phase4_onnx";
+        "https://huggingface.co/screenpipe/pii-redactor/resolve/main/v45_phase5_pruned";
 
     /// Files to download from the HF repo on first run. Each is
     /// (filename, expected sha256). Recompute via
-    ///   shasum -a 256 model_quantized.onnx tokenizer.json config.json
+    ///   shasum -a 256 model_quantized.onnx tokenizer.json config.json remap.json
     /// when bumping the model (and bump [`ONNX_REDACTOR_VERSION`]).
+    ///
+    /// v45_phase5_pruned is v45_phase4 with the 250k multilingual embedding
+    /// vocab-pruned to the ~81k tokens used in the broad training corpus
+    /// (266 MB -> 149 MB INT8). Tokenizer + config are byte-identical to
+    /// phase4; `remap.json` maps full-vocab token ids -> the sliced embedding
+    /// rows and is applied in [`runtime::OnnxRedactor::run_window`].
     pub const FILES: &'static [(&'static str, &'static str)] = &[
-        // INT8-quantized model. ~278 MB.
+        // INT8-quantized, vocab-pruned model. ~149 MB.
         (
             "model_quantized.onnx",
-            "286c628349c0145fdfbfc773cd44a6e22680abb42b00730d6ec78d366aac610b",
+            "a966fe75b8b7b9042b6c4a9a5d3878ca3e4a00fdbae26e8fbc9be4f4bebf5a61",
         ),
-        // SentencePiece tokenizer (HF fast format). ~17 MB.
+        // SentencePiece tokenizer (HF fast format), unchanged from phase4. ~17 MB.
         (
             "tokenizer.json",
             "d0091a328b3441d754e481db5a390d7f3b8dabc6016869fd13ba350d23ddc4cd",
         ),
-        // id2label + model config. ~2 KB.
+        // id2label + model config, unchanged from phase4. ~2 KB.
         (
             "config.json",
             "61dc24e4e4816d723143974268ef0b7a303d4b1f208bdd96db4d38a3359036f2",
+        ),
+        // full-vocab-id -> pruned-row remap (+ unk_new). ~1.2 MB.
+        (
+            "remap.json",
+            "8b540d411419c32a7b9d4359d7a05760f595d61a83b662eec84d3e7e999f1fca",
         ),
     ];
 
@@ -324,6 +335,11 @@ mod runtime {
         tokenizer: Tokenizer,
         /// `id → "B-private_person"` from config.json.
         id2label: Vec<String>,
+        /// For vocab-pruned models: maps full-tokenizer ids → the model's
+        /// sliced embedding rows. `None` for full-vocab models (no remap.json).
+        remap: Option<HashMap<u32, u32>>,
+        /// Row to use for ids missing from `remap` (the pruned UNK row).
+        unk_remapped: u32,
     }
 
     impl OnnxRedactor {
@@ -374,11 +390,17 @@ mod runtime {
 
             let session = build_session(&model_path)?;
 
+            // Optional vocab-prune remap. Present iff the model ships a
+            // `remap.json` (pruned models); absent for full-vocab models.
+            let (remap, unk_remapped) = load_remap(&cfg.model_dir.join("remap.json"))?;
+
             Ok(Self {
                 cfg,
                 session: Mutex::new(session),
                 tokenizer,
                 id2label,
+                remap,
+                unk_remapped,
             })
         }
 
@@ -436,7 +458,17 @@ mod runtime {
         /// return the per-token argmax label ids.
         fn run_window(&self, ids: &[u32], mask: &[u32]) -> Result<Vec<usize>, RedactError> {
             let len = ids.len();
-            let input_ids: Vec<i64> = ids.iter().map(|x| *x as i64).collect();
+            // Vocab-pruned models: remap full-tokenizer ids → sliced rows
+            // (ids outside the kept set → the pruned UNK row). Byte offsets are
+            // unaffected — they index `text`, not the model vocab — so decoding
+            // stays correct. Full-vocab models (remap=None) pass ids through.
+            let input_ids: Vec<i64> = match &self.remap {
+                Some(remap) => ids
+                    .iter()
+                    .map(|x| *remap.get(x).unwrap_or(&self.unk_remapped) as i64)
+                    .collect(),
+                None => ids.iter().map(|x| *x as i64).collect(),
+            };
             let attention_mask: Vec<i64> = mask.iter().map(|x| *x as i64).collect();
 
             // ndarray shapes: [batch=1, seq_len]
@@ -579,6 +611,9 @@ mod runtime {
                         start,
                         end,
                         label,
+                        // Model spans carry the coarse label only; fine-grained
+                        // sub-types come from the deterministic detectors.
+                        subtype: None,
                         text: text[start..end].to_string(),
                     });
                 }
@@ -674,6 +709,40 @@ mod runtime {
             merged.push(s);
         }
         *spans = merged;
+    }
+
+    /// Load a vocab-prune `remap.json` if present:
+    /// `{"remap": {"<old_id>": <new_row>, …}, "unk_new": <row>}`.
+    /// Returns `(None, 0)` when the file is absent (full-vocab model).
+    fn load_remap(path: &std::path::Path) -> Result<(Option<HashMap<u32, u32>>, u32), RedactError> {
+        if !path.exists() {
+            return Ok((None, 0));
+        }
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| RedactError::Runtime(format!("read remap: {e}")))?;
+        let parsed: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| RedactError::Runtime(format!("parse remap: {e}")))?;
+        let obj = parsed
+            .get("remap")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| RedactError::Runtime("remap.json has no remap object".into()))?;
+        let mut map: HashMap<u32, u32> = HashMap::with_capacity(obj.len());
+        for (k, v) in obj {
+            let old: u32 = k
+                .parse()
+                .map_err(|e| RedactError::Runtime(format!("remap key {k}: {e}")))?;
+            let new = v
+                .as_u64()
+                .ok_or_else(|| RedactError::Runtime(format!("remap[{k}] not a u64")))?
+                as u32;
+            map.insert(old, new);
+        }
+        let unk = parsed
+            .get("unk_new")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| RedactError::Runtime("remap.json has no unk_new".into()))?
+            as u32;
+        Ok((Some(map), unk))
     }
 
     fn parse_id2label(config_path: &std::path::Path) -> Result<Vec<String>, RedactError> {
@@ -798,6 +867,7 @@ mod runtime {
                     start: 5,
                     end: 16,
                     label: SpanLabel::Secret,
+                    subtype: None,
                     text: "SECRETVALUE".into(),
                 },
                 // window A: same secret, plus a split half of "KEY"
@@ -805,12 +875,14 @@ mod runtime {
                     start: 5,
                     end: 11,
                     label: SpanLabel::Secret,
+                    subtype: None,
                     text: "SECRET".into(),
                 },
                 RedactedSpan {
                     start: 22,
                     end: 24,
                     label: SpanLabel::Secret,
+                    subtype: None,
                     text: "KE".into(),
                 },
                 // window B: the other half of "KEY", overlapping
@@ -818,6 +890,7 @@ mod runtime {
                     start: 23,
                     end: 25,
                     label: SpanLabel::Secret,
+                    subtype: None,
                     text: "EY".into(),
                 },
             ];
@@ -844,6 +917,7 @@ mod cross_feature_tests {
             start: 5,
             end: 18,
             label: SpanLabel::Sensitive,
+            subtype: None,
             text: "Schizophrenia".to_string(),
         }];
         let text = "Note Schizophrenia at chart";

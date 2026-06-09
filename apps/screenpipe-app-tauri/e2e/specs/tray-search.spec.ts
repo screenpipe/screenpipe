@@ -121,6 +121,17 @@ describe("Tray: Search window", function () {
 
     await invokeOrThrow("open_search_window", { query: null });
     await waitForWindowHandle("search", t(20_000));
+    // Wait for the first search window to finish its initial /search load before
+    // reusing it. The reuse path re-seeds the query by eval-ing
+    // window.location.replace("/search/?q=…") (src-tauri window/show.rs); if that
+    // fires before the initial load has committed, the replace is lost and the
+    // ?q= query never seeds — the source of this spec's flake on slow CI.
+    // Switching in and waiting for the input guarantees the webview is ready.
+    await browser.switchToWindow("search");
+    await (
+      await $('input[placeholder*="search memory"]')
+    ).waitForExist({ timeout: t(20_000) });
+
     await invokeOrThrow("open_search_window", { query: "?q=tray-e2e" });
     await waitForWindowHandle("search", t(20_000));
 

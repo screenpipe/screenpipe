@@ -6,7 +6,7 @@ const MEDIA_EXTENSIONS = ["mp4", "mp3", "wav", "webm", "ogg", "m4a"] as const;
 const MEDIA_EXTENSION_PATTERN = MEDIA_EXTENSIONS.join("|");
 
 export function normalizeMediaFilePath(path: string): string {
-  let cleaned = path.replace(/^["'`]|["'`]$/g, "").trim();
+  let cleaned = path.trim().replace(/^["'`]|["'`]$/g, "").trim();
 
   try {
     cleaned = decodeURIComponent(cleaned);
@@ -14,7 +14,11 @@ export function normalizeMediaFilePath(path: string): string {
     // Keep the original string if it contains malformed percent escapes.
   }
 
-  cleaned = cleaned.replace(/^file:\/+/i, "");
+  if (/^file:\/\/\/[A-Z]:[\\/]/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^file:\/\/\//i, "");
+  } else {
+    cleaned = cleaned.replace(/^file:\/+/i, "/");
+  }
 
   // Windows file URLs often become /C:/Users/... after stripping file://.
   cleaned = cleaned.replace(/^\/([A-Z]:[\\/])/i, "$1");
@@ -25,7 +29,7 @@ export function normalizeMediaFilePath(path: string): string {
   if (windowsMatch) return windowsMatch[0].trim();
 
   const unixMatch = cleaned.match(
-    new RegExp(`/(?:[^\\n\\r\`"<>]+?/)??[^\\n\\r\`"<>]+?\\.(${MEDIA_EXTENSION_PATTERN})`, "i"),
+    new RegExp(`/[^\\n\\r\`"<>]+?\\.(${MEDIA_EXTENSION_PATTERN})`, "i"),
   );
   if (unixMatch) return unixMatch[0].trim();
 

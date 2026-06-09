@@ -39,6 +39,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
+        # cache restore/save is an optimization only; a transient GHA cache
+        # service error must never fail the job
+        continue-on-error: true
         uses: Swatinem/rust-cache@v2
 
       - name: Install system deps

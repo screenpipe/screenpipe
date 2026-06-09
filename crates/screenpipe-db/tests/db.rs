@@ -110,7 +110,7 @@ mod tests {
     async fn test_recent_output_audio_ignores_input_chunk() {
         let db = setup_test_db().await;
 
-        db.insert_audio_chunk("Ruark’s AirPods (input)_recent.mp4", Some(Utc::now()))
+        db.insert_audio_chunk("AirPods (input)_recent.mp4", Some(Utc::now()))
             .await
             .unwrap();
 

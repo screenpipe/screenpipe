@@ -8,7 +8,7 @@ import { isAfter, subDays, addDays, startOfDay, format, formatDistanceToNow } fr
 import { motion } from "framer-motion";
 import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw, Phone, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import type { Meeting } from "@/lib/hooks/use-meetings";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import posthog from "posthog-js";
 import { cn } from "@/lib/utils";
@@ -300,6 +300,11 @@ export const TimelineSlider = ({
 	scrubberRef,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
+	// The inner flex content (motion.div) that lays out frame bars and is the
+	// positioning context for the memory-marker layer. Memory diamonds are placed
+	// by measuring real frame DOM positions relative to this node (the frame row
+	// flows right-to-left under dir="rtl", so offsets can't be recomputed by index).
+	const timelineContentRef = useRef<HTMLDivElement>(null);
 	const observerTargetRef = useRef<HTMLDivElement>(null);
 	const forwardObserverTargetRef = useRef<HTMLDivElement>(null);
 	const lastFetchRef = useRef<Date | null>(null);
@@ -351,6 +356,10 @@ export const TimelineSlider = ({
 	const [hoveredMemoryId, setHoveredMemoryId] = useState<number | null>(null);
 	const [hoveredMemoryRect, setHoveredMemoryRect] = useState<{ x: number; y: number } | null>(null);
 	const memoriesFetchedRangeRef = useRef<string>("");
+	// Measured left-px (relative to the timeline content box) for each memory's
+	// diamond marker, keyed by memory id. Computed in a layout effect from real
+	// frame positions so markers land on the correct frame regardless of RTL flow.
+	const [memoryPositions, setMemoryPositions] = useState<Record<number, number>>({});
 
 	// Chat history overlay — show PipeAI icon on timeline where chats occurred
 	const [chatConversations, setChatConversations] = useState<ChatConversation[]>([]);
@@ -976,6 +985,70 @@ export const TimelineSlider = ({
 		return group.frames.length * (frameWidth + frameMargin * 2);
 	}, [frameWidth, frameMargin]);
 
+	// Position memory diamonds by measuring the real frame DOM nodes.
+	// The frame row flows right-to-left (dir="rtl") and is virtualized, so a
+	// frame's pixel offset can't be derived from its index — we read each
+	// rendered frame's center relative to the content box and snap every memory
+	// to its nearest-in-time frame. Runs in a layout effect (pre-paint) so the
+	// markers never flash at a stale spot. Re-measures whenever the laid-out
+	// frames (appGroups), sizing, or the memory set changes.
+	useLayoutEffect(() => {
+		const container = timelineContentRef.current;
+		const clearIfNeeded = () =>
+			setMemoryPositions((prev) => (Object.keys(prev).length ? {} : prev));
+		if (!container || memories.length === 0) {
+			clearIfNeeded();
+			return;
+		}
+		const frameEls = container.querySelectorAll<HTMLElement>("[data-timestamp]");
+		if (frameEls.length === 0) {
+			clearIfNeeded();
+			return;
+		}
+		const containerLeft = container.getBoundingClientRect().left;
+		const frameCenters: { time: number; left: number }[] = [];
+		frameEls.forEach((el) => {
+			const ts = el.getAttribute("data-timestamp");
+			if (!ts) return;
+			const time = new Date(ts).getTime();
+			if (Number.isNaN(time)) return;
+			const r = el.getBoundingClientRect();
+			frameCenters.push({ time, left: r.left + r.width / 2 - containerLeft });
+		});
+		if (frameCenters.length === 0) {
+			clearIfNeeded();
+			return;
+		}
+		const next: Record<number, number> = {};
+		for (const mem of memories) {
+			const memTime = new Date(mem.created_at).getTime();
+			if (Number.isNaN(memTime)) continue;
+			let bestLeft = frameCenters[0].left;
+			let bestDist = Infinity;
+			for (const fc of frameCenters) {
+				const dist = Math.abs(fc.time - memTime);
+				if (dist < bestDist) {
+					bestDist = dist;
+					bestLeft = fc.left;
+				}
+			}
+			next[mem.id] = bestLeft;
+		}
+		// Skip the state update (and the extra render it triggers each scroll
+		// tick) when nothing moved meaningfully.
+		setMemoryPositions((prev) => {
+			const prevKeys = Object.keys(prev);
+			const nextKeys = Object.keys(next);
+			if (
+				prevKeys.length === nextKeys.length &&
+				nextKeys.every((k) => Math.abs((prev[+k] ?? Number.NaN) - next[+k]) < 0.5)
+			) {
+				return prev;
+			}
+			return next;
+		});
+	}, [appGroups, frameWidth, frameMargin, memories]);
+
 	return (
 		<div className="relative w-full" dir="rtl">
 			{/* Filter icon column + inline expand (design E) */}
@@ -1359,70 +1432,44 @@ export const TimelineSlider = ({
 				}}
 			>
 				<motion.div
+					ref={timelineContentRef}
 					className="whitespace-nowrap flex flex-nowrap w-max justify-center px-[50vw] h-24 sticky right-0 scrollbar-hide relative"
 					onMouseUp={handleDragEnd}
 					onMouseLeave={handleDragEnd}
 				>
-					{/* Memory markers — diamonds above frame bars */}
-					{memories.length > 0 && (() => {
-						const stepPx = frameWidth + frameMargin * 2;
-						// Build flat list of all frame timestamps in render order
-						const allFrameTimestamps: string[] = [];
-						for (const g of appGroups) {
-							if (g.dayBoundaryDate) allFrameTimestamps.push("__boundary__");
-							for (const f of g.frames) allFrameTimestamps.push(f.timestamp);
-						}
-						return (
-							<div className="absolute top-0 left-0 right-0 h-5 pointer-events-auto" style={{ direction: "ltr", zIndex: 40 }}>
-								{memories.map((mem) => {
-									const memTime = new Date(mem.created_at).getTime();
-									let bestIdx = -1;
-									let bestDist = Infinity;
-									let boundaryOffset = 0;
-									for (let i = 0; i < allFrameTimestamps.length; i++) {
-										if (allFrameTimestamps[i] === "__boundary__") {
-											boundaryOffset += 16; // day boundary divider width
-											continue;
-										}
-										const dist = Math.abs(new Date(allFrameTimestamps[i]).getTime() - memTime);
-										if (dist < bestDist) {
-											bestDist = dist;
-											bestIdx = i;
-										}
-									}
-									if (bestIdx < 0) return null;
-									// Count actual frames before this index (exclude boundaries)
-									let frameCount = 0;
-									for (let i = 0; i < bestIdx; i++) {
-										if (allFrameTimestamps[i] !== "__boundary__") frameCount++;
-									}
-									// 50vw padding + 1px forward observer + boundary offsets + frame positions
-									const xOffset = frameCount * stepPx + stepPx / 2 + boundaryOffset;
-									return (
+					{/* Memory markers — diamonds above frame bars. Positions are measured
+					    from real frame DOM nodes in a layout effect (memoryPositions),
+					    so each diamond sits on its nearest-in-time frame even though the
+					    frame row flows right-to-left. */}
+					{memories.length > 0 && (
+						<div className="absolute top-0 left-0 right-0 h-5 pointer-events-auto" style={{ direction: "ltr", zIndex: 40 }}>
+							{memories.map((mem) => {
+								const left = memoryPositions[mem.id];
+								if (left === undefined) return null;
+								return (
+									<div
+										key={mem.id}
+										className="absolute pointer-events-auto cursor-default"
+										style={{ left: `${left}px`, top: "2px", transform: "translateX(-50%)" }}
+										onMouseEnter={(e) => {
+											const rect = e.currentTarget.getBoundingClientRect();
+											setHoveredMemoryId(mem.id);
+											setHoveredMemoryRect({ x: rect.left + rect.width / 2, y: rect.top - 8 });
+										}}
+										onMouseLeave={() => {
+											setHoveredMemoryId(null);
+											setHoveredMemoryRect(null);
+										}}
+									>
 										<div
-											key={mem.id}
-											className="absolute pointer-events-auto cursor-default"
-											style={{ left: `calc(50vw + ${xOffset}px)`, top: "2px" }}
-											onMouseEnter={(e) => {
-												const rect = e.currentTarget.getBoundingClientRect();
-												setHoveredMemoryId(mem.id);
-												setHoveredMemoryRect({ x: rect.left + rect.width / 2, y: rect.top - 8 });
-											}}
-											onMouseLeave={() => {
-												setHoveredMemoryId(null);
-												setHoveredMemoryRect(null);
-											}}
-										>
-											<div
-												className="w-2 h-2 bg-foreground/50 rotate-45 hover:bg-foreground hover:scale-150 transition-all duration-150"
-												title={mem.content.slice(0, 60)}
-											/>
-										</div>
-									);
-								})}
-							</div>
-						);
-					})()}
+											className="w-2 h-2 bg-foreground/50 rotate-45 hover:bg-foreground hover:scale-150 transition-all duration-150"
+											title={mem.content.slice(0, 60)}
+										/>
+									</div>
+								);
+							})}
+						</div>
+					)}
 
 					{/* Memory tooltip portal */}
 					{hoveredMemoryId !== null && hoveredMemoryRect && createPortal(

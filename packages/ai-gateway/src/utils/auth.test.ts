@@ -1,4 +1,37 @@
 import { describe, it, expect } from 'bun:test';
+import { activeSubscriptionFilter } from './subscription';
+
+// Canceling a subscription must not strip Pro access before the paid period
+// ends. Stripe stamps canceled_at / flips status to canceled the moment a
+// cancellation is processed, so the subscription gate has to grant access to a
+// canceled row whose current_period_end is still in the future. (issue #3843)
+describe('activeSubscriptionFilter — keeps Pro until period end (#3843)', () => {
+  const nowIso = '2026-06-05T00:00:00.000Z';
+
+  it('still matches active and trialing subscriptions', () => {
+    expect(activeSubscriptionFilter(nowIso)).toContain('status.in.(active,trialing)');
+  });
+
+  it('grants a canceled subscription access until current_period_end', () => {
+    const filter = activeSubscriptionFilter(nowIso);
+    expect(filter).toContain('status.eq.canceled');
+    expect(filter).toContain('current_period_end.gt.');
+  });
+
+  it('is one PostgREST or= filter combining both conditions', () => {
+    const filter = activeSubscriptionFilter(nowIso);
+    expect(filter.startsWith('or=(')).toBe(true);
+    expect(filter.endsWith(')')).toBe(true);
+    // canceled access is gated on the period end, not on canceled_at
+    expect(filter).not.toContain('canceled_at');
+  });
+
+  it('url-encodes the timestamp so the query string stays valid', () => {
+    expect(activeSubscriptionFilter('2026-06-05T12:34:56.789Z')).toContain(
+      '2026-06-05T12%3A34%3A56.789Z'
+    );
+  });
+});
 
 describe('Auth tier determination', () => {
   it('should return anonymous tier when no auth header', () => {

@@ -74,10 +74,12 @@ const canDriveOwnedBrowser = process.platform !== "linux";
 //
 // The fix tags each navigation with its owner (the chat/session id, or
 // `pipe:<name>` for a pipe) and the sidebar ignores navigations owned by a chat
-// other than the one on screen. This block drives the *real* path a background
-// pipe uses (POST /connections/browsers/owned-default/navigate with the
-// `x-screenpipe-session` header the agent's curl shim adds) while a chat is on
-// screen, and asserts the foreign navigation does NOT reveal the browser.
+// other than the one on screen. This block drives BOTH *real* paths a
+// background pipe uses while a chat is on screen — POST
+// /connections/browsers/owned-default/navigate AND the navigate-and-scrape POST
+// /connections/browsers/owned-default/eval with a `url` (both carrying the
+// `x-screenpipe-session` header the agent's curl shim adds) — and asserts the
+// foreign navigation does NOT reveal the browser.
 //
 // We assert on native visibility (`e2e_owned_browser_visible`), not persisted
 // browserState: a regression reveals the panel, which attaches the native child
@@ -216,6 +218,33 @@ async function postNavigateAs(
   return res.status;
 }
 
+/** POST the owned-browser eval endpoint with a `url` (navigate-and-scrape) the
+ *  way a background pipe does — carrying the same `x-screenpipe-session` owner
+ *  header. This is the second way a pipe drives the owned browser: a single
+ *  call that navigates then runs JS. Pre-fix the eval path ignored the header
+ *  and emitted the navigate event with owner=None. Returns the HTTP status. */
+async function postEvalWithUrlAs(
+  port: number,
+  key: string | null,
+  url: string,
+  owner: string,
+): Promise<number> {
+  const res = await fetch(
+    `http://127.0.0.1:${port}/connections/browsers/owned-default/eval`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-screenpipe-session": owner,
+        ...authHeaders(key),
+      },
+      body: JSON.stringify({ url, code: "return 1" }),
+    },
+  );
+  await res.text().catch(() => ""); // drain so the socket closes cleanly
+  return res.status;
+}
+
 describe("Owned browser — per-chat navigation ownership", function () {
   this.timeout(180_000);
 
@@ -271,6 +300,19 @@ describe("Owned browser — per-chat navigation ownership", function () {
       //    browser in OWN_CHAT. Pre-fix the global navigate event flipped the
       //    panel open in whatever chat was on screen, attaching the native child
       //    (which is exactly what destroys home's handle on a regression).
+      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        false,
+      );
+
+      // 6. Same guarantee for the OTHER way a pipe drives the browser: a
+      //    navigate-and-scrape via POST /eval with a `url`. Pre-fix the eval
+      //    path ignored the `x-screenpipe-session` header and emitted the
+      //    navigate event with owner=None, which the sidebar honors in every
+      //    chat. The event fires before eval waits for the (absent) child
+      //    webview, so the gate is exercised regardless of the eval's own
+      //    result — we assert visibility, not the HTTP status.
+      await postEvalWithUrlAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
+      await browser.pause(t(2_500));
       expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
         false,
       );

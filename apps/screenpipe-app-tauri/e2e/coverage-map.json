@@ -223,6 +223,16 @@
       "notes": "macOS-only chat streaming responsiveness."
     },
     {
+      "spec": "zzz-browser-state-chat-switch.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e", "storage-privacy"],
+      "features": ["chat", "owned-browser"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Synthetic E2E (zzz- prefix, search-driven): starts from a fresh chat with no conversation file, seeds browser state before the first durable save, then verifies auto-save persists that state and it survives a switch away and back. Keeps native visibility assertions out of this spec because post-zz window state is too brittle; deeper save/merge coverage lives in focused tests."
+    },
+    {
       "spec": "chat-switch-context-loss.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
@@ -340,7 +350,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Seeds and opens a long meeting note, then clicks the bottom editor line."
+      "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
     },
     {
       "spec": "notification-viewer-link.spec.ts",
@@ -421,6 +431,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Settings sections, storage, privacy, and rapid switching crash guard."
+    },
+    {
+      "spec": "meeting-apps-picker.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "real-ui-e2e"],
+      "features": ["settings-recording", "meeting-detector-ignored-apps"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847)."
     },
     {
       "spec": "timeline.spec.ts",
@@ -521,6 +541,36 @@
       "confidence": "partial",
       "ux": "synthetic",
       "notes": "Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions)."
+    },
+    {
+      "spec": "privacy-installed-apps.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "storage-privacy", "real-ui-e2e"],
+      "features": ["settings-privacy-filters", "installed-apps"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism)."
+    },
+    {
+      "spec": "zz-app-entitlement-gate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "billing", "real-ui-e2e"],
+      "features": ["app-entitlement-gate", "billing-gate"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared."
+    },
+    {
+      "spec": "zz-logout-resurrect.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "settings"],
+      "features": ["account-logout", "auth-session"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx."
     }
   ]
 }

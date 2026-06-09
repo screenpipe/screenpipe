@@ -455,10 +455,44 @@ export function TranscriptPanel({
     const durableText = normalizeForDedupe(
       chunks.map((c) => c.transcription ?? "").join(" "),
     );
+    // Cross-device echo suppression. Without headphones the mic ("input"/"me")
+    // picks up the speaker output, so the remote's words arrive on BOTH the
+    // input stream and the clean system-audio ("output"/"speaker") stream.
+    // macOS VoiceProcessingIO AEC does not remove this (it has no downlink
+    // reference), and the engine's cross-device dedup only runs on the deferred
+    // durable path — so during a live meeting both copies reach the UI. The
+    // output capture is the clean source, so drop an input block when most of
+    // its words are covered by a nearby output block.
+    const ECHO_WINDOW_MS = 6000;
+    const outputBlocks = liveBlocks
+      .filter((b) => b.deviceType.toLowerCase() === "output")
+      .map((b) => ({
+        ts: timestampMs(b.capturedAt),
+        norm: normalizeForDedupe(b.text),
+      }));
+    const isInputEchoOfOutput = (
+      block: LiveTranscriptBlock,
+      normalized: string,
+    ) => {
+      if (block.deviceType.toLowerCase() !== "input") return false;
+      const ts = timestampMs(block.capturedAt);
+      const ref = new Set(
+        outputBlocks
+          .filter((o) => Math.abs(o.ts - ts) <= ECHO_WINDOW_MS)
+          .flatMap((o) => o.norm.split(" "))
+          .filter(Boolean),
+      );
+      if (ref.size === 0) return false;
+      const words = normalized.split(" ").filter(Boolean);
+      if (words.length === 0) return false;
+      const covered = words.filter((w) => ref.has(w)).length / words.length;
+      return covered >= 0.6;
+    };
     return liveBlocks.filter((block) => {
       const normalized = normalizeForDedupe(block.text);
       if (normalized.length < 24) return true;
-      return !durableText.includes(normalized.slice(0, 80));
+      if (durableText.includes(normalized.slice(0, 80))) return false;
+      return !isInputEchoOfOutput(block, normalized);
     });
   }, [chunks, liveBlocks]);
   const visibleLiveSpeakerBlocks = useMemo(

@@ -36,6 +36,7 @@
         "@tauri-apps/plugin-shell": "~2.3.5",
         "@tauri-apps/plugin-store": "~2.4.2",
         "@tauri-apps/plugin-updater": "~2.10.0",
+        "@tiptap/extension-image": "3.22.5",
         "@tiptap/extension-placeholder": "^3.22.5",
         "@tiptap/pm": "^3.22.5",
         "@tiptap/react": "^3.22.5",
@@ -45,6 +46,7 @@
         "cmdk": "0.2.1",
         "date-fns": "^3.6.0",
         "framer-motion": "^11.18.2",
+        "fuse.js": "^7.4.2",
         "hotkeys-js": "^3.13.15",
         "js-levenshtein": "^1.1.6",
         "localforage": "^1.10.0",
@@ -711,6 +713,8 @@
     "@tiptap/extension-heading": ["@tiptap/extension-heading@3.22.5", "", { "peerDependencies": { "@tiptap/core": "3.22.5" } }, "sha512-hjyEG4947PAhMBfP1G6B0QAh6+y9mp2C5BQmNjprA05/lQzDAT7KFZzNh8ZVp3ol6aICKq/N1gFOW9Dc/9FUOw=="],
 
     "@tiptap/extension-horizontal-rule": ["@tiptap/extension-horizontal-rule@3.22.5", "", { "peerDependencies": { "@tiptap/core": "3.22.5", "@tiptap/pm": "3.22.5" } }, "sha512-vUV0/ugIbXOc8SJib0h8UMhgcqZXWu/dkEhlswZN4VVven1o5enkfxEiDw+OyIJHi5rUkrdhsQ/KTxG/Xb7X8A=="],
+
+    "@tiptap/extension-image": ["@tiptap/extension-image@3.22.5", "", { "peerDependencies": { "@tiptap/core": "3.22.5" } }, "sha512-ezMzA6w6UsPesQp6fxTQojI/IkGJLmkwR/VGTimva7sudP3HdSW8k3SGBkjfvp0L2xqUrC/l4nWOchu01A/xtQ=="],
 
     "@tiptap/extension-italic": ["@tiptap/extension-italic@3.22.5", "", { "peerDependencies": { "@tiptap/core": "3.22.5" } }, "sha512-4T8baSiLkeIymTgEwirxDFt5YgYofkP3m1+MGYdGy2HKcOK+1vpvlPhEO1X5qtZngtJW5S4+njKjinRg52A4PA=="],
 
@@ -1519,6 +1523,8 @@
     "function.prototype.name": ["function.prototype.name@1.1.6", "", { "dependencies": { "call-bind": "^1.0.2", "define-properties": "^1.2.0", "es-abstract": "^1.22.1", "functions-have-names": "^1.2.3" } }, ""],
 
     "functions-have-names": ["functions-have-names@1.2.3", "", {}, ""],
+
+    "fuse.js": ["fuse.js@7.4.2", "", {}, "sha512-LVbzjD4WA6UP5B1UnP8wuaXJiLnqMdM/E4fiJXTJ5haJ5b/MBNsK29h2fm6swEoQaVQjvYFWKLE2RanyZIoRVQ=="],
 
     "geckodriver": ["geckodriver@6.1.0", "", { "dependencies": { "@wdio/logger": "^9.18.0", "@zip.js/zip.js": "^2.8.11", "decamelize": "^6.0.1", "http-proxy-agent": "^7.0.2", "https-proxy-agent": "^7.0.6", "modern-tar": "^0.7.2" }, "bin": { "geckodriver": "bin/geckodriver.js" } }, "sha512-ZRXLa4ZaYTTgUO4Eefw+RsQCleugU2QLb1ME7qTYxxuRj51yAhfnXaItXNs5/vUzfIaDHuZ+YnSF005hfp07nQ=="],
 

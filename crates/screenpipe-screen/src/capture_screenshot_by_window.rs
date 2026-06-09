@@ -22,7 +22,6 @@ use crate::monitor::SafeMonitor;
 
 #[cfg(target_os = "macos")]
 use crate::monitor::macos_version::use_sck_rs;
-use url::Url;
 
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
@@ -223,7 +222,7 @@ pub struct CapturedWindow {
 pub struct WindowFilters {
     ignore_patterns: Vec<WindowPattern>,
     include_patterns: Vec<WindowPattern>,
-    ignored_urls: HashSet<String>,
+    ignored_urls: Vec<String>,
 }
 
 impl WindowFilters {
@@ -268,71 +267,11 @@ impl WindowFilters {
     /// Check if a URL should be filtered out for privacy
     /// Uses domain-level matching to avoid false positives (e.g., "chase" won't match "purchase.com")
     /// Returns true if the URL is blocked (should be skipped)
+    ///
+    /// Delegates to [`screenpipe_a11y::url_filter::is_url_blocked`] so the
+    /// vision path and the a11y tree walker agree on what "blocked" means.
     pub fn is_url_blocked(&self, url: &str) -> bool {
-        if self.ignored_urls.is_empty() {
-            return false;
-        }
-
-        // Try to extract the host/domain from the URL for more precise matching
-        let url_to_parse = if !url.starts_with("http://") && !url.starts_with("https://") {
-            format!("https://{}", url)
-        } else {
-            url.to_string()
-        };
-
-        if let Ok(parsed) = Url::parse(&url_to_parse) {
-            if let Some(host) = parsed.host_str() {
-                let host_lower = host.to_lowercase();
-                return self.ignored_urls.iter().any(|blocked| {
-                    // Domain-level matching - must match at domain boundaries
-                    // "chase.com" should NOT match "purchase.com" (just happens to end same)
-                    //
-                    // Strategies:
-                    // 1. Exact match: host == blocked
-                    // 2. Subdomain: host ends with ".{blocked}"
-                    // 3. No-TLD pattern: blocked="chase" matches "chase.com", "www.chase.com"
-
-                    // Exact match
-                    if host_lower == *blocked {
-                        return true;
-                    }
-
-                    // Subdomain match: host ends with ".blocked"
-                    if host_lower.ends_with(&format!(".{}", blocked)) {
-                        return true;
-                    }
-
-                    // For patterns without TLD (e.g., "chase" instead of "chase.com")
-                    if !blocked.contains('.') {
-                        // Match "chase.com", "chase.net", etc.
-                        if host_lower == format!("{}.com", blocked)
-                            || host_lower == format!("{}.net", blocked)
-                            || host_lower == format!("{}.org", blocked)
-                            || host_lower == format!("{}.bank", blocked)
-                        {
-                            return true;
-                        }
-                        // Match "www.chase.com", "online.chase.com", etc.
-                        if host_lower.ends_with(&format!(".{}.com", blocked))
-                            || host_lower.ends_with(&format!(".{}.net", blocked))
-                            || host_lower.ends_with(&format!(".{}.org", blocked))
-                            || host_lower.ends_with(&format!(".{}.bank", blocked))
-                        {
-                            return true;
-                        }
-                    }
-
-                    false
-                });
-            }
-        }
-
-        // Fallback to simple contains check if URL parsing fails
-        // This is less precise but ensures we don't miss obvious matches
-        let url_lower = url.to_lowercase();
-        self.ignored_urls
-            .iter()
-            .any(|blocked| url_lower.contains(blocked))
+        screenpipe_a11y::url_filter::is_url_blocked(url, &self.ignored_urls)
     }
 
     /// Check if a window title suggests it's a blocked site (fallback for unfocused windows)
@@ -881,7 +820,7 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
     Ok(windows
         .into_iter()
         .filter_map(|window| {
-            let mut app_name = match window.app_name() {
+            let app_name = match window.app_name() {
                 Ok(name) => name.to_string(),
                 Err(e) => {
                     debug!("Failed to get app_name for window: {}", e);
@@ -892,14 +831,22 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
             // On Windows, xcap returns empty string when OpenProcess fails
             // (elevated/system processes). Fall back to exe filename.
             #[cfg(target_os = "windows")]
-            if app_name.is_empty() {
-                if let Some(pid) = window.pid().ok() {
-                    if let Some(exe_name) = get_process_exe_name(pid as u32) {
-                        debug!("app_name was empty, using exe name: {}", exe_name);
-                        app_name = exe_name;
+            let app_name = {
+                if app_name.is_empty() {
+                    if let Some(pid) = window.pid().ok() {
+                        if let Some(exe_name) = get_process_exe_name(pid as u32) {
+                            debug!("app_name was empty, using exe name: {}", exe_name);
+                            exe_name
+                        } else {
+                            app_name
+                        }
+                    } else {
+                        app_name
                     }
+                } else {
+                    app_name
                 }
-            }
+            };
 
             let title = match window.title() {
                 Ok(title) => title.to_string(),
@@ -959,7 +906,10 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
 /// Returns an empty vec if no windows match the filters or on error.
 #[cfg(target_os = "macos")]
 pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.ignore_patterns.is_empty() && window_filters.include_patterns.is_empty() {
+    if window_filters.ignore_patterns.is_empty()
+        && window_filters.include_patterns.is_empty()
+        && window_filters.ignored_urls.is_empty()
+    {
         return Vec::new();
     }
 

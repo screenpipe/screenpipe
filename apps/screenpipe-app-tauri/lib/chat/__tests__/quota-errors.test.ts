@@ -58,7 +58,7 @@ describe("buildDailyLimitMessage", () => {
 
   it("tailors copy by tier", () => {
     expect(buildDailyLimitMessage('{"tier":"subscribed"}')).toContain("daily limit");
-    expect(buildDailyLimitMessage('{"tier":"logged_in"}')).toContain("upgrade to Pro");
+    expect(buildDailyLimitMessage('{"tier":"logged_in"}')).toContain("upgrade to Business");
     expect(buildDailyLimitMessage('{"tier":"anonymous"}')).toContain("Sign in for more");
   });
 

@@ -27,7 +27,7 @@ export function buildDailyLimitMessage(errorStr: string): string {
     if (tier === "subscribed") {
       return "You've hit your daily limit. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage.";
     } else if (tier === "logged_in") {
-      return "You've used your free queries for today. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage, or upgrade to Pro.";
+      return "You've used your free queries for today. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage, or upgrade to Business.";
     } else {
       return "You've used your free queries for today. Sign in for more, or switch to a free model (Qwen3 Coder, Gemini Flash).";
     }

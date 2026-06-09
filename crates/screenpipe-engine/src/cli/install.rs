@@ -14,10 +14,10 @@
 //! }
 //! ```
 //!
-//! Hosts other than `screenpi.pe` are rejected unless `--allow-untrusted` is
-//! passed or `SCREENPIPE_TRUSTED_HOSTS` lists them (comma-separated). This
-//! exists because installing pipes runs code, so manifests should come from
-//! sources the user controls.
+//! Hosts other than `screenpipe.com` or `screenpi.pe` are rejected unless
+//! `--allow-untrusted` is passed or `SCREENPIPE_TRUSTED_HOSTS` lists them
+//! (comma-separated). This exists because installing pipes runs code, so
+//! manifests should come from sources the user controls.
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
@@ -30,7 +30,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-const DEFAULT_TRUSTED_HOSTS: &[&str] = &["screenpi.pe", "www.screenpi.pe"];
+const DEFAULT_TRUSTED_HOSTS: &[&str] = &[
+    "screenpipe.com",
+    "www.screenpipe.com",
+    "screenpi.pe",
+    "www.screenpi.pe",
+];
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +97,7 @@ pub async fn handle_install(url: &str, allow_untrusted: bool) -> Result<()> {
     manager.load_pipes().await?;
 
     let api_base = std::env::var("SCREENPIPE_API_BASE_URL")
-        .unwrap_or_else(|_| "https://screenpi.pe".to_string());
+        .unwrap_or_else(|_| "https://screenpipe.com".to_string());
 
     let mut installed = 0usize;
     let mut failed: Vec<(String, String)> = Vec::new();

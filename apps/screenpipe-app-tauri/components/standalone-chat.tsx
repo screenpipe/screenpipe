@@ -42,7 +42,7 @@ import rehypeRaw from "rehype-raw";
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { save as saveDialog, open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { writeTextFile, readFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile, readFile, mkdir } from "@tauri-apps/plugin-fs";
 import {
   extractDocument,
   docsToPromptText,
@@ -71,6 +71,7 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { buildChipModelContent, buildChipDisplayContent, parseConnectionChip } from "@/lib/utils/connection-chip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -128,6 +129,7 @@ import {
   type SourceCitation,
 } from "@/lib/source-citations";
 import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
+import { IntegrationIcon, INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
 import {
   formatSteerShortcut,
   getComposerPrimaryAction,
@@ -172,8 +174,17 @@ const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
+
 const CONNECTION_SUGGESTION_LIMIT = 3;
 const VISIBLE_SUGGESTION_LIMIT = 2;
+const LARGE_CONTEXT_CHAR_THRESHOLD = 160_000;
+const LARGE_CONTEXT_CHUNK_CHARS = 24_000;
+const LARGE_CONTEXT_PREVIEW_HEAD_CHARS = 3_000;
+const LARGE_CONTEXT_PREVIEW_TAIL_CHARS = 1_500;
+const LARGE_CONTEXT_PROMPT_TAG = "screenpipe-large-context";
+const PASTED_TEXT_ATTACHMENT_CHAR_THRESHOLD = 8_000;
+const PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS = 20_000;
+const PASTED_TEXT_DOC_BASE_NAME = "Pasted text";
 
 type ConnectedIntegration = {
   id: string;
@@ -675,6 +686,161 @@ type PendingSteerBatchItem = {
 };
 
 const TURN_INTENT_LEDGER_TTL_MS = 10 * 60 * 1000;
+
+function isPastedTextDoc(doc: Pick<ExtractedDoc, "name" | "ext">) {
+  return doc.ext === "txt" && new RegExp(`^${PASTED_TEXT_DOC_BASE_NAME}(?: \\d+)?$`).test(doc.name);
+}
+
+function pastedTextDocName(existingDocs: ExtractedDoc[]) {
+  const existingCount = existingDocs.filter(isPastedTextDoc).length;
+  return existingCount === 0
+    ? PASTED_TEXT_DOC_BASE_NAME
+    : `${PASTED_TEXT_DOC_BASE_NAME} ${existingCount + 1}`;
+}
+
+function makePastedTextDoc(text: string, name: string): ExtractedDoc {
+  return {
+    name,
+    ext: "txt",
+    text,
+    truncated: false,
+    charCount: text.length,
+  };
+}
+
+function estimateLargeContextTokens(text: string) {
+  // Claude tokenizes repeated short tokens like "x " much denser than the
+  // usual chars/4 rule. Use a conservative estimate for preflight only.
+  return Math.ceil(text.length / 2);
+}
+
+function sanitizeLargeContextFilePart(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "pasted-context";
+}
+
+function extractLargeContextTask(text: string) {
+  const trimmed = text.trim();
+  const paragraphs = trimmed
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const lastParagraph = paragraphs[paragraphs.length - 1] ?? "";
+  const lastParagraphTask = lastParagraph.replace(/<\/attached file>\s*$/i, "").trim();
+  if (
+    lastParagraphTask.length > 0 &&
+    lastParagraphTask.length <= 2_000 &&
+    trimmed.length - lastParagraphTask.length > LARGE_CONTEXT_CHAR_THRESHOLD
+  ) {
+    return lastParagraphTask;
+  }
+
+  const tail = trimmed.slice(-1_200).replace(/<\/attached file>\s*$/i, "").trim();
+  if (
+    tail &&
+    /\b(summarize|summarise|analyze|analyse|explain|extract|find|review|debug|fix|compare|list|what|why|how|tell|write|create|convert|translate)\b/i.test(tail)
+  ) {
+    return tail;
+  }
+
+  return "Use the attached large context to answer the user's request.";
+}
+
+function buildLargeContextPreview(text: string) {
+  if (text.length <= LARGE_CONTEXT_PREVIEW_HEAD_CHARS + LARGE_CONTEXT_PREVIEW_TAIL_CHARS) {
+    return text;
+  }
+
+  const omittedChars = text.length - LARGE_CONTEXT_PREVIEW_HEAD_CHARS - LARGE_CONTEXT_PREVIEW_TAIL_CHARS;
+  return [
+    text.slice(0, LARGE_CONTEXT_PREVIEW_HEAD_CHARS),
+    "",
+    `[... ${omittedChars} characters omitted; full input is stored on disk ...]`,
+    "",
+    text.slice(-LARGE_CONTEXT_PREVIEW_TAIL_CHARS),
+  ].join("\n");
+}
+
+async function externalizeLargeContextIfNeeded(
+  text: string,
+  sessionId: string | null,
+  taskHint?: string,
+) {
+  if (text.length <= LARGE_CONTEXT_CHAR_THRESHOLD) return null;
+
+  const task = taskHint?.trim() || extractLargeContextTask(text);
+  const createdAt = new Date().toISOString().replace(/[:.]/g, "-");
+  const sessionPart = sanitizeLargeContextFilePart(sessionId || "chat");
+  const filePart = sanitizeLargeContextFilePart(task.slice(0, 60));
+  const contextDirName = `${createdAt}-${filePart}`;
+  const fileName = "full.txt";
+  const home = await homeDir();
+  const dir = await join(home, ".screenpipe", "pi-chat", "large-context", sessionPart, contextDirName);
+  await mkdir(dir, { recursive: true });
+  const filePath = await join(dir, fileName);
+  await writeTextFile(filePath, text);
+
+  const chunksDir = await join(dir, "chunks");
+  await mkdir(chunksDir, { recursive: true });
+  const chunkCount = Math.ceil(text.length / LARGE_CONTEXT_CHUNK_CHARS);
+  const chunkDigits = Math.max(4, String(chunkCount).length);
+  const chunkPaths: string[] = [];
+  for (let i = 0; i < chunkCount; i++) {
+    const start = i * LARGE_CONTEXT_CHUNK_CHARS;
+    const end = Math.min(text.length, start + LARGE_CONTEXT_CHUNK_CHARS);
+    const chunkName = `chunk-${String(i + 1).padStart(chunkDigits, "0")}.txt`;
+    const chunkPath = await join(chunksDir, chunkName);
+    await writeTextFile(chunkPath, text.slice(start, end));
+    chunkPaths.push(chunkPath);
+  }
+
+  const estimatedTokens = estimateLargeContextTokens(text);
+  const firstChunkPath = chunkPaths[0] ?? "";
+  const lastChunkPath = chunkPaths[chunkPaths.length - 1] ?? firstChunkPath;
+  const preview = buildLargeContextPreview(text);
+  const prompt = [
+    `<${LARGE_CONTEXT_PROMPT_TAG}>`,
+    "[INPUT OFFLOADED]",
+    "The user-provided input was too large to send inline. The full input was saved to local text files and replaced with this file reference, following the same offload pattern used by agent CLIs for oversized context.",
+    `full_path: ${filePath}`,
+    `chunk_dir: ${chunksDir}`,
+    `chunk_file_format: chunk-${"1".padStart(chunkDigits, "0")}.txt through chunk-${String(chunkCount).padStart(chunkDigits, "0")}.txt`,
+    `first_chunk_path: ${firstChunkPath}`,
+    `last_chunk_path: ${lastChunkPath}`,
+    `chunk_count: ${chunkCount}`,
+    `chunk_chars: ${LARGE_CONTEXT_CHUNK_CHARS}`,
+    `characters: ${text.length}`,
+    `estimated_tokens: ${estimatedTokens}`,
+    `</${LARGE_CONTEXT_PROMPT_TAG}>`,
+    "",
+    "Inline preview:",
+    "```text",
+    preview,
+    "```",
+    "",
+    "User request:",
+    task,
+    "",
+    "Use ordinary file or shell operations on these files, not custom tools:",
+    "1. For search, use bounded grep/rg commands against full_path or chunk_dir.",
+    "2. For summaries, read chunk files one or a few at a time and combine partial summaries.",
+    "3. Do not cat or read the full_path into the conversation in one shot.",
+  ].join("\n");
+
+  return {
+    prompt,
+    displayLabel: task.length <= 240 ? task : `Large context: ${fileName}`,
+    attachment: {
+      name: "large-context.txt",
+      ext: "txt",
+      charCount: text.length,
+      truncated: false,
+    } satisfies ChatAttachment,
+  };
+}
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -1261,6 +1427,7 @@ const STATIC_APP_ICONS: Record<string, string> = {
   resend: "/images/resend.svg",
   limitless: "/images/limitless.svg",
   granola: "/images/granola.png",
+  mochi: "/images/mochi.png",
   fireflies: "/images/fireflies.png",
   otter: "/images/otter.png",
   bee: "/images/bee.png",
@@ -1957,6 +2124,26 @@ function MessageContent({
   // attachment cards above already disclose what was attached, so we
   // suppress the expansion chevron in that case (label-only bubble).
   if (isUser && message.displayContent) {
+    const chipMatch = message.displayContent.match(/^\[chip:([^|]+)\|([^\]]+)\] ([\s\S]*)/);
+    if (chipMatch) {
+      const [, chipId, chipName, chipText] = chipMatch;
+      return (
+        <div className="space-y-2">
+          {attachmentsRow}
+          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5">
+            <span className="inline-flex h-5 items-center gap-1 shrink-0 align-top">
+              <IntegrationIcon
+                icon={chipId}
+                className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0"
+                fallbackClassName="h-3 w-3 text-muted-foreground"
+              />
+              <span className="text-sm font-mono font-semibold text-foreground/80 leading-5">{chipName}</span>
+            </span>
+            <span className="text-sm leading-5 break-words min-w-0">{chipText}</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="space-y-2">
         {attachmentsRow}
@@ -2442,6 +2629,9 @@ export function StandaloneChat({
   const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
   const [allConnectionItems, setAllConnectionItems] = useState<ConnectionListItem[]>([]);
   const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
+  const [showConnectBanner, setShowConnectBanner] = useState(() => {
+    try { return localStorage.getItem("screenpipe_connect_banner_dismissed") !== "true"; } catch { return true; }
+  });
   const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
   const connectionSetupSuggestions = React.useMemo(
     () => buildConnectionSetupSuggestions(allConnectionItems, appItems),
@@ -2520,6 +2710,28 @@ export function StandaloneChat({
     };
   }, [refreshConnectionState]);
 
+  // Pre-fill chat input when "Try in Chat" is clicked from the connections page.
+  // Always opens a new chat so the prompt never lands in an existing conversation.
+  // Uses a ref so the effect doesn't need startNewConversation as a dep (avoids
+  // re-registering the listener on every render while still calling the latest fn).
+  const tryInChatStartNewRef = useRef<(() => Promise<void> | void) | null>(null);
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const { connectionId, connectionName, prompt } = (e as CustomEvent<{
+        connectionId: string;
+        connectionName: string;
+        prompt: string;
+      }>).detail;
+      // Start a fresh conversation so the prompt doesn't pollute an existing chat.
+      await tryInChatStartNewRef.current?.();
+      setConnectionChip({ id: connectionId, name: connectionName, icon: connectionId });
+      setInput(prompt);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener("try-in-chat", handler);
+    return () => window.removeEventListener("try-in-chat", handler);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     if (connections.length === 0) {
@@ -2576,6 +2788,7 @@ export function StandaloneChat({
   };
 
   const [input, setInput] = useState("");
+  const [connectionChip, setConnectionChip] = useState<{ id: string; name: string; icon: string } | null>(null);
   // Mirror `input` into a ref so the chat-switch logic in
   // useChatConversations can snapshot the outgoing composer text
   // without needing it as a dep (which would re-bind handlers every
@@ -2697,6 +2910,19 @@ export function StandaloneChat({
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Inline connection prefix: icon+name rendered as an absolute overlay on the
+  // textarea's first line. We measure its width and indent the textarea's first
+  // line so the typed text flows after the prefix. chipScrollTop tracks the
+  // textarea's scroll offset so the overlay scrolls with its line instead of
+  // staying pinned at the top once the input grows past maxHeight.
+  const chipPrefixRef = useRef<HTMLDivElement>(null);
+  const [chipPrefixWidth, setChipPrefixWidth] = useState(0);
+  const [chipScrollTop, setChipScrollTop] = useState(0);
+  // Root of the chat surface. The webview drag-drop event is window-global and
+  // this chat is kept mounted-but-hidden (display:none) on non-chat sections,
+  // so we use this ref's visibility to ignore drops meant for another view
+  // (e.g. a meeting note) that would otherwise also stage into the composer.
+  const dropRootRef = useRef<HTMLDivElement>(null);
 
   const [scheduleDialogMessage, setScheduleDialogMessage] = useState<{ prompt: string; response: string } | null>(null);
   const [prefillContext, setPrefillContext] = useState<string | null>(null);
@@ -2754,8 +2980,6 @@ export function StandaloneChat({
   const turnIntentLedgerRef = useRef<TurnIntentRecord[]>([]);
   const pendingSteerBatchRef = useRef<PendingSteerBatchItem[]>([]);
   const pendingSteerFlushInFlightRef = useRef(false);
-  const steerAbortAtBoundaryRef = useRef(false);
-  const steerAbortInFlightRef = useRef(false);
   const streamRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
@@ -2879,7 +3103,7 @@ export function StandaloneChat({
   const lastUserMessageRef = useRef<string>("");
 
   // Ref to sendMessage so useEffect callbacks can call it without stale closures
-  const sendMessageRef = useRef<(msg: string, displayLabel?: string) => Promise<void>>();
+  const sendMessageRef = useRef<(msg: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>>();
   // Bypass guard for auto-send from chat-prefill (Pi confirmed running but React state stale)
   const autoSendBypassRef = useRef(false);
 
@@ -2906,6 +3130,22 @@ export function StandaloneChat({
     () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
     [queuedPromptsBySession, currentQueueSessionId]
   );
+
+  // Clear the connection chip whenever the active conversation changes (new chat or history switch).
+  useEffect(() => { setConnectionChip(null); }, [conversationId]);
+
+  // Measure the inline connection prefix so the textarea first line can indent
+  // past it. Re-measure on chip change and container resize.
+  React.useLayoutEffect(() => {
+    if (!connectionChip) { setChipPrefixWidth(0); setChipScrollTop(0); return; }
+    const el = chipPrefixRef.current;
+    if (!el) return;
+    const measure = () => setChipPrefixWidth(el.offsetWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [connectionChip]);
 
   useEffect(() => {
     void refreshConnectionState();
@@ -3143,6 +3383,36 @@ export function StandaloneChat({
     await extractAndAttach(name, async () => new Uint8Array(await file.arrayBuffer()));
   }, [extractAndAttach]);
 
+  const attachPastedText = useCallback((text: string) => {
+    const normalized = text.replace(/\r\n/g, "\n");
+    if (normalized.length < PASTED_TEXT_ATTACHMENT_CHAR_THRESHOLD) return false;
+    setAttachedDocs((prev) => [
+      ...prev,
+      makePastedTextDoc(normalized, pastedTextDocName(prev)),
+    ]);
+    return true;
+  }, []);
+
+  const showPastedTextInField = useCallback((doc: ExtractedDoc, index: number) => {
+    if (doc.text.length > PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS) return;
+
+    setInput((prev) => {
+      if (!prev) return doc.text;
+      const separator = prev.endsWith("\n") ? "\n" : "\n\n";
+      return `${prev}${separator}${doc.text}`;
+    });
+    setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index));
+    setShowMentionDropdown(false);
+    setMentionFilter("");
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+      if (inputRef.current) {
+        inputRef.current.style.height = "auto";
+        inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
+      }
+    }, 0);
+  }, []);
+
   // Handle file picker — images and documents
   const handleFilePicker = useCallback(async () => {
     const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
@@ -3176,6 +3446,13 @@ export function StandaloneChat({
 
     const webview = getCurrentWebview();
     const unlisten = webview.onDragDropEvent((event) => {
+      // The drag-drop event is window-global. Only react when this chat is the
+      // visible surface; when it's the hidden home layer (display:none on other
+      // sections) offsetParent is null, so a drop meant for another view is not
+      // also staged here.
+      if (!dropRootRef.current || dropRootRef.current.offsetParent === null) {
+        return;
+      }
       if (event.payload.type === "enter" || event.payload.type === "over") {
         setIsDragging(true);
       } else if (event.payload.type === "drop") {
@@ -3206,12 +3483,11 @@ export function StandaloneChat({
     const items = e.clipboardData?.items;
     const files = e.clipboardData?.files;
 
-    // Walk both surfaces (`items` for the common path, `files` as a
+    // Walk both file surfaces (`items` for the common path, `files` as a
     // fallback for browsers that don't expose Finder/Explorer pastes
     // through items). Images take the existing fast path; documents
     // route through processDocFile, which mirrors the drag-drop flow
-    // including pending-chip rendering. Non-file clipboard content
-    // (plain text, html) is ignored — the default paste handles it.
+    // including pending-chip rendering.
     const handled = new Set<File>();
     const tryDispatch = (file: File | null | undefined) => {
       if (!file || handled.has(file)) return false;
@@ -3243,8 +3519,32 @@ export function StandaloneChat({
         if (tryDispatch(files[i])) didDispatch = true;
       }
     }
-    if (didDispatch) e.preventDefault();
-  }, [processImageFile, processDocFile]);
+    if (didDispatch) {
+      e.preventDefault();
+      return;
+    }
+
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+
+    // Reconstruct the connection chip when pasting a copied chip message
+    // (content or display form). Restoring the pill keeps the connection
+    // context intact across copy/paste, including paste into a different chat
+    // window (handler runs per-window).
+    if (!connectionChip) {
+      const parsed = parseConnectionChip(text, (id) => INTEGRATION_ICON_KEYS.has(id));
+      if (parsed) {
+        e.preventDefault();
+        setConnectionChip({ ...parsed.chip, icon: parsed.chip.id });
+        setInput((prev) => prev + parsed.prompt);
+        requestAnimationFrame(() => inputRef.current?.focus());
+        return;
+      }
+    }
+
+    if (attachPastedText(text)) {
+      e.preventDefault();
+    }
+  }, [processImageFile, processDocFile, attachPastedText, connectionChip]);
 
   // Signal that this chat window is ready to receive prefill events.
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
@@ -3386,8 +3686,9 @@ export function StandaloneChat({
 
   // Listen for chat-prefill events from search modal and pipe creation
   useEffect(() => {
-    const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
-      const { context, prompt, displayLabel, frameId, autoSend, source, targetWindow } = event.payload;
+    const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; images?: string[]; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
+      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow } = event.payload;
+      const prefillImages = normalizeImageDataUrls(images);
 
       // Route to exactly one window. An autoSend prefill with no targetWindow
       // would otherwise be claimed by BOTH the home and overlay panels — each
@@ -3408,7 +3709,8 @@ export function StandaloneChat({
         (async () => {
           try {
             // Cross-window dedup: compete for the right to handle this prefill.
-            const dedupKey = fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200);
+            const imageKey = prefillImages.map((img) => img.slice(0, 96)).join("|");
+            const dedupKey = `${fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200)}|images:${imageKey}`;
             const myWindowLabel = getCurrentWindow().label;
             const myNonce = Math.random().toString(36).slice(2, 10);
             const myClaim = { windowLabel: myWindowLabel, timestamp: Date.now(), nonce: myNonce };
@@ -3462,7 +3764,7 @@ export function StandaloneChat({
             autoSendBypassRef.current = true;
             await new Promise(r => setTimeout(r, 200));
             if (sendMessageRef.current) {
-              await sendMessageRef.current(fullMessage, displayLabel);
+              await sendMessageRef.current(fullMessage, displayLabel, prefillImages);
               setInput("");
               if (inputRef.current) inputRef.current.style.height = "auto";
             }
@@ -3480,6 +3782,9 @@ export function StandaloneChat({
       setPrefillSource(source || "search");
       if (frameId) {
         setPrefillFrameId(frameId);
+      }
+      if (prefillImages.length > 0) {
+        setPastedImages(prefillImages);
       }
       if (prompt) {
         setInput(prompt);
@@ -3523,6 +3828,8 @@ export function StandaloneChat({
   const startNewConversationRef = useRef(startNewConversation);
   loadConversationRef.current = loadConversation;
   startNewConversationRef.current = startNewConversation;
+  // Keep the try-in-chat ref in sync so the event handler always calls the latest fn.
+  tryInChatStartNewRef.current = startNewConversation;
 
   const openConversationLocally = useCallback(async (convId: string) => {
     const { loadConversationFile } = await import("@/lib/chat-storage");
@@ -4051,6 +4358,9 @@ export function StandaloneChat({
     const textarea = e.target;
     textarea.style.height = "auto";
     textarea.style.height = Math.min(textarea.scrollHeight, 150) + "px";
+    // Keep the inline connection prefix aligned with its line: typing can grow
+    // the textarea past maxHeight and scroll it without firing onScroll.
+    if (connectionChip) setChipScrollTop(textarea.scrollTop);
 
     const cursorPos = e.target.selectionStart || 0;
     const textBeforeCursor = value.slice(0, cursorPos);
@@ -4096,12 +4406,30 @@ export function StandaloneChat({
       return;
     }
 
+    // Backspace at the very start of the input deletes the connection prefix
+    // (icon+name), since it sits before the typed text.
+    if (
+      (e.key === "Backspace" || e.key === "Delete") &&
+      connectionChip &&
+      e.currentTarget.selectionStart === 0 &&
+      e.currentTarget.selectionEnd === 0
+    ) {
+      e.preventDefault();
+      setConnectionChip(null);
+      return;
+    }
+
     if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown) {
       e.preventDefault();
       e.stopPropagation();
       if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
         steerShortcutInFlightRef.current = true;
         void Promise.resolve(steerMessage(input.trim())).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
+      } else if (!input.trim() && pastedImages.length === 0 && pendingDocsRef.current.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
           steerShortcutInFlightRef.current = false;
         });
       }
@@ -4117,7 +4445,12 @@ export function StandaloneChat({
       // which is the exact silent-drop bug the pending-chips fix.
       if (pendingDocsRef.current.length > 0) return;
       if (input.trim() || pastedImages.length > 0 || attachedDocsRef.current.length > 0) {
-        sendMessage(input.trim());
+        const chip = connectionChip;
+        setConnectionChip(null);
+        sendMessage(
+          chip ? buildChipModelContent(chip, input.trim()) : input.trim(),
+          chip ? buildChipDisplayContent(chip, input.trim()) : undefined,
+        );
       }
       return;
     }
@@ -4155,12 +4488,17 @@ export function StandaloneChat({
         void Promise.resolve(steerMessage(input.trim())).finally(() => {
           steerShortcutInFlightRef.current = false;
         });
+      } else if (!input.trim() && pastedImages.length === 0 && pendingDocsRef.current.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
     };
 
     window.addEventListener("keydown", handleComposerSteerShortcut, true);
     return () => window.removeEventListener("keydown", handleComposerSteerShortcut, true);
-  }, [input, isComposing, isMac, pastedImages, showMentionDropdown]);
+  }, [input, isComposing, isMac, pastedImages, showMentionDropdown, queuedPrompts]);
 
   useEffect(() => {
     // Don't resolve preset until settings are loaded from the store —
@@ -4744,7 +5082,6 @@ export function StandaloneChat({
         ) {
           const evt = data.assistantMessageEvent;
           if (evt.type === "text_delta" && evt.delta) {
-            void maybeInterruptForPendingSteer("text_delta");
             // First delta of a queued turn → create the placeholder lazily.
             if (!ensureAssistantPlaceholder()) return;
             piStreamingTextRef.current += evt.delta;
@@ -4785,7 +5122,6 @@ export function StandaloneChat({
             }
             scheduleStreamingMessageRender();
           } else if (evt.type === "thinking_end") {
-            void maybeInterruptForPendingSteer("thinking_end");
             const blocks = piContentBlocksRef.current;
             const thinkingBlock = blocks[blocks.length - 1];
             if (thinkingBlock && thinkingBlock.type === "thinking") {
@@ -4803,7 +5139,6 @@ export function StandaloneChat({
             }
           }
         } else if (data.type === "tool_execution_start") {
-          void maybeInterruptForPendingSteer("tool_execution_start");
           if (!ensureAssistantPlaceholder()) return;
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
@@ -4821,7 +5156,6 @@ export function StandaloneChat({
             );
           }
         } else if (data.type === "tool_execution_end") {
-          void maybeInterruptForPendingSteer("tool_execution_end");
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
             const toolCallId = data.toolCallId;
@@ -5257,9 +5591,7 @@ export function StandaloneChat({
             setIsLoading(false);
             setIsStreaming(false);
             emitSessionActivity({ status: "idle" });
-            if (steerAbortAtBoundaryRef.current) {
-              finishPendingSteerInterrupt();
-            } else if (pendingSteerBatchRef.current.some((item) => item.sessionId === piSessionIdRef.current)) {
+            if (pendingSteerBatchRef.current.some((item) => item.sessionId === piSessionIdRef.current)) {
               void flushPendingSteerBatch();
             }
           }
@@ -5438,8 +5770,6 @@ export function StandaloneChat({
           piStoppedIntentionallyRef.current = false;
           return;
         }
-        const shouldResumePendingSteer = steerAbortAtBoundaryRef.current &&
-          pendingSteerBatchRef.current.some((item) => item.sessionId === payload.sessionId);
         console.log("[Pi] Process terminated, pid:", terminatedPid);
         try {
           const info = await commands.piInfo(piSessionIdRef.current);
@@ -5448,21 +5778,6 @@ export function StandaloneChat({
             return;
           }
         } catch {}
-
-        if (shouldResumePendingSteer) {
-          piStreamingTextRef.current = "";
-          piMessageIdRef.current = null;
-          piContentBlocksRef.current = [];
-          piLastErrorRef.current = null;
-          piActiveStopRequestedRef.current = false;
-          piThinkingStartRef.current = null;
-          followUpFiredRef.current = false;
-          forceQueueModeRef.current = false;
-          setIsLoading(false);
-          setIsStreaming(false);
-          finishPendingSteerInterrupt();
-          return;
-        }
 
         // If a message was in flight, append error to the message so the user
         // knows the agent stopped unexpectedly (not just "completed").
@@ -5953,6 +6268,15 @@ export function StandaloneChat({
     return images;
   }
 
+  function normalizeImageDataUrls(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is string =>
+        typeof item === "string" && /^data:image\/[^;]+;base64,/.test(item),
+      )
+      .slice(0, 8);
+  }
+
   function queuedPreviewForText(text: string) {
     return Array.from(text).slice(0, 200).join("");
   }
@@ -5999,18 +6323,19 @@ export function StandaloneChat({
     return takeQueuedDisplayById(sessionId, match[0]);
   }
 
-  async function enqueuePiMessage(userMessage: string, displayLabel?: string) {
+  async function enqueuePiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
     if (!piInfo?.running) {
       // No Pi running → fall back to the normal start-and-send path.
-      return sendPiMessage(userMessage, displayLabel);
+      return sendPiMessage(userMessage, displayLabel, imageDataUrls);
     }
 
     // Convert any data-URL pastes to the Pi image-content shape (same format
     // used by the normal send path further down in this file).
-    const piImages = imageDataUrlsToPiImages(pastedImages);
-    const queuedImageDataUrls = pastedImages.length > 0 ? [...pastedImages] : [];
+    const outgoingImages = imageDataUrls ?? pastedImages;
+    const piImages = imageDataUrlsToPiImages(outgoingImages);
+    const queuedImageDataUrls = outgoingImages.length > 0 ? [...outgoingImages] : [];
     const prevInput = input;
-    const hadPastedImages = pastedImages.length > 0;
+    const hadPastedImages = imageDataUrls == null && pastedImages.length > 0;
     // Snapshot whatever sendMessage stashed for us. Consumed here so it
     // doesn't leak into a later turn if this enqueue races with another.
     const queuedAttachments = consumePendingAttachments();
@@ -6620,11 +6945,12 @@ export function StandaloneChat({
     }
   }
 
-  async function sendMessage(userMessage: string, displayLabel?: string) {
+  async function sendMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
     const trimmed = userMessage.trim();
+    const outgoingImages = imageDataUrls ?? pastedImages;
     const queuedDocs = attachedDocsRef.current;
-    if (!trimmed && pastedImages.length === 0 && queuedDocs.length === 0) return;
+    if (!trimmed && outgoingImages.length === 0 && queuedDocs.length === 0) return;
 
     // Fold any attached documents into the outgoing turn. The extracted
     // text rides in `content` (what the model sees, kept for
@@ -6657,17 +6983,48 @@ export function StandaloneChat({
     // pastedImages restore-on-error contract in enqueuePiMessage/sendPiMessage:
     // a failed dispatch must not silently swallow the user's attachments.
     const restoreDocsOnError = (e: unknown) => {
-      if (snapshotDocs.length === 0) return;
-      setAttachedDocs((prev) => prev.length === 0 ? snapshotDocs : prev);
+      if (snapshotDocs.length > 0) {
+        setAttachedDocs((prev) => prev.length === 0 ? snapshotDocs : prev);
+      }
       throw e;
     };
+
+    try {
+      const taskHint = snapshotDocs.length > 0 && trimmed.length > 0 && trimmed.length <= 2_000
+        ? trimmed
+        : undefined;
+      const largeContext = await externalizeLargeContextIfNeeded(
+        outgoingMessage,
+        piSessionIdRef.current,
+        taskHint,
+      );
+      if (largeContext) {
+        outgoingMessage = largeContext.prompt;
+        outgoingDisplay = outgoingDisplay ?? largeContext.displayLabel;
+        pendingAttachmentsRef.current = [
+          ...pendingAttachmentsRef.current,
+          largeContext.attachment,
+        ];
+        toast({
+          title: "large context saved as file",
+          description: "Pi will use local chunk files instead of sending the full text inline.",
+        });
+      }
+    } catch (e) {
+      toast({
+        title: "failed to save large context",
+        description: "The message was not sent because the pasted input is too large to send inline.",
+        variant: "destructive",
+      });
+      restoreDocsOnError(e);
+    }
 
     // Guard the tiny gap between submit and React's loading state update.
     // During this window, rapid Enter presses must queue (not start a second
     // normal turn), otherwise user bubbles can drift.
     if (forceQueueModeRef.current || sendDispatchInFlightRef.current || piMessageIdRef.current || isLoading || isStreaming) {
       try {
-        return await enqueuePiMessage(outgoingMessage, outgoingDisplay);
+        return await enqueuePiMessage(outgoingMessage, outgoingDisplay, imageDataUrls);
       } catch (e) {
         restoreDocsOnError(e);
       }
@@ -6676,7 +7033,7 @@ export function StandaloneChat({
     sendDispatchInFlightRef.current = true;
     try {
       // All providers route through Pi agent
-      return await sendPiMessage(outgoingMessage, outgoingDisplay);
+      return await sendPiMessage(outgoingMessage, outgoingDisplay, imageDataUrls);
     } catch (e) {
       restoreDocsOnError(e);
     } finally {
@@ -6725,16 +7082,9 @@ export function StandaloneChat({
           };
         });
       } catch {
-        if (!cancelled) {
-          setQueuedPromptsBySession((prev) => {
-            const existing = prev[sid] ?? [];
-            if (existing.length === 0) return prev;
-            return {
-              ...prev,
-              [sid]: [],
-            };
-          });
-        }
+        // Transient queue refresh failures should not erase the last known
+        // visible queue. The Rust-side `pi-queue-changed` subscription is the
+        // source of truth and will reconcile once IPC recovers.
       }
     })();
 
@@ -6867,20 +7217,75 @@ export function StandaloneChat({
     }
   }
 
+  /**
+   * Extracts the pending steer batch for the given session, clears it from
+   * the ref, computes derived fields (prompt, preview, images), and sets
+   * the intent / display / optimistic refs needed by the message_start
+   * handler to recognise the steer echo. Returns null when there is no
+   * pending batch for the session.
+   */
+  function prepareSteerBatch(sessionId: string) {
+    const batch = pendingSteerBatchRef.current.filter(
+      (item) => item.sessionId === sessionId,
+    );
+    if (batch.length === 0) return null;
+    pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter(
+      (item) => item.sessionId !== sessionId,
+    );
+
+    const latest = batch[batch.length - 1];
+    const prompt = buildSteerPrompt(batch);
+    const preview = queuedPreviewForText(latest.content);
+    const combinedImages = imageDataUrlsToPiImages(
+      batch.flatMap((item) => item.images),
+    );
+
+    // Remove earlier batch items' turn intents (only latest survives).
+    batch.slice(0, -1).forEach((item) => removeTurnIntent(item.turnIntentId));
+
+    // Set intent refs so the message_start handler recognises the
+    // steer echo and creates the assistant placeholder.
+    pendingNextPiUserIntentRef.current = "steer";
+    pendingNextPiUserDisplayRef.current = {
+      preview,
+      images: [...latest.images],
+      ...(latest.attachments?.length
+        ? { attachments: [...latest.attachments] }
+        : {}),
+      ...(latest.displayContent
+        ? { displayContent: latest.displayContent }
+        : {}),
+      optimisticUserId: latest.optimisticUserId,
+      turnIntentId: latest.turnIntentId,
+    };
+    optimisticSteerRef.current = {
+      id: latest.optimisticUserId,
+      content: prompt,
+      turnIntentId: latest.turnIntentId,
+    };
+    registerTurnIntent({
+      id: latest.turnIntentId,
+      sessionId,
+      kind: "steer",
+      content: prompt,
+      preview,
+      displayedUserId: latest.optimisticUserId,
+      createdAt: latest.createdAt,
+    });
+
+    return { batch, latest, prompt, preview, combinedImages };
+  }
+
   async function flushPendingSteerBatch() {
     const sessionId = piSessionIdRef.current;
     if (!sessionId || pendingSteerFlushInFlightRef.current) return;
 
-    const batch = pendingSteerBatchRef.current.filter((item) => item.sessionId === sessionId);
-    if (batch.length === 0) return;
-    pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter((item) => item.sessionId !== sessionId);
+    const prepared = prepareSteerBatch(sessionId);
+    if (!prepared) return;
     pendingSteerFlushInFlightRef.current = true;
 
-    const latest = batch[batch.length - 1];
+    const { batch, latest, prompt, preview, combinedImages } = prepared;
     const interruptedAssistantId = batch.find((item) => item.interruptedAssistantId)?.interruptedAssistantId ?? null;
-    const prompt = buildSteerPrompt(batch);
-    const preview = queuedPreviewForText(latest.content);
-    const combinedImages = imageDataUrlsToPiImages(batch.flatMap((item) => item.images));
     const hasActiveAssistant = Boolean(piMessageIdRef.current);
 
     const labelMarkers: Message[] = batch.slice(0, -1).map((item, index) => ({
@@ -6913,31 +7318,6 @@ export function StandaloneChat({
         useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterLabels as any);
       }
     }
-
-    pendingNextPiUserIntentRef.current = "steer";
-    pendingNextPiUserDisplayRef.current = {
-      preview,
-      images: [...latest.images],
-      ...(latest.attachments?.length ? { attachments: [...latest.attachments] } : {}),
-      ...(latest.displayContent ? { displayContent: latest.displayContent } : {}),
-      optimisticUserId: latest.optimisticUserId,
-      turnIntentId: latest.turnIntentId,
-    };
-    optimisticSteerRef.current = {
-      id: latest.optimisticUserId,
-      content: prompt,
-      turnIntentId: latest.turnIntentId,
-    };
-    batch.slice(0, -1).forEach((item) => removeTurnIntent(item.turnIntentId));
-    registerTurnIntent({
-      id: latest.turnIntentId,
-      sessionId,
-      kind: "steer",
-      content: prompt,
-      preview,
-      displayedUserId: latest.optimisticUserId,
-      createdAt: latest.createdAt,
-    });
 
     let precreatedSteerAssistantId: string | null = null;
     if (hasActiveAssistant) {
@@ -7047,39 +7427,6 @@ export function StandaloneChat({
       toast({ title: "failed to send steered message", description, variant: "destructive" });
     } finally {
       pendingSteerFlushInFlightRef.current = false;
-    }
-  }
-
-  function finishPendingSteerInterrupt(options?: { flush?: boolean }) {
-    steerAbortAtBoundaryRef.current = false;
-    steerAbortInFlightRef.current = false;
-    if (options?.flush !== false) {
-      void flushPendingSteerBatch();
-    }
-  }
-
-  async function maybeInterruptForPendingSteer(_reason: string) {
-    if (!steerAbortAtBoundaryRef.current) return;
-    if (steerAbortInFlightRef.current) return;
-    const sid = piSessionIdRef.current;
-    if (!sid) return;
-    const hasPending = pendingSteerBatchRef.current.some((item) => item.sessionId === sid);
-    if (!hasPending) {
-      finishPendingSteerInterrupt({ flush: false });
-      return;
-    }
-    if (!piMessageIdRef.current || (!isLoading && !isStreaming)) {
-      finishPendingSteerInterrupt();
-      return;
-    }
-
-    steerAbortInFlightRef.current = true;
-    try {
-      piActiveStopRequestedRef.current = true;
-      await commands.piAbortActive(sid);
-    } catch (e) {
-      console.warn("[steer] boundary abort failed", e);
-      steerAbortInFlightRef.current = false;
     }
   }
 
@@ -7202,14 +7549,97 @@ export function StandaloneChat({
       },
     ];
     if (hadActiveReply) {
-      // Request interruption at the next safe boundary event.
-      steerAbortAtBoundaryRef.current = true;
-      void maybeInterruptForPendingSteer("steer_message");
+      const sid = piSessionIdRef.current;
+      if (sid) {
+        const prepared = prepareSteerBatch(sid);
+        if (!prepared) return;
+        const { batch, latest, prompt, combinedImages } = prepared;
+
+        piActiveStopRequestedRef.current = true;
+        const interruptedAssistantId =
+          latest.interruptedAssistantId ?? null;
+
+        // Send steer directly — no abort needed.
+        // send_immediate sets steer_in_flight in Rust, holding the
+        // drain loop until the steer turn's agent_start fires.
+        // If piSteer fails at the IPC layer, Pi never received the
+        // steer — revert is clean. Mid-stream failures surface as
+        // agent_end / response events, not IPC errors.
+        void commands
+          .piSteer(
+            sid,
+            prompt,
+            combinedImages.length > 0 ? combinedImages : null,
+          )
+          .then((result) => {
+            if (result.status !== "ok") {
+              console.warn("[steer] piSteer returned non-ok:", result);
+              revertFailedComposerSteer(
+                batch,
+                latest,
+                interruptedAssistantId,
+                result.error ?? "steer command rejected",
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            console.warn("[steer] piSteer failed, reverting", err);
+            revertFailedComposerSteer(
+              batch,
+              latest,
+              interruptedAssistantId,
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+      }
       return;
     }
     if (!piMessageIdRef.current) {
       void flushPendingSteerBatch();
     }
+  }
+
+  /** Undo all side-effects of a failed composer steer. */
+  function revertFailedComposerSteer(
+    batch: typeof pendingSteerBatchRef.current,
+    latest: (typeof pendingSteerBatchRef.current)[number],
+    interruptedAssistantId: string | null,
+    errorDescription: string,
+  ) {
+    // Clear intent refs so message_start handler ignores the steer.
+    pendingNextPiUserIntentRef.current = null;
+    pendingNextPiUserDisplayRef.current = null;
+    optimisticSteerRef.current = null;
+    piActiveStopRequestedRef.current = false;
+    removeTurnIntent(latest.turnIntentId);
+
+    // Un-mark the assistant that was marked interrupted.
+    setAssistantInterruptedState(interruptedAssistantId, false);
+
+    // Remove only the optimistic steer user bubble inserted by steerMessage.
+    const optimisticId = latest.optimisticUserId;
+    setMessages((prev) =>
+      prev.filter(
+        (m) =>
+          !(
+            m.id === optimisticId &&
+            m.role === "user" &&
+            m.intent === "steer"
+          ),
+      ),
+    );
+
+    // Put the batch back so a retry or future steer can use it.
+    pendingSteerBatchRef.current = [
+      ...batch,
+      ...pendingSteerBatchRef.current,
+    ];
+
+    toast({
+      title: "failed to send steered message",
+      description: errorDescription,
+      variant: "destructive",
+    });
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
@@ -7233,6 +7663,7 @@ export function StandaloneChat({
       turnIntentId,
       timestamp: Date.now(),
     };
+    const interruptedAssistantBeforeSteer = piMessageIdRef.current;
     try {
       pendingNextPiUserIntentRef.current = "steer";
       pendingNextPiUserDisplayRef.current = {
@@ -7277,19 +7708,41 @@ export function StandaloneChat({
         pendingNextPiUserIntentRef.current = null;
         pendingNextPiUserDisplayRef.current = null;
         removeTurnIntent(turnIntentId);
-        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+        setMessages((prev) =>
+          prev.filter(
+            (m) =>
+              !(
+                m.id === optimisticQueuedUser.id &&
+                m.role === "user" &&
+                m.intent === "steer"
+              ),
+          ),
+        );
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-        clearCurrentAssistantInterrupted();
+        setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
         toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
         return;
       }
       if (!result.data) {
+        // Benign race: the queued prompt already left the queue and will
+        // render via the normal message_start path. Only remove the
+        // steer-specific optimistic user bubble — do not remove or disturb
+        // any transcript state that the normal message_start path may need.
         pendingNextPiUserIntentRef.current = null;
         pendingNextPiUserDisplayRef.current = null;
         removeTurnIntent(turnIntentId);
-        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+        setMessages((prev) =>
+          prev.filter(
+            (m) =>
+              !(
+                m.id === optimisticQueuedUser.id &&
+                m.role === "user" &&
+                m.intent === "steer"
+              ),
+          ),
+        );
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-        clearCurrentAssistantInterrupted();
+        setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
         toast({
           title: "message already started",
           description: "That follow-up has moved out of the queue.",
@@ -7308,9 +7761,18 @@ export function StandaloneChat({
       pendingNextPiUserIntentRef.current = null;
       pendingNextPiUserDisplayRef.current = null;
       removeTurnIntent(turnIntentId);
-      setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
+      setMessages((prev) =>
+        prev.filter(
+          (m) =>
+            !(
+              m.id === optimisticQueuedUser.id &&
+              m.role === "user" &&
+              m.intent === "steer"
+            ),
+        ),
+      );
       restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-      clearCurrentAssistantInterrupted();
+      setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
       toast({
         title: "failed to steer queued message",
         description: e instanceof Error ? e.message : String(e),
@@ -7405,7 +7867,12 @@ export function StandaloneChat({
     e.preventDefault();
     if (pendingDocsRef.current.length > 0) return; // wait for extraction to finish
     if (!input.trim() && pastedImages.length === 0 && attachedDocsRef.current.length === 0) return;
-    sendMessage(input.trim());
+    const chip = connectionChip;
+    setConnectionChip(null);
+    sendMessage(
+      chip ? buildChipModelContent(chip, input.trim()) : input.trim(),
+      chip ? buildChipDisplayContent(chip, input.trim()) : undefined,
+    );
   };
 
   const handleStop = async () => {
@@ -7644,7 +8111,7 @@ export function StandaloneChat({
   );
 
   return (
-    <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
+    <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
       {/* Header - draggable only in standalone mode */}
       {/* Add left padding on macOS to avoid traffic light overlap (standalone only) */}
       <div
@@ -7725,9 +8192,12 @@ export function StandaloneChat({
               <Plus size={14} />
               <span>New</span>
             </Button>
-            <kbd suppressHydrationWarning className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono text-muted-foreground bg-muted/50 border border-border/50 rounded">
-              {formatShortcutDisplay(settings.showChatShortcut || (isMac ? "Control+Super+L" : "Alt+L"), isMac)}
-            </kbd>
+            {!settings.disabledShortcuts.includes("showChatShortcut") &&
+            settings.showChatShortcut ? (
+              <kbd suppressHydrationWarning className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono text-muted-foreground bg-muted/50 border border-border/50 rounded">
+                {formatShortcutDisplay(settings.showChatShortcut, isMac)}
+              </kbd>
+            ) : null}
           </>
         )}
       </div>
@@ -8556,6 +9026,7 @@ export function StandaloneChat({
             the spinner promote in-place to a resolved chip, then resolved
             docs, then images). */}
         {(attachedDocs.length > 0 || pendingDocs.length > 0 || pastedImages.length > 0) && (
+          <TooltipProvider delayDuration={150}>
           <div className="px-5 sm:px-6 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
             {pendingDocs.map((doc) => {
               const badge = attachmentBadge(doc.ext);
@@ -8578,6 +9049,8 @@ export function StandaloneChat({
             })}
             {attachedDocs.map((doc, i) => {
               const badge = attachmentBadge(doc.ext);
+              const isPastedText = isPastedTextDoc(doc);
+              const canShowInField = doc.text.length <= PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS;
               return (
                 <div
                   key={`doc-${doc.name}-${i}`}
@@ -8589,9 +9062,32 @@ export function StandaloneChat({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
-                    <div className="truncate text-[10px] text-muted-foreground">
-                      {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
-                    </div>
+                    {isPastedText ? (
+                      canShowInField ? (
+                        <button
+                          type="button"
+                          onClick={() => showPastedTextInField(doc, i)}
+                          className="inline-flex max-w-full items-center gap-0.5 truncate text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                        >
+                          <span className="truncate">Show in text field</span>
+                          <ChevronRight className="h-3 w-3 shrink-0" />
+                        </button>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex max-w-full cursor-not-allowed items-center gap-0.5 truncate text-[10px] text-muted-foreground/70 underline decoration-dotted underline-offset-2">
+                              <span className="truncate">Show in text field</span>
+                              <ChevronRight className="h-3 w-3 shrink-0" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Too long to show in text field</TooltipContent>
+                        </Tooltip>
+                      )
+                    ) : (
+                      <div className="truncate text-[10px] text-muted-foreground">
+                        {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -8627,6 +9123,7 @@ export function StandaloneChat({
               </div>
             ))}
           </div>
+          </TooltipProvider>
         )}
 
         <form
@@ -8762,12 +9259,45 @@ export function StandaloneChat({
           >
             {/* Textarea row: full width so scrollbar is above the buttons and no dead zone */}
             <div className="relative flex-1 min-w-0">
+              {/* Connection chip — inline icon + name prefix on the
+                  textarea's first line. The prefix is an absolute overlay; the
+                  textarea's first line is indented past it so typed text flows
+                  after the name. X (absolute, top-right) clears it. */}
+              {connectionChip && (
+                <>
+                  {/* Clip wrapper: matches the textarea's visible box so the
+                      prefix never bleeds above the first line when scrolled. */}
+                  <div className="pointer-events-none absolute left-3 right-7 top-2.5 bottom-2.5 z-10 overflow-hidden">
+                    <div
+                      ref={chipPrefixRef}
+                      className="absolute left-0 top-0 flex h-5 items-center gap-1.5"
+                      style={{ transform: `translateY(${-chipScrollTop}px)` }}
+                    >
+                      <IntegrationIcon
+                        icon={connectionChip.icon}
+                        className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0 bg-transparent"
+                        fallbackClassName="h-3 w-3 text-muted-foreground"
+                      />
+                      <span className="text-sm font-mono font-semibold text-foreground/80 leading-5 whitespace-nowrap">{connectionChip.name}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Remove connection context"
+                    onClick={() => setConnectionChip(null)}
+                    className="absolute right-2.5 top-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={handleInputChange}
                 onCompositionStart={() => setIsComposing(true)}
                 onCompositionEnd={() => setIsComposing(false)}
+                onScroll={connectionChip ? (e) => setChipScrollTop(e.currentTarget.scrollTop) : undefined}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   disabledReason
@@ -8780,8 +9310,14 @@ export function StandaloneChat({
                 spellCheck={false}
                 autoCorrect="off"
                 rows={1}
-                className="w-full min-h-[44px] border-0 bg-transparent px-3 py-2.5 pr-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-foreground resize-none overflow-y-auto scrollbar-minimal"
-                style={{ maxHeight: "150px" }}
+                className={cn(
+                  "w-full min-h-[44px] border-0 bg-transparent px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-foreground resize-none overflow-y-auto scrollbar-minimal py-2.5",
+                  connectionChip ? "pr-7" : "pr-3"
+                )}
+                style={{
+                  maxHeight: "150px",
+                  textIndent: connectionChip && chipPrefixWidth ? `${chipPrefixWidth + 8}px` : undefined,
+                }}
               />
 
               <AnimatePresence>
@@ -8954,6 +9490,49 @@ export function StandaloneChat({
               })()}
             </div>
           </div>
+
+          {/* Connect apps nudge banner — inside the form, below the input box */}
+          {showConnectBanner && (
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => openConnectionSetup("connections")}
+                className="text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors flex-1 text-left"
+              >
+                Connect your apps to get better answers
+              </button>
+              <div className="flex items-center gap-1">
+                {connections
+                  .filter((c) => INTEGRATION_ICON_KEYS.has(c.icon || c.id))
+                  .slice(0, 8)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      title={c.name}
+                      onClick={() => openConnectionSetup(c.id)}
+                      className="shrink-0 opacity-70 hover:opacity-100 transition-opacity"
+                    >
+                      <IntegrationIcon
+                        icon={c.icon || c.id}
+                        className="w-6 h-6 bg-muted/40 rounded-md flex items-center justify-center"
+                        fallbackClassName="h-3 w-3 text-muted-foreground"
+                      />
+                    </button>
+                  ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConnectBanner(false);
+                  try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
+                }}
+                className="text-muted-foreground/50 hover:text-foreground transition-colors shrink-0"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
         </form>
       </div> {/* End of max-w-4xl input wrapper */}
       </div>

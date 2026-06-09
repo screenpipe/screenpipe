@@ -22,6 +22,7 @@ import { TimelineSlider } from "@/components/rewind/timeline/timeline";
 import { SearchResultStrip } from "@/components/rewind/search-result-strip";
 import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
@@ -302,18 +303,24 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		showSearchModal,
 	});
 
-	// Track if user is at "live edge" (viewing newest frame, index 0)
-	const isAtLiveEdge = currentIndex === 0;
-	const prevFramesLengthRef = useRef(frames.length);
-
-	// When new frames arrive and user is NOT at live edge, adjust index to stay on same frame.
-	// Subscribe directly to the store instead of via reactive state to avoid re-rendering the
-	// entire timeline component every 150ms when lastFlushTimestamp changes.
-	const currentIndexRef = useRef(currentIndex);
-	currentIndexRef.current = currentIndex;
-	const framesLengthRef = useRef(frames.length);
-	framesLengthRef.current = frames.length;
-
+	// When new frames stream in (live recording), they're prepended at the
+	// front (newest-first), shifting every already-loaded frame to a higher
+	// index. Keep currentIndex pointing at the same frame the user is viewing
+	// by shifting it forward by the number of frames added at the front — a
+	// no-op at the live edge (index 0), where we stay pinned to the newest.
+	//
+	// Subscribe directly to the store (not via reactive state) so we don't
+	// re-render the whole timeline on every flush. Read the live index via the
+	// functional setState updater (prev) and gate on lastFlushTimestamp so each
+	// flush is processed exactly once.
+	//
+	// IMPORTANT: do NOT gate this on a React ref tracking frames.length. Store
+	// subscribers fire synchronously inside set(), BEFORE React re-renders, so
+	// such a ref is one flush stale and silently drops the first shift — which
+	// desyncs currentIndex below currentFrame and makes ArrowRight die early at
+	// index 0 (the original "stuck going right after ~5 moves" bug). The shift
+	// math lives in shiftIndexForPrependedFrames so it can be unit-tested; see
+	// lib/hooks/__tests__/timeline-live-edge-shift.test.ts.
 	useEffect(() => {
 		let prevTs = 0;
 		return useTimelineStore.subscribe((state) => {
@@ -321,11 +328,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (lastFlushTimestamp === prevTs) return;
 			prevTs = lastFlushTimestamp;
 
-			if (newFramesCount > 0 && currentIndexRef.current !== 0 && framesLengthRef.current > prevFramesLengthRef.current) {
-				setCurrentIndex(prev => prev + newFramesCount);
-			}
-			prevFramesLengthRef.current = framesLengthRef.current;
 			if (newFramesCount > 0) {
+				setCurrentIndex((prev) => shiftIndexForPrependedFrames(prev, newFramesCount));
 				clearNewFramesCount();
 			}
 		});

@@ -38,6 +38,9 @@ interface WindowPickerProps {
   /** Currently-selected patterns (legacy or scoped) — used to show the
    * "already added" check on rows. */
   selected: string[];
+  /** Installed apps with no captures yet — surfaced as app-only rows so users
+   * can add a rule before the app is ever recorded. */
+  installedApps?: string[];
   /** Called when the user adds a pattern. The caller is responsible for
    * updating settings. The picker stays open so users can add multiple. */
   onAdd: (pattern: string) => void;
@@ -60,6 +63,7 @@ export function WindowPicker({
   open,
   onOpenChange,
   selected,
+  installedApps = [],
   onAdd,
   action,
 }: WindowPickerProps) {
@@ -69,14 +73,26 @@ export function WindowPicker({
 
   const selectedSet = React.useMemo(() => new Set(selected), [selected]);
 
+  // Append installed apps that have no captures yet as app-only nodes (no
+  // windows, zero counts). Lets users add a whole-app rule before the app has
+  // ever been recorded; captured apps stay first.
+  const merged = React.useMemo(() => {
+    if (!installedApps.length) return data;
+    const present = new Set(data.map((n) => n.app.toLowerCase()));
+    const extra: AppWindowNode[] = installedApps
+      .filter((app) => app && !present.has(app.toLowerCase()))
+      .map((app) => ({ app, totalCount: 0, windowCount: 0, windows: [] }));
+    return [...data, ...extra];
+  }, [data, installedApps]);
+
   // Filter tree by search query. When `search` matches an app name, keep all
   // its windows. When it matches a window title, keep the parent app with
   // just the matching windows. Empty search = full tree.
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return data;
+    if (!q) return merged;
     const result: AppWindowNode[] = [];
-    for (const node of data) {
+    for (const node of merged) {
       const appMatch = node.app.toLowerCase().includes(q);
       const matchingWindows = appMatch
         ? node.windows
@@ -88,7 +104,7 @@ export function WindowPicker({
       }
     }
     return result;
-  }, [data, search]);
+  }, [merged, search]);
 
   // When searching, auto-expand all apps in the filtered set so matches
   // are visible. Clearing search collapses back to the user's manual state.
@@ -114,8 +130,8 @@ export function WindowPicker({
   };
 
   const title = action === "ignore" ? "Browse to ignore" : "Browse to include";
-  const totalApps = data.length;
-  const totalWindows = data.reduce((s, n) => s + n.windowCount, 0);
+  const totalApps = merged.length;
+  const totalWindows = merged.reduce((s, n) => s + n.windowCount, 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -188,9 +204,11 @@ export function WindowPicker({
                       {node.app}
                     </span>
                     <span className="text-[10px] text-muted-foreground tabular-nums">
-                      {node.windowCount > 1
-                        ? `${node.windowCount} windows · ${formatCount(node.totalCount)}`
-                        : formatCount(node.totalCount)}
+                      {node.totalCount === 0
+                        ? "not captured yet"
+                        : node.windowCount > 1
+                          ? `${node.windowCount} windows · ${formatCount(node.totalCount)}`
+                          : formatCount(node.totalCount)}
                     </span>
                     <Button
                       size="sm"
@@ -222,8 +240,9 @@ export function WindowPicker({
                     <div className="bg-background">
                       {node.windows.length === 0 && (
                         <div className="pl-9 pr-2 py-1.5 text-[11px] text-muted-foreground italic">
-                          no window titles available — accessibility permission
-                          may be blocked for this app
+                          {node.totalCount === 0
+                            ? "not captured yet. add the whole app above."
+                            : "no window titles available — accessibility permission may be blocked for this app"}
                         </div>
                       )}
                       {node.windows.map((w) => {

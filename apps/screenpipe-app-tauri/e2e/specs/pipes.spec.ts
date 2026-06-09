@@ -19,6 +19,18 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
 let installedPipeName = '';
 let connectionPipeSlug = '';
 
+async function confirmRiskGateIfPresent(): Promise<void> {
+  const confirmBtn = await $('[data-testid="pipe-risk-install-confirm"]');
+  if (!(await confirmBtn.isExisting())) return;
+
+  const ack = await $('[data-testid="pipe-risk-ack"]');
+  if (await ack.isExisting()) {
+    await ack.click();
+  }
+
+  await confirmBtn.click();
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -127,9 +139,11 @@ describe('Pipes: discover → install → play', function () {
         { timeout: 15_000, timeoutMsg: 'No pipe-install-btn found — store API unreachable or Discover grid not loaded' }
       );
 
-      // Click any GET button — interceptor makes it fail inside handleInstall
-      const anyGetBtn = await $('[data-testid="pipe-install-btn"]');
+      // Click a real GET button — some cards may require source review first.
+      const anyGetBtn = await browser.$('//button[@data-testid="pipe-install-btn" and normalize-space()="GET"]');
+      await anyGetBtn.waitForExist({ timeout: 8_000 });
       await anyGetBtn.click();
+      await confirmRiskGateIfPresent();
 
       // handleInstall catches the 503 and calls toast({ variant: "destructive" }).
       // toaster.tsx sets data-testid="toast-error" on the inner <div> for
@@ -198,6 +212,7 @@ describe('Pipes: discover → install → play', function () {
     }
 
     await installBtn.click();
+    await confirmRiskGateIfPresent();
 
     // After install, the connection modal OR "My Pipes" tab should appear.
     // Either the modal opens (PostInstallConnectionsModal) or the tab switches.
@@ -290,6 +305,7 @@ describe('Pipes: discover → install → play', function () {
       console.log(`[pipes-spec] "${slug}" already installed (button=${btnText}); skipping install click`);
     } else {
       await installBtn.click();
+      await confirmRiskGateIfPresent();
 
       // After GET click the app auto-switches to My Pipes (onInstalled
       // callback). Wait for an unambiguous marker: the My Pipes section
@@ -314,6 +330,43 @@ describe('Pipes: discover → install → play', function () {
 
     const filepath = await saveScreenshot('pipes-my-pipes-after-install');
     expect(existsSync(filepath)).toBe(true);
+  });
+
+  // ─── Step 3b: installed pipe must NOT be pinned to a premium model ───────
+  // Regression guard for the "pipe failed: model not available for your tier"
+  // bug. On install we assign the dedicated "pipes" preset (auto, tier-safe)
+  // via pickPipePreset() — NOT the user's Opus chat default. A pipe pinned to
+  // claude-opus-* 403s the moment tier resolution flickers to a lower tier.
+  // We assert through the API (preset is config, not visible in the DOM).
+  it('assigns a tier-safe preset to the installed pipe (not Opus)', async () => {
+    if (!installedPipeName) throw new Error('no installed pipe to inspect');
+
+    const cfg = await browser.executeAsync(
+      (name: string, done: (v: any) => void) => {
+        fetch(`http://localhost:3030/pipes/${encodeURIComponent(name)}`)
+          .then((r) => r.json())
+          .then((json) => done(json?.config ?? json?.data?.config ?? json ?? null))
+          .catch(() => done(null));
+      },
+      installedPipeName
+    );
+
+    // The config may carry the preset id (e.g. "pipes" / "screenpipe") and/or
+    // a resolved model string. Whichever is present, it must not be an Opus
+    // premium model — that's the exact value that caused the reported failure.
+    const blob = JSON.stringify(cfg ?? {}).toLowerCase();
+    console.log(`[pipes-spec] installed pipe config: ${blob}`);
+    expect(blob).not.toContain('claude-opus');
+
+    // If a preset id is exposed, prefer the dedicated "pipes" preset.
+    const presetId =
+      (cfg && (cfg.preset || cfg.aiPreset || cfg.preset_id)) || null;
+    if (presetId) {
+      console.log(`[pipes-spec] assigned preset id: ${presetId}`);
+      // Either the dedicated pipes preset, or (non-pro user) the single
+      // auto-based default — both are acceptable. Opus chat is not.
+      expect(String(presetId).toLowerCase()).not.toBe('chat');
+    }
   });
 
   // ─── Step 4: confirm pipe row is visible in My Pipes ─────────────────────

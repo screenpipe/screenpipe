@@ -312,6 +312,150 @@ describe("source citations", () => {
     expect(citations[0].subtitle).toContain("query: roadmap");
   });
 
+  it("anchors screenpipe_search tool citations to the capture moment", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "screenpipe_search",
+            args: {
+              content_type: "ocr",
+              start_time: "2026-05-15T17:00:00Z",
+              end_time: "2026-05-15T18:00:00Z",
+            },
+            result: { content: [{ type: "text", text: "{}" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].kind).toBe("screenpipe");
+    expect(citations[0].timestamp).toBe("2026-05-15T17:00:00Z");
+  });
+
+  it("anchors bash screenpipe /search citations to the url-encoded start_time", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: {
+              command:
+                'curl -s "http://localhost:3030/search?content_type=audio&start_time=2026-05-15T17%3A00%3A00Z"',
+            },
+            result: '{"data":[]}',
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].kind).toBe("screenpipe");
+    expect(citations[0].timestamp).toBe("2026-05-15T17:00:00Z");
+  });
+
+  it("does not anchor non-capture citations (memory) to a timeline moment", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: { command: 'curl -s "http://localhost:3030/memories?q=pricing&limit=5"' },
+            result: '{"data":[]}',
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].kind).toBe("memory");
+    expect(citations[0].timestamp).toBeUndefined();
+  });
+
+  it("leaves screenpipe_search citations without a start_time unanchored", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "screenpipe_search",
+            args: { content_type: "ocr", query: "roadmap" },
+            result: { content: [{ type: "text", text: "{}" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].timestamp).toBeUndefined();
+  });
+
+  it("carries the search term so screen captures can open in search", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "screenpipe_search",
+            args: { content_type: "ocr", query: "roadmap", start_time: "2026-05-15T17:00:00Z" },
+            result: { content: [{ type: "text", text: "{}" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].query).toBe("roadmap");
+  });
+
+  it("carries the search term from bash /search calls (url-decoded)", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: { command: 'curl -s "http://localhost:3030/search?content_type=ocr&q=pricing%20deck"' },
+            result: '{"data":[]}',
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].kind).toBe("screenpipe");
+    expect(citations[0].query).toBe("pricing deck");
+  });
+
+  it("leaves non-search captures (activity-summary) without a query term", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: { command: 'curl -s "http://localhost:3030/activity-summary?start_time=2026-05-15T17:00:00Z"' },
+            result: '{"data":[]}',
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].query).toBeUndefined();
+  });
+
   it("ignores running and errored tool calls", () => {
     const citations = sourceCitationsFromMessage({
       contentBlocks: [

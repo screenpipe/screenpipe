@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-sdk"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 description = "Screenpipe SDK — napi-rs bindings around the screenpipe-recorder crate"
 license = "LicenseRef-Screenpipe-Enterprise"

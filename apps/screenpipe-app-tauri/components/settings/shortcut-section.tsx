@@ -4,6 +4,12 @@
 import React from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import ShortcutRow from "./shortcut-row";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Shortcuts", keywords: ["hotkey", "keybind", "keyboard"] },
+];
 
 const ShortcutSection = () => {
   const { settings, updateSettings } = useSettings();
