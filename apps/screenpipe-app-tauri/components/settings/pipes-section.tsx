@@ -1632,7 +1632,7 @@ export function PipesSection() {
                     pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
                       ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
                       : "",
-                    pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${pipe.config.schedule}` : "",
+                    pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${humanizeSchedule(pipe.config.schedule)}` : "",
                   ].filter(Boolean).join(" | ") || "manual"}
                 >
                   {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0
@@ -1902,7 +1902,7 @@ export function PipesSection() {
                             return (
                               <>
                                 {isCustom && (
-                                  <SelectItem value={current}>{current} (custom)</SelectItem>
+                                  <SelectItem value={current}>{humanizeSchedule(current)} (custom)</SelectItem>
                                 )}
                                 {presets.map((p) => (
                                   <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
