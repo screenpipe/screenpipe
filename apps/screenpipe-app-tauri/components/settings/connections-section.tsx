@@ -527,35 +527,8 @@ function CursorLogo({ className }: { className?: string }) {
 }
 
 
-// Keys with an explicit (non-fallback) icon in IntegrationIcon — used to
-// filter the connect-apps banner so it never shows the generic Send arrow.
-export const INTEGRATION_ICON_KEYS = new Set<string>([
-  "claude", "cursor", "codex", "claude-code", "warp", "chatgpt",
-  "telegram", "slack", "discord", "apple-intelligence", "input-monitoring",
-  "apple-calendar", "google-calendar", "google-docs", "ics-calendar",
-  "openclaw", "hermes", "bee", "email", "todoist", "teams", "anythingllm",
-  "msty", "ollama", "lmstudio", "whatsapp", "obsidian", "quickbooks",
-  "google-sheets", "notion", "linear", "krisp", "plaud", "odoo", "perplexity",
-  "posthog", "n8n", "make", "glean", "zapier", "github", "jira", "granola",
-  "mochi", "hubspot", "bitrix24", "airtable", "limitless", "logseq",
-  "pushover", "ntfy", "toggl", "monday", "asana", "browser-url", "user-browser",
-  "voice-memos", "custom-mcp", "skills", "microsoft365", "trello", "salesforce",
-  "zendesk", "zoom", "confluence", "clickup", "brex", "calendly", "gmail",
-  "calcom", "stripe", "sentry", "vercel", "pipedrive", "fireflies", "otter",
-  "lexi", "financialsense", "loops", "resend", "readwise", "supabase",
-  "intercom", "workflowy",
-]);
-
-export function IntegrationIcon({
-  icon,
-  className = "w-10 h-10 bg-muted rounded-xl flex items-center justify-center",
-  fallbackClassName = "h-5 w-5 text-muted-foreground",
-}: {
-  icon: string;
-  className?: string;
-  fallbackClassName?: string;
-}) {
-  const icons: Record<string, React.ReactNode> = {
+// Source of truth for integration glyphs; INTEGRATION_ICON_KEYS derives from it.
+const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
@@ -783,10 +756,22 @@ export function IntegrationIcon({
       </svg>
     ),
     workflowy: <img src="/images/workflowy.svg" alt="Workflowy" className="w-5 h-5" />,
-  };
+};
+
+export const INTEGRATION_ICON_KEYS = new Set<string>(Object.keys(INTEGRATION_ICONS));
+
+export function IntegrationIcon({
+  icon,
+  className = "w-10 h-10 bg-muted rounded-xl flex items-center justify-center",
+  fallbackClassName = "h-5 w-5 text-muted-foreground",
+}: {
+  icon: string;
+  className?: string;
+  fallbackClassName?: string;
+}) {
   return (
     <div className={className}>
-      {icons[icon] || <Send className={fallbackClassName} />}
+      {INTEGRATION_ICONS[icon] || <Send className={fallbackClassName} />}
     </div>
   );
 }

@@ -2927,9 +2927,12 @@ export function StandaloneChat({
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Inline connection prefix: icon+name rendered as an absolute overlay on the
   // textarea's first line. We measure its width and indent the textarea's first
-  // line so the typed text flows after the prefix.
+  // line so the typed text flows after the prefix. chipScrollTop tracks the
+  // textarea's scroll offset so the overlay scrolls with its line instead of
+  // staying pinned at the top once the input grows past maxHeight.
   const chipPrefixRef = useRef<HTMLDivElement>(null);
   const [chipPrefixWidth, setChipPrefixWidth] = useState(0);
+  const [chipScrollTop, setChipScrollTop] = useState(0);
   // Root of the chat surface. The webview drag-drop event is window-global and
   // this chat is kept mounted-but-hidden (display:none) on non-chat sections,
   // so we use this ref's visibility to ignore drops meant for another view
@@ -3149,7 +3152,7 @@ export function StandaloneChat({
   // Measure the inline connection prefix so the textarea first line can indent
   // past it. Re-measure on chip change and container resize.
   React.useLayoutEffect(() => {
-    if (!connectionChip) { setChipPrefixWidth(0); return; }
+    if (!connectionChip) { setChipPrefixWidth(0); setChipScrollTop(0); return; }
     const el = chipPrefixRef.current;
     if (!el) return;
     const measure = () => setChipPrefixWidth(el.offsetWidth);
@@ -4387,6 +4390,9 @@ export function StandaloneChat({
     const textarea = e.target;
     textarea.style.height = "auto";
     textarea.style.height = Math.min(textarea.scrollHeight, 150) + "px";
+    // Keep the inline connection prefix aligned with its line: typing can grow
+    // the textarea past maxHeight and scroll it without firing onScroll.
+    if (connectionChip) setChipScrollTop(textarea.scrollTop);
 
     const cursorPos = e.target.selectionStart || 0;
     const textBeforeCursor = value.slice(0, cursorPos);
@@ -9291,16 +9297,21 @@ export function StandaloneChat({
                   after the name. X (absolute, top-right) clears it. */}
               {connectionChip && (
                 <>
-                  <div
-                    ref={chipPrefixRef}
-                    className="pointer-events-none absolute left-3 top-2.5 z-10 flex h-5 items-center gap-1.5"
-                  >
-                    <IntegrationIcon
-                      icon={connectionChip.icon}
-                      className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0 bg-transparent"
-                      fallbackClassName="h-3 w-3 text-muted-foreground"
-                    />
-                    <span className="text-sm font-mono font-semibold text-foreground/80 leading-5 whitespace-nowrap">{connectionChip.name}</span>
+                  {/* Clip wrapper: matches the textarea's visible box so the
+                      prefix never bleeds above the first line when scrolled. */}
+                  <div className="pointer-events-none absolute left-3 right-7 top-2.5 bottom-2.5 z-10 overflow-hidden">
+                    <div
+                      ref={chipPrefixRef}
+                      className="absolute left-0 top-0 flex h-5 items-center gap-1.5"
+                      style={{ transform: `translateY(${-chipScrollTop}px)` }}
+                    >
+                      <IntegrationIcon
+                        icon={connectionChip.icon}
+                        className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0 bg-transparent"
+                        fallbackClassName="h-3 w-3 text-muted-foreground"
+                      />
+                      <span className="text-sm font-mono font-semibold text-foreground/80 leading-5 whitespace-nowrap">{connectionChip.name}</span>
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -9318,6 +9329,7 @@ export function StandaloneChat({
                 onChange={handleInputChange}
                 onCompositionStart={() => setIsComposing(true)}
                 onCompositionEnd={() => setIsComposing(false)}
+                onScroll={connectionChip ? (e) => setChipScrollTop(e.currentTarget.scrollTop) : undefined}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   disabledReason
