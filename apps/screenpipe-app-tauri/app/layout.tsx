@@ -318,8 +318,11 @@ export default function RootLayout({
     const SELECTABLE =
       '.prose, .selectable-text-layer, input, textarea, [contenteditable="true"], [contenteditable=""]';
     const onSelectStart = (e: Event) => {
-      const target = e.target as Element | null;
-      if (target?.closest?.(SELECTABLE)) return; // allow selecting real content
+      // e.target may be a Text node (when clicking mid-text), which lacks
+      // .closest(). Walk up to the nearest Element so the check works.
+      const node = e.target as Node | null;
+      const el = node instanceof Element ? node : node?.parentElement;
+      if (el?.closest?.(SELECTABLE)) return; // allow selecting real content
       e.preventDefault();
     };
     document.addEventListener("selectstart", onSelectStart);
