@@ -77,6 +77,16 @@ pub enum TranscriptionMode {
     Batch,
 }
 
+impl TranscriptionMode {
+    /// Stable lowercase label for diagnostics / the health endpoint.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TranscriptionMode::Realtime => "realtime",
+            TranscriptionMode::Batch => "batch",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AudioManagerOptions {
     pub transcription_engine: Arc<AudioTranscriptionEngine>,

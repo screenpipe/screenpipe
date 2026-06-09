@@ -1061,14 +1061,27 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 } else {
                     Some(device_names)
                 },
-                // Batch/Smart mode
-                transcription_mode: if audio_snap.segments_deferred > 0
-                    || audio_snap.segments_batch_processed > 0
-                {
-                    Some("batch".to_string())
-                } else {
-                    Some("realtime".to_string())
-                },
+                // Report the CONFIGURED transcription mode, not a heuristic.
+                // The old behavior derived this from segment counters, so it
+                // reported "realtime" right after restart / during idle even
+                // when batch was configured. Observed batch *activity* is still
+                // available via segments_deferred / segments_batch_processed.
+                // Falls back to the activity-derived guess only if the options
+                // lock is momentarily contended (keeps health non-blocking).
+                transcription_mode: Some(
+                    match state.audio_manager.transcription_mode_hint() {
+                        Some(mode) => mode.as_str().to_string(),
+                        None => {
+                            if audio_snap.segments_deferred > 0
+                                || audio_snap.segments_batch_processed > 0
+                            {
+                                "batch".to_string()
+                            } else {
+                                "realtime".to_string()
+                            }
+                        }
+                    },
+                ),
                 transcription_paused: Some(transcription_paused),
                 segments_deferred: if audio_snap.segments_deferred > 0 {
                     Some(audio_snap.segments_deferred)

@@ -643,6 +643,18 @@ impl AudioManager {
         self.options.read().await.use_system_default_audio
     }
 
+    /// Best-effort, non-blocking read of the configured transcription mode.
+    ///
+    /// Uses `try_read` so the health endpoint never blocks on the options
+    /// lock; returns `None` if a writer momentarily holds it (the caller
+    /// can fall back to an activity-derived guess).
+    pub fn transcription_mode_hint(&self) -> Option<TranscriptionMode> {
+        self.options
+            .try_read()
+            .ok()
+            .map(|o| o.transcription_mode.clone())
+    }
+
     async fn record_device(&self, device: &AudioDevice) -> Result<JoinHandle<Result<()>>> {
         let options = self.options.read().await;
         let stream = self
