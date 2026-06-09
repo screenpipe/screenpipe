@@ -82,7 +82,6 @@ const DRM_APPS: &[&str] = &[
     "peacock",
     "paramount+",
     "hbo max",
-    "max",
     "crunchyroll",
     "dazn",
     // Remote-desktop clients using macOS content protection.
@@ -91,15 +90,22 @@ const DRM_APPS: &[&str] = &[
     "horizon client",
 ];
 
+/// App names that must match EXACTLY (case-insensitive), never as a substring.
+/// These are too short/common to substring-match safely:
+/// - "max": HBO Max's app is literally named "Max"; a substring match would hit
+///   "Image Capture", "Activity Monitor"… anything containing "max".
+/// - "tv": Apple's app on modern macOS is named just "TV"; a substring match
+///   would hit any window/app title containing "tv" (e.g. "tvOS Simulator").
+const DRM_APPS_EXACT: &[&str] = &["max", "tv"];
+
 /// Check whether `app_name` matches a known DRM streaming app.
 pub fn is_drm_app(app_name: &str) -> bool {
     let lower = app_name.to_lowercase();
+    if DRM_APPS_EXACT.contains(&lower.as_str()) {
+        return true;
+    }
     for &drm in DRM_APPS {
-        if drm == "max" {
-            if lower == "max" {
-                return true;
-            }
-        } else if lower.contains(drm) {
+        if lower.contains(drm) {
             return true;
         }
     }
@@ -642,6 +648,9 @@ mod tests {
         assert!(is_drm_app("Crunchyroll"));
         assert!(is_drm_app("Max"));
         assert!(is_drm_app("max"));
+        // Apple's app on modern macOS is named just "TV"
+        assert!(is_drm_app("TV"));
+        assert!(is_drm_app("tv"));
     }
 
     #[test]
@@ -653,6 +662,10 @@ mod tests {
         assert!(!is_drm_app("Max Mustermann"));
         assert!(!is_drm_app("3ds Max"));
         assert!(!is_drm_app("Terminal"));
+        // "tv" must match exactly — not as a substring
+        assert!(!is_drm_app("tvOS Simulator"));
+        assert!(!is_drm_app("Plex TV"));
+        assert!(!is_drm_app("Elgato Stream Deck"));
     }
 
     #[test]
