@@ -783,6 +783,14 @@ function HomeContent() {
     return () => window.removeEventListener("open-settings", handler);
   }, [openSettings, setActiveSection]);
 
+  // "Try in Chat" from connections page — switch to chat view so the
+  // pre-filled prompt (set by standalone-chat.tsx) becomes visible.
+  useEffect(() => {
+    const handler = () => setActiveSection("home");
+    window.addEventListener("try-in-chat", handler);
+    return () => window.removeEventListener("try-in-chat", handler);
+  }, [setActiveSection]);
+
   const renderMainSection = () => {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
       return (

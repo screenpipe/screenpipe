@@ -128,6 +128,7 @@ import {
   type SourceCitation,
 } from "@/lib/source-citations";
 import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
+import { IntegrationIcon, INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
 import {
   formatSteerShortcut,
   getComposerPrimaryAction,
@@ -172,6 +173,23 @@ const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
+
+// Connection chip helpers. The chip (icon + name) is a real piece of context:
+// it tells the model which connection/integration the prompt is about. We carry
+// it three ways that must stay in sync:
+//   - content (what the model sees): prefixed with `[connection: Name]` so the
+//     model knows to use that integration.
+//   - displayContent (the bubble): `[chip:id|name] prompt` for icon rendering.
+//   - copy/paste: copying a chip message yields the `[connection: Name]` form so
+//     pasting it back into the composer reconstructs the connection context.
+const CONNECTION_CONTENT_PREFIX_RE = /^\[connection:\s*([^\]]+)\]\s*([\s\S]*)$/;
+function buildChipDisplayContent(chip: { id: string; name: string }, prompt: string): string {
+  return `[chip:${chip.id}|${chip.name}] ${prompt}`;
+}
+function buildChipModelContent(chip: { name: string }, prompt: string): string {
+  // Instruction the model honors: act using the named connection.
+  return `[connection: ${chip.name}] ${prompt}`;
+}
 const CONNECTION_SUGGESTION_LIMIT = 3;
 const VISIBLE_SUGGESTION_LIMIT = 2;
 const LARGE_CONTEXT_CHAR_THRESHOLD = 160_000;
@@ -2121,6 +2139,26 @@ function MessageContent({
   // attachment cards above already disclose what was attached, so we
   // suppress the expansion chevron in that case (label-only bubble).
   if (isUser && message.displayContent) {
+    const chipMatch = message.displayContent.match(/^\[chip:([^|]+)\|([^\]]+)\] ([\s\S]*)/);
+    if (chipMatch) {
+      const [, chipId, chipName, chipText] = chipMatch;
+      return (
+        <div className="space-y-2">
+          {attachmentsRow}
+          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5">
+            <span className="inline-flex h-5 items-center gap-1 shrink-0 align-top">
+              <IntegrationIcon
+                icon={chipId}
+                className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0"
+                fallbackClassName="h-3 w-3 text-muted-foreground"
+              />
+              <span className="text-sm font-mono font-semibold text-foreground/80 leading-5">{chipName}</span>
+            </span>
+            <span className="text-sm leading-5 break-words min-w-0">{chipText}</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="space-y-2">
         {attachmentsRow}
@@ -2606,6 +2644,9 @@ export function StandaloneChat({
   const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
   const [allConnectionItems, setAllConnectionItems] = useState<ConnectionListItem[]>([]);
   const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
+  const [showConnectBanner, setShowConnectBanner] = useState(() => {
+    try { return localStorage.getItem("screenpipe_connect_banner_dismissed") !== "true"; } catch { return true; }
+  });
   const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
   const connectionSetupSuggestions = React.useMemo(
     () => buildConnectionSetupSuggestions(allConnectionItems, appItems),
@@ -2684,6 +2725,28 @@ export function StandaloneChat({
     };
   }, [refreshConnectionState]);
 
+  // Pre-fill chat input when "Try in Chat" is clicked from the connections page.
+  // Always opens a new chat so the prompt never lands in an existing conversation.
+  // Uses a ref so the effect doesn't need startNewConversation as a dep (avoids
+  // re-registering the listener on every render while still calling the latest fn).
+  const tryInChatStartNewRef = useRef<(() => Promise<void> | void) | null>(null);
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const { connectionId, connectionName, prompt } = (e as CustomEvent<{
+        connectionId: string;
+        connectionName: string;
+        prompt: string;
+      }>).detail;
+      // Start a fresh conversation so the prompt doesn't pollute an existing chat.
+      await tryInChatStartNewRef.current?.();
+      setConnectionChip({ id: connectionId, name: connectionName, icon: connectionId });
+      setInput(prompt);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener("try-in-chat", handler);
+    return () => window.removeEventListener("try-in-chat", handler);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     if (connections.length === 0) {
@@ -2740,6 +2803,7 @@ export function StandaloneChat({
   };
 
   const [input, setInput] = useState("");
+  const [connectionChip, setConnectionChip] = useState<{ id: string; name: string; icon: string } | null>(null);
   // Mirror `input` into a ref so the chat-switch logic in
   // useChatConversations can snapshot the outgoing composer text
   // without needing it as a dep (which would re-bind handlers every
@@ -2861,6 +2925,11 @@ export function StandaloneChat({
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Inline connection prefix: icon+name rendered as an absolute overlay on the
+  // textarea's first line. We measure its width and indent the textarea's first
+  // line so the typed text flows after the prefix.
+  const chipPrefixRef = useRef<HTMLDivElement>(null);
+  const [chipPrefixWidth, setChipPrefixWidth] = useState(0);
   // Root of the chat surface. The webview drag-drop event is window-global and
   // this chat is kept mounted-but-hidden (display:none) on non-chat sections,
   // so we use this ref's visibility to ignore drops meant for another view
@@ -3073,6 +3142,22 @@ export function StandaloneChat({
     () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
     [queuedPromptsBySession, currentQueueSessionId]
   );
+
+  // Clear the connection chip whenever the active conversation changes (new chat or history switch).
+  useEffect(() => { setConnectionChip(null); }, [conversationId]);
+
+  // Measure the inline connection prefix so the textarea first line can indent
+  // past it. Re-measure on chip change and container resize.
+  React.useLayoutEffect(() => {
+    if (!connectionChip) { setChipPrefixWidth(0); return; }
+    const el = chipPrefixRef.current;
+    if (!el) return;
+    const measure = () => setChipPrefixWidth(el.offsetWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [connectionChip]);
 
   useEffect(() => {
     void refreshConnectionState();
@@ -3452,10 +3537,43 @@ export function StandaloneChat({
     }
 
     const text = e.clipboardData?.getData("text/plain") ?? "";
+
+    // Reconstruct the connection chip when pasting a copied chip message.
+    // Copied chip messages carry the model-content form `[connection: Name] …`;
+    // older/internal copies may carry the display form `[chip:id|name] …`.
+    // Restoring the pill keeps the connection context intact across copy/paste,
+    // including paste into a different chat window (handler runs per-window).
+    if (!connectionChip) {
+      let chipFromPaste: { id: string; name: string } | null = null;
+      let rest = "";
+
+      const chipForm = text.match(/^\[chip:([^|]+)\|([^\]]+)\]\s*([\s\S]*)$/);
+      const connForm = text.match(CONNECTION_CONTENT_PREFIX_RE);
+      if (chipForm && INTEGRATION_ICON_KEYS.has(chipForm[1])) {
+        chipFromPaste = { id: chipForm[1], name: chipForm[2] };
+        rest = chipForm[3];
+      } else if (connForm) {
+        const name = connForm[1].trim();
+        const id = name.toLowerCase().replace(/\s+/g, "-");
+        if (INTEGRATION_ICON_KEYS.has(id)) {
+          chipFromPaste = { id, name };
+          rest = connForm[2];
+        }
+      }
+
+      if (chipFromPaste) {
+        e.preventDefault();
+        setConnectionChip({ ...chipFromPaste, icon: chipFromPaste.id });
+        setInput((prev) => prev + rest);
+        requestAnimationFrame(() => inputRef.current?.focus());
+        return;
+      }
+    }
+
     if (attachPastedText(text)) {
       e.preventDefault();
     }
-  }, [processImageFile, processDocFile, attachPastedText]);
+  }, [processImageFile, processDocFile, attachPastedText, connectionChip]);
 
   // Signal that this chat window is ready to receive prefill events.
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
@@ -3739,6 +3857,8 @@ export function StandaloneChat({
   const startNewConversationRef = useRef(startNewConversation);
   loadConversationRef.current = loadConversation;
   startNewConversationRef.current = startNewConversation;
+  // Keep the try-in-chat ref in sync so the event handler always calls the latest fn.
+  tryInChatStartNewRef.current = startNewConversation;
 
   const openConversationLocally = useCallback(async (convId: string) => {
     const { loadConversationFile } = await import("@/lib/chat-storage");
@@ -4312,6 +4432,19 @@ export function StandaloneChat({
       return;
     }
 
+    // Backspace at the very start of the input deletes the connection prefix
+    // (icon+name), since it sits before the typed text.
+    if (
+      (e.key === "Backspace" || e.key === "Delete") &&
+      connectionChip &&
+      e.currentTarget.selectionStart === 0 &&
+      e.currentTarget.selectionEnd === 0
+    ) {
+      e.preventDefault();
+      setConnectionChip(null);
+      return;
+    }
+
     if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown) {
       e.preventDefault();
       e.stopPropagation();
@@ -4338,7 +4471,12 @@ export function StandaloneChat({
       // which is the exact silent-drop bug the pending-chips fix.
       if (pendingDocsRef.current.length > 0) return;
       if (input.trim() || pastedImages.length > 0 || attachedDocsRef.current.length > 0) {
-        sendMessage(input.trim());
+        const chip = connectionChip;
+        setConnectionChip(null);
+        sendMessage(
+          chip ? buildChipModelContent(chip, input.trim()) : input.trim(),
+          chip ? buildChipDisplayContent(chip, input.trim()) : undefined,
+        );
       }
       return;
     }
@@ -7755,7 +7893,12 @@ export function StandaloneChat({
     e.preventDefault();
     if (pendingDocsRef.current.length > 0) return; // wait for extraction to finish
     if (!input.trim() && pastedImages.length === 0 && attachedDocsRef.current.length === 0) return;
-    sendMessage(input.trim());
+    const chip = connectionChip;
+    setConnectionChip(null);
+    sendMessage(
+      chip ? buildChipModelContent(chip, input.trim()) : input.trim(),
+      chip ? buildChipDisplayContent(chip, input.trim()) : undefined,
+    );
   };
 
   const handleStop = async () => {
@@ -9142,6 +9285,33 @@ export function StandaloneChat({
           >
             {/* Textarea row: full width so scrollbar is above the buttons and no dead zone */}
             <div className="relative flex-1 min-w-0">
+              {/* Connection chip — inline icon + name prefix on the
+                  textarea's first line. The prefix is an absolute overlay; the
+                  textarea's first line is indented past it so typed text flows
+                  after the name. X (absolute, top-right) clears it. */}
+              {connectionChip && (
+                <>
+                  <div
+                    ref={chipPrefixRef}
+                    className="pointer-events-none absolute left-3 top-2.5 z-10 flex h-5 items-center gap-1.5"
+                  >
+                    <IntegrationIcon
+                      icon={connectionChip.icon}
+                      className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0 bg-transparent"
+                      fallbackClassName="h-3 w-3 text-muted-foreground"
+                    />
+                    <span className="text-sm font-mono font-semibold text-foreground/80 leading-5 whitespace-nowrap">{connectionChip.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Remove connection context"
+                    onClick={() => setConnectionChip(null)}
+                    className="absolute right-2.5 top-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
               <textarea
                 ref={inputRef}
                 value={input}
@@ -9160,8 +9330,14 @@ export function StandaloneChat({
                 spellCheck={false}
                 autoCorrect="off"
                 rows={1}
-                className="w-full min-h-[44px] border-0 bg-transparent px-3 py-2.5 pr-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-foreground resize-none overflow-y-auto scrollbar-minimal"
-                style={{ maxHeight: "150px" }}
+                className={cn(
+                  "w-full min-h-[44px] border-0 bg-transparent px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-foreground resize-none overflow-y-auto scrollbar-minimal py-2.5",
+                  connectionChip ? "pr-7" : "pr-3"
+                )}
+                style={{
+                  maxHeight: "150px",
+                  textIndent: connectionChip && chipPrefixWidth ? `${chipPrefixWidth + 8}px` : undefined,
+                }}
               />
 
               <AnimatePresence>
@@ -9334,6 +9510,49 @@ export function StandaloneChat({
               })()}
             </div>
           </div>
+
+          {/* Connect apps nudge banner — inside the form, below the input box */}
+          {showConnectBanner && (
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => openConnectionSetup("connections")}
+                className="text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors flex-1 text-left"
+              >
+                Connect your apps to get better answers
+              </button>
+              <div className="flex items-center gap-1">
+                {connections
+                  .filter((c) => INTEGRATION_ICON_KEYS.has(c.icon || c.id))
+                  .slice(0, 8)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      title={c.name}
+                      onClick={() => openConnectionSetup(c.id)}
+                      className="shrink-0 opacity-70 hover:opacity-100 transition-opacity"
+                    >
+                      <IntegrationIcon
+                        icon={c.icon || c.id}
+                        className="w-6 h-6 bg-muted/40 rounded-md flex items-center justify-center"
+                        fallbackClassName="h-3 w-3 text-muted-foreground"
+                      />
+                    </button>
+                  ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConnectBanner(false);
+                  try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
+                }}
+                className="text-muted-foreground/50 hover:text-foreground transition-colors shrink-0"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
         </form>
       </div> {/* End of max-w-4xl input wrapper */}
       </div>
