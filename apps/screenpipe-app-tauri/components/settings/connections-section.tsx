@@ -783,7 +783,42 @@ interface ConnectionTile {
   connected: boolean;
   detected?: boolean;
   category?: string;
+  description?: string;
 }
+
+const HARDCODED_DESCRIPTIONS: Record<string, string> = {
+  "claude": "Search your screen & audio from Claude Desktop via MCP",
+  "cursor": "Give Cursor AI access to your screen history via MCP",
+  "codex": "Give Codex access to your screen & audio via MCP",
+  "claude-code": "Add screen memory to the Claude Code CLI",
+  "warp": "Search screen history from Warp terminal via MCP",
+  "chatgpt": "Search your screen history from ChatGPT",
+  "browser-url": "Capture visited URLs from your browser in real time",
+  "voice-memos": "Sync Apple Voice Memos for AI-powered search",
+  "apple-intelligence": "Connect Apple Intelligence writing tools",
+  "input-monitoring": "Track keyboard & mouse for productivity insights",
+  "apple-calendar": "Search Apple Calendar events with AI",
+  "google-calendar": "Search Google Calendar events with AI",
+  "google-docs": "Read and search your Google Docs",
+  "google-sheets": "Read and search your Google Sheets",
+  "gmail": "Read and search your Gmail inbox",
+  "ics-calendar": "Subscribe to any ICS calendar feed",
+  "openclaw": "Browse the web with OpenClaw agents",
+  "hermes": "AI-powered messaging assistant",
+  "whatsapp": "Search your WhatsApp conversations",
+  "anythingllm": "Give AnythingLLM access to your screen",
+  "ollama": "Connect local Ollama models to screenpipe",
+  "lmstudio": "Connect LM Studio models to screenpipe",
+  "msty": "Connect Msty models to screenpipe",
+  "obsidian": "Sync screen memory to your Obsidian vault",
+  "notion": "Search Notion pages with your screen context",
+  "linear": "Search Linear issues from your screen context",
+  "perplexity": "Search the web with Perplexity AI",
+  "krisp": "Search Krisp meeting transcripts and notes",
+  "plaud": "Search Plaud recordings and transcripts",
+  "custom-mcp": "Connect any MCP-compatible server",
+  "skills": "Import Claude Code skills for AI automations",
+};
 
 type ConnectionSort = "suggested" | "alphabetical";
 
@@ -864,30 +899,72 @@ function compareConnectionTiles(a: ConnectionTile, b: ConnectionTile): number {
   return a.name.localeCompare(b.name);
 }
 
+// Compact square tile — used in the "Suggested" section
 function Tile({ tile, selected, onClick }: {
   tile: ConnectionTile;
   selected: boolean;
   onClick: () => void;
 }) {
-  const status = tile.connected ? "connected" : tile.detected ? "detected" : "";
-
   return (
     <button
       onClick={onClick}
       className={`
-        relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 p-3 rounded-xl border transition-all text-center
+        relative flex min-h-[80px] flex-col items-center justify-center gap-1.5 p-3 rounded-xl border transition-all text-center
         ${selected
           ? "border-foreground bg-accent"
           : "border-border bg-card hover:border-muted-foreground/50 hover:bg-accent/50"
         }
       `}
     >
-      {tile.connected && (
-        <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-foreground" />
-      )}
+      {tile.connected ? (
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
+          <Check className="h-2.5 w-2.5 text-foreground" />
+        </div>
+      ) : tile.detected ? (
+        <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+      ) : null}
       <IntegrationIcon icon={tile.icon} />
       <span className="text-xs font-medium text-foreground leading-tight">{tile.name}</span>
-      <span className="h-3 text-[10px] leading-none text-muted-foreground">{status}</span>
+      {tile.connected && (
+        <span className="text-[10px] leading-none text-muted-foreground">connected</span>
+      )}
+    </button>
+  );
+}
+
+// Horizontal list row with description — used in the browse section
+function ListRow({ tile, selected, onClick }: {
+  tile: ConnectionTile;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        group flex w-full items-center gap-3 px-3 py-3 rounded-xl border transition-all text-left
+        ${selected
+          ? "border-foreground bg-accent"
+          : "border-transparent hover:bg-accent/50 hover:border-border"
+        }
+      `}
+    >
+      <IntegrationIcon icon={tile.icon} />
+      <div className="flex flex-1 min-w-0 flex-col gap-1.5">
+        <p className="text-sm font-semibold leading-tight text-foreground">{tile.name}</p>
+        {tile.description && (
+          <p className="text-xs leading-snug text-muted-foreground truncate">{tile.description}</p>
+        )}
+      </div>
+      <div className="shrink-0">
+        {tile.connected ? (
+          <Check className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <div className="h-7 w-7 rounded-xl bg-muted flex items-center justify-center">
+            <Plus className="h-4 w-4 text-foreground" />
+          </div>
+        )}
+      </div>
     </button>
   );
 }
@@ -3274,6 +3351,7 @@ export function ConnectionsSection({
         icon: i.icon,
         connected: i.connected,
         category: normalizeConnectionCategory(i.category),
+        description: i.description || undefined,
       }));
     // Update connected status from API for hardcoded tiles that also exist in API
     for (const h of hardcoded) {
@@ -3298,21 +3376,13 @@ export function ConnectionsSection({
     }
     return [...hardcoded, ...apiTiles].map((tile) => ({
       ...tile,
-      category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
+      // Our explicit map overrides the API's category so known tools always land in the right group
+      category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
+      description: tile.description ?? HARDCODED_DESCRIPTIONS[tile.id],
     }));
   }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
-  const categoryOptions = useMemo(() => {
-    const categories = Array.from(
-      new Set(allTiles.map((tile) => normalizeConnectionCategory(tile.category)))
-    ).sort((a, b) => a.localeCompare(b));
-    return [ALL_CONNECTION_CATEGORIES, ...categories];
-  }, [allTiles]);
-
-  const isDefaultView =
-    !search.trim() &&
-    categoryFilter === ALL_CONNECTION_CATEGORIES &&
-    sortBy === "suggested";
+  const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
   const suggested = useMemo(() => {
     if (!isDefaultView) return [];
@@ -3326,27 +3396,45 @@ export function ConnectionsSection({
       .slice(0, 8);
   }, [allTiles, isDefaultView]);
 
+  // Flat search results (used when search is active or category is programmatically focused)
   const filtered = useMemo(() => {
     let tiles = allTiles;
     if (categoryFilter !== ALL_CONNECTION_CATEGORIES) {
       tiles = tiles.filter((tile) => normalizeConnectionCategory(tile.category) === categoryFilter);
     }
-    const q = search.toLowerCase();
-    if (q.trim()) {
+    const q = search.toLowerCase().trim();
+    if (q) {
       tiles = tiles.filter(t => t.name.toLowerCase().includes(q));
     }
-    if (sortBy === "alphabetical") {
-      return [...tiles].sort((a, b) => a.name.localeCompare(b.name));
+    return [...tiles].sort(compareConnectionTiles);
+  }, [allTiles, categoryFilter, search]);
+
+  // Category order for grouped view
+  const CATEGORY_ORDER = ["Desktop", "AI", "Productivity", "Project Management", "Communication", "Calendar", "Documents", "Knowledge", "Meetings", "System", "Web", "Research", "Notification", "Agent", "Other"];
+
+  // Grouped tiles by category (default view — excludes suggested items)
+  const groupedTiles = useMemo(() => {
+    if (!isDefaultView) return null;
+    const suggestedIds = new Set(suggested.map(t => t.id));
+    const remaining = allTiles.filter(t => !suggestedIds.has(t.id));
+    const groups = new Map<string, ConnectionTile[]>();
+    for (const tile of remaining) {
+      const cat = normalizeConnectionCategory(tile.category);
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(tile);
     }
-    tiles = [...tiles].sort(compareConnectionTiles);
-    // In default view, the suggested row already surfaces these — drop them
-    // from the grid below to avoid duplication.
-    if (isDefaultView) {
-      const suggestedIds = new Set(suggested.map((tile) => tile.id));
-      tiles = tiles.filter((t) => !suggestedIds.has(t.id));
+    for (const tiles of groups.values()) {
+      tiles.sort(compareConnectionTiles);
     }
-    return tiles;
-  }, [allTiles, categoryFilter, search, sortBy, isDefaultView, suggested]);
+    return [...groups.entries()].sort(([a], [b]) => {
+      const ai = CATEGORY_ORDER.indexOf(a);
+      const bi = CATEGORY_ORDER.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }, [allTiles, isDefaultView, suggested]);
 
   const selectedIntegration = integrations.find(i => i.id === selected);
 
@@ -3464,7 +3552,19 @@ export function ConnectionsSection({
 
   return (
     <div className="space-y-5">
-      <p className="text-muted-foreground text-sm mb-4">Give AI access to your memory, and connect to the apps you use every day</p>
+      {/* Header: title + inline search */}
+      <div className="flex items-center gap-3">
+        <p className="flex-1 text-sm text-muted-foreground">Connect to the apps you use every day</p>
+        <div className="relative w-52 shrink-0">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search..."
+            className="pl-8 h-8 text-xs"
+          />
+        </div>
+      </div>
 
       <McpSpotlight
         enabledCount={customMcpEnabledCount}
@@ -3480,12 +3580,12 @@ export function ConnectionsSection({
       />
 
       {/* Suggested — device-aware high-activation connections, default view only. */}
-      {suggested.length > 0 && (
+      {!search.trim() && suggested.length > 0 && (
         <div className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground">Suggested for this device</h3>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {suggested.map((tile) => (
-              <Tile
+              <ListRow
                 key={tile.id}
                 tile={tile}
                 selected={selected === tile.id}
@@ -3496,68 +3596,58 @@ export function ConnectionsSection({
         </div>
       )}
 
-      {/* Search & filters */}
-      <div className="space-y-2">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="search connections..."
-            className="pl-9 h-9 text-sm"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-            <SelectTrigger className="h-9 flex-1 text-sm">
-              <SelectValue placeholder="Filter by" />
-            </SelectTrigger>
-            <SelectContent>
-              {categoryOptions.map((category) => (
-                <SelectItem key={category} value={category}>
-                  {category === ALL_CONNECTION_CATEGORIES ? "All categories" : category}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={sortBy} onValueChange={(value) => setSortBy(value as ConnectionSort)}>
-            <SelectTrigger className="h-9 w-[150px] text-sm">
-              <SelectValue placeholder="Sort by" />
-            </SelectTrigger>
-            <SelectContent>
-              {CONNECTION_SORT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Grid */}
-      <div className="grid grid-cols-3 gap-2">
-        {!integrationsLoaded ? (
-          Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border bg-card animate-pulse">
-              <div className="w-8 h-8 rounded-md bg-muted" />
-              <div className="flex-1 space-y-1.5">
-                <div className="h-3 bg-muted rounded w-20" />
-                <div className="h-2 bg-muted rounded w-12" />
+      {/* Connections — categorized sections or flat search results */}
+      {!integrationsLoaded ? (
+        <div className="space-y-6">
+          {Array.from({ length: 3 }).map((_, gi) => (
+            <div key={gi} className="space-y-2">
+              <div className="h-4 bg-muted rounded w-24 animate-pulse" />
+              <div className="grid grid-cols-2 gap-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-border bg-card animate-pulse">
+                    <div className="w-10 h-10 rounded-xl bg-muted shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3 bg-muted rounded w-20" />
+                      <div className="h-2.5 bg-muted rounded w-32" />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          ))
-        ) : (
-          filtered.map((tile) => (
-            <Tile
+          ))}
+        </div>
+      ) : search.trim() || categoryFilter !== ALL_CONNECTION_CATEGORIES ? (
+        <div className="grid grid-cols-2 gap-2">
+          {filtered.map((tile) => (
+            <ListRow
               key={tile.id}
               tile={tile}
               selected={selected === tile.id}
               onClick={() => setSelected(selected === tile.id ? null : tile.id)}
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {groupedTiles?.map(([category, tiles]) => (
+            <div key={category} className="space-y-3">
+              <div className="border-b border-border pb-2">
+                <h3 className="text-sm font-semibold text-foreground">{category}</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {tiles.map((tile) => (
+                  <ListRow
+                    key={tile.id}
+                    tile={tile}
+                    selected={selected === tile.id}
+                    onClick={() => setSelected(selected === tile.id ? null : tile.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Dialog
         open={!!selected && !!selectedTile}
