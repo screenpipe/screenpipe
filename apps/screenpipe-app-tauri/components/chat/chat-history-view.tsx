@@ -524,45 +524,47 @@ export function ChatHistoryView({
   return (
     <div className="h-full flex flex-col min-h-0">
       <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-6 pt-6">
-          {/* Tabs */}
-          <div
-            className="flex items-center gap-6 border-b border-border/60"
-            role="tablist"
-            aria-label="Chat filter"
-          >
-            {TABS.map((t) => {
-              const active = tab === t.value;
-              return (
-                <button
-                  key={t.value}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setTab(t.value)}
-                  className={cn(
-                    "relative -mb-px py-2 text-sm tracking-wide transition-colors duration-150",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                    active
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {t.label}
-                  <span
-                    aria-hidden
+        {/* Sticky header: tabs + search/bulk bar */}
+        <div className="sticky top-0 z-10 bg-background">
+          <div className="max-w-4xl mx-auto px-6 pt-6">
+            {/* Tabs */}
+            <div
+              className="flex items-center gap-6 border-b border-border/60"
+              role="tablist"
+              aria-label="Chat filter"
+            >
+              {TABS.map((t) => {
+                const active = tab === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setTab(t.value)}
                     className={cn(
-                      "absolute left-0 right-0 -bottom-px h-px transition-colors duration-150",
-                      active ? "bg-foreground" : "bg-transparent"
+                      "relative -mb-px py-2 text-sm tracking-wide transition-colors duration-150",
+                      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                      active
+                        ? "text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
                     )}
-                  />
-                </button>
-              );
-            })}
-          </div>
+                  >
+                    {t.label}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "absolute left-0 right-0 -bottom-px h-px transition-colors duration-150",
+                        active ? "bg-foreground" : "bg-transparent"
+                      )}
+                    />
+                  </button>
+                );
+              })}
+            </div>
 
-          {/* Search + New Chat / Bulk Actions (swap in-place) */}
-          <div className="mt-4 mb-4 h-9">
+            {/* Search + New Chat / Bulk Actions (swap in-place) */}
+            <div className="mt-4 mb-4 h-9">
             {showBulkBar ? (
                 <div
                   className={cn(
@@ -760,8 +762,12 @@ export function ChatHistoryView({
                 </Button>
               </div>
             )}
+            </div>
           </div>
+        </div>
 
+        {/* Scrollable list content */}
+        <div className="max-w-4xl mx-auto px-6 pb-6">
         {loading ? (
           <div className="min-h-[40vh] flex items-center justify-center">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
