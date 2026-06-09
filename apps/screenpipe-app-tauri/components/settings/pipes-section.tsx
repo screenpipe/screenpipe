@@ -52,7 +52,7 @@ import { parsePipeSessionId } from "@/lib/events/types";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
-import { humanizeSchedule } from "@/lib/utils/schedule-format";
+import { humanizeDow, humanizeSchedule } from "@/lib/utils/schedule-format";
 import {
   PipeActivityIndicator,
   formatPipeElapsed,
@@ -2043,9 +2043,11 @@ export function PipesSection() {
                               pendingConfigSaves.current[pipeName] = savePromise;
                             };
 
+                            const dowSummary = humanizeDow(currentDow) || "daily";
+
                             return (
-                              <div className="flex items-center gap-1 mt-2">
-                                <span className="text-[10px] text-muted-foreground mr-1">days</span>
+                              <div className="mt-2 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-1">
                                 {dayLabels.map((d, i) => {
                                   const on = activeDays.has(d.key);
                                   return (
@@ -2066,6 +2068,10 @@ export function PipesSection() {
                                     </button>
                                   );
                                 })}
+                                </div>
+                                <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                                  runs <span className="text-foreground">{dowSummary}</span>
+                                </span>
                               </div>
                             );
                           })()}
