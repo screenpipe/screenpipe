@@ -838,10 +838,6 @@ const FEATURED_CONNECTION_IDS = [
   "notion",
 ];
 
-const CONNECTION_SORT_OPTIONS: { value: ConnectionSort; label: string }[] = [
-  { value: "suggested", label: "Suggested" },
-  { value: "alphabetical", label: "Alphabetical" },
-];
 
 const DEVICE_CONNECTION_ORDER = [
   "custom-mcp",
@@ -899,38 +895,6 @@ function compareConnectionTiles(a: ConnectionTile, b: ConnectionTile): number {
   return a.name.localeCompare(b.name);
 }
 
-// Compact square tile — used in the "Suggested" section
-function Tile({ tile, selected, onClick }: {
-  tile: ConnectionTile;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        relative flex min-h-[80px] flex-col items-center justify-center gap-1.5 p-3 rounded-xl border transition-all text-center
-        ${selected
-          ? "border-foreground bg-accent"
-          : "border-border bg-card hover:border-muted-foreground/50 hover:bg-accent/50"
-        }
-      `}
-    >
-      {tile.connected ? (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
-          <Check className="h-2.5 w-2.5 text-foreground" />
-        </div>
-      ) : tile.detected ? (
-        <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
-      ) : null}
-      <IntegrationIcon icon={tile.icon} />
-      <span className="text-xs font-medium text-foreground leading-tight">{tile.name}</span>
-      {tile.connected && (
-        <span className="text-[10px] leading-none text-muted-foreground">connected</span>
-      )}
-    </button>
-  );
-}
 
 // Horizontal list row with description — used in the browse section
 function ListRow({ tile, selected, onClick }: {
@@ -3122,7 +3086,7 @@ export function ConnectionsSection({
 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
-  const [sortBy, setSortBy] = useState<ConnectionSort>("suggested");
+
   const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
@@ -3146,7 +3110,6 @@ export function ConnectionsSection({
         : ALL_CONNECTION_CATEGORIES,
     );
     setSearch("");
-    setSortBy("suggested");
     onFocusRequestConsumed?.();
   }, [focusCategory, focusConnectionId, focusRequestId, onFocusRequestConsumed]);
 
