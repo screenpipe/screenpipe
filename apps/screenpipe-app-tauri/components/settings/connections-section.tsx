@@ -901,7 +901,7 @@ function compareConnectionTiles(a: ConnectionTile, b: ConnectionTile): number {
 
 
 // Per-connection quickstart prompts shown when "Try in Chat" is clicked.
-const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
+export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   gmail: "Show me important emails from the last week",
   slack: "Summarize recent Slack discussions",
   "google-calendar": "What's on my calendar this week?",

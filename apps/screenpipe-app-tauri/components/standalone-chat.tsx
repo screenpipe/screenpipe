@@ -71,6 +71,7 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { buildChipModelContent, buildChipDisplayContent, parseConnectionChip } from "@/lib/utils/connection-chip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -174,22 +175,6 @@ const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 
-// Connection chip helpers. The chip (icon + name) is a real piece of context:
-// it tells the model which connection/integration the prompt is about. We carry
-// it three ways that must stay in sync:
-//   - content (what the model sees): prefixed with `[connection: Name]` so the
-//     model knows to use that integration.
-//   - displayContent (the bubble): `[chip:id|name] prompt` for icon rendering.
-//   - copy/paste: copying a chip message yields the `[connection: Name]` form so
-//     pasting it back into the composer reconstructs the connection context.
-const CONNECTION_CONTENT_PREFIX_RE = /^\[connection:\s*([^\]]+)\]\s*([\s\S]*)$/;
-function buildChipDisplayContent(chip: { id: string; name: string }, prompt: string): string {
-  return `[chip:${chip.id}|${chip.name}] ${prompt}`;
-}
-function buildChipModelContent(chip: { name: string }, prompt: string): string {
-  // Instruction the model honors: act using the named connection.
-  return `[connection: ${chip.name}] ${prompt}`;
-}
 const CONNECTION_SUGGESTION_LIMIT = 3;
 const VISIBLE_SUGGESTION_LIMIT = 2;
 const LARGE_CONTEXT_CHAR_THRESHOLD = 160_000;
@@ -3541,33 +3526,16 @@ export function StandaloneChat({
 
     const text = e.clipboardData?.getData("text/plain") ?? "";
 
-    // Reconstruct the connection chip when pasting a copied chip message.
-    // Copied chip messages carry the model-content form `[connection: Name] …`;
-    // older/internal copies may carry the display form `[chip:id|name] …`.
-    // Restoring the pill keeps the connection context intact across copy/paste,
-    // including paste into a different chat window (handler runs per-window).
+    // Reconstruct the connection chip when pasting a copied chip message
+    // (content or display form). Restoring the pill keeps the connection
+    // context intact across copy/paste, including paste into a different chat
+    // window (handler runs per-window).
     if (!connectionChip) {
-      let chipFromPaste: { id: string; name: string } | null = null;
-      let rest = "";
-
-      const chipForm = text.match(/^\[chip:([^|]+)\|([^\]]+)\]\s*([\s\S]*)$/);
-      const connForm = text.match(CONNECTION_CONTENT_PREFIX_RE);
-      if (chipForm && INTEGRATION_ICON_KEYS.has(chipForm[1])) {
-        chipFromPaste = { id: chipForm[1], name: chipForm[2] };
-        rest = chipForm[3];
-      } else if (connForm) {
-        const name = connForm[1].trim();
-        const id = name.toLowerCase().replace(/\s+/g, "-");
-        if (INTEGRATION_ICON_KEYS.has(id)) {
-          chipFromPaste = { id, name };
-          rest = connForm[2];
-        }
-      }
-
-      if (chipFromPaste) {
+      const parsed = parseConnectionChip(text, (id) => INTEGRATION_ICON_KEYS.has(id));
+      if (parsed) {
         e.preventDefault();
-        setConnectionChip({ ...chipFromPaste, icon: chipFromPaste.id });
-        setInput((prev) => prev + rest);
+        setConnectionChip({ ...parsed.chip, icon: parsed.chip.id });
+        setInput((prev) => prev + parsed.prompt);
         requestAnimationFrame(() => inputRef.current?.focus());
         return;
       }
