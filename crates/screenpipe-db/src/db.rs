@@ -10358,7 +10358,7 @@ LIMIT ? OFFSET ?
         tags_all: &[String],
     ) -> Result<Vec<MemoryRecord>, SqlxError> {
         let use_fts = query.is_some_and(|q| !q.is_empty());
-        let tags_col = if use_fts { "m.tags" } else { "tags" };
+        let id_col = if use_fts { "m.id" } else { "memories.id" };
         let tags_all_json = serde_json::to_string(tags_all).unwrap_or_else(|_| "[]".to_string());
 
         let mut sql = if use_fts {
@@ -10395,13 +10395,16 @@ LIMIT ? OFFSET ?
         if end_time.is_some() {
             sql.push_str(" AND created_at <= ?6");
         }
-        // Exact-match AND tag filter. The `json_array_length(?9) = 0` guard
-        // short-circuits (SQLite evaluates OR left-to-right) so non-tag
-        // callers pay nothing.
+        // Exact-match AND tag filter, index-driven via the memory_tags junction
+        // (kept in sync by triggers). The `json_array_length(?9) = 0` guard
+        // short-circuits (SQLite evaluates OR left-to-right) so non-tag callers
+        // pay nothing.
         sql.push_str(&format!(
-            " AND (json_array_length(?9) = 0 OR \
-             (SELECT COUNT(DISTINCT je.value) FROM json_each({tags_col}) je \
-              WHERE je.value IN (SELECT value FROM json_each(?9))) = json_array_length(?9))"
+            " AND (json_array_length(?9) = 0 OR {id_col} IN ( \
+              SELECT mt.memory_id FROM memory_tags mt \
+              WHERE mt.tag_name IN (SELECT value FROM json_each(?9)) \
+              GROUP BY mt.memory_id \
+              HAVING COUNT(DISTINCT mt.tag_name) = json_array_length(?9)))"
         ));
 
         // Allow caller to control sort order; default to newest first
@@ -10448,7 +10451,7 @@ LIMIT ? OFFSET ?
         tags_all: &[String],
     ) -> Result<i64, SqlxError> {
         let use_fts = query.is_some_and(|q| !q.is_empty());
-        let tags_col = if use_fts { "m.tags" } else { "tags" };
+        let id_col = if use_fts { "m.id" } else { "memories.id" };
         let tags_all_json = serde_json::to_string(tags_all).unwrap_or_else(|_| "[]".to_string());
 
         let mut sql = if use_fts {
@@ -10480,9 +10483,11 @@ LIMIT ? OFFSET ?
             sql.push_str(" AND created_at <= ?6");
         }
         sql.push_str(&format!(
-            " AND (json_array_length(?7) = 0 OR \
-             (SELECT COUNT(DISTINCT je.value) FROM json_each({tags_col}) je \
-              WHERE je.value IN (SELECT value FROM json_each(?7))) = json_array_length(?7))"
+            " AND (json_array_length(?7) = 0 OR {id_col} IN ( \
+              SELECT mt.memory_id FROM memory_tags mt \
+              WHERE mt.tag_name IN (SELECT value FROM json_each(?7)) \
+              GROUP BY mt.memory_id \
+              HAVING COUNT(DISTINCT mt.tag_name) = json_array_length(?7)))"
         ));
 
         let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);

@@ -484,6 +484,59 @@ mod tests {
         assert_eq!(n, 2);
     }
 
+    /// The memory_tags index (maintained by triggers + ON DELETE CASCADE) stays
+    /// in sync as the JSON `tags` column is created, updated, and deleted — so
+    /// the index-driven filter never goes stale.
+    #[tokio::test]
+    async fn test_memory_tags_index_stays_in_sync() {
+        let db = setup_test_db().await;
+        let id = db
+            .insert_memory("a fact", "user", None, Some(r#"["person:ada"]"#), 0.5, None)
+            .await
+            .unwrap();
+
+        // Insert trigger populated the junction → filter finds it.
+        assert_eq!(
+            search_ct(&db, ContentType::Memory, &["person:ada".to_string()])
+                .await
+                .len(),
+            1
+        );
+
+        // Update tags → re-synced: the old tag stops matching, the new one matches.
+        db.update_memory(id, None, Some(r#"["person:bob"]"#), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            search_ct(&db, ContentType::Memory, &["person:ada".to_string()])
+                .await
+                .len(),
+            0
+        );
+        assert_eq!(
+            search_ct(&db, ContentType::Memory, &["person:bob".to_string()])
+                .await
+                .len(),
+            1
+        );
+
+        // Delete the memory → ON DELETE CASCADE clears the junction (no orphans).
+        db.delete_memory(id).await.unwrap();
+        assert_eq!(
+            search_ct(&db, ContentType::Memory, &["person:bob".to_string()])
+                .await
+                .len(),
+            0
+        );
+        let orphans: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memory_tags WHERE memory_id = ?")
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
     #[tokio::test]
     async fn test_recent_output_audio_detects_deferred_output_chunk() {
         let db = setup_test_db().await;

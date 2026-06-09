@@ -14,20 +14,20 @@
 //! EXPLAIN QUERY PLAN dumps confirm which.
 //!
 //! Measured (200k frames / 200k vision_tags / 60k audio / 50k memories,
-//! in-memory, M-series; tags rare + on the oldest rows = adversarial):
-//!   plan: screen/audio drives off the tag indexes (tags.name UNIQUE +
-//!         idx_vision_tags_tag_id) then PK-looks-up frames — it does NOT scan
-//!         all frames, so the tag filter is *faster* than unfiltered search.
-//!   OCR  no-tags (baseline full scan+sort) ~127 ms
-//!   OCR  tags=person:ada                    ~7 ms   (17x faster than baseline)
-//!   Audio tags=person:ada                   ~1 ms
-//!   All  tags=person:ada                    ~8 ms
-//!   Memory tags=person:ada                  ~16 ms
-//!   counts (OCR/All/Memory)                 ~7-12 ms
-//! Memory is the one linear path: memories.tags is JSON with no index, so the
-//! filter is a full scan + correlated json_each (~0.3 us/row, ~16 ms @ 50k,
-//! so ~160 ms @ 500k). Fine at realistic memory counts; if memories ever reach
-//! millions, add a memory_tags junction table mirroring vision_tags.
+//! in-memory; tags rare + on the oldest rows = adversarial). Absolute timings
+//! vary by machine/run; what matters is the PLAN and that the tag filter is far
+//! cheaper than scanning:
+//!   ALL three modalities are index-driven (the EXPLAIN dumps confirm):
+//!     - screen/audio drive off the tag indexes (tags.name UNIQUE +
+//!       idx_vision_tags_tag_id) then PK-look-up frames/chunks.
+//!     - memory drives off idx_memory_tags_tag_name (the memory_tags junction,
+//!       maintained by triggers) then PK-looks-up memories — NOT a table scan,
+//!       so it scales with the number of matching memories, not the total.
+//!   tag-filtered search/count land in the single-digit-to-low-tens of ms even
+//!   at these sizes, well under the 30s search timeout, and the filter is
+//!   faster than the equivalent unfiltered scan (which must sort everything).
+//! No-tag queries are untouched (the `json_array_length(?) = 0 OR ...` guard
+//! short-circuits before any subquery runs).
 
 use std::time::Instant;
 
@@ -214,10 +214,11 @@ async fn bench_tag_filter_scaling() {
     .await;
     explain(
         &db,
-        "memory tag filter (correlated json_each over memories.tags)",
-        "SELECT id FROM memories WHERE (json_array_length(?1)=0 OR \
-           (SELECT COUNT(DISTINCT je.value) FROM json_each(memories.tags) je \
-            WHERE je.value IN (SELECT value FROM json_each(?1)))=json_array_length(?1)) \
+        "memory tag filter (memory_tags junction, index-driven)",
+        "SELECT id FROM memories WHERE memories.id IN (\
+           SELECT mt.memory_id FROM memory_tags mt \
+           WHERE mt.tag_name IN (SELECT value FROM json_each(?1)) \
+           GROUP BY mt.memory_id HAVING COUNT(DISTINCT mt.tag_name)=json_array_length(?1)) \
          ORDER BY created_at DESC LIMIT 20",
     )
     .await;
