@@ -90,6 +90,7 @@ xcap = { version = "0.9", features = ["wgc"] }
 uiautomation = { version = "0.16.1" }
 windows = { version = "0.58", features = [
   "Graphics_Imaging",
+  "Globalization",
   "Media_Ocr",
   "Storage",
   "Storage_Streams",

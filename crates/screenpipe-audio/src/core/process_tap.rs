@@ -602,7 +602,7 @@ pub fn spawn_process_tap_capture(
         // silent audio (AND the callback is firing, so it's not just that
         // the IO proc stalled), rebuild the aggregate once. This catches
         // the "tap anchored to BuiltInSpeaker while all app audio is
-        // routed to AirPods" failure mode that Ruark hit on v2.4.46 — the
+        // routed to AirPods" failure mode reported on v2.4.46. The
         // tap runs happily, the callback fires, but every buffer is
         // zeros because the aggregate's sub-device has no signal and the
         // global-tap → aggregate delivery path stays mute. See the

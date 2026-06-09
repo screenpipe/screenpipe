@@ -390,6 +390,11 @@ impl DatabaseManager {
         // Run migrations after establishing the connection
         Self::run_migrations(&db_manager.pool).await?;
 
+        // Surface corruption proactively at boot with a recovery hint,
+        // instead of only discovering it later via worker query errors
+        // (which used to spin a CPU core retrying a malformed DB).
+        db_manager.spawn_startup_integrity_check(Arc::from(database_path));
+
         Ok(db_manager)
     }
 
@@ -8458,6 +8463,54 @@ LIMIT ? OFFSET ?
         });
     }
 
+    /// Spawn a one-shot background `PRAGMA quick_check` shortly after startup.
+    ///
+    /// Corruption ("database disk image is malformed", SQLITE_CORRUPT)
+    /// otherwise only surfaces later, via worker query errors. We run it in
+    /// the background (not inline in `new()`) because `quick_check` still
+    /// scans every page, which would add seconds of boot latency on a
+    /// multi-GB database. On failure we log loudly with the exact recovery
+    /// command so the user can self-heal via the existing `screenpipe db
+    /// recover` path (which backs up the original before rebuilding).
+    fn spawn_startup_integrity_check(&self, database_path: Arc<str>) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            // Let boot settle so the scan doesn't compete with migrations
+            // and the first capture writes for I/O.
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            // quick_check(1) stops after the first error — we only need a
+            // yes/no signal here, not the full corruption inventory.
+            match sqlx::query_scalar::<_, String>("PRAGMA quick_check(1)")
+                .fetch_one(&pool)
+                .await
+            {
+                Ok(result) if result == "ok" => {
+                    debug!("startup integrity check: ok");
+                }
+                Ok(detail) => {
+                    error!(
+                        db = %database_path,
+                        detail = %detail,
+                        "DATABASE CORRUPTION DETECTED at startup. Recording continues but \
+                         some reads/writes may fail. Quit screenpipe and run \
+                         `screenpipe db recover` to rebuild the database (it backs up the \
+                         original first)."
+                    );
+                }
+                Err(e) => {
+                    // The check itself failing usually means the file is too
+                    // damaged to even scan — still actionable.
+                    error!(
+                        db = %database_path,
+                        error = %e,
+                        "startup integrity check could not run (database may be corrupt). \
+                         If problems persist, quit screenpipe and run `screenpipe db recover`."
+                    );
+                }
+            }
+        });
+    }
+
     /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on demand, flushing WAL into the
     /// main database file so it can be safely copied.
     /// Returns (busy, log_pages, checkpointed_pages).
@@ -9127,7 +9180,7 @@ LIMIT ? OFFSET ?
                   SELECT 1 FROM meeting_transcript_segments mts
                   WHERE mts.meeting_id = ?2
                     AND ABS(julianday(mts.captured_at) - julianday(audio_chunks.timestamp)) <= ?3
-                    AND instr(audio_chunks.file_path, mts.device_name) > 0
+                    AND instr(lower(audio_chunks.file_path), lower(mts.device_name)) > 0
                     AND instr(lower(audio_chunks.file_path), '(' || lower(mts.device_type) || ')') > 0
               )
             "#,
@@ -9157,8 +9210,11 @@ LIMIT ? OFFSET ?
     /// - `speaker_id` is left NULL — live diarization stores a free-text
     ///   `speaker_name`, not a `speakers.id`; the Meeting view still shows the live
     ///   row's speaker (it reads `meeting_transcript_segments` directly).
-    /// - Segments with no covering chunk within `coverage_window_secs` are skipped
-    ///   (the timeline still surfaces them live via `find_video_chunks`).
+    /// - A segment whose nearest same-device chunk is OUTSIDE `coverage_window_secs`
+    ///   is still mirrored onto that chunk (carrying the segment's real timestamp)
+    ///   rather than dropped, so live transcript text is never lost. Only a segment
+    ///   whose device has NO chunk at all is skipped (the timeline still surfaces it
+    ///   live via `find_video_chunks`).
     /// - `timestamp` is bound as a `DateTime<Utc>` so its on-disk format matches
     ///   every other `audio_transcriptions` row (range queries stay consistent).
     pub async fn mirror_live_meeting_to_audio_transcriptions(
@@ -9244,9 +9300,16 @@ LIMIT ? OFFSET ?
             // Match the SAME physical device's chunk so an input (mic) segment can't
             // inherit a remote speaker from a System Audio (output) chunk, and vice
             // versa. The device string is sanitized the same way the recorder names
-            // files (only '/' and '\\' replaced). If no same-device chunk exists,
-            // skip the mirror and leave the chunk pending for backfill rather than
-            // corrupting source attribution.
+            // files (only '/' and '\\' replaced). Prefer the nearest same-device chunk
+            // WITHIN the window; if none is in the window (the live provider can
+            // finalize a turn seconds after the audio, drifting captured_at past the
+            // chunk timestamp, and chunks longer than 2x the window leave segments with
+            // no in-window chunk) fall back to the nearest same-device chunk regardless
+            // of distance rather than silently DROPPING the segment. Losing the
+            // transcript text is worse than a small playback offset, and the stored
+            // `timestamp` is the segment's real captured_at so search/timeline stay
+            // correct. Only skip when the device has NO chunk at all (leave it pending
+            // for backfill). Device attribution stays strict: never a different device.
             let device_key = format!(
                 "{} ({})",
                 s.device_name,
@@ -9256,8 +9319,14 @@ LIMIT ? OFFSET ?
             .to_lowercase();
             let pick = chunks
                 .iter()
-                .filter(|c| (c.1 - seg_ms).abs() <= window_ms && c.2.contains(device_key.as_str()))
-                .min_by_key(|c| (c.1 - seg_ms).abs());
+                .filter(|c| c.2.contains(device_key.as_str()))
+                .min_by_key(|c| {
+                    // In-window chunks (false) sort before out-of-window (true); the
+                    // nearest wins within each group. So an in-window chunk is always
+                    // preferred, but a far same-device chunk still beats dropping.
+                    let dt = (c.1 - seg_ms).abs();
+                    (dt > window_ms, dt)
+                });
             let Some(chunk) = pick else {
                 continue;
             };

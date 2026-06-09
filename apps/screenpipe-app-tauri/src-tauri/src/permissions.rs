@@ -111,8 +111,8 @@ pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission)
             }
             OSPermission::InputMonitoring => {
                 // Defer to the dedicated request flow (opens Settings + calls
-                // CGRequestListenEventAccess). The ghost-record probe lives
-                // inside `screenpipe_a11y::request_input_monitoring`.
+                // CGRequestListenEventAccess). No probe tap is created — the
+                // check reads from INPUT_MONITORING_GROUND_TRUTH or preflight.
                 let _ = request_input_monitoring_permission().await;
             }
             OSPermission::Calendar => {
@@ -309,7 +309,7 @@ pub fn check_microphone_permission() -> OSPermissionStatus {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn check_screen_recording_permission() -> OSPermissionStatus {
-    core_to_os_status(screenpipe_core::permissions::check_screen_recording())
+    core_to_os_status(screenpipe_core::permissions::check_screen_recording_tauri())
 }
 
 /// Check only accessibility permission

@@ -179,11 +179,25 @@ const NotificationHandler: React.FC = () => {
         }
 
         if (action.type === "api" && action.url) {
-          await localFetch(action.url, {
+          const res = await localFetch(action.url, {
             method: action.method || "POST",
             headers: { "Content-Type": "application/json" },
             body: action.body ? JSON.stringify(action.body) : undefined,
           });
+          // The "+ HD" action calls /capture/hd/start, which is otherwise
+          // silent — confirm the click with an in-app /notify so the user
+          // knows HD capture actually started. Gated on res.ok so a failed
+          // start never shows a false "started" toast.
+          if (action.action === "record-hd" && res.ok) {
+            await localFetch("/notify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: "HD recording started",
+                body: "Capturing this meeting at high frame rate. Stops automatically when the call ends.",
+              }),
+            }).catch(() => {});
+          }
           return;
         }
 

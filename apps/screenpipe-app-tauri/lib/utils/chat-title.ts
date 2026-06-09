@@ -67,7 +67,11 @@ export function deriveFallbackConversationTitle(
   firstUserMessage?: TitleSourceMessageLike | null,
 ): string {
   const displayTitle = firstUserMessage?.displayContent?.trim();
-  if (displayTitle) return displayTitle;
+  if (displayTitle) {
+    // Strip connection-chip prefix: "[chip:id|name] text" → "text"
+    const stripped = displayTitle.replace(/^\[chip:[^\]]+\] /, "").trim();
+    return stripped || systemFallbackTitle(firstUserMessage?.content);
+  }
   return systemFallbackTitle(firstUserMessage?.content);
 }
 

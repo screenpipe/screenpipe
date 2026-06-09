@@ -29,6 +29,7 @@ pub struct VisionManagerConfig {
     pub output_path: String,
     pub ignored_windows: Vec<String>,
     pub included_windows: Vec<String>,
+    pub ignored_urls: Vec<String>,
     pub vision_metrics: Arc<PipelineMetrics>,
     pub use_pii_removal: bool,
     /// Stable IDs of monitors the user selected for recording (e.g. "MSI G271_1920x1080_2002,-1080").
@@ -450,6 +451,7 @@ impl VisionManager {
         let tree_walker_config = TreeWalkerConfig {
             ignored_windows: self.config.ignored_windows.clone(),
             included_windows: self.config.included_windows.clone(),
+            ignored_urls: self.config.ignored_urls.clone(),
             monitor_x: monitor.x() as f64,
             monitor_y: monitor.y() as f64,
             monitor_width: monitor.width() as f64,
@@ -512,6 +514,7 @@ impl VisionManager {
             let hd_config = crate::hd_recorder::HdRecorderConfig {
                 ignored_windows: self.config.ignored_windows.clone(),
                 included_windows: self.config.included_windows.clone(),
+                ignored_urls: self.config.ignored_urls.clone(),
             };
             let hd_handle = self
                 .vision_handle
@@ -671,6 +674,7 @@ mod tests {
             output_path: std::env::temp_dir().to_string_lossy().into_owned(),
             ignored_windows: vec![],
             included_windows: vec![],
+            ignored_urls: vec![],
             vision_metrics: Arc::new(PipelineMetrics::default()),
             use_pii_removal: false,
             monitor_ids,

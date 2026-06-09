@@ -334,6 +334,10 @@ export function useTimelineKeyboard(opts: {
 
 		window.addEventListener("keydown", handleArrowKeys);
 		return () => window.removeEventListener("keydown", handleArrowKeys);
-	}, [frames, setCurrentFrame, showSearchModal, isPlaying, seekPlayback, pausePlayback, inSearchReviewMode, searchResultIndex, searchResults, hasSearchHighlight, dismissSearchHighlight]);
+		// findNextDevice + setCurrentIndex are used inside the handler; without
+		// them in deps the listener keeps a stale findNextDevice after a filter
+		// change (its identity tracks selectedDeviceId/app/matchingIndices), so
+		// arrow nav would ignore the active filter until frames next change.
+	}, [frames, findNextDevice, setCurrentIndex, setCurrentFrame, showSearchModal, isPlaying, seekPlayback, pausePlayback, inSearchReviewMode, searchResultIndex, searchResults, hasSearchHighlight, dismissSearchHighlight]);
 
 }

@@ -12,12 +12,15 @@ use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::frame_linker::{CorrelationId, EventPersisted};
 use crate::frame_linker_actor::{next_correlation_id, LinkerMessage, LinkerSender};
+
+const UI_RECORDER_IDLE_RECV_TIMEOUT: Duration = Duration::from_secs(1);
+const UI_RECORDER_MIN_RECV_TIMEOUT: Duration = Duration::from_millis(1);
 
 /// A batched UI event plus an optional correlation id. Events that
 /// won't trigger a capture (Move, Idle, filtered-out targets) leave
@@ -433,6 +436,7 @@ pub async fn start_ui_recording(
     capture_trigger_tx: Option<crate::event_driven_capture::TriggerSender>,
     linker_tx: Option<LinkerSender>,
     ignored_windows: Vec<String>,
+    prompt_permissions: bool,
 ) -> Result<UiRecorderHandle> {
     if !config.enabled {
         info!("UI event capture is disabled");
@@ -453,14 +457,22 @@ pub async fn start_ui_recording(
     // - Input Monitoring is OPTIONAL. Missing → the recorder runs in
     //   reduced mode: clipboard via NSPasteboard.changeCount polling,
     //   app/window events via NSWorkspace, but no keystrokes or clicks.
-    let mut perms = recorder.check_permissions();
+    //
+    // When `prompt_permissions` is true (CLI), call request_permissions() so
+    // macOS shows the accessibility and input-monitoring TCC dialogs natively.
+    // When false (Tauri app), the caller already gated on accessibility being
+    // granted; input monitoring is handled by the onboarding drag panel, so
+    // a native prompt here would bypass it.
+    let perms = if prompt_permissions {
+        recorder.request_permissions()
+    } else {
+        recorder.check_permissions()
+    };
     if !perms.all_granted() {
         warn!(
-            "UI capture permissions not fully granted - accessibility: {}, input_monitoring: {}",
+            "UI capture permissions not fully granted - accessibility: {}, input_monitoring: {}; running in reduced mode",
             perms.accessibility, perms.input_monitoring
         );
-        warn!("Requesting permissions...");
-        perms = recorder.request_permissions();
     }
     if !perms.accessibility {
         // The "accessibility" bit means different things per OS. macOS:
@@ -567,8 +579,10 @@ pub async fn start_ui_recording(
                 break;
             }
 
-            // Try to receive events with timeout
-            match handle.recv_timeout(Duration::from_millis(100)) {
+            let recv_timeout =
+                next_ui_event_recv_timeout(&batch, last_flush, batch_timeout, &scroll_burst);
+
+            match handle.recv_timeout(recv_timeout) {
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
                     let app_lower = db_event
@@ -971,6 +985,55 @@ impl ScrollBurstTracker {
             None
         }
     }
+
+    fn time_until_burst_end_at(&self, now: Instant) -> Option<Duration> {
+        let last = self.last_scroll_at?;
+        Some(min_positive_timeout(
+            self.delay
+                .saturating_sub(now.saturating_duration_since(last)),
+        ))
+    }
+}
+
+fn min_positive_timeout(timeout: Duration) -> Duration {
+    timeout.max(UI_RECORDER_MIN_RECV_TIMEOUT)
+}
+
+fn next_ui_event_recv_timeout(
+    batch: &EventBatch,
+    last_flush: Instant,
+    batch_timeout: Duration,
+    scroll_burst: &ScrollBurstTracker,
+) -> Duration {
+    next_ui_event_recv_timeout_at(
+        batch,
+        last_flush,
+        batch_timeout,
+        scroll_burst,
+        Instant::now(),
+    )
+}
+
+fn next_ui_event_recv_timeout_at(
+    batch: &EventBatch,
+    last_flush: Instant,
+    batch_timeout: Duration,
+    scroll_burst: &ScrollBurstTracker,
+    now: Instant,
+) -> Duration {
+    let mut timeout = UI_RECORDER_IDLE_RECV_TIMEOUT;
+
+    if !batch.is_empty() {
+        timeout = timeout.min(min_positive_timeout(
+            batch_timeout.saturating_sub(now.saturating_duration_since(last_flush)),
+        ));
+    }
+
+    if let Some(scroll_timeout) = scroll_burst.time_until_burst_end_at(now) {
+        timeout = timeout.min(scroll_timeout);
+    }
+
+    timeout
 }
 
 #[cfg(test)]
@@ -1040,6 +1103,70 @@ mod event_batch_tests {
         assert!(b.is_empty());
         assert_eq!(b.events.len(), 0);
         assert_eq!(b.correlation_ids.len(), 0);
+    }
+
+    #[test]
+    fn idle_recv_timeout_uses_long_backoff_without_pending_work() {
+        let batch = EventBatch::with_capacity(0);
+        let scroll = ScrollBurstTracker::new(Duration::from_millis(300));
+        let now = Instant::now();
+
+        let timeout =
+            next_ui_event_recv_timeout_at(&batch, now, Duration::from_secs(1), &scroll, now);
+
+        assert_eq!(timeout, UI_RECORDER_IDLE_RECV_TIMEOUT);
+    }
+
+    #[test]
+    fn recv_timeout_tracks_batch_flush_deadline() {
+        let mut batch = EventBatch::with_capacity(1);
+        batch.push(evt(), None);
+        let scroll = ScrollBurstTracker::new(Duration::from_millis(300));
+        let now = Instant::now();
+
+        let timeout = next_ui_event_recv_timeout_at(
+            &batch,
+            now - Duration::from_millis(750),
+            Duration::from_secs(1),
+            &scroll,
+            now,
+        );
+
+        assert_eq!(timeout, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn recv_timeout_tracks_scroll_burst_deadline() {
+        let batch = EventBatch::with_capacity(0);
+        let now = Instant::now();
+        let scroll = ScrollBurstTracker {
+            last_scroll_at: Some(now - Duration::from_millis(250)),
+            last_scroll_corr_id: Some(1),
+            delay: Duration::from_millis(300),
+        };
+
+        let timeout =
+            next_ui_event_recv_timeout_at(&batch, now, Duration::from_secs(1), &scroll, now);
+
+        assert_eq!(timeout, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn recv_timeout_never_returns_zero_for_due_work() {
+        let mut batch = EventBatch::with_capacity(1);
+        batch.push(evt(), None);
+        let scroll = ScrollBurstTracker::new(Duration::from_millis(300));
+        let now = Instant::now();
+
+        let timeout = next_ui_event_recv_timeout_at(
+            &batch,
+            now - Duration::from_secs(2),
+            Duration::from_secs(1),
+            &scroll,
+            now,
+        );
+
+        assert_eq!(timeout, UI_RECORDER_MIN_RECV_TIMEOUT);
     }
 }
 

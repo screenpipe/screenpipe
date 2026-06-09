@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use screenpipe_db::DatabaseManager;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::frame_linker::{
     CorrelationId, DropReason, EventPersisted, FrameCaptured, FrameLinker, FrameLinkerConfig,
@@ -151,7 +151,7 @@ pub fn spawn_frame_linker(
                                 linker.on_event_persisted(e, Instant::now())
                             {
                                 PAIRS_EMITTED.fetch_add(1, Ordering::Relaxed);
-                                info!(
+                                debug!(
                                     corr_id,
                                     row_id = update.row_id,
                                     frame_id = update.frame_id,
@@ -176,7 +176,7 @@ pub fn spawn_frame_linker(
                             let updates = linker.on_frame_captured(c, Instant::now());
                             if !updates.is_empty() {
                                 PAIRS_EMITTED.fetch_add(updates.len() as u64, Ordering::Relaxed);
-                                info!(
+                                debug!(
                                     frame_id,
                                     paired = updates.len(),
                                     still_pending = n_corr - updates.len(),

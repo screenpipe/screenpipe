@@ -7,7 +7,7 @@ pub mod apple;
 pub mod core;
 pub mod custom_ocr;
 pub mod frame_comparison;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub mod microsoft;
 pub mod monitor;
 #[cfg(target_os = "windows")]

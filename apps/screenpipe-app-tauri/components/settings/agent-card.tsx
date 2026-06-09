@@ -33,39 +33,17 @@ import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 
 // ---------------------------------------------------------------------------
-// Canonical screenpipe SKILL.md — kept in sync with docs.screenpi.pe/openclaw
+// Canonical screenpipe SKILL.md content. Re-exported from a generated module so
+// the "copy / save SKILL.md" text the cards serve is always the source of truth
+// from the repo: .claude/skills/{screenpipe-api,screenpipe-cli}/SKILL.md
+// (the same folders the `... skills install github:...` one-liners install from).
+// Regenerated on prebuild by scripts/gen-skill-content.js. Do not hand-edit copies.
 // ---------------------------------------------------------------------------
 
-export const SCREENPIPE_SKILL_MD = `---
-name: screenpipe
-description: Search screen recordings and audio transcriptions from the user's computer
-tools:
-  - Bash
----
-# screenpipe skill
-
-Query the user's screen history via the local API at http://localhost:3030.
-
-## search content
-\`\`\`bash
-curl -s "http://localhost:3030/search?q=QUERY&limit=20"
-\`\`\`
-
-## get recent activity
-\`\`\`bash
-curl -s "http://localhost:3030/search?limit=10&content_type=ocr"
-\`\`\`
-
-## activity summary
-\`\`\`bash
-curl -s "http://localhost:3030/activity-summary?start_time=2024-01-15T10:00:00Z&end_time=2024-01-15T18:00:00Z"
-\`\`\`
-
-## list meetings
-\`\`\`bash
-curl -s "http://localhost:3030/meetings?limit=20"
-\`\`\`
-`;
+export {
+  SCREENPIPE_API_SKILL_MD,
+  SCREENPIPE_CLI_SKILL_MD,
+} from "@/lib/generated/screenpipe-skills";
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -79,18 +57,32 @@ export type ConnectField = {
   helpUrl?: string;
 };
 
+/** One installable screenpipe skill (e.g. the API skill or the CLI skill). */
+export type SkillVariant = {
+  /** Stable id — sub-tab value + posthog suffix. */
+  id: string;
+  /** Short tab label, e.g. "API" or "CLI". */
+  label: string;
+  /** One-line summary of what this skill lets the agent do. */
+  blurb: string;
+  /** SKILL.md contents served by copy / save-to-downloads. */
+  md: string;
+  /** Filename used when saving to Downloads (must be unique per variant). */
+  downloadName: string;
+  /** Where to drop SKILL.md on the agent's machine. */
+  localPath: string;
+  /** Optional one-liner that installs the real skill from a remote source. */
+  cliInstall?: string;
+};
+
 export type AgentCardProps = {
   name: string;
   iconSrc: string;
   description: string;
   homepage?: string;
   mcp: { format: "json" | "yaml"; configPath: string; snippet: string };
-  skill: {
-    /** Where to drop SKILL.md on the local machine. */
-    localPath: string;
-    /** Optional CLI command that installs from a remote source. */
-    cliInstall?: string;
-  };
+  /** One or more installable screenpipe skills (e.g. API + CLI). First is shown by default. */
+  skills: SkillVariant[];
   sync: {
     /** Default remote path on the VPS where ~/.screenpipe gets pushed. */
     defaultRemotePath: string;
@@ -155,7 +147,42 @@ function McpSection({ name, mcp }: { name: string; mcp: AgentCardProps["mcp"] })
 // Skill section — install screenpipe SKILL.md into the agent's skills dir
 // ---------------------------------------------------------------------------
 
-function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["skill"] }) {
+function SkillSection({ name, skills }: { name: string; skills: SkillVariant[] }) {
+  const [activeId, setActiveId] = useState(skills[0]?.id ?? "");
+  const active = skills.find((s) => s.id === activeId) ?? skills[0];
+  if (!active) return null;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        Drop a screenpipe SKILL.md into {name}&apos;s skills directory and {name} loads it
+        as a new skill. {skills.length > 1 ? "Install either — or both." : ""}
+      </p>
+
+      {skills.length > 1 && (
+        <div className="flex gap-1.5">
+          {skills.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setActiveId(s.id)}
+              className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                s.id === active.id
+                  ? "bg-foreground text-background border-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <SkillVariantBody key={active.id} name={name} variant={active} />
+    </div>
+  );
+}
+
+function SkillVariantBody({ name, variant }: { name: string; variant: SkillVariant }) {
   const [copied, setCopied] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -164,37 +191,37 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
 
   const copyMd = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(SCREENPIPE_SKILL_MD);
+      await navigator.clipboard.writeText(variant.md);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied SKILL.md to clipboard" });
     } catch (e) {
       toast({ title: "copy failed", description: String(e), variant: "destructive" });
     }
-  }, []);
+  }, [variant.md]);
 
   const copyCmd = useCallback(async () => {
-    if (!skill.cliInstall) return;
+    if (!variant.cliInstall) return;
     try {
-      await navigator.clipboard.writeText(skill.cliInstall);
+      await navigator.clipboard.writeText(variant.cliInstall);
       setCmdCopied(true);
       setTimeout(() => setCmdCopied(false), 2000);
       toast({ title: "copied install command" });
     } catch (e) {
       toast({ title: "copy failed", description: String(e), variant: "destructive" });
     }
-  }, [skill.cliInstall]);
+  }, [variant.cliInstall]);
 
   const saveToDownloads = useCallback(async () => {
     setSaveError(null);
     setSavedPath(null);
     setIsSaving(true);
     try {
-      await writeTextFile("screenpipe-SKILL.md", SCREENPIPE_SKILL_MD, {
+      await writeTextFile(variant.downloadName, variant.md, {
         baseDir: BaseDirectory.Download,
       });
       const dir = await downloadDir();
-      const filePath = await join(dir, "screenpipe-SKILL.md");
+      const filePath = await join(dir, variant.downloadName);
       setSavedPath(filePath);
       toast({ title: "saved to Downloads", description: filePath });
     } catch (e) {
@@ -205,7 +232,7 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
     } finally {
       setIsSaving(false);
     }
-  }, []);
+  }, [variant.downloadName, variant.md]);
 
   const revealSaved = useCallback(async () => {
     if (!savedPath) return;
@@ -218,10 +245,7 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground leading-relaxed">
-        Drop screenpipe&apos;s SKILL.md into {name}&apos;s skills directory. {name} will
-        load it as a new tool/skill that queries screenpipe&apos;s local API.
-      </p>
+      <p className="text-xs text-muted-foreground leading-relaxed">{variant.blurb}</p>
 
       {/* Path 1: agent on same machine — install via CLI or save to Downloads + manual move */}
       <div className="space-y-2">
@@ -229,14 +253,14 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
           if {name} runs on this machine
         </p>
 
-        {skill.cliInstall && (
+        {variant.cliInstall && (
           <div className="space-y-1.5">
             <p className="text-xs text-muted-foreground">
               One-liner install:
             </p>
             <div className="relative group">
               <pre className="bg-muted border border-border rounded-lg p-3 pr-10 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">
-                {skill.cliInstall}
+                {variant.cliInstall}
               </pre>
               <Button
                 variant="ghost"
@@ -283,7 +307,7 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
         {savedPath && (
           <p className="text-xs text-muted-foreground">
             saved to <code className="bg-muted px-1 rounded">{savedPath}</code> — move to{" "}
-            <code className="bg-muted px-1 rounded">{skill.localPath}</code> and restart {name}.
+            <code className="bg-muted px-1 rounded">{variant.localPath}</code> and restart {name}.
           </p>
         )}
         {saveError && <p className="text-xs text-destructive">{saveError}</p>}
@@ -295,11 +319,11 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
           if {name} runs on a remote machine
         </p>
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Copy the SKILL.md contents above, paste them into{" "}
-          <code className="bg-muted px-1 rounded">{skill.localPath}</code> on the remote
-          host, and either point the skill at this machine&apos;s screenpipe
-          (replace <code>localhost:3030</code> with your IP/Tailscale name) or use the{" "}
-          <strong>Sync (remote)</strong> tab to push your screenpipe data to that host.
+          Copy the SKILL.md contents above and paste them into{" "}
+          <code className="bg-muted px-1 rounded">{variant.localPath}</code> on the remote
+          host. To let {name} reach the screenpipe data on <em>this</em> machine, use the{" "}
+          <strong>Sync (remote)</strong> tab to push it over, or point any{" "}
+          <code>localhost:3030</code> calls at this machine&apos;s IP/Tailscale name.
         </p>
       </div>
     </div>
@@ -883,7 +907,7 @@ export function AgentCard({
   description,
   homepage,
   mcp,
-  skill,
+  skills,
   sync,
   connect,
 }: AgentCardProps) {
@@ -924,7 +948,7 @@ export function AgentCard({
               <McpSection name={name} mcp={mcp} />
             </TabsContent>
             <TabsContent value="skill" className="mt-3">
-              <SkillSection name={name} skill={skill} />
+              <SkillSection name={name} skills={skills} />
             </TabsContent>
             <TabsContent value="sync" className="mt-3">
               <RemoteSyncSection agentName={name} sync={sync} />

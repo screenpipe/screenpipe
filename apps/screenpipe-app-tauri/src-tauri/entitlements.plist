@@ -13,6 +13,13 @@
     <key>com.apple.security.personal-information.calendars</key>
     <true/>
 
+    <!-- Apple Events (Automation) permission. Required under hardened runtime
+         to send Apple events to other apps (browsers for URL capture). Without
+         this, AEDeterminePermissionToAutomateTarget never shows the TCC prompt
+         and the app never appears in Privacy & Security → Automation. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
     <!-- DENO -->
     <!-- DEAD CODE? -->
     <key>com.apple.security.cs.allow-jit</key>

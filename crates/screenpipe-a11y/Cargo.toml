@@ -12,6 +12,7 @@ db = ["screenpipe-db"]
 [dependencies]
 screenpipe-db = { path = "../screenpipe-db", optional = true }
 screenpipe-core = { path = "../screenpipe-core" }
+screenpipe-config = { path = "../screenpipe-config" }
 # Core
 anyhow = "1.0"
 tracing = "0.1"
@@ -44,6 +45,7 @@ dirs = "5.0"
 # copy of the C library into the workspace. `bundled` ensures we ship our
 # own SQLite on every OS rather than depending on the system's.
 rusqlite = { version = "0.29", features = ["bundled"] }
+url = "2.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }

@@ -9,6 +9,7 @@ import { Check, Upload, Loader, Calendar } from "lucide-react";
 import { Button } from "../ui/button";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
+import { openPermissionSettingsWithFlow } from "@/lib/utils/permission-flow";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettings, makeDefaultPresets } from "@/lib/hooks/use-settings";
 import { localFetch } from "@/lib/api";
@@ -1113,7 +1114,7 @@ if the input is sparse, just describe what little you have warmly. don't apologi
                     <Button
                       size="sm"
                       onClick={() =>
-                        commands.openPermissionSettings("screenRecording")
+                        openPermissionSettingsWithFlow("screenRecording")
                       }
                       className="font-mono text-xs h-8 px-3"
                     >

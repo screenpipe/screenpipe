@@ -275,32 +275,30 @@ impl UiRecorder {
         let tx4 = tx.clone();
         let stop4 = stop.clone();
         threads.push(thread::spawn(move || {
-            while !stop4.load(Ordering::Relaxed) {
-                match element_rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                    Ok((req, ctx)) => {
-                        // Send a supplementary event with the element context for the click
-                        let event = UiEvent {
-                            id: None,
-                            timestamp: req.timestamp,
-                            relative_ms: 0,
-                            data: EventData::Click {
-                                x: req.x,
-                                y: req.y,
-                                button: 0,
-                                click_count: 0, // Marker: this is an element-context-only event
-                                modifiers: 0,
-                            },
-                            app_name: None,
-                            window_title: None,
-                            browser_url: None,
-                            element: Some(ctx),
-                            frame_id: None,
-                        };
-                        let _ = tx4.try_send(event);
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            while let Ok((req, ctx)) = element_rx.recv() {
+                if stop4.load(Ordering::Relaxed) {
+                    break;
                 }
+
+                // Send a supplementary event with the element context for the click
+                let event = UiEvent {
+                    id: None,
+                    timestamp: req.timestamp,
+                    relative_ms: 0,
+                    data: EventData::Click {
+                        x: req.x,
+                        y: req.y,
+                        button: 0,
+                        click_count: 0, // Marker: this is an element-context-only event
+                        modifiers: 0,
+                    },
+                    app_name: None,
+                    window_title: None,
+                    browser_url: None,
+                    element: Some(ctx),
+                    frame_id: None,
+                };
+                let _ = tx4.try_send(event);
             }
         }));
 

@@ -1671,6 +1671,57 @@ pub async fn show_window_activated(
     show_window(app_handle, window).await
 }
 
+/// Programmatically adjust a window's always-on-top level after creation.
+///
+/// Tauri's JS `setAlwaysOnTop` can be unreliable for macOS panel-style
+/// windows. For permission flows we need Screenpipe to stay normally
+/// always-on-top, but temporarily drop below System Settings while the user is
+/// granting permissions. On macOS this directly sets the underlying NSWindow
+/// level: floating when enabled, normal when disabled.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_window_always_on_top_native(
+    app_handle: tauri::AppHandle,
+    label: String,
+    always_on_top: bool,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    let window = app_handle
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("window not found: {}", label))?;
+
+    window
+        .set_always_on_top(always_on_top)
+        .map_err(|e| format!("failed to set always-on-top: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use crate::window::run_on_main_thread_safe;
+        use raw_window_handle::HasWindowHandle;
+
+        let window_clone = window.clone();
+        run_on_main_thread_safe(&app_handle, move || {
+            if let Ok(handle) = window_clone.window_handle() {
+                if let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw() {
+                    use objc::{msg_send, sel, sel_impl};
+                    let ns_view = appkit_handle.ns_view.as_ptr() as *mut objc::runtime::Object;
+                    let ns_window: *mut objc::runtime::Object = unsafe { msg_send![ns_view, window] };
+                    if !ns_window.is_null() {
+                        // NSNormalWindowLevel = 0. NSFloatingWindowLevel = 3.
+                        // Floating keeps recovery/onboarding above normal app
+                        // windows; normal lets System Settings sit above it.
+                        let level: i64 = if always_on_top { 3 } else { 0 };
+                        let _: () = unsafe { msg_send![ns_window, setLevel: level] };
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(())
+}
+
 /// Re-assert the WKWebView as first responder for the current key panel.
 /// Called from JS on pointer enter / window focus to ensure trackpad pinch
 /// gestures (magnifyWithEvent:) reach the WKWebView for zoom handling.
@@ -3052,7 +3103,7 @@ pub async fn perform_ocr_on_image(
         OcrEngine::AppleNative => screenpipe_screen::perform_ocr_apple(&img, &languages),
         OcrEngine::Tesseract => screenpipe_screen::perform_ocr_tesseract(&img, languages),
         #[cfg(target_os = "windows")]
-        OcrEngine::WindowsNative => screenpipe_screen::perform_ocr_windows(&img)
+        OcrEngine::WindowsNative => screenpipe_screen::perform_ocr_windows(&img, &languages)
             .await
             .map_err(|e| format!("windows ocr failed: {}", e))?,
         _ => return Err("unsupported ocr engine".to_string()),

@@ -27,6 +27,7 @@ pub fn start_meeting_watcher(
     shutdown_rx: broadcast::Receiver<()>,
     detector: Option<Arc<MeetingDetector>>,
     close_orphaned_meetings_on_start: bool,
+    ignored_meeting_apps: Vec<String>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         meeting_detector::run_meeting_detection_loop(
@@ -37,6 +38,7 @@ pub fn start_meeting_watcher(
             None, // use default scan interval
             detector,
             close_orphaned_meetings_on_start,
+            ignored_meeting_apps,
         )
         .await;
     })

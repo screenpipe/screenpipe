@@ -51,7 +51,10 @@ jobs:
     - name: Install dependencies
       shell: pwsh
       run: |
-        choco install ffmpeg openssl
+        # openssl is preinstalled on the windows-2022 runner and already on PATH
+        # (e2e-test.yml mints the same Scream cert with no choco openssl). Installing
+        # it via choco breaks when slproweb.com 404s the latest OpenSSL installer.
+        choco install ffmpeg
         echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     - name: Install Scream on Windows

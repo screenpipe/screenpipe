@@ -4,6 +4,12 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Usage stats", keywords: ["stats", "activity", "analytics", "metrics"] },
+];
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";

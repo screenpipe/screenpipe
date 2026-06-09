@@ -2544,11 +2544,25 @@ async fn browser_run_snapshot(
 }
 
 /// POST /connections/browsers/:id/eval — run JS in the named browser.
+///
+/// When `url` is supplied this is a navigate-and-scrape: the owned browser
+/// navigates first, then runs `code`. That navigation must carry the same
+/// `x-screenpipe-session` owner tag as the dedicated `/navigate` endpoint, or
+/// a background pipe's eval-with-url pops its page into whatever chat is on
+/// screen (the singleton owned-browser is shared by every chat + pipe). See
+/// `browser_run_navigate` and `screenpipe-core::agents::bash_env`.
 async fn browser_run_eval(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<BrowserEvalBody>,
 ) -> (StatusCode, Json<Value>) {
+    let owner = headers
+        .get("x-screenpipe-session")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let browser = match state.browser_registry.get(&id).await {
         Some(b) => b,
         None => {
@@ -2560,7 +2574,10 @@ async fn browser_run_eval(
     };
 
     let timeout = std::time::Duration::from_secs(body.timeout_secs.unwrap_or(30).min(120));
-    match browser.eval(&body.code, body.url.as_deref(), timeout).await {
+    match browser
+        .eval_with_owner(&body.code, body.url.as_deref(), timeout, owner)
+        .await
+    {
         Ok(r) => {
             let status = if r.ok {
                 StatusCode::OK
@@ -3362,5 +3379,118 @@ mod tests {
                 "snapshot script lost field '{field}' from return shape"
             );
         }
+    }
+
+    /// Records the owner each `eval_with_owner` call receives so the route test
+    /// can prove the `x-screenpipe-session` header reaches the browser.
+    struct OwnerRecordingBrowser {
+        last_owner: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl screenpipe_connect::connections::browser::Browser for OwnerRecordingBrowser {
+        fn id(&self) -> &str {
+            "owned-default"
+        }
+        fn name(&self) -> &str {
+            "recorder"
+        }
+        fn description(&self) -> &str {
+            "records the owner passed to eval"
+        }
+        async fn is_ready(&self) -> bool {
+            true
+        }
+        async fn eval(
+            &self,
+            _code: &str,
+            _url: Option<&str>,
+            _timeout: std::time::Duration,
+        ) -> Result<
+            screenpipe_connect::connections::browser::EvalResult,
+            screenpipe_connect::connections::browser::EvalError,
+        > {
+            // Plain eval is un-owned; record None so a regression that routed
+            // through here (instead of eval_with_owner) is visible.
+            *self.last_owner.lock().await = None;
+            Ok(screenpipe_connect::connections::browser::EvalResult {
+                ok: true,
+                result: Some(json!("plain")),
+                error: None,
+            })
+        }
+        async fn eval_with_owner(
+            &self,
+            _code: &str,
+            _url: Option<&str>,
+            _timeout: std::time::Duration,
+            owner: Option<&str>,
+        ) -> Result<
+            screenpipe_connect::connections::browser::EvalResult,
+            screenpipe_connect::connections::browser::EvalError,
+        > {
+            *self.last_owner.lock().await = owner.map(|s| s.to_string());
+            Ok(screenpipe_connect::connections::browser::EvalResult {
+                ok: true,
+                result: Some(json!("ok")),
+                error: None,
+            })
+        }
+    }
+
+    /// Regression: a background pipe drives the owned browser via the
+    /// navigate-and-scrape `/eval` endpoint, which (like `/navigate`) carries
+    /// the `x-screenpipe-session` owner header the agent's curl shim injects.
+    /// The handler must forward it so the sidebar can keep the pipe's page out
+    /// of an unrelated chat. Before the fix, `/eval` ignored the header and the
+    /// owned-browser navigate event was emitted with owner=None — honored in
+    /// every chat.
+    #[tokio::test]
+    async fn browser_eval_forwards_session_owner_header() {
+        let dir = TempDir::new().unwrap();
+        let screenpipe_dir = dir.path().to_path_buf();
+        let last_owner = Arc::new(Mutex::new(None));
+        let registry = BrowserRegistry::new();
+        registry
+            .register(Arc::new(OwnerRecordingBrowser {
+                last_owner: last_owner.clone(),
+            }))
+            .await;
+
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            None,
+        )));
+        let wa = Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone())));
+        let app = router(
+            cm,
+            wa,
+            screenpipe_dir,
+            None,
+            crate::routes::browser::BrowserBridge::new(),
+            registry,
+            None,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/browsers/owned-default/eval")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-screenpipe-session", "pipe:reddit-poster")
+                    .body(Body::from(
+                        r#"{"code":"return 1","url":"https://example.com/scrape"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            last_owner.lock().await.clone(),
+            Some("pipe:reddit-poster".to_string())
+        );
     }
 }

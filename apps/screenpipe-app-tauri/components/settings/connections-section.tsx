@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, Keyboard, AlertCircle } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, Keyboard, AlertCircle, MessageSquare } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -527,16 +527,8 @@ function CursorLogo({ className }: { className?: string }) {
 }
 
 
-export function IntegrationIcon({
-  icon,
-  className = "w-10 h-10 bg-muted rounded-xl flex items-center justify-center",
-  fallbackClassName = "h-5 w-5 text-muted-foreground",
-}: {
-  icon: string;
-  className?: string;
-  fallbackClassName?: string;
-}) {
-  const icons: Record<string, React.ReactNode> = {
+// Source of truth for integration glyphs; INTEGRATION_ICON_KEYS derives from it.
+const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
@@ -612,6 +604,7 @@ export function IntegrationIcon({
     notion: <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />,
     linear: <img src="/images/linear.svg" alt="Linear" className="w-5 h-5" />,
     krisp: <img src="/images/krisp.svg" alt="Krisp" className="w-5 h-5 dark:invert" />,
+    plaud: <img src="/images/plaud.png" alt="Plaud" className="w-5 h-5 dark:invert" />,
     odoo: <img src="/images/odoo.svg" alt="Odoo" className="w-5 h-5" />,
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     posthog: <img src="/images/posthog.svg" alt="PostHog" className="w-5 h-5" />,
@@ -622,6 +615,7 @@ export function IntegrationIcon({
     github: <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />,
     jira: <img src="/images/jira.png" alt="Jira" className="w-5 h-5 rounded" />,
     granola: <img src="/images/granola.png" alt="Granola" className="w-5 h-5 rounded" />,
+    mochi: <img src="/images/mochi.png" alt="Mochi" className="w-5 h-5 rounded" />,
     hubspot: <img src="/images/hubspot.png" alt="HubSpot" className="w-5 h-5 rounded" />,
     bitrix24: <img src="/images/bitrix24.png" alt="Bitrix24" className="w-5 h-5 rounded" />,
     airtable: <img src="/images/airtable.png" alt="Airtable" className="w-5 h-5 rounded" />,
@@ -762,10 +756,22 @@ export function IntegrationIcon({
       </svg>
     ),
     workflowy: <img src="/images/workflowy.svg" alt="Workflowy" className="w-5 h-5" />,
-  };
+};
+
+export const INTEGRATION_ICON_KEYS = new Set<string>(Object.keys(INTEGRATION_ICONS));
+
+export function IntegrationIcon({
+  icon,
+  className = "w-10 h-10 bg-muted rounded-xl flex items-center justify-center",
+  fallbackClassName = "h-5 w-5 text-muted-foreground",
+}: {
+  icon: string;
+  className?: string;
+  fallbackClassName?: string;
+}) {
   return (
     <div className={className}>
-      {icons[icon] || <Send className={fallbackClassName} />}
+      {INTEGRATION_ICONS[icon] || <Send className={fallbackClassName} />}
     </div>
   );
 }
@@ -781,7 +787,42 @@ interface ConnectionTile {
   connected: boolean;
   detected?: boolean;
   category?: string;
+  description?: string;
 }
+
+const HARDCODED_DESCRIPTIONS: Record<string, string> = {
+  "claude": "Search your screen & audio from Claude Desktop via MCP",
+  "cursor": "Give Cursor AI access to your screen history via MCP",
+  "codex": "Give Codex access to your screen & audio via MCP",
+  "claude-code": "Add screen memory to the Claude Code CLI",
+  "warp": "Search screen history from Warp terminal via MCP",
+  "chatgpt": "Search your screen history from ChatGPT",
+  "browser-url": "Capture visited URLs from your browser in real time",
+  "voice-memos": "Sync Apple Voice Memos for AI-powered search",
+  "apple-intelligence": "Connect Apple Intelligence writing tools",
+  "input-monitoring": "Track keyboard & mouse for productivity insights",
+  "apple-calendar": "Search Apple Calendar events with AI",
+  "google-calendar": "Search Google Calendar events with AI",
+  "google-docs": "Read and search your Google Docs",
+  "google-sheets": "Read and search your Google Sheets",
+  "gmail": "Read and search your Gmail inbox",
+  "ics-calendar": "Subscribe to any ICS calendar feed",
+  "openclaw": "Browse the web with OpenClaw agents",
+  "hermes": "AI-powered messaging assistant",
+  "whatsapp": "Search your WhatsApp conversations",
+  "anythingllm": "Give AnythingLLM access to your screen",
+  "ollama": "Connect local Ollama models to screenpipe",
+  "lmstudio": "Connect LM Studio models to screenpipe",
+  "msty": "Connect Msty models to screenpipe",
+  "obsidian": "Sync screen memory to your Obsidian vault",
+  "notion": "Search Notion pages with your screen context",
+  "linear": "Search Linear issues from your screen context",
+  "perplexity": "Search the web with Perplexity AI",
+  "krisp": "Search Krisp meeting transcripts and notes",
+  "plaud": "Search Plaud recordings and transcripts",
+  "custom-mcp": "Connect any MCP-compatible server",
+  "skills": "Import Claude Code skills for AI automations",
+};
 
 type ConnectionSort = "suggested" | "alphabetical";
 
@@ -801,10 +842,6 @@ const FEATURED_CONNECTION_IDS = [
   "notion",
 ];
 
-const CONNECTION_SORT_OPTIONS: { value: ConnectionSort; label: string }[] = [
-  { value: "suggested", label: "Suggested" },
-  { value: "alphabetical", label: "Alphabetical" },
-];
 
 const DEVICE_CONNECTION_ORDER = [
   "custom-mcp",
@@ -862,31 +899,113 @@ function compareConnectionTiles(a: ConnectionTile, b: ConnectionTile): number {
   return a.name.localeCompare(b.name);
 }
 
-function Tile({ tile, selected, onClick }: {
+
+// Per-connection quickstart prompts shown when "Try in Chat" is clicked.
+export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
+  gmail: "Show me important emails from the last week",
+  slack: "Summarize recent Slack discussions",
+  "google-calendar": "What's on my calendar this week?",
+  "google-docs": "Summarize my recent documents",
+  "google-sheets": "Help me analyze data from my spreadsheets",
+  obsidian: "What did I write about recently in my notes?",
+  notion: "Find recent project notes in my Notion",
+  linear: "Show my open issues and tasks",
+  claude: "What have I been working on based on my screen history?",
+  cursor: "Summarize my recent coding sessions",
+  chatgpt: "What topics did I discuss with AI recently?",
+  "apple-calendar": "What meetings do I have this week?",
+  "ics-calendar": "What events are coming up this week?",
+  granola: "Show notes from my recent meetings",
+  zoom: "Summarize my recent Zoom calls",
+  krisp: "Search my meeting transcripts for action items",
+  whatsapp: "What were the latest messages in my WhatsApp?",
+  discord: "What was discussed in my Discord servers recently?",
+  teams: "Show me recent Microsoft Teams messages",
+  jira: "What are my assigned Jira issues?",
+  asana: "What tasks do I have due soon?",
+  todoist: "What tasks do I have due today?",
+  github: "Show my recent GitHub activity",
+  "browser-url": "What websites have I been visiting today?",
+  fireflies: "Show action items from my recent meetings",
+  otter: "Search my meeting recordings",
+  "voice-memos": "What did I record in Voice Memos recently?",
+};
+
+function tryInChat(tile: ConnectionTile) {
+  const prompt = TRY_IN_CHAT_PROMPTS[tile.id] ?? `What can you tell me about my ${tile.name} data?`;
+  window.dispatchEvent(
+    new CustomEvent("try-in-chat", {
+      detail: { connectionId: tile.id, connectionName: tile.name, prompt },
+    }),
+  );
+}
+
+// Horizontal list row with description — used in the browse section
+function ListRow({ tile, selected, onClick, onTryInChat }: {
   tile: ConnectionTile;
   selected: boolean;
   onClick: () => void;
+  onTryInChat?: () => void;
 }) {
-  const status = tile.connected ? "connected" : tile.detected ? "detected" : "";
-
+  // Use div instead of button to avoid nested-button DOM violations
+  // (the "Try in Chat" icon is itself a button).
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+      }}
       className={`
-        relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 p-3 rounded-xl border transition-all text-center
+        group/row flex w-full items-center gap-3 px-3 py-3 rounded-xl border transition-all text-left cursor-pointer select-none
         ${selected
           ? "border-foreground bg-accent"
-          : "border-border bg-card hover:border-muted-foreground/50 hover:bg-accent/50"
+          : "border-transparent hover:bg-accent/50 hover:border-border"
         }
       `}
     >
-      {tile.connected && (
-        <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-foreground" />
-      )}
       <IntegrationIcon icon={tile.icon} />
-      <span className="text-xs font-medium text-foreground leading-tight">{tile.name}</span>
-      <span className="h-3 text-[10px] leading-none text-muted-foreground">{status}</span>
-    </button>
+      <div className="flex flex-1 min-w-0 flex-col gap-1.5">
+        <p className="text-sm font-semibold leading-tight text-foreground">{tile.name}</p>
+        {tile.description && (
+          <p className="text-xs leading-snug text-muted-foreground truncate">{tile.description}</p>
+        )}
+      </div>
+      <div className="relative h-7 w-7 shrink-0">
+        {tile.connected ? (
+          <>
+            {/* Check mark — fades out on row hover */}
+            <div className="absolute inset-0 flex items-center justify-center transition-opacity group-hover/row:opacity-0 pointer-events-none">
+              <Check className="h-4 w-4 text-muted-foreground" />
+            </div>
+            {/* "Try in Chat" — fades in on row hover; button is valid here since parent is div */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Try in Chat"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTryInChat?.();
+                    }}
+                    className="absolute inset-0 rounded-lg flex items-center justify-center opacity-0 group-hover/row:opacity-100 group-hover/row:bg-muted transition-all"
+                  >
+                    <MessageSquare className="h-4 w-4 text-foreground" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Try in Chat</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </>
+        ) : (
+          <div className="absolute inset-0 rounded-xl bg-muted flex items-center justify-center">
+            <Plus className="h-4 w-4 text-foreground" />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2787,27 +2906,36 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 }
 
 // ---------------------------------------------------------------------------
-// Krisp — official OAuth MCP card
+// Featured OAuth MCP cards (Krisp, Plaud)
 // ---------------------------------------------------------------------------
 //
-// Krisp exposes its meeting data (transcripts, notes, action items) through a
-// remote, OAuth-gated MCP server. Rather than make the user paste the URL into
-// the Custom MCP form, this card creates the server config and runs the OAuth
-// flow in one click. Krisp registers screenpipe as a *confidential* client
-// (client_secret_basic) — handled in screenpipe-connect's mcp_servers.rs.
+// Some providers expose their data (meeting transcripts, recordings, notes)
+// through a remote, OAuth-gated MCP server. Rather than make the user paste the
+// URL into the Custom MCP form, these cards create the server config and run the
+// OAuth flow in one click. A provider may register screenpipe as a *confidential*
+// client (client_secret_basic) during dynamic client registration; that is
+// handled generically in screenpipe-connect's mcp_servers.rs, so a new provider
+// only needs its display name + MCP URL here.
 
 const KRISP_MCP_URL = "https://mcp.krisp.ai/mcp";
+const PLAUD_MCP_URL = "https://mcp.plaud.ai/mcp";
 
-function krispMcpRandomId(): string {
+function mcpRandomId(): string {
   const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function KrispPanel({
+function OAuthMcpPanel({
+  name,
+  mcpUrl,
+  description,
   onConnected,
   onDisconnected,
 }: {
+  name: string;
+  mcpUrl: string;
+  description: React.ReactNode;
   onConnected?: () => void;
   onDisconnected?: () => void;
 }) {
@@ -2826,8 +2954,8 @@ function KrispPanel({
     }
   };
 
-  // Reflect reality on open: find a Krisp MCP server created by a prior connect
-  // and read its OAuth status.
+  // Reflect reality on open: find this provider's MCP server created by a prior
+  // connect and read its OAuth status.
   const loadStatus = useCallback(async () => {
     try {
       const r = await localFetch("/mcp-servers");
@@ -2835,7 +2963,7 @@ function KrispPanel({
       const body = await r.json();
       const list = (body?.data ?? []) as { id: string; url?: string }[];
       const existing = list.find(
-        (s) => (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL
+        (s) => (s.url ?? "").replace(/\/+$/, "") === mcpUrl
       );
       if (!existing) {
         setServerId(null);
@@ -2851,7 +2979,7 @@ function KrispPanel({
         setConnected(!!sb?.data?.connected);
       }
     } catch {}
-  }, []);
+  }, [mcpUrl]);
 
   useEffect(() => {
     loadStatus();
@@ -2867,9 +2995,9 @@ function KrispPanel({
     cancelledRef.current = false;
     clearTimer();
     try {
-      // Reuse an existing Krisp server if present; otherwise create-on-complete
+      // Reuse an existing server if present; otherwise create-on-complete
       // (the server is persisted only when OAuth succeeds).
-      const targetId = serverId ?? krispMcpRandomId();
+      const targetId = serverId ?? mcpRandomId();
       const isNew = !serverId;
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
@@ -2878,7 +3006,7 @@ function KrispPanel({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             isNew
-              ? { name: "Krisp", url: KRISP_MCP_URL, headers: [], enabled: true }
+              ? { name, url: mcpUrl, headers: [], enabled: true }
               : {}
           ),
         }
@@ -2956,9 +3084,7 @@ function KrispPanel({
   return (
     <div className="p-4 space-y-3 text-sm">
       <p className="text-xs text-muted-foreground leading-relaxed">
-        Connect Krisp so your AI can search your meeting transcripts, notes, and
-        action items. Sign-in is handled by Krisp&apos;s OAuth — screenpipe never
-        sees your password.
+        {description}
       </p>
       {connected ? (
         <div className="flex items-center gap-2">
@@ -3007,7 +3133,7 @@ function KrispPanel({
           ) : (
             <LogIn className="h-3 w-3" />
           )}
-          Connect Krisp
+          Connect {name}
         </Button>
       )}
       {statusMsg && !waiting && !connected && (
@@ -3036,7 +3162,7 @@ export function ConnectionsSection({
 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
-  const [sortBy, setSortBy] = useState<ConnectionSort>("suggested");
+
   const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
@@ -3060,7 +3186,6 @@ export function ConnectionsSection({
         : ALL_CONNECTION_CATEGORIES,
     );
     setSearch("");
-    setSortBy("suggested");
     onFocusRequestConsumed?.();
   }, [focusCategory, focusConnectionId, focusRequestId, onFocusRequestConsumed]);
 
@@ -3080,6 +3205,7 @@ export function ConnectionsSection({
   const [customMcpServerCount, setCustomMcpServerCount] = useState(0);
   const [customMcpEnabledCount, setCustomMcpEnabledCount] = useState(0);
   const [krispConnected, setKrispConnected] = useState(false);
+  const [plaudConnected, setPlaudConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
 
@@ -3127,6 +3253,7 @@ export function ConnectionsSection({
         setCustomMcpServerCount(0);
         setCustomMcpEnabledCount(0);
         setKrispConnected(false);
+        setPlaudConnected(false);
         return;
       }
       const body = await r.json();
@@ -3136,11 +3263,13 @@ export function ConnectionsSection({
       setCustomMcpEnabledCount(enabled.length);
       setCustomMcpConnected(enabled.length > 0);
       setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
+      setPlaudConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === PLAUD_MCP_URL));
     }).catch(() => {
       setCustomMcpConnected(false);
       setCustomMcpServerCount(0);
       setCustomMcpEnabledCount(0);
       setKrispConnected(false);
+      setPlaudConnected(false);
     });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
@@ -3245,6 +3374,7 @@ export function ConnectionsSection({
       { id: "linear", name: "Linear", icon: "linear", connected: false, detected: detectedConnectionIds.has("linear") },
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false, detected: detectedConnectionIds.has("perplexity") },
       { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected, detected: detectedConnectionIds.has("krisp") },
+      { id: "plaud", name: "Plaud", icon: "plaud", connected: plaudConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false, detected: customMcpServerCount > 0 },
       { id: "skills", name: "Skills", icon: "skills", connected: importedSkillsCount > 0, category: "Agent" },
     ];
@@ -3260,6 +3390,7 @@ export function ConnectionsSection({
         icon: i.icon,
         connected: i.connected,
         category: normalizeConnectionCategory(i.category),
+        description: i.description || undefined,
       }));
     // Update connected status from API for hardcoded tiles that also exist in API
     for (const h of hardcoded) {
@@ -3284,21 +3415,13 @@ export function ConnectionsSection({
     }
     return [...hardcoded, ...apiTiles].map((tile) => ({
       ...tile,
-      category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
+      // Our explicit map overrides the API's category so known tools always land in the right group
+      category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
+      description: tile.description ?? HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
-  const categoryOptions = useMemo(() => {
-    const categories = Array.from(
-      new Set(allTiles.map((tile) => normalizeConnectionCategory(tile.category)))
-    ).sort((a, b) => a.localeCompare(b));
-    return [ALL_CONNECTION_CATEGORIES, ...categories];
-  }, [allTiles]);
-
-  const isDefaultView =
-    !search.trim() &&
-    categoryFilter === ALL_CONNECTION_CATEGORIES &&
-    sortBy === "suggested";
+  const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
   const suggested = useMemo(() => {
     if (!isDefaultView) return [];
@@ -3312,27 +3435,45 @@ export function ConnectionsSection({
       .slice(0, 8);
   }, [allTiles, isDefaultView]);
 
+  // Flat search results (used when search is active or category is programmatically focused)
   const filtered = useMemo(() => {
     let tiles = allTiles;
     if (categoryFilter !== ALL_CONNECTION_CATEGORIES) {
       tiles = tiles.filter((tile) => normalizeConnectionCategory(tile.category) === categoryFilter);
     }
-    const q = search.toLowerCase();
-    if (q.trim()) {
+    const q = search.toLowerCase().trim();
+    if (q) {
       tiles = tiles.filter(t => t.name.toLowerCase().includes(q));
     }
-    if (sortBy === "alphabetical") {
-      return [...tiles].sort((a, b) => a.name.localeCompare(b.name));
+    return [...tiles].sort(compareConnectionTiles);
+  }, [allTiles, categoryFilter, search]);
+
+  // Category order for grouped view
+  const CATEGORY_ORDER = ["Desktop", "AI", "Productivity", "Project Management", "Communication", "Calendar", "Documents", "Knowledge", "Meetings", "System", "Web", "Research", "Notification", "Agent", "Other"];
+
+  // Grouped tiles by category (default view — excludes suggested items)
+  const groupedTiles = useMemo(() => {
+    if (!isDefaultView) return null;
+    const suggestedIds = new Set(suggested.map(t => t.id));
+    const remaining = allTiles.filter(t => !suggestedIds.has(t.id));
+    const groups = new Map<string, ConnectionTile[]>();
+    for (const tile of remaining) {
+      const cat = normalizeConnectionCategory(tile.category);
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(tile);
     }
-    tiles = [...tiles].sort(compareConnectionTiles);
-    // In default view, the suggested row already surfaces these — drop them
-    // from the grid below to avoid duplication.
-    if (isDefaultView) {
-      const suggestedIds = new Set(suggested.map((tile) => tile.id));
-      tiles = tiles.filter((t) => !suggestedIds.has(t.id));
+    for (const tiles of groups.values()) {
+      tiles.sort(compareConnectionTiles);
     }
-    return tiles;
-  }, [allTiles, categoryFilter, search, sortBy, isDefaultView, suggested]);
+    return [...groups.entries()].sort(([a], [b]) => {
+      const ai = CATEGORY_ORDER.indexOf(a);
+      const bi = CATEGORY_ORDER.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }, [allTiles, isDefaultView, suggested]);
 
   const selectedIntegration = integrations.find(i => i.id === selected);
 
@@ -3373,9 +3514,19 @@ export function ConnectionsSection({
       case "hermes": return <HermesCard />;
       case "custom-mcp": return <CustomMcpCard />;
       case "skills": return <SkillsCard onChanged={loadSkillsCount} />;
-      case "krisp": return <KrispPanel
+      case "krisp": return <OAuthMcpPanel
+        name="Krisp"
+        mcpUrl={KRISP_MCP_URL}
+        description={<>Connect Krisp so your AI can search your meeting transcripts, notes, and action items. Sign-in is handled by Krisp&apos;s OAuth, so screenpipe never sees your password.</>}
         onConnected={() => setKrispConnected(true)}
         onDisconnected={() => setKrispConnected(false)}
+      />;
+      case "plaud": return <OAuthMcpPanel
+        name="Plaud"
+        mcpUrl={PLAUD_MCP_URL}
+        description={<>Connect Plaud so your AI can search your Plaud recordings, transcripts, summaries, and notes. Sign-in is handled by Plaud&apos;s OAuth, so screenpipe never sees your password.</>}
+        onConnected={() => setPlaudConnected(true)}
+        onDisconnected={() => setPlaudConnected(false)}
       />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
@@ -3440,7 +3591,19 @@ export function ConnectionsSection({
 
   return (
     <div className="space-y-5">
-      <p className="text-muted-foreground text-sm mb-4">Give AI access to your memory, and connect to the apps you use every day</p>
+      {/* Header: title + inline search */}
+      <div className="flex items-center gap-3">
+        <p className="flex-1 text-sm text-muted-foreground">Connect to the apps you use every day</p>
+        <div className="relative w-52 shrink-0">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search..."
+            className="pl-8 h-8 text-xs"
+          />
+        </div>
+      </div>
 
       <McpSpotlight
         enabledCount={customMcpEnabledCount}
@@ -3456,84 +3619,77 @@ export function ConnectionsSection({
       />
 
       {/* Suggested — device-aware high-activation connections, default view only. */}
-      {suggested.length > 0 && (
+      {!search.trim() && suggested.length > 0 && (
         <div className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground">Suggested for this device</h3>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {suggested.map((tile) => (
-              <Tile
+              <ListRow
                 key={tile.id}
                 tile={tile}
                 selected={selected === tile.id}
                 onClick={() => setSelected(selected === tile.id ? null : tile.id)}
+                onTryInChat={tile.connected ? () => tryInChat(tile) : undefined}
               />
             ))}
           </div>
         </div>
       )}
 
-      {/* Search & filters */}
-      <div className="space-y-2">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="search connections..."
-            className="pl-9 h-9 text-sm"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-            <SelectTrigger className="h-9 flex-1 text-sm">
-              <SelectValue placeholder="Filter by" />
-            </SelectTrigger>
-            <SelectContent>
-              {categoryOptions.map((category) => (
-                <SelectItem key={category} value={category}>
-                  {category === ALL_CONNECTION_CATEGORIES ? "All categories" : category}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={sortBy} onValueChange={(value) => setSortBy(value as ConnectionSort)}>
-            <SelectTrigger className="h-9 w-[150px] text-sm">
-              <SelectValue placeholder="Sort by" />
-            </SelectTrigger>
-            <SelectContent>
-              {CONNECTION_SORT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Grid */}
-      <div className="grid grid-cols-3 gap-2">
-        {!integrationsLoaded ? (
-          Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border bg-card animate-pulse">
-              <div className="w-8 h-8 rounded-md bg-muted" />
-              <div className="flex-1 space-y-1.5">
-                <div className="h-3 bg-muted rounded w-20" />
-                <div className="h-2 bg-muted rounded w-12" />
+      {/* Connections — categorized sections or flat search results */}
+      {!integrationsLoaded ? (
+        <div className="space-y-6">
+          {Array.from({ length: 3 }).map((_, gi) => (
+            <div key={gi} className="space-y-2">
+              <div className="h-4 bg-muted rounded w-24 animate-pulse" />
+              <div className="grid grid-cols-2 gap-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-border bg-card animate-pulse">
+                    <div className="w-10 h-10 rounded-xl bg-muted shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3 bg-muted rounded w-20" />
+                      <div className="h-2.5 bg-muted rounded w-32" />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          ))
-        ) : (
-          filtered.map((tile) => (
-            <Tile
+          ))}
+        </div>
+      ) : search.trim() || categoryFilter !== ALL_CONNECTION_CATEGORIES ? (
+        <div className="grid grid-cols-2 gap-2">
+          {filtered.map((tile) => (
+            <ListRow
               key={tile.id}
               tile={tile}
               selected={selected === tile.id}
               onClick={() => setSelected(selected === tile.id ? null : tile.id)}
+              onTryInChat={tile.connected ? () => tryInChat(tile) : undefined}
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {groupedTiles?.map(([category, tiles]) => (
+            <div key={category} className="space-y-3">
+              <div className="border-b border-border pb-2">
+                <h3 className="text-sm font-semibold text-foreground">{category}</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {tiles.map((tile) => (
+                  <ListRow
+                    key={tile.id}
+                    tile={tile}
+                    selected={selected === tile.id}
+                    onClick={() => setSelected(selected === tile.id ? null : tile.id)}
+                    onTryInChat={tile.connected ? () => tryInChat(tile) : undefined}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Dialog
         open={!!selected && !!selectedTile}

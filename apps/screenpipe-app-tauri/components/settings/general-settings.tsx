@@ -18,6 +18,18 @@ import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
 import { UpdateBanner } from "@/components/update-banner";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Auto-start", keywords: ["autostart", "launch", "startup"] },
+  { label: "Auto-update", keywords: ["updates"] },
+  { label: "Check for updates", keywords: ["version"] },
+  { label: "Auto-Update Pipes" },
+  { label: "Enhanced AI", keywords: ["cloud"] },
+  { label: "Auto-generate chat titles" },
+  { label: "Reset Onboarding", keywords: ["setup"] },
+];
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import {

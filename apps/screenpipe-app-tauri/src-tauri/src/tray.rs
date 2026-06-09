@@ -46,6 +46,8 @@ struct TrayMenuData {
     search_shortcut: String,
     chat_shortcut: String,
     cloud_subscribed: bool,
+    /// Internal plan id from /api/user (standard|pro|team|enterprise|lifetime|none).
+    subscription_plan: Option<String>,
     has_permission_issue: bool,
     app_ui_hidden: bool,
     disable_timeline: bool,
@@ -109,6 +111,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
     }
 
     let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
+    let subscription_plan = settings.user.subscription_plan.clone();
     let disable_timeline = settings.recording.disable_timeline;
 
     let app_ui_hidden = is_app_ui_hidden();
@@ -133,9 +136,25 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         search_shortcut,
         chat_shortcut,
         cloud_subscribed,
+        subscription_plan,
         has_permission_issue,
         app_ui_hidden,
         disable_timeline,
+    }
+}
+
+/// Map an internal plan id to the public pricing-page display name.
+/// The pricing page renames the tiers: standard→"Basic", pro→"Business",
+/// enterprise→"Enterprise". Keep in sync with `planDisplayName` in
+/// lib/app-entitlement.ts.
+fn plan_display_name(plan: Option<&str>) -> &'static str {
+    match plan.unwrap_or("none").to_ascii_lowercase().as_str() {
+        "standard" => "Basic",
+        "pro" => "Business",
+        "team" => "Team",
+        "enterprise" => "Enterprise",
+        "lifetime" => "Lifetime",
+        _ => "Free",
     }
 }
 
@@ -360,8 +379,10 @@ struct MenuState {
     has_permission_issue: bool,
     /// Device names + active status for change detection
     devices: Vec<(String, bool)>,
-    /// Whether user has a pro subscription (triggers menu rebuild on login)
+    /// Whether user has a cloud (Business+) subscription (triggers menu rebuild on login)
     cloud_subscribed: bool,
+    /// Plan id (Free/Basic/Business/…) so plan-label changes also rebuild the menu
+    subscription_plan: Option<String>,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -688,22 +709,19 @@ fn create_dynamic_menu(
 
     // --- Plan / usage info ---
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_plan") {
-        let is_pro = data.cloud_subscribed;
+        let plan_label = plan_display_name(data.subscription_plan.as_deref());
+        let has_cloud = data.cloud_subscribed;
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
-        if is_pro {
-            menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id("plan_info", "Pro plan")
-                    .enabled(false)
-                    .build(app)?,
-            );
-        } else {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("plan_info", format!("{} plan", plan_label))
+                .enabled(false)
+                .build(app)?,
+        );
+        // Anyone without cloud (Free, Basic, or Lifetime-only) can move up to
+        // Business to add cloud sync, cloud AI, and integrations.
+        if !has_cloud {
             menu_builder = menu_builder
-                .item(
-                    &MenuItemBuilder::with_id("plan_info", "Free plan")
-                        .enabled(false)
-                        .build(app)?,
-                )
-                .item(&MenuItemBuilder::with_id("upgrade", "⚡ Upgrade to Pro").build(app)?);
+                .item(&MenuItemBuilder::with_id("upgrade", "⚡ Upgrade to Business").build(app)?);
         }
     }
 
@@ -1391,6 +1409,7 @@ async fn update_menu_if_needed(
             .map(|d| (d.name.clone(), d.active))
             .collect(),
         cloud_subscribed: data.cloud_subscribed,
+        subscription_plan: data.subscription_plan.clone(),
     };
 
     // Compare with last state (poison-safe: run handler must not panic)

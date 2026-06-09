@@ -15,6 +15,10 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  deleteCachedBrowserState,
+  setCachedBrowserState,
+} from "../browser-state-cache";
 
 vi.mock("@/lib/chat-storage", () => ({
   listConversations: vi.fn(async () => []),
@@ -40,6 +44,7 @@ function piEvt(sessionId: string, event: AgentInnerEvent): AgentEventEnvelope {
 
 function reset() {
   vi.clearAllMocks();
+  deleteCachedBrowserState("A");
   useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 }
 
@@ -129,6 +134,46 @@ describe("pi-event-router: status mirroring for backgrounded sessions", () => {
   });
 });
 
+describe("pi-event-router: browser state preservation", () => {
+  beforeEach(reset);
+
+  it("preserves browserState from the shadow cache when background save runs before the file exists", async () => {
+    seed("A", {
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+      ],
+      messageCount: 1,
+      isLoading: true,
+      isStreaming: true,
+    });
+    useChatStore.setState({ currentId: "B" });
+    setCachedBrowserState("A", {
+      url: "https://example.com/background-shadow",
+      updatedAt: 4_321,
+      width: 480,
+    });
+
+    handleTerminated({ sessionId: "A", exitCode: 0 } as any);
+    await flushPendingSaves();
+
+    expect(saveConversationFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "A",
+        browserState: {
+          url: "https://example.com/background-shadow",
+          updatedAt: 4_321,
+          width: 480,
+        },
+      }),
+    );
+  });
+});
+
 describe("pi-event-router: background content accumulation (the parallel-chat repro)", () => {
   beforeEach(reset);
 
@@ -174,18 +219,25 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
     expect((a3.messages![0] as any).content).toBe("Hello world");
   });
 
-  it("SKIPS content writes for the foreground session (panel owns it)", async () => {
-    // Foreground writes belong to standalone-chat. If the router also
-    // wrote, the same delta would land twice — once in panel state,
-    // once in store messages — and on snapshot the panel's view would
-    // overwrite the router's, producing flicker / duplicates.
+  it("materializes queued background user turns before the assistant reply", async () => {
     seed("A");
-    useChatStore.setState({ currentId: "A" }); // A is foreground
+    useChatStore.setState({ currentId: "B" });
     await handlePiEvent(
-      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+      piEvt("A", {
+        type: "message_start",
+        message: {
+          role: "user",
+          content:
+            "<conversation_history>\nuser: x\nassistant: y\n</conversation_history>\n\nqueued follow-up",
+        },
+      }),
     );
-    expect(useChatStore.getState().sessions.A.messages ?? []).toEqual([]);
-    expect(useChatStore.getState().sessions.A.streamingMessageId).toBeFalsy();
+    const session = useChatStore.getState().sessions.A;
+    expect(session.messages).toHaveLength(2);
+    expect((session.messages![0] as any).role).toBe("user");
+    expect((session.messages![0] as any).content).toBe("queued follow-up");
+    expect((session.messages![1] as any).role).toBe("assistant");
+    expect(session.streamingMessageId).toBe((session.messages![1] as any).id);
   });
 
   it("keeps one assistant message across turn_end + assistant restart after switch-away", async () => {
@@ -251,6 +303,35 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
       "text",
     ]);
     expect(assistant.contentBlocks[1].toolCall.result).toBe("hi");
+  });
+
+  it("keeps accumulating during the switch-back gap after currentId flips", async () => {
+    // Regression for the "come back immediately and the queued turn vanishes"
+    // repro. During the handoff window `loadConversation` has already flipped
+    // currentId to A but the new foreground handler is not attached yet, so
+    // the default router must still accept A's events.
+    seed("A");
+    useChatStore.setState({ currentId: "A" });
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_start",
+        message: { role: "user", content: "queued while switching back" },
+      }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "still here" },
+      }),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.messages).toHaveLength(2);
+    expect((session.messages![0] as any).role).toBe("user");
+    expect((session.messages![0] as any).content).toBe("queued while switching back");
+    expect((session.messages![1] as any).role).toBe("assistant");
+    expect((session.messages![1] as any).content).toBe("still here");
   });
 });
 

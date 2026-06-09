@@ -374,6 +374,9 @@ fn map_output(out: opf::RedactionOutput) -> RedactionOutput {
             start: s.start,
             end: s.end,
             label: map_label(s.label),
+            // Model spans carry the coarse label only; sub-types come from
+            // the deterministic detectors.
+            subtype: None,
             // opf-rs returns score, not text; rebuild text from the
             // input slice for the audit-log contract this trait carries.
             text: input.get(s.start..s.end).unwrap_or("").to_string(),

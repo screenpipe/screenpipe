@@ -4,6 +4,10 @@
 
 @layer base {
   :root {
+    /* Tell the engine the UI is light by default so native scrollbars and form
+       controls render correctly. Overridden by `.dark` below. (#3746) */
+    color-scheme: light;
+
     /*
      * Screenpipe Brand Style Guide
      * Black & White Geometric Minimalism
@@ -103,9 +107,26 @@
 
     /* Sharp corners - no radius */
     --radius: 0;
+
+    /* Font size scale — controlled by the font size setting */
+    --font-size-base: 16px;
+    --text-xs: calc(var(--font-size-base) * 0.75);
+    --text-sm: calc(var(--font-size-base) * 0.875);
+    --text-base: var(--font-size-base);
+    --text-lg: calc(var(--font-size-base) * 1.125);
+    --text-xl: calc(var(--font-size-base) * 1.25);
+    --text-2xl: calc(var(--font-size-base) * 1.5);
+    --text-3xl: calc(var(--font-size-base) * 1.875);
+    --text-4xl: calc(var(--font-size-base) * 2.25);
   }
 
   .dark {
+    /* Match native scrollbars and form controls to the dark UI even when the OS
+       is in light mode. The theme is class-based (`.dark` on <html>), not
+       prefers-color-scheme, so without this the WebView keeps painting a light
+       scrollbar/controls in dark mode (most visible on Windows). (#3746) */
+    color-scheme: dark;
+
     /* Base colors - Slightly lifted black */
     --background: 0 0% 7%; /* #121212 */
     --foreground: 0 0% 100%; /* #FFFFFF */

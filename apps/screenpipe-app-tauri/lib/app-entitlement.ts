@@ -187,6 +187,27 @@ export function normalizePlanLabel(plan: string | null | undefined) {
   return plan.replace(/_/g, " ");
 }
 
+// Map an internal plan id to the public pricing-page display name.
+// The pricing page (app/onboarding) renames the tiers: standard→"Basic",
+// pro→"Business", enterprise→"Enterprise". Keep this in sync with the Rust
+// `plan_display_name` in src-tauri/src/tray.rs.
+export function planDisplayName(plan: string | null | undefined): string {
+  switch ((plan || "none").toLowerCase()) {
+    case "standard":
+      return "Basic";
+    case "pro":
+      return "Business";
+    case "team":
+      return "Team";
+    case "enterprise":
+      return "Enterprise";
+    case "lifetime":
+      return "Lifetime";
+    default:
+      return "Free";
+  }
+}
+
 export function normalizeAppUser(rawUser: any, token: string): AppUser {
   const checkedAt = new Date().toISOString();
   const rawEntitlement = asEntitlement(rawUser?.entitlement);

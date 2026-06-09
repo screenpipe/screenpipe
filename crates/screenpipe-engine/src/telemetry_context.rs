@@ -32,6 +32,23 @@ const EMBEDDER_VERSION_ENV_VARS: &[&str] = &[
     "SCREENPIPE_HOST_VERSION",
     "SCREENPIPE_TELEMETRY_HOST_VERSION",
 ];
+const DISTRIBUTION_ENV_VARS: &[&str] = &["SCREENPIPE_DISTRIBUTION", "SCREENPIPE_DIST"];
+
+/// How this engine was launched: "desktop-app" (Tauri app), "cli" (npm/bunx),
+/// or "source"/"source-dev" (built locally). The app and CLI set
+/// `SCREENPIPE_DISTRIBUTION` explicitly; without it we infer a source build
+/// (debug = dev). Lets analytics split the free OSS engine WAU from the signed
+/// app and paying users.
+pub fn resolve_distribution() -> String {
+    if let Some(value) = first_env(DISTRIBUTION_ENV_VARS) {
+        return value;
+    }
+    if cfg!(debug_assertions) {
+        "source-dev".to_string()
+    } else {
+        "source".to_string()
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TelemetryContext {
@@ -83,20 +100,30 @@ impl TelemetryContext {
     }
 
     pub fn insert_posthog_properties(&self, properties: &mut Map<String, Value>) {
+        // Distribution channel (desktop-app / cli / source) is ALWAYS tagged —
+        // even with no enterprise context — so every engine event and person can
+        // be split by how screenpipe was installed (separates the free OSS engine
+        // WAU from the signed app + paid users).
+        let distribution = resolve_distribution();
+        properties.insert(
+            "screenpipe_distribution".to_string(),
+            json!(distribution.clone()),
+        );
+
         let pairs = self.pairs();
-        if pairs.is_empty() {
-            return;
+
+        // Mirror onto $set so the PERSON is tagged (sticky, segmentable like
+        // subscription_plan), including distribution and any enterprise context.
+        let set = properties.entry("$set").or_insert_with(|| json!({}));
+        if let Some(set_obj) = set.as_object_mut() {
+            set_obj.insert("screenpipe_distribution".to_string(), json!(distribution));
+            for (key, value) in &pairs {
+                set_obj.insert((*key).to_string(), json!(value));
+            }
         }
 
         for (key, value) in &pairs {
             properties.insert((*key).to_string(), json!(value));
-        }
-
-        let set = properties.entry("$set").or_insert_with(|| json!({}));
-        if let Some(set_obj) = set.as_object_mut() {
-            for (key, value) in pairs {
-                set_obj.insert(key.to_string(), json!(value));
-            }
         }
     }
 }
@@ -142,6 +169,8 @@ mod tests {
         "SCREENPIPE_EMBEDDER_VERSION",
         "SCREENPIPE_HOST_VERSION",
         "SCREENPIPE_TELEMETRY_HOST_VERSION",
+        "SCREENPIPE_DISTRIBUTION",
+        "SCREENPIPE_DIST",
     ];
 
     fn with_env<T>(pairs: &[(&str, &str)], test: impl FnOnce() -> T) -> T {
@@ -232,5 +261,37 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn distribution_prefers_env_then_falls_back_to_source() {
+        with_env(&[("SCREENPIPE_DISTRIBUTION", "desktop-app")], || {
+            assert_eq!(resolve_distribution(), "desktop-app");
+        });
+        with_env(&[], || {
+            // no launcher env -> inferred source build (dev under `cargo test`)
+            assert!(resolve_distribution().starts_with("source"));
+        });
+    }
+
+    #[test]
+    fn distribution_always_tagged_even_without_context() {
+        with_env(&[("SCREENPIPE_DISTRIBUTION", "cli")], || {
+            let context = TelemetryContext::from_env();
+            assert!(context.is_empty(), "no enterprise context expected");
+
+            let mut properties = Map::new();
+            context.insert_posthog_properties(&mut properties);
+
+            assert_eq!(
+                properties.get("screenpipe_distribution"),
+                Some(&json!("cli"))
+            );
+            let set = properties.get("$set").and_then(|value| value.as_object());
+            assert_eq!(
+                set.and_then(|value| value.get("screenpipe_distribution")),
+                Some(&json!("cli"))
+            );
+        });
     }
 }

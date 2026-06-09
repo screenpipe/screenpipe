@@ -65,6 +65,7 @@ pub mod events;
 pub mod incognito;
 pub mod platform;
 pub mod tree;
+pub mod url_filter;
 
 // Re-exports
 pub use activity_feed::{ActivityFeed, ActivityKind, CaptureParams};

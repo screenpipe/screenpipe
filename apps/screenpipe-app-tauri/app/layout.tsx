@@ -318,8 +318,11 @@ export default function RootLayout({
     const SELECTABLE =
       '.prose, .selectable-text-layer, input, textarea, [contenteditable="true"], [contenteditable=""]';
     const onSelectStart = (e: Event) => {
-      const target = e.target as Element | null;
-      if (target?.closest?.(SELECTABLE)) return; // allow selecting real content
+      // e.target may be a Text node (when clicking mid-text), which lacks
+      // .closest(). Walk up to the nearest Element so the check works.
+      const node = e.target as Node | null;
+      const el = node instanceof Element ? node : node?.parentElement;
+      if (el?.closest?.(SELECTABLE)) return; // allow selecting real content
       e.preventDefault();
     };
     document.addEventListener("selectstart", onSelectStart);
@@ -347,6 +350,13 @@ export default function RootLayout({
                   var systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                   document.documentElement.classList.add(systemTheme);
                 }
+
+                try {
+                  var savedFs = localStorage.getItem('screenpipe-font-size');
+                  if (savedFs) {
+                    document.documentElement.style.setProperty('--font-size-base', savedFs);
+                  }
+                } catch (e) {}
 
                 // Crash recovery: if React fails to render, the page stays blank.
                 // After 8s, if <body> has no visible children, reload once.

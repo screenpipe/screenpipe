@@ -24,7 +24,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::Redactor;
 
@@ -155,6 +155,21 @@ impl Worker {
             }
         }
 
+        // A non-transient corruption error (SQLITE_CORRUPT / "database disk
+        // image is malformed") won't clear on retry — the DB must be
+        // recovered. Detect it so we log once and back off hard instead of
+        // pinning a CPU core retrying every 2s (what users see as a sudden
+        // screenpipe CPU spike).
+        fn is_db_corruption<E: std::fmt::Display + ?Sized>(e: &E) -> bool {
+            let msg = e.to_string().to_lowercase();
+            msg.contains("malformed")             // database disk image is malformed
+                || msg.contains("disk image")
+                || msg.contains("(code: 11)")     // SQLITE_CORRUPT
+                || msg.contains("not a database") // SQLITE_NOTADB
+                || msg.contains("(code: 26)")
+        }
+        let mut corruption_logged = false;
+
         loop {
             if self.paused.load(std::sync::atomic::Ordering::SeqCst) {
                 self.set_paused(true).await;
@@ -185,14 +200,42 @@ impl Worker {
                         info!("redact worker: shutdown signal received mid-batch, exiting");
                         return;
                     }
-                    Some(Ok(n)) if n > 0 => any_work = true,
-                    Some(Ok(_)) => {}
+                    Some(Ok(n)) if n > 0 => {
+                        any_work = true;
+                        corruption_logged = false; // DB readable again
+                    }
+                    Some(Ok(_)) => {
+                        corruption_logged = false; // DB readable again
+                    }
                     Some(Err(e)) => {
+                        {
+                            let mut s = self.status.lock().await;
+                            s.last_error = Some(e.to_string());
+                        }
+                        if is_db_corruption(&e) {
+                            // Non-transient: the DB is corrupt and every table
+                            // shares it, so retrying now just spins a core.
+                            // Log once, back off 5 min, and skip the rest of
+                            // this round.
+                            if !corruption_logged {
+                                error!(
+                                    table = ?table,
+                                    error = %e,
+                                    "database corruption detected — backing off reconciliation \
+                                     (retrying every 5 min); recover the DB to clear this"
+                                );
+                                corruption_logged = true;
+                            }
+                            if race(time::sleep(Duration::from_secs(300)), shutdown.as_ref())
+                                .await
+                                .is_none()
+                            {
+                                return;
+                            }
+                            break;
+                        }
                         warn!(table = ?table, error = %e, "reconciliation error; will retry");
-                        let mut s = self.status.lock().await;
-                        s.last_error = Some(e.to_string());
-                        drop(s);
-                        // backoff on error
+                        // backoff on transient error
                         if race(time::sleep(Duration::from_secs(2)), shutdown.as_ref())
                             .await
                             .is_none()

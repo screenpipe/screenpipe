@@ -38,11 +38,18 @@ describe("owned-browser ownership", () => {
       expect(isForeignNavigation(null, "conv-C")).toBe(false);
       expect(isForeignNavigation(undefined, "conv-C")).toBe(false);
       expect(isForeignNavigation("", "conv-C")).toBe(false);
+      // Untagged is honored even when no chat is bound — that's a fresh
+      // chat's own restore/reload, not a foreign pipe.
+      expect(isForeignNavigation(null, null)).toBe(false);
     });
 
-    it("does not gate when no chat is bound", () => {
-      expect(isForeignNavigation("pipe:x", null)).toBe(false);
-      expect(isForeignNavigation("pipe:x", undefined)).toBe(false);
+    it("gates a tagged navigation when no chat is bound (fresh/unsaved chat)", () => {
+      // conversationId is null until the first message is saved. A background
+      // pipe (or another chat's agent) navigating the shared browser then must
+      // NOT pop its page into the empty chat the user is looking at.
+      expect(isForeignNavigation("pipe:x", null)).toBe(true);
+      expect(isForeignNavigation("pipe:x", undefined)).toBe(true);
+      expect(isForeignNavigation("conv-A", "")).toBe(true);
     });
   });
 

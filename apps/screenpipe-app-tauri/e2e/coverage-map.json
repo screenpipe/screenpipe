@@ -223,6 +223,16 @@
       "notes": "macOS-only chat streaming responsiveness."
     },
     {
+      "spec": "zzz-browser-state-chat-switch.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["real-ui-e2e", "storage-privacy"],
+      "features": ["chat", "owned-browser"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Synthetic E2E (zzz- prefix, search-driven): starts from a fresh chat with no conversation file, seeds browser state before the first durable save, then verifies auto-save persists that state and it survives a switch away and back. Keeps native visibility assertions out of this spec because post-zz window state is too brittle; deeper save/merge coverage lives in focused tests."
+    },
+    {
       "spec": "chat-switch-context-loss.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
@@ -421,6 +431,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Settings sections, storage, privacy, and rapid switching crash guard."
+    },
+    {
+      "spec": "meeting-apps-picker.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "real-ui-e2e"],
+      "features": ["settings-recording", "meeting-detector-ignored-apps"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847)."
     },
     {
       "spec": "timeline.spec.ts",

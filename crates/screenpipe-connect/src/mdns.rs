@@ -11,6 +11,7 @@
 //! screenpipe continues to work. Discovery falls back to SSH/Tailscale.
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -38,6 +39,25 @@ const BROWSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// service stays advertised. Dropping the daemon would unregister the service.
 static DAEMON: OnceLock<Option<ServiceDaemon>> = OnceLock::new();
 
+/// Whether mDNS LAN peer discovery is enabled. Off by default: both advertising
+/// and browsing open a multicast socket, which makes macOS prompt for "Local
+/// Network" access. Discovery is opt-in (CLI `--enable-mdns` /
+/// `SCREENPIPE_ENABLE_MDNS`), so screenpipe stays silent on the network unless
+/// the user wants multi-device discovery / remote sync.
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable mDNS advertise + browse. Call once at startup from config.
+/// While disabled, `advertise` and `browse` are no-ops that never touch the
+/// network (no daemon, no multicast, no permission prompt).
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether mDNS discovery is currently enabled.
+pub fn is_enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
 fn get_or_init_daemon() -> Option<&'static ServiceDaemon> {
     DAEMON
         .get_or_init(|| match ServiceDaemon::new() {
@@ -55,6 +75,11 @@ fn get_or_init_daemon() -> Option<&'static ServiceDaemon> {
 /// Call once at startup. The advertisement persists until the process exits.
 /// Returns `Ok(())` on success or silently succeeds if mDNS is unavailable.
 pub fn advertise(port: u16) -> Result<(), String> {
+    if !is_enabled() {
+        debug!("mdns: discovery disabled, not advertising");
+        return Ok(());
+    }
+
     let daemon = match get_or_init_daemon() {
         Some(d) => d,
         None => return Ok(()), // mDNS unavailable, skip silently
@@ -108,6 +133,9 @@ pub fn advertise(port: u16) -> Result<(), String> {
 /// Returns a list of `(host, port)` pairs. Best-effort: returns an empty
 /// vec if mDNS is unavailable or no instances are found within the timeout.
 pub async fn browse() -> Vec<(String, u16)> {
+    if !is_enabled() {
+        return Vec::new();
+    }
     // Run the blocking browse on a dedicated thread
     tokio::task::spawn_blocking(browse_blocking)
         .await

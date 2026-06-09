@@ -18,6 +18,7 @@ import type {
   ConversationKind,
   PipeContext,
 } from "@/lib/hooks/use-settings";
+import { deleteCachedBrowserState } from "@/lib/browser-state-cache";
 import {
   CHAT_PROCESSING_PLACEHOLDER,
   CONVERSATION_DEDUP_WINDOW_MS,
@@ -134,16 +135,18 @@ export async function loadConversationFile(
 }
 
 export async function deleteConversationFile(id: string): Promise<void> {
-  const dir = await getChatsDir();
-  const filename = conversationFilename(id);
-  const filePath = `${dir}/${filename}`;
   try {
+    const dir = await getChatsDir();
+    const filename = conversationFilename(id);
+    const filePath = `${dir}/${filename}`;
     if (await exists(filePath)) {
       await remove(filePath);
       forgetConversationEntry(dir, filename);
     }
   } catch {
     // ignore
+  } finally {
+    deleteCachedBrowserState(id);
   }
 }
 

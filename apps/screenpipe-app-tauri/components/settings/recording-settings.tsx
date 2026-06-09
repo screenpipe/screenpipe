@@ -7,6 +7,32 @@
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { useSettingsIndexDriftCheck, type SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  // Mirrors the labels actually rendered by RecordingSettings. Keep in sync.
+  { label: "Audio Recording", keywords: ["mic", "microphone", "audio"] },
+  { label: "Transcription engine", keywords: ["whisper", "cloud", "stt"] },
+  // conditional: rendered only when audio is enabled / engine selected.
+  { label: "Live meeting notes", keywords: ["captions", "meeting", "live"], conditional: true },
+  { label: "Append typed text to note", keywords: ["note", "append"], conditional: true },
+  { label: "Batch Transcription", keywords: ["batch", "chunks", "quality"], conditional: true },
+  { label: "Filter Music", keywords: ["music", "background music", "filter"], conditional: true },
+  { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"], conditional: true },
+  { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
+  { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
+  // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
+  { label: "Microphone echo cancellation", keywords: ["echo", "voiceprocessingio"], conditional: true },
+  { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
+  { label: "Screen recording", keywords: ["screen", "video"] },
+  { label: "Use all monitors", keywords: ["monitor", "display"] },
+  { label: "Recording quality", keywords: ["fps", "quality"] },
+  // conditional: monitor picker only renders when "Use all monitors" is off.
+  { label: "Monitors", conditional: true },
+  { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
+  { label: "Chinese mirror", keywords: ["china", "mirror"] },
+];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { Label } from "@/components/ui/label";
 import {
@@ -49,6 +75,7 @@ import {
   FileText,
   User,
   Users,
+  UserX,
   ChevronUp,
   ChevronDown,
   CheckCircle2,
@@ -100,7 +127,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { MultiSelect } from "@/components/ui/multi-select";
+import { MeetingAppsPicker } from "./meeting-apps-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import * as Sentry from "@sentry/react";
@@ -1670,10 +1697,16 @@ function HighFpsCard({
 export function RecordingSettings() {
   const { settings, updateSettings, getDataDir, loadUser } = useSettings();
   const [openLanguages, setOpenLanguages] = React.useState(false);
+  // Dev-only: warn if searchIndex drifts from rendered headings. State-gated
+  // fields are marked `conditional: true` in the index above, so no false
+  // positives while they're hidden — no hardcoded allowlist here.
+  const sectionRootRef = React.useRef<HTMLDivElement | null>(null);
+  useSettingsIndexDriftCheck("Recording", searchIndex, sectionRootRef);
 
   // Add validation state
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [pendingChanges, setPendingChanges] = useState<Partial<SettingsStore>>({});
+  const [meetingAppsPickerOpen, setMeetingAppsPickerOpen] = useState(false);
 
   const { items: windowItems, isLoading: isWindowItemsLoading } =
     useSqlAutocomplete("window");
@@ -2369,8 +2402,23 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
     }
   };
 
+  // Toggle one app in/out of the meeting-detection ignore list (used by the
+  // MeetingAppsPicker rows and chips). Case-insensitive; stores the trimmed
+  // label the user picked.
+  const handleToggleIgnoredMeetingApp = (value: string) => {
+    const cur = settings.ignoredMeetingApps ?? [];
+    const term = value.trim();
+    if (!term) return;
+    const lower = term.toLowerCase();
+    const exists = cur.some((v) => v.toLowerCase() === lower);
+    const next = exists
+      ? cur.filter((v) => v.toLowerCase() !== lower)
+      : [...cur, term];
+    handleSettingsChange({ ignoredMeetingApps: next }, true);
+  };
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" ref={sectionRootRef}>
       <p className="text-muted-foreground text-sm mb-4">
         Screen and audio recording preferences
       </p>
@@ -3307,16 +3355,46 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <p className="text-xs text-muted-foreground">Auto-start meetings when a call app is detected</p>
                 </div>
               </div>
-              <ManagedSwitch
-                settingKey="disableMeetingDetector"
-                id="disableMeetingDetector"
-                checked={!settings.disableMeetingDetector}
-                onCheckedChange={(checked) => handleSettingsChange({ disableMeetingDetector: !checked }, true)}
-              />
+              <div className="flex items-center gap-2 shrink-0">
+                {!settings.disableMeetingDetector && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] gap-1.5"
+                    onClick={() => setMeetingAppsPickerOpen(true)}
+                    title="Choose apps that should never auto-start a meeting"
+                    data-testid="settings-ignore-meeting-apps-button"
+                  >
+                    <UserX className="h-3.5 w-3.5" />
+                    ignore apps
+                    {(settings.ignoredMeetingApps?.length ?? 0) > 0 && (
+                      <span
+                        className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums"
+                        data-testid="settings-ignore-meeting-apps-count"
+                      >
+                        {settings.ignoredMeetingApps!.length}
+                      </span>
+                    )}
+                  </Button>
+                )}
+                <ManagedSwitch
+                  settingKey="disableMeetingDetector"
+                  id="disableMeetingDetector"
+                  checked={!settings.disableMeetingDetector}
+                  onCheckedChange={(checked) => handleSettingsChange({ disableMeetingDetector: !checked }, true)}
+                />
+              </div>
             </div>
           </CardContent>
         </Card>
         )}
+
+        <MeetingAppsPicker
+          open={meetingAppsPickerOpen}
+          onOpenChange={setMeetingAppsPickerOpen}
+          selected={settings.ignoredMeetingApps ?? []}
+          onToggle={handleToggleIgnoredMeetingApp}
+        />
 
         {/* Per-app exclusion list for the CoreAudio Process Tap. Only
             meaningful when the tap is the active backend. */}

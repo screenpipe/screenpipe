@@ -22,6 +22,10 @@ import {
   shouldAcceptTitleSource,
 } from "@/lib/utils/chat-title";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
+import {
+  getCachedBrowserStateEntry,
+  resolveNewestBrowserState,
+} from "@/lib/browser-state-cache";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
@@ -497,6 +501,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const existing = await loadConversationFile(convId);
+    const browserState = resolveNewestBrowserState(
+      existing?.browserState,
+      getCachedBrowserStateEntry(convId),
+    );
 
     // Find first real user message, skipping injected metadata.
     const firstUserMsg = msgs.find((m) => (
@@ -704,6 +712,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // plain chat (kind/pipeContext dropped on disk).
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+      ...(browserState ? { browserState } : {}),
       ...(existing?.pinned ? { pinned: existing.pinned } : {}),
       ...(existing?.hidden ? { hidden: existing.hidden } : {}),
       // Preserve sort key across reloads. Source of truth: the in-memory

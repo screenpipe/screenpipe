@@ -109,15 +109,15 @@ impl DbConfig {
         match tier {
             DeviceTier::High => Self::default(),
             DeviceTier::Mid => Self {
-                mmap_size: 128 * 1024 * 1024, // 128 MB
-                cache_size_kb: 32_000,        // 32 MB
+                mmap_size: 0,          // disabled — see DbConfig::default (prevents DB corruption)
+                cache_size_kb: 32_000, // 32 MB
                 read_pool_max: 12,
                 read_pool_min: 2,
                 write_pool_max: 6,
             },
             DeviceTier::Low => Self {
-                mmap_size: 32 * 1024 * 1024, // 32 MB
-                cache_size_kb: 8_000,        // 8 MB
+                mmap_size: 0,         // disabled — see DbConfig::default (prevents DB corruption)
+                cache_size_kb: 8_000, // 8 MB
                 read_pool_max: 5,
                 read_pool_min: 1,
                 write_pool_max: 4,
@@ -130,8 +130,15 @@ impl Default for DbConfig {
     /// High-tier defaults — identical to the previous hardcoded values.
     fn default() -> Self {
         Self {
-            mmap_size: 256 * 1024 * 1024, // 256 MB
-            cache_size_kb: 64_000,        // 64 MB
+            // mmap disabled (0): memory-mapped I/O maps the DB file *writably*
+            // into screenpipe's address space, where a stray write from any
+            // native code (capture, CoreAudio, ONNX/PII models, sqlite_vec)
+            // can silently scribble onto DB pages and corrupt the file on disk
+            // ("database disk image is malformed"). Buffered I/O through the
+            // page cache below is the safe default and the integrity win is
+            // worth the small read-throughput cost for a capture product.
+            mmap_size: 0,
+            cache_size_kb: 64_000, // 64 MB
             read_pool_max: 27,
             read_pool_min: 3,
             write_pool_max: 8,
@@ -437,7 +444,10 @@ mod tests {
     fn db_config_low_is_smaller() {
         let high = DbConfig::for_tier(DeviceTier::High);
         let low = DbConfig::for_tier(DeviceTier::Low);
-        assert!(low.mmap_size < high.mmap_size);
+        // mmap is disabled (0) on every tier to prevent stray-write DB
+        // corruption, so it's equal across tiers, not smaller.
+        assert_eq!(low.mmap_size, 0);
+        assert_eq!(high.mmap_size, 0);
         assert!(low.cache_size_kb < high.cache_size_kb);
         assert!(low.read_pool_max < high.read_pool_max);
     }

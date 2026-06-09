@@ -161,6 +161,10 @@ pub struct RecordingConfig {
     /// See `RecordingSettings.disable_meeting_detector` for details.
     pub disable_meeting_detector: bool,
 
+    /// Apps / meeting services excluded from meeting detection.
+    /// See `RecordingSettings.ignored_meeting_apps` for matching semantics.
+    pub ignored_meeting_apps: Vec<String>,
+
     /// Mitsukeru fork: overrides for event-driven capture parameters.
     /// None = follow active PowerProfile.
     pub idle_capture_interval_ms: Option<u64>,
@@ -332,6 +336,7 @@ impl RecordingConfig {
             max_snapshot_width: settings.max_snapshot_width,
             disable_snapshot_compaction: settings.disable_snapshot_compaction,
             disable_meeting_detector: settings.disable_meeting_detector,
+            ignored_meeting_apps: settings.ignored_meeting_apps.clone(),
             idle_capture_interval_ms: settings.idle_capture_interval_ms,
             visual_check_interval_ms: settings.visual_check_interval_ms,
             visual_change_threshold: settings.visual_change_threshold,
@@ -443,6 +448,7 @@ impl RecordingConfig {
             output_path,
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
+            ignored_urls: self.ignored_urls.clone(),
             vision_metrics,
             use_pii_removal: self.use_pii_removal,
             monitor_ids: self.monitor_ids.clone(),

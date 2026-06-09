@@ -218,11 +218,13 @@ async function fetchNativeCalendar(
 async function fetchGoogleCalendar(
   hoursBack: number,
   hoursAhead: number,
+  instance: string | null,
 ): Promise<CalendarEvent[] | null> {
+  const query =
+    `hours_back=${hoursBack}&hours_ahead=${hoursAhead}` +
+    (instance ? `&instance=${encodeURIComponent(instance)}` : "");
   try {
-    const res = await localFetch(
-      `/connections/google-calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`,
-    );
+    const res = await localFetch(`/connections/google-calendar/events?${query}`);
     if (!res.ok) return null;
     const body = (await res.json()) as RawGoogleEvent[] | { error?: string };
     if (!Array.isArray(body)) return null;
@@ -260,7 +262,11 @@ async function fetchNativeProvider(
   };
 }
 
-async function fetchGoogleProvider(
+// Fetch a single Google account. `instance` is the account identifier (email)
+// or null for the implicit default — used when only one account is connected
+// or when enumeration is unavailable.
+async function fetchGoogleInstance(
+  instance: string | null,
   hoursBack: number,
   hoursAhead: number,
 ): Promise<ProviderCalendarResult> {
@@ -268,7 +274,7 @@ async function fetchGoogleProvider(
   let statusConnected = false;
   let needsAttention = false;
   try {
-    const status = await commands.oauthStatus("google-calendar", null);
+    const status = await commands.oauthStatus("google-calendar", instance);
     if (status.status === "ok") {
       statusKnown = true;
       statusConnected = status.data.connected;
@@ -293,12 +299,54 @@ async function fetchGoogleProvider(
     };
   }
 
-  const events = await fetchGoogleCalendar(hoursBack, hoursAhead);
+  const events = await fetchGoogleCalendar(hoursBack, hoursAhead, instance);
   return {
     source: "google",
     connected: statusConnected || events !== null,
     ok: events !== null,
     events: events ?? [],
+  };
+}
+
+async function fetchGoogleProvider(
+  hoursBack: number,
+  hoursAhead: number,
+): Promise<ProviderCalendarResult> {
+  // A user can connect more than one Google account (e.g. personal + work).
+  // The events endpoint refuses an ambiguous request once >1 account exists
+  // ("specify which one with `instance`"), so enumerate the accounts and query
+  // each explicitly, then merge. Falls back to a single implicit-default call
+  // when enumeration is unavailable or only one account is connected.
+  let instances: (string | null)[] | null = null;
+  try {
+    const list = await commands.oauthListInstances("google-calendar");
+    if (list.status === "ok") {
+      instances = list.data.map((entry) => entry.instance);
+    }
+  } catch {
+    // Enumeration unavailable — fall through to the single-account path.
+  }
+
+  if (instances === null || instances.length <= 1) {
+    return fetchGoogleInstance(instances?.[0] ?? null, hoursBack, hoursAhead);
+  }
+
+  const results = await Promise.all(
+    instances.map((instance) =>
+      fetchGoogleInstance(instance, hoursBack, hoursAhead),
+    ),
+  );
+
+  const connectedResults = results.filter((result) => result.connected);
+  return {
+    source: "google",
+    connected: connectedResults.length > 0,
+    // Only flag the source as failing when every connected account failed; one
+    // healthy account shouldn't surface a global "calendar needs attention".
+    ok:
+      connectedResults.length === 0 ||
+      connectedResults.some((result) => result.ok),
+    events: results.flatMap((result) => result.events),
   };
 }
 

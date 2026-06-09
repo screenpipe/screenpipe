@@ -5,7 +5,7 @@
 
 import React from "react";
 import { ShareLogsButton } from "@/components/share-logs-button";
-import { MessageSquare, Github, Lightbulb, Calendar, FileText, Youtube, BookOpen } from "lucide-react";
+import { MessageSquare, Github, Lightbulb, Calendar, FileText, Youtube, BookOpen, Play } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 
 function DiscordIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -30,6 +30,40 @@ export function FeedbackSection() {
       </p>
 
       <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => open("https://youtu.be/OLUMknhvxWY")}
+          data-testid="help-getting-started"
+          className="group w-full text-left flex items-center gap-3 px-3 py-3 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
+          <div className="relative shrink-0">
+            <img
+              src="/tutorial-thumbnail.jpg"
+              alt="screenpipe tutorial"
+              className="w-[124px] h-[70px] object-cover border border-border"
+            />
+            <span className="absolute inset-0 flex items-center justify-center">
+              <span className="flex h-8 w-8 items-center justify-center bg-background/85 border border-border">
+                <Play className="h-3.5 w-3.5 text-foreground" fill="currentColor" />
+              </span>
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-medium text-foreground">Getting started</h3>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground border border-border px-1 py-px">
+                11 min
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              the complete screenpipe tutorial, setup to pipes
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
+            watch →
+          </span>
+        </button>
+
         <div className="px-3 py-2.5 bg-card border border-border">
           <div className="flex items-center gap-2.5 mb-2.5">
             <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />

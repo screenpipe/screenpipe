@@ -969,7 +969,7 @@ export function NoteView({
             <Pill icon={<Clock className="h-3.5 w-3.5" />}>
               <span className="text-foreground/80">{meetingStartClock}</span>
               {isLive || !meetingEndClock ? (
-                <span className="inline-flex items-center gap-1 border border-foreground/15 bg-foreground/[0.03] px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+                <span className="inline-flex items-center gap-1 border border-foreground/15 bg-foreground/[0.03] px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground">
                   <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
                   ongoing
                 </span>
@@ -1502,7 +1502,7 @@ function Pill({
   children: React.ReactNode;
 }) {
   return (
-    <span className="inline-flex items-center gap-1.5 border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground">
+    <span className="inline-flex h-7 items-center gap-1.5 border border-border bg-background px-2.5 text-xs text-muted-foreground">
       {icon}
       {children}
     </span>
@@ -1527,8 +1527,8 @@ function AttendeesPill({
 
   if (editing) {
     return (
-      <span className="inline-flex items-center gap-1.5 border border-foreground bg-background px-2.5 py-1 text-xs">
-        <Users className="h-3 w-3" />
+      <span className="inline-flex h-7 items-center gap-1.5 border border-foreground bg-background px-2.5 text-xs">
+        <Users className="h-3.5 w-3.5" />
         <input
           ref={inputRef}
           value={value}
@@ -1547,9 +1547,9 @@ function AttendeesPill({
   return (
     <button
       onClick={() => setEditing(true)}
-      className="inline-flex items-center gap-1.5 border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+      className="inline-flex h-7 items-center gap-1.5 border border-border bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
     >
-      <Users className="h-3 w-3" />
+      <Users className="h-3.5 w-3.5" />
       {count === 0
         ? "add attendees"
         : `${count} ${count === 1 ? "attendee" : "attendees"}`}

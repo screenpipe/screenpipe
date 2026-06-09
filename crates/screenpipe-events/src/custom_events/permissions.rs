@@ -38,6 +38,9 @@ pub enum PermissionKind {
 pub enum PermissionState {
     Lost,
     Restored,
+    /// Permission is required but not yet granted (emitted at startup when
+    /// capture is blocked waiting for user to grant via onboarding).
+    Needed,
 }
 
 /// Published to the event bus as `"permission_lost"` or `"permission_restored"`.
@@ -71,12 +74,21 @@ impl PermissionEvent {
         }
     }
 
+    pub fn needed(kind: PermissionKind) -> Self {
+        Self {
+            kind,
+            state: PermissionState::Needed,
+            reason: None,
+        }
+    }
+
     /// Event name to publish on the bus. Split by state so subscribers can
     /// filter cheaply (same convention as `meeting_started` / `meeting_ended`).
     pub fn event_name(&self) -> &'static str {
         match self.state {
             PermissionState::Lost => "permission_lost",
             PermissionState::Restored => "permission_restored",
+            PermissionState::Needed => "permission_needed",
         }
     }
 }

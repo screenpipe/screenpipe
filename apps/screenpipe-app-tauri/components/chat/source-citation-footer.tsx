@@ -14,12 +14,14 @@ import {
   FileText,
   Globe,
   HardDrive,
+  History,
   Plug,
   Search,
   TerminalSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SourceCitation, SourceCitationKind } from "@/lib/source-citations";
+import { jumpToTimelineMoment, openSearchForQuery } from "@/lib/timeline-navigation";
 
 interface SourceCitationFooterProps {
   citations: SourceCitation[];
@@ -75,6 +77,7 @@ const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
   ["logseq", "/images/logseq.png"],
   ["loops", "/images/loops.svg"],
   ["make", "/images/make.png"],
+  ["mochi", "/images/mochi.png"],
   ["monday", "/images/monday.png"],
   ["n8n", "/images/n8n.png"],
   ["notion", "/images/notion.svg"],
@@ -146,6 +149,12 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
   const Icon = KIND_ICON[citation.kind] ?? FileText;
   const kindLabel = KIND_LABEL[citation.kind] ?? citation.kind;
   const canOpen = Boolean(citation.href);
+  // A screen capture with a search term opens the search window (a thumbnail
+  // grid of every matching capture); a time-only capture jumps into the
+  // timeline at that moment; web/file sources open their external href.
+  const canSearch = !canOpen && Boolean(citation.query);
+  const canJump = !canOpen && !canSearch && Boolean(citation.timestamp);
+  const interactive = canOpen || canSearch || canJump;
 
   const inner = (
     <>
@@ -159,6 +168,8 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
             {kindLabel}
           </span>
           {canOpen && <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
+          {canSearch && <Search className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
+          {canJump && <History className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
         </span>
         {citation.subtitle && (
           <span className="mt-0.5 block break-words text-muted-foreground">{citation.subtitle}</span>
@@ -167,7 +178,7 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
     </>
   );
 
-  if (!canOpen) {
+  if (!interactive) {
     return (
       <div className="flex min-w-0 items-start gap-2 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5">
         {inner}
@@ -178,7 +189,16 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
   return (
     <button
       type="button"
+      title={canSearch ? "open in search" : canJump ? "open in timeline" : undefined}
       onClick={() => {
+        if (canSearch && citation.query) {
+          void openSearchForQuery(citation.query);
+          return;
+        }
+        if (canJump && citation.timestamp) {
+          void jumpToTimelineMoment(citation.timestamp);
+          return;
+        }
         void openUrl(citation.href!);
       }}
       className="flex min-w-0 items-start gap-2 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5 text-left transition-colors hover:border-border/70 hover:bg-muted/35"

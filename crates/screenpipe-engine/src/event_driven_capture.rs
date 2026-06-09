@@ -29,6 +29,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, warn};
 
+const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Stable configuration for a single capture invocation.
 ///
 /// Groups parameters that don't change between captures on the same monitor,
@@ -43,6 +45,16 @@ pub struct CaptureParams<'a> {
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
     pub languages: &'a [screenpipe_core::Language],
+}
+
+async fn capture_with_timeout<F, T>(
+    duration: Duration,
+    future: F,
+) -> std::result::Result<T, tokio::time::error::Elapsed>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(duration, future).await
 }
 
 /// Types of events that trigger a capture.
@@ -197,6 +209,30 @@ fn trigger_reduce_priority(trigger: &CaptureTrigger) -> u8 {
     } else {
         1
     }
+}
+
+fn quiet_activity_window_ms(visual_check_interval: Duration) -> u64 {
+    let quiet_ms = visual_check_interval.as_millis().saturating_mul(2);
+    quiet_ms.min(u64::MAX as u128) as u64
+}
+
+fn should_run_visual_check(
+    trigger: &Option<CaptureTrigger>,
+    visual_check_enabled: bool,
+    can_capture: bool,
+    drm_paused: bool,
+    schedule_paused: bool,
+    elapsed_since_visual_check: Duration,
+    visual_check_interval: Duration,
+    keyboard_idle_ms: u64,
+) -> bool {
+    trigger.is_none()
+        && visual_check_enabled
+        && can_capture
+        && !drm_paused
+        && !schedule_paused
+        && elapsed_since_visual_check >= visual_check_interval
+        && keyboard_idle_ms >= quiet_activity_window_ms(visual_check_interval)
 }
 
 impl CaptureTrigger {
@@ -654,19 +690,22 @@ pub async fn event_driven_capture_loop(
         state.last_capture = Instant::now()
             .checked_sub(Duration::from_millis(500))
             .unwrap_or(Instant::now()); // allow capture
-        match do_capture(
-            &capture_params,
-            &CaptureTrigger::Manual,
-            None, // first capture — no previous hash
-            last_db_write,
-            None, // first capture — no elements ref
-            &mut walk_budget,
-            false, // screenshot enabled on startup
-            false, // hd not active at startup (Manual is dedup-exempt anyway)
+        match capture_with_timeout(
+            CAPTURE_OPERATION_TIMEOUT,
+            do_capture(
+                &capture_params,
+                &CaptureTrigger::Manual,
+                None, // first capture — no previous hash
+                last_db_write,
+                None, // first capture — no elements ref
+                &mut walk_budget,
+                false, // screenshot enabled on startup
+                false, // hd not active at startup (Manual is dedup-exempt anyway)
+            ),
         )
         .await
         {
-            Ok(output) => {
+            Ok(Ok(output)) => {
                 state.mark_captured();
                 if let Some(ref mut comparer) = frame_comparer {
                     let _ = comparer.compare(&output.image);
@@ -697,8 +736,14 @@ pub async fn event_driven_capture_loop(
                     vision_metrics.record_dedup_skip();
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!("startup capture failed for monitor {}: {}", monitor_id, e);
+            }
+            Err(_timeout) => {
+                warn!(
+                    "startup capture timed out after {:?} for monitor {}; continuing with live capture loop",
+                    CAPTURE_OPERATION_TIMEOUT, monitor_id
+                );
             }
         }
     } else {
@@ -1122,18 +1167,21 @@ pub async fn event_driven_capture_loop(
         // Use the same window exclusions as the full capture so the diff image
         // matches what we'd actually store — avoids triggering on excluded
         // windows and seeing phantom "visual changes" from their pixels.
-        if trigger.is_none()
-            && visual_check_enabled
-            && state.can_capture()
-            && !crate::drm_detector::drm_content_paused()
-            && !crate::schedule_monitor::schedule_paused()
-            && last_visual_check.elapsed() >= visual_check_interval
-        {
+        if should_run_visual_check(
+            &trigger,
+            visual_check_enabled,
+            state.can_capture(),
+            crate::drm_detector::drm_content_paused(),
+            crate::schedule_monitor::schedule_paused(),
+            last_visual_check.elapsed(),
+            visual_check_interval,
+            activity_feed.keyboard_idle_ms(),
+        ) {
             last_visual_check = Instant::now();
             let vc_filters = WindowFilters::new(
                 &capture_params.tree_walker_config.ignored_windows,
                 &capture_params.tree_walker_config.included_windows,
-                &[],
+                &capture_params.tree_walker_config.ignored_urls,
             );
             let mut fresh_ids = get_excluded_sck_window_ids(&vc_filters);
             fresh_ids.sort_unstable();
@@ -1240,8 +1288,8 @@ pub async fn event_driven_capture_loop(
                 // if the DB is truly stuck. 15s is generous — normal captures take
                 // 1-3s on debug builds. The semaphore serializes writes so they
                 // don't pile up, but each write still needs time.
-                let capture_result = tokio::time::timeout(
-                    Duration::from_secs(15),
+                let capture_result = capture_with_timeout(
+                    CAPTURE_OPERATION_TIMEOUT,
                     do_capture(
                         &capture_params,
                         &trigger,
@@ -1709,7 +1757,7 @@ async fn do_capture(
     let window_filters = WindowFilters::new(
         &params.tree_walker_config.ignored_windows,
         &params.tree_walker_config.included_windows,
-        &[],
+        &params.tree_walker_config.ignored_urls,
     );
     let mut excluded_ids = get_excluded_sck_window_ids(&window_filters);
     excluded_ids.sort_unstable();
@@ -1897,7 +1945,7 @@ async fn do_capture(
                 let new_hash = snap.content_hash as i64;
                 if let Some(prev) = previous_content_hash {
                     if prev == new_hash && new_hash != 0 {
-                        info!(
+                        debug!(
                             "content dedup: skipping capture for monitor {} (hash={}, trigger={})",
                             params.monitor_id,
                             new_hash,
@@ -2490,6 +2538,51 @@ mod tests {
         assert_eq!(corrs, vec![1, 2]);
     }
 
+    #[test]
+    fn visual_check_skips_while_keyboard_activity_is_recent() {
+        let interval = Duration::from_secs(3);
+        assert!(!should_run_visual_check(
+            &None,
+            true,
+            true,
+            false,
+            false,
+            Duration::from_secs(4),
+            interval,
+            quiet_activity_window_ms(interval) - 1,
+        ));
+    }
+
+    #[test]
+    fn visual_check_runs_after_keyboard_activity_is_quiet() {
+        let interval = Duration::from_secs(3);
+        assert!(should_run_visual_check(
+            &None,
+            true,
+            true,
+            false,
+            false,
+            Duration::from_secs(4),
+            interval,
+            quiet_activity_window_ms(interval),
+        ));
+    }
+
+    #[test]
+    fn visual_check_keeps_existing_trigger_gate() {
+        let interval = Duration::from_secs(3);
+        assert!(!should_run_visual_check(
+            &Some(CaptureTrigger::Click { x: 10, y: 20 }),
+            true,
+            true,
+            false,
+            false,
+            Duration::from_secs(4),
+            interval,
+            quiet_activity_window_ms(interval),
+        ));
+    }
+
     #[tokio::test]
     async fn test_trigger_receiver_recv_async() {
         let (tx, mut rx) = trigger_channel();
@@ -2500,6 +2593,16 @@ mod tests {
         .unwrap();
         let got = rx.recv().await.unwrap();
         assert_eq!(got.trigger, CaptureTrigger::Click { x: 10, y: 20 });
+    }
+
+    #[tokio::test]
+    async fn capture_timeout_returns_elapsed_for_stuck_future() {
+        let result = capture_with_timeout(Duration::from_millis(10), async {
+            std::future::pending::<Result<CaptureOutput>>().await
+        })
+        .await;
+
+        assert!(result.is_err());
     }
 
     #[test]

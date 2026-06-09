@@ -227,7 +227,7 @@ async function runChain(
 }
 
 /** User-friendly error message for a final cascade failure. */
-function friendlyError(model: string, status: number, fellThrough: boolean): string {
+export function friendlyError(model: string, status: number, fellThrough: boolean): string {
   if (status === 524 || status === 504 || status === 408) {
     return fellThrough
       ? `Upstream models are slow right now — please try again in a moment, or pick a different model.`
@@ -240,6 +240,18 @@ function friendlyError(model: string, status: number, fellThrough: boolean): str
   }
   if (status === 429) {
     return `Rate limit reached on ${model} (and fallbacks). Please try again in a minute.`;
+  }
+  if (status === 404 || status === 400) {
+    // A 404/400 from a provider almost always means the model id isn't enabled
+    // for this account or API key (not a transient outage), so retrying the same
+    // model won't help; point the user at the real fix instead of a bare
+    // "request failed (404)". (#3786)
+    return fellThrough
+      ? `No available model accepted the request. "${model}" and the fallbacks may not be enabled on your account or API key. Pick a different model, or check your provider access.`
+      : `"${model}" isn't available on your account or API key (${status}). Pick a different model, or check that your provider or key has access to it.`;
+  }
+  if (status === 401 || status === 403) {
+    return `Your provider rejected the request for "${model}" (${status}). Check that the API key in your AI preset is valid and has access to this model.`;
   }
   return fellThrough
     ? `All available models failed. Please try again or pick a different model.`

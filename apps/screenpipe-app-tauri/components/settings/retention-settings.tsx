@@ -296,14 +296,16 @@ export function RetentionSettings() {
   return (
     <>
       <div className="space-y-4 pt-4 border-t border-border">
-        {/* Recent-window delete */}
-        <div className="space-y-2">
+        {/* Card 1 — one-time manual purge of just-captured activity */}
+        <div className="space-y-2 rounded border border-border p-3">
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium">delete recent data</p>
+              <p className="text-sm font-medium">erase recent activity</p>
               <p className="text-xs text-muted-foreground">
-                instantly purge everything captured in the chosen window
+                wipe the last few minutes if something was captured by
+                mistake. removes clips, audio, transcripts, and ocr. asks
+                first.
               </p>
             </div>
           </div>
@@ -323,65 +325,80 @@ export function RetentionSettings() {
           </div>
         </div>
 
-        {/* Auto-cleanup section */}
-        <div className="space-y-3 pt-3 border-t border-border/50">
+        {/* Card 2 — ongoing retention policy (distinct from the manual purge above) */}
+        <div className="space-y-3 rounded border border-border p-3">
           <div className="flex items-center gap-2">
             <Trash2 className="h-4 w-4 text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium">auto-delete old data</p>
+              <p className="text-sm font-medium">storage policy</p>
               <p className="text-xs text-muted-foreground">
-                free disk space without losing your timeline
+                what happens to recordings as they age
               </p>
             </div>
           </div>
 
+          {/* Current state spelled out so "recommended" never reads as "active" */}
+          <p className="text-xs text-muted-foreground pl-6">
+            {effective === "off"
+              ? "currently: keeping everything forever."
+              : effective === "media"
+                ? `currently: dropping video + audio older than ${retentionDays} days, text stays searchable.`
+                : `currently: deleting everything older than ${retentionDays} days.`}
+          </p>
+
           <div className="space-y-2 pl-6">
+            <ModeRow
+              testId="retention-mode-off"
+              checked={effective === "off"}
+              title="keep everything"
+              body="disk keeps growing. you monitor space yourself."
+              onClick={() => handleSelectMode("off")}
+            />
             <ModeRow
               testId="retention-mode-media"
               checked={effective === "media"}
               recommended
               icon={<Film className="h-4 w-4" />}
-              title="video + audio only"
-              body="reclaims mp4/wav/jpeg files. transcripts, ocr, app history stay searchable. you won't be able to replay clips past the cutoff."
+              title="drop video + audio, keep text"
+              body="reclaims mp4/wav/jpeg files. transcripts, ocr, and app history stay searchable. you won't be able to replay clips past the cutoff."
               onClick={() => handleSelectMode("media")}
             />
             <ModeRow
               testId="retention-mode-all"
               checked={effective === "all"}
               icon={<Trash2 className="h-4 w-4" />}
-              title="everything"
+              title="delete everything"
               body="permanently deletes all data past the cutoff. search won't find anything from that period."
               onClick={() => handleSelectMode("all")}
             />
-            <ModeRow
-              testId="retention-mode-off"
-              checked={effective === "off"}
-              title="off"
-              body="keep everything forever. you'll need to monitor disk usage manually."
-              onClick={() => handleSelectMode("off")}
-            />
           </div>
 
-          {effective !== "off" && (
-            <div className="flex items-center gap-3 pl-6">
-              <span className="text-sm text-muted-foreground">
-                {effective === "media" ? "evict media older than" : "delete data older than"}
-              </span>
-              <Select
-                value={retentionDays.toString()}
-                onValueChange={handleRetentionChange}
-              >
-                <SelectTrigger className="w-[120px] h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {RETENTION_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {/* Cutoff stays visible (disabled when off) so "the cutoff" always has a referent */}
+          <div className="flex flex-wrap items-center gap-3 pl-6">
+            <span className="text-sm text-muted-foreground">
+              {effective === "off"
+                ? "cutoff (applies once a policy is on)"
+                : effective === "media"
+                  ? "evict media older than"
+                  : "delete data older than"}
+            </span>
+            <Select
+              value={retentionDays.toString()}
+              onValueChange={handleRetentionChange}
+              disabled={effective === "off"}
+            >
+              <SelectTrigger className="w-[120px] h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RETENTION_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {effective !== "off" && (
               <Button
                 variant="outline"
                 size="sm"
@@ -396,8 +413,8 @@ export function RetentionSettings() {
                 )}
                 clean up now
               </Button>
-            </div>
-          )}
+            )}
+          </div>
 
           {effective !== "off" && status && (
             <div className="text-xs text-muted-foreground space-y-1 pl-6">

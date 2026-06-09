@@ -130,54 +130,68 @@ pub fn preflight_check(need_screen: bool, need_audio: bool) -> bool {
 
 /// macOS Screen Recording TCC probes.
 ///
-/// Two independent checks exist because `CGPreflightScreenCaptureAccess`
-/// has a well-known false-negative bug: it returns `false` even when
-/// permission is actually granted. We've documented this in three other
-/// places in the codebase (see `permission_monitor`, the Tauri app's
-/// `health.rs`, and `main.rs`'s retry loops). The case that motivates
-/// this split: a CLI binary launched via `npx` from a fresh cache path
-/// — TCC's cache hasn't associated it with the responsible terminal yet,
-/// so preflight reports denied while `/usr/sbin/screencapture` (and any
-/// real capture call) succeeds.
+/// - `preflight`: `CGPreflightScreenCaptureAccess` — fast, no side effects. A `true`
+///   result is always reliable; a `false` can be a false negative (known bug for CLI
+///   binaries on fresh TCC cache paths, e.g. via `npx`).
+/// - `capture_probe`: `CGWindowListCreateImage` — real capture attempt. Reliable on
+///   macOS ≤ 14 and in CLI. On macOS 15+ inside a Tauri app, Apple changed it to
+///   return the calling app's own windows even without permission → always non-NULL →
+///   false positive. Do NOT use in Tauri on macOS 15+ release builds.
 ///
-/// - [`preflight`] reads TCC's cached answer. Fast and a `true` result
-///   is always trustworthy. A `false` result is not: it may be stale.
-/// - [`capture_probe`] performs a real 1x1 `CGWindowListCreateImage`
-///   capture. The kernel either returns an image (permission granted)
-///   or NULL (denied) — the cache plays no role. This is the same
-///   primitive `/usr/sbin/screencapture` relies on, which is why
-///   that test consistently agrees with reality.
+/// See `check_screen_recording` and `check_screen_recording_tauri` for how these
+/// are combined per context.
 #[cfg(target_os = "macos")]
 mod macos_screen_recording {
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use std::ffi::c_void;
+
+    type CGImageRef = *mut c_void;
+    const ON_SCREEN_ONLY: u32 = 1;
+    const IMAGE_DEFAULT: u32 = 0;
+    const NULL_WINDOW_ID: u32 = 0;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGWindowListCreateImage(
+            screen_bounds: CGRect,
+            list_option: u32,
+            window_id: u32,
+            image_option: u32,
+        ) -> CGImageRef;
+        fn CGImageRelease(image: CGImageRef);
+    }
+
     /// Cached TCC answer via `CGPreflightScreenCaptureAccess`. May lie
     /// in the negative direction; never in the positive direction.
     pub fn preflight() -> bool {
-        use core_graphics::access::ScreenCaptureAccess;
-        ScreenCaptureAccess.preflight()
+        unsafe { CGPreflightScreenCaptureAccess() }
     }
 
-    /// Definitive probe: attempts a minimal real capture. Returns `true`
-    /// iff the kernel hands back a CGImage. Cost is a single 1x1 image
-    /// allocation + release (~milliseconds, no UI flicker, no prompt).
+    /// True on macOS 15 (Sequoia) or later. Cached — spawns `sw_vers` once per process.
+    pub fn is_sequoia_or_later() -> bool {
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<bool> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            use std::process::Command;
+            Command::new("sw_vers")
+                .arg("-productVersion")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|v| {
+                    v.trim()
+                        .split('.')
+                        .next()
+                        .and_then(|s| s.parse::<i32>().ok())
+                })
+                .map(|major| major >= 15)
+                .unwrap_or(false)
+        })
+    }
+
+    /// Real capture probe via `CGWindowListCreateImage` — NULL means denied, non-NULL means granted.
     pub fn capture_probe() -> bool {
-        use core_graphics::geometry::{CGPoint, CGRect, CGSize};
-
-        type CGImageRef = *mut std::ffi::c_void;
-        const ON_SCREEN_ONLY: u32 = 1;
-        const IMAGE_DEFAULT: u32 = 0;
-        const NULL_WINDOW_ID: u32 = 0;
-
-        #[link(name = "CoreGraphics", kind = "framework")]
-        extern "C" {
-            fn CGWindowListCreateImage(
-                screen_bounds: CGRect,
-                list_option: u32,
-                window_id: u32,
-                image_option: u32,
-            ) -> CGImageRef;
-            fn CGImageRelease(image: CGImageRef);
-        }
-
         let rect = CGRect {
             origin: CGPoint { x: 0.0, y: 0.0 },
             size: CGSize {
@@ -199,17 +213,38 @@ mod macos_screen_recording {
     }
 }
 
+/// CLI: always uses `preflight() || capture_probe()` on every macOS version.
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording() -> PermissionStatus {
-    // Trust a positive preflight (always reliable). For a negative,
-    // confirm with a real capture before declaring denial — the CLI's
-    // polling loop has no other signal, and a false denial leaves users
-    // stuck on the permission screen with permission already granted.
     if macos_screen_recording::preflight() || macos_screen_recording::capture_probe() {
         PermissionStatus::Granted
     } else {
         PermissionStatus::Denied
     }
+}
+
+/// Tauri app: on release builds on macOS 15+, skips `capture_probe()` to avoid a false
+/// positive — Apple changed `CGWindowListCreateImage` to return the app's own windows
+/// even without Screen Recording permission, so a non-NULL result no longer implies access.
+/// Dev builds (`debug_assertions`) skip this restriction: devs already have permissions
+/// and benefit from the full probe chain to avoid false-negative preflight stalls.
+#[cfg(target_os = "macos")]
+pub fn check_screen_recording_tauri() -> PermissionStatus {
+    let ok = if macos_screen_recording::is_sequoia_or_later() && !cfg!(debug_assertions) {
+        macos_screen_recording::preflight()
+    } else {
+        macos_screen_recording::preflight() || macos_screen_recording::capture_probe()
+    };
+    if ok {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::Denied
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_screen_recording_tauri() -> PermissionStatus {
+    PermissionStatus::NotNeeded
 }
 
 #[cfg(target_os = "macos")]
@@ -288,26 +323,23 @@ pub fn check_accessibility() -> PermissionStatus {
 mod tests {
     use super::*;
 
-    /// Invariant: a successful capture probe is definitive — the kernel
-    /// just handed us a CGImage of the desktop, so permission must be
-    /// granted. Safe to assert regardless of CI's TCC state because the
-    /// invariant only fires on the positive branch.
+    /// Either probe returning true means permission is granted.
     #[test]
-    fn capture_probe_implies_granted() {
-        if macos_screen_recording::capture_probe() {
+    fn probe_implies_granted() {
+        if macos_screen_recording::preflight() || macos_screen_recording::capture_probe() {
             assert_eq!(check_screen_recording(), PermissionStatus::Granted);
-        }
-        if macos_screen_recording::preflight() {
-            assert_eq!(check_screen_recording(), PermissionStatus::Granted);
+            // tests run with debug_assertions → check_screen_recording_tauri uses full probe chain
+            assert_eq!(check_screen_recording_tauri(), PermissionStatus::Granted);
         }
     }
 
-    /// Sanity: repeated probing must not leak, hang, or destabilize.
+    /// Sanity: repeated probing must not leak, hang, or destabilise.
     /// `permission_monitor` polls every 5s for the life of the process,
     /// so a long-running burst here mirrors hours of real usage.
     #[test]
-    fn capture_probe_is_stable_under_repetition() {
+    fn probes_are_stable_under_repetition() {
         for _ in 0..256 {
+            let _ = macos_screen_recording::preflight();
             let _ = macos_screen_recording::capture_probe();
         }
     }

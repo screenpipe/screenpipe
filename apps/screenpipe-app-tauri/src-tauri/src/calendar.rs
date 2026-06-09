@@ -146,7 +146,7 @@ pub async fn calendar_status() -> Result<CalendarStatus, String> {
 
 /// Reset TCC (privacy) permission for Calendars on this app's bundle ID.
 ///
-/// Why: users (Mike, Jarad, Ruark, Louis's own Mac mini) clicked
+/// Why: multiple users (including Louis's own Mac mini) clicked
 /// "Fix Calendar Permission" → macOS opened the Calendars privacy pane
 /// with an EMPTY app list, so they had no way to grant access. Root cause
 /// is a stale TCC record (dev-build → prod-build reinstall, OS update,

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   commands: {
     calendarStatus: vi.fn(),
     oauthStatus: vi.fn(),
+    oauthListInstances: vi.fn(),
     icsCalendarGetEntries: vi.fn(),
     icsCalendarGetUpcoming: vi.fn(),
   },
@@ -43,6 +44,11 @@ describe("fetchUpcomingCalendarSnapshot", () => {
       },
     });
     mocks.commands.icsCalendarGetEntries.mockResolvedValue({
+      status: "ok",
+      data: [],
+    });
+    // Default: no enumerable Google accounts → single implicit-default call.
+    mocks.commands.oauthListInstances.mockResolvedValue({
       status: "ok",
       data: [],
     });
@@ -202,5 +208,107 @@ describe("fetchUpcomingCalendarSnapshot", () => {
       source: "google",
       meeting_url: "https://meet.google.com/abc-defg-hij",
     });
+  });
+
+  it("merges events across multiple connected Google accounts", async () => {
+    // Two accounts connected: the events endpoint 401s on an ambiguous
+    // request, so each must be queried with its own `instance`.
+    mocks.commands.oauthListInstances.mockResolvedValue({
+      status: "ok",
+      data: [
+        { instance: "work@example.com", display_name: "work@example.com" },
+        {
+          instance: "personal@example.com",
+          display_name: "personal@example.com",
+        },
+      ],
+    });
+    mocks.commands.oauthStatus.mockResolvedValue({
+      status: "ok",
+      data: { connected: true },
+    });
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.startsWith("/connections/google-calendar/events")) {
+        if (url.includes("instance=work%40example.com")) {
+          return Promise.resolve(
+            jsonResponse(true, [
+              {
+                id: "work-1",
+                title: "Work standup",
+                start: "2026-06-09T09:00:00-07:00",
+                end: "2026-06-09T09:15:00-07:00",
+              },
+            ]),
+          );
+        }
+        if (url.includes("instance=personal%40example.com")) {
+          return Promise.resolve(
+            jsonResponse(true, [
+              {
+                id: "personal-1",
+                title: "Dentist",
+                start: "2026-06-09T11:00:00-07:00",
+                end: "2026-06-09T11:30:00-07:00",
+              },
+            ]),
+          );
+        }
+        // No instance specified — backend rejects when >1 account connected.
+        return Promise.resolve(
+          jsonResponse(false, {
+            error: "multiple Google Calendar accounts connected",
+          }),
+        );
+      }
+      if (url.startsWith("/connections/calendar/events")) {
+        return Promise.resolve(
+          jsonResponse(false, { error: "AuthorizationDenied" }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+
+    const snapshot = await fetchUpcomingCalendarSnapshot({ hoursAhead: 8 });
+
+    expect(snapshot.connectedSources).toEqual(["google"]);
+    expect(snapshot.failedSources).toEqual([]);
+    expect(snapshot.events.map((e) => e.title)).toEqual([
+      "Work standup",
+      "Dentist",
+    ]);
+  });
+
+  it("flags Google as failed only when every connected account fails", async () => {
+    mocks.commands.oauthListInstances.mockResolvedValue({
+      status: "ok",
+      data: [
+        { instance: "work@example.com", display_name: "work@example.com" },
+        {
+          instance: "personal@example.com",
+          display_name: "personal@example.com",
+        },
+      ],
+    });
+    mocks.commands.oauthStatus.mockResolvedValue({
+      status: "ok",
+      data: { connected: true },
+    });
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.startsWith("/connections/google-calendar/events")) {
+        return Promise.resolve(jsonResponse(false, { error: "boom" }));
+      }
+      if (url.startsWith("/connections/calendar/events")) {
+        return Promise.resolve(
+          jsonResponse(false, { error: "AuthorizationDenied" }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+
+    const snapshot = await fetchUpcomingCalendarSnapshot({ hoursAhead: 8 });
+
+    expect(snapshot.connectedSources).toEqual(["google"]);
+    expect(snapshot.failedSources).toEqual(["google"]);
+    expect(snapshot.events).toEqual([]);
   });
 });

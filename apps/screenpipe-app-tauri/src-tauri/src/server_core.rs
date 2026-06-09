@@ -83,6 +83,11 @@ impl ServerCore {
         if !config.analytics_id.is_empty() {
             std::env::set_var("SCREENPIPE_ANALYTICS_ID", &config.analytics_id);
         }
+        // Tag engine telemetry as the desktop app (vs cli / source) so WAU can be
+        // split by distribution. Respect an explicit override (e.g. enterprise embeds).
+        if std::env::var("SCREENPIPE_DISTRIBUTION").is_err() {
+            std::env::set_var("SCREENPIPE_DISTRIBUTION", "desktop-app");
+        }
         analytics::init(config.analytics_enabled);
 
         if config.use_chinese_mirror {
@@ -632,7 +637,13 @@ impl ServerCore {
         info!("Server core started successfully");
         crate::health::set_boot_phase("ready", None);
 
-        // mDNS
+        // mDNS LAN discovery is opt-in (off by default) so the app doesn't
+        // trigger the macOS "Local Network" permission prompt unless the user
+        // wants multi-device discovery. Enable with SCREENPIPE_ENABLE_MDNS=1.
+        let mdns_enabled = std::env::var("SCREENPIPE_ENABLE_MDNS")
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE"))
+            .unwrap_or(false);
+        screenpipe_connect::mdns::set_enabled(mdns_enabled);
         if let Err(e) = screenpipe_connect::mdns::advertise(config.port) {
             warn!("mdns advertisement failed (non-fatal): {}", e);
         }

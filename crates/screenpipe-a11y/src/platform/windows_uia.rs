@@ -40,6 +40,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT,
 };
 
+const LOCKED_SCREEN_UIA_BACKOFF: Duration = Duration::from_millis(1000);
+
 /// Returns true if the user has produced a mouse/keyboard event within
 /// `pause_extraction_on_input_ms`. The UIA worker uses this to skip tree captures during
 /// active input — the resulting tree would be stale within milliseconds anyway, and the
@@ -64,6 +66,21 @@ fn input_too_recent(
 struct PendingFocus {
     hwnd: HWND,
     time: Instant,
+}
+
+fn pause_uia_while_screen_locked(
+    pending_focus: &Arc<Mutex<Option<PendingFocus>>>,
+    click_queue: &Arc<Mutex<Vec<ClickElementRequest>>>,
+    last_capture_time: &mut Instant,
+) -> bool {
+    if !screenpipe_config::screen_is_locked() {
+        return false;
+    }
+
+    *pending_focus.lock() = None;
+    click_queue.lock().clear();
+    *last_capture_time = Instant::now();
+    true
 }
 
 /// Click position request for ElementFromPoint
@@ -642,6 +659,7 @@ pub fn run_uia_thread(
     let mut last_capture_time = Instant::now();
     let debounce_dur = Duration::from_millis(config.tree_debounce_ms);
     let interval_dur = Duration::from_millis(config.tree_capture_interval_ms);
+    let mut was_lock_paused = false;
 
     // Capture initial focused window (no input has happened yet, so input_too_recent is a no-op)
     let initial_hwnd = unsafe { GetForegroundWindow() };
@@ -675,6 +693,33 @@ pub fn run_uia_thread(
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+        }
+
+        if pause_uia_while_screen_locked(&pending_focus, &click_queue, &mut last_capture_time) {
+            was_lock_paused = true;
+            std::thread::sleep(LOCKED_SCREEN_UIA_BACKOFF);
+            continue;
+        }
+
+        if was_lock_paused && config.capture_tree {
+            was_lock_paused = false;
+            let hwnd = unsafe { GetForegroundWindow() };
+            if !hwnd.is_invalid() {
+                capture_and_send(
+                    &uia,
+                    hwnd,
+                    &config,
+                    &tree_tx,
+                    &focused_element,
+                    &mut last_captured_hwnd,
+                    &mut last_tree_hash,
+                    &mut last_capture_time,
+                );
+            } else {
+                last_capture_time = Instant::now();
+            }
+        } else {
+            was_lock_paused = false;
         }
 
         // Defer tree captures while the user is actively typing/clicking. The captured
@@ -727,6 +772,8 @@ pub fn run_uia_thread(
                         &mut last_tree_hash,
                         &mut last_capture_time,
                     );
+                } else {
+                    last_capture_time = Instant::now();
                 }
             }
         }
@@ -782,6 +829,10 @@ fn compute_next_timeout(
 ) -> u64 {
     let mut min_ms: u64 = 1000; // safety ceiling
 
+    if !config.capture_tree {
+        return min_ms;
+    }
+
     // Time until debounce fires
     if let Some(ref pf) = *pending_focus.lock() {
         let elapsed = pf.time.elapsed();
@@ -817,6 +868,10 @@ fn capture_and_send(
     last_capture_time: &mut Instant,
 ) {
     let capture_start = Instant::now();
+    // Mark every attempt, not just successful captures. If the focused window
+    // is filtered out or UIA capture fails, leaving the periodic timer overdue
+    // makes the worker retry immediately and spin a CPU core.
+    *last_capture_time = capture_start;
 
     // Get window info
     let (app_name, window_title, pid) = get_window_info(hwnd);
@@ -1133,6 +1188,68 @@ mod tests {
             ],
         };
         assert_eq!(root.node_count(), 4);
+    }
+
+    #[test]
+    fn test_screen_lock_pause_clears_deferred_work() {
+        struct ResetScreenLock;
+        impl Drop for ResetScreenLock {
+            fn drop(&mut self) {
+                screenpipe_config::set_screen_locked(false);
+            }
+        }
+
+        let _reset = ResetScreenLock;
+        screenpipe_config::set_screen_locked(true);
+
+        let pending_focus = Arc::new(Mutex::new(Some(PendingFocus {
+            hwnd: HWND::default(),
+            time: Instant::now(),
+        })));
+        let click_queue = Arc::new(Mutex::new(vec![ClickElementRequest {
+            x: 12,
+            y: 34,
+            timestamp: Utc::now(),
+        }]));
+        let original_capture_time = Instant::now() - Duration::from_secs(5);
+        let mut last_capture_time = original_capture_time;
+
+        assert!(pause_uia_while_screen_locked(
+            &pending_focus,
+            &click_queue,
+            &mut last_capture_time
+        ));
+        assert!(pending_focus.lock().is_none());
+        assert!(click_queue.lock().is_empty());
+        assert!(last_capture_time > original_capture_time);
+
+        screenpipe_config::set_screen_locked(false);
+        assert!(!pause_uia_while_screen_locked(
+            &pending_focus,
+            &click_queue,
+            &mut last_capture_time
+        ));
+    }
+
+    #[test]
+    fn test_compute_next_timeout_ignores_tree_work_when_capture_disabled() {
+        let pending_focus = Arc::new(Mutex::new(Some(PendingFocus {
+            hwnd: HWND::default(),
+            time: Instant::now() - Duration::from_secs(1),
+        })));
+        let mut config = UiCaptureConfig::new();
+        config.capture_tree = false;
+        config.tree_capture_interval_ms = 1;
+
+        let wait_ms = compute_next_timeout(
+            &pending_focus,
+            Duration::from_millis(10),
+            &(Instant::now() - Duration::from_secs(1)),
+            Duration::from_millis(1),
+            &config,
+        );
+
+        assert_eq!(wait_ms, 1000);
     }
 
     /// Comprehensive live test: enumerate ALL visible windows, capture each tree,

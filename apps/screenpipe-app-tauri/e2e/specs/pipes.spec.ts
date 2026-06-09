@@ -19,6 +19,18 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
 let installedPipeName = '';
 let connectionPipeSlug = '';
 
+async function confirmRiskGateIfPresent(): Promise<void> {
+  const confirmBtn = await $('[data-testid="pipe-risk-install-confirm"]');
+  if (!(await confirmBtn.isExisting())) return;
+
+  const ack = await $('[data-testid="pipe-risk-ack"]');
+  if (await ack.isExisting()) {
+    await ack.click();
+  }
+
+  await confirmBtn.click();
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -127,9 +139,11 @@ describe('Pipes: discover → install → play', function () {
         { timeout: 15_000, timeoutMsg: 'No pipe-install-btn found — store API unreachable or Discover grid not loaded' }
       );
 
-      // Click any GET button — interceptor makes it fail inside handleInstall
-      const anyGetBtn = await $('[data-testid="pipe-install-btn"]');
+      // Click a real GET button — some cards may require source review first.
+      const anyGetBtn = await browser.$('//button[@data-testid="pipe-install-btn" and normalize-space()="GET"]');
+      await anyGetBtn.waitForExist({ timeout: 8_000 });
       await anyGetBtn.click();
+      await confirmRiskGateIfPresent();
 
       // handleInstall catches the 503 and calls toast({ variant: "destructive" }).
       // toaster.tsx sets data-testid="toast-error" on the inner <div> for
@@ -198,6 +212,7 @@ describe('Pipes: discover → install → play', function () {
     }
 
     await installBtn.click();
+    await confirmRiskGateIfPresent();
 
     // After install, the connection modal OR "My Pipes" tab should appear.
     // Either the modal opens (PostInstallConnectionsModal) or the tab switches.
@@ -290,6 +305,7 @@ describe('Pipes: discover → install → play', function () {
       console.log(`[pipes-spec] "${slug}" already installed (button=${btnText}); skipping install click`);
     } else {
       await installBtn.click();
+      await confirmRiskGateIfPresent();
 
       // After GET click the app auto-switches to My Pipes (onInstalled
       // callback). Wait for an unambiguous marker: the My Pipes section

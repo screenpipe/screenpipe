@@ -177,6 +177,67 @@ impl ModelDownloader {
     }
 }
 
+/// Map a transport-level download failure to an actionable hint, or `None` when
+/// we can't confidently classify it. Split from the string matcher below so the
+/// timeout case can use reqwest's typed predicate while staying testable.
+fn download_failure_hint(err: &reqwest::Error) -> Option<&'static str> {
+    if err.is_timeout() {
+        return Some(
+            "connection timed out: a corporate proxy or firewall may be throttling or \
+             blocking the download. try another network or your IT proxy settings",
+        );
+    }
+    classify_download_failure(&err.to_string())
+}
+
+/// String-based classifier for download failures. Factored out so it can be
+/// unit-tested without constructing a `reqwest::Error` (which has no public
+/// constructor). Recognizes the corporate-network failure modes from issue #3655.
+fn classify_download_failure(message: &str) -> Option<&'static str> {
+    let msg = message.to_ascii_lowercase();
+    if msg.contains("certificate")
+        || msg.contains("unknownissuer")
+        || msg.contains("self-signed")
+        || msg.contains("self signed")
+        || msg.contains("tls")
+        || msg.contains("ssl")
+    {
+        return Some(
+            "TLS certificate rejected: a corporate network is likely intercepting HTTPS \
+             (MITM proxy). install or trust your company's root certificate, or download on \
+             an unfiltered network",
+        );
+    }
+    if msg.contains("dns")
+        || msg.contains("failed to lookup")
+        || msg.contains("name or service not known")
+        || msg.contains("nodename nor servname")
+    {
+        return Some(
+            "DNS lookup failed: the model host could not be resolved. check your network, \
+             VPN, or DNS settings",
+        );
+    }
+    if msg.contains("connection refused")
+        || msg.contains("network is unreachable")
+        || msg.contains("no route to host")
+        || msg.contains("connection reset")
+        || msg.contains("connection closed")
+    {
+        return Some(
+            "connection blocked: a firewall or proxy may be refusing the download. try \
+             another network or your IT proxy settings",
+        );
+    }
+    if msg.contains("timed out") || msg.contains("timeout") {
+        return Some(
+            "connection timed out: a corporate proxy or firewall may be throttling or \
+             blocking the download. try another network",
+        );
+    }
+    None
+}
+
 /// Download model from URL with HTTP validation, empty body check, atomic write, and logging.
 async fn download_model(
     url: &str,
@@ -185,17 +246,57 @@ async fn download_model(
     model_path_lock: &'static Mutex<Option<PathBuf>>,
 ) -> Result<()> {
     info!("downloading {} model from {}", filename, url);
-    let response = reqwest::get(url).await?;
+    let response = match reqwest::get(url).await {
+        Ok(response) => response,
+        Err(e) => {
+            // Corporate networks (TLS interception, proxies, firewalls) are the
+            // most common reason a model download fails. The raw reqwest error
+            // is opaque, so attach an actionable hint when we can recognize it.
+            return Err(match download_failure_hint(&e) {
+                Some(hint) => anyhow!("failed to download {} from {}: {} ({})", filename, url, hint, e),
+                None => anyhow!("failed to download {} from {}: {}", filename, url, e),
+            });
+        }
+    };
 
     if !response.status().is_success() {
-        return Err(anyhow!(
-            "download failed: HTTP {} for {}",
-            response.status(),
-            url
-        ));
+        let status = response.status();
+        let hint = match status.as_u16() {
+            407 => "; proxy authentication required, configure your corporate proxy credentials",
+            401 | 403 => "; request blocked, a proxy or firewall may be filtering this host",
+            511 => "; captive portal, sign in to your network then retry",
+            _ if status.is_redirection() => "; unexpected redirect, a captive portal or proxy may be intercepting the request",
+            _ => "",
+        };
+        return Err(anyhow!("download failed: HTTP {} for {}{}", status, url, hint));
     }
 
-    let model_data = response.bytes().await?;
+    // A captive portal / proxy login page answers 200 OK with an HTML body
+    // instead of the model binary. Detect it before we cache garbage to disk.
+    if let Some(content_type) = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    {
+        if content_type.contains("text/html") {
+            return Err(anyhow!(
+                "download for {} returned an HTML page, not the model binary. a captive portal \
+                 or corporate proxy is likely intercepting the request ({})",
+                filename,
+                url
+            ));
+        }
+    }
+
+    let model_data = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Err(match download_failure_hint(&e) {
+                Some(hint) => anyhow!("failed reading {} download body: {} ({})", filename, hint, e),
+                None => anyhow!("failed reading {} download body: {}", filename, e),
+            });
+        }
+    };
     if model_data.is_empty() {
         return Err(anyhow!("download returned empty body for {}", filename));
     }
@@ -245,6 +346,33 @@ mod tests {
 
     static TEST_TEMP_FILE_FLAG: OnceLock<AtomicBool> = OnceLock::new();
     static TEST_TEMP_FILE_LOCK: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+    #[test]
+    fn classifies_corporate_network_failures() {
+        // TLS interception (the MITM-proxy case from issue #3655 / PR #3658).
+        for msg in [
+            "invalid peer certificate: UnknownIssuer",
+            "error sending request: SSL handshake failed",
+            "the certificate was self-signed",
+        ] {
+            let hint = classify_download_failure(msg).expect("should classify TLS failure");
+            assert!(hint.contains("certificate"), "got: {hint}");
+        }
+
+        // DNS / connection / timeout buckets.
+        assert!(classify_download_failure("failed to lookup address information")
+            .unwrap()
+            .contains("DNS"));
+        assert!(classify_download_failure("tcp connect error: Connection refused (os error 61)")
+            .unwrap()
+            .contains("firewall"));
+        assert!(classify_download_failure("operation timed out")
+            .unwrap()
+            .contains("timed out"));
+
+        // A clean, unrelated error must not be misclassified.
+        assert!(classify_download_failure("unexpected end of file").is_none());
+    }
 
     #[tokio::test]
     async fn disk_cache_hit_returns_model() {

@@ -1366,7 +1366,7 @@ export const AIPresetsSelector = ({
     // Prevent deletion of screenpipe-cloud preset for Pro subscribers
     if (preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
       toast.error("Cannot delete cloud preset", {
-        description: "This preset is included with your Pro subscription",
+        description: "This preset is included with your Business subscription",
       });
       return;
     }

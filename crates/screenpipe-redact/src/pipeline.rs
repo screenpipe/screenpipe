@@ -65,7 +65,7 @@ fn apply_policy(out: RedactionOutput, policy: &TextRedactionPolicy) -> Redaction
     let kept: Vec<RedactedSpan> = out
         .spans
         .into_iter()
-        .filter(|s| policy.allows(s.label))
+        .filter(|s| policy.allows(s.label, s.subtype.as_deref()))
         .collect();
     let redacted = render_with_spans(&out.input, &kept);
     RedactionOutput {

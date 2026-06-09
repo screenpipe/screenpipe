@@ -324,7 +324,7 @@ function GoogleCalendarConnect({
         const msg = String(result.error ?? "");
         setStatusText(
           msg.toLowerCase().includes("pro subscription")
-            ? "OAuth integrations require Pro. Upgrade to connect."
+            ? "OAuth integrations require Business. Upgrade to connect."
             : msg || "Google Calendar was not connected.",
         );
       } else {

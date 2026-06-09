@@ -82,17 +82,19 @@ pub struct RecordingSettings {
     pub use_system_default_audio: bool,
 
     /// Experimental: capture System Audio via the CoreAudio Process Tap API
-    /// (macOS 14.4+) instead of ScreenCaptureKit. Avoids SCK's display
-    /// enumeration failures after sleep/wake, the GPU/compositor wake
-    /// overhead, and — most importantly — captures audio that's been
-    /// routed to a Bluetooth headset via HFP (which SCK can't see; see
-    /// Ruark Ferreira's 2026-04-24 Zoom call where AirPods-as-input
-    /// silently routed output away from the SCK-visible mixer).
+    /// (macOS 14.4+) instead of ScreenCaptureKit. The tap sidesteps SCK's
+    /// display-enumeration failures after sleep/wake and the GPU/compositor
+    /// wake overhead, but it cannot see audio rendered through a
+    /// VoiceProcessing AudioUnit (Zoom / Google Meet / Microsoft Teams all
+    /// use one for echo cancellation), so on meeting audio it silently
+    /// captures zeroed buffers even though tap creation succeeds.
     ///
-    /// Default `true`: if tap creation fails for any reason (permission,
-    /// macOS <14.4, OS quirk), stream.rs falls back to the SCK path
-    /// automatically — so flipping the default on can't regress anyone.
-    /// Ignored on non-macOS platforms.
+    /// Default `false` (see `default_experimental_coreaudio_system_audio`).
+    /// SCK captures at the display compositor, which does see VoiceProcessing
+    /// output, so it is the right default for anyone on calls. Users who hit
+    /// SCK's sleep/wake display-enumeration bug can still opt in; when the tap
+    /// is on and creation fails (permission, macOS <14.4, OS quirk), stream.rs
+    /// falls back to the SCK path automatically. Ignored on non-macOS platforms.
     #[serde(
         rename = "experimentalCoreaudioSystemAudio",
         default = "default_experimental_coreaudio_system_audio"
@@ -180,6 +182,17 @@ pub struct RecordingSettings {
     /// in_meeting override flag stays false.
     #[serde(rename = "disableMeetingDetector", default)]
     pub disable_meeting_detector: bool,
+
+    /// Apps / meeting services to exclude from automatic meeting detection
+    /// while leaving detection on for everything else. Case-insensitive
+    /// substring match against the running app's name/process AND the matched
+    /// detection profile's identifiers (native names + browser URL patterns),
+    /// so an entry can be what the user sees ("Discord") or a service domain
+    /// ("meet.google.com"). Use when one app trips the detector spuriously
+    /// (an always-open Teams, a Discord call you don't want logged) but you
+    /// still want Zoom/Meet/etc. detected. Empty = detect all known apps.
+    #[serde(rename = "ignoredMeetingApps", default)]
+    pub ignored_meeting_apps: Vec<String>,
 
     // ── Mitsukeru fork: event-driven capture overrides ─────────────────
     // ミツケル拡張：PowerProfile に依らず個別パラメータを直接指定するための上書き値。
@@ -544,6 +557,7 @@ impl Default for RecordingSettings {
             max_snapshot_width: default_max_snapshot_width(),
             disable_snapshot_compaction: false,
             disable_meeting_detector: false,
+            ignored_meeting_apps: vec![],
             idle_capture_interval_ms: None,
             visual_check_interval_ms: None,
             visual_change_threshold: None,
