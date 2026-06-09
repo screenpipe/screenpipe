@@ -52,7 +52,7 @@ import { parsePipeSessionId } from "@/lib/events/types";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
-import { humanizeDow, humanizeSchedule } from "@/lib/utils/schedule-format";
+import { humanizeDow, humanizeSchedule, parseHumanSchedule } from "@/lib/utils/schedule-format";
 import {
   PipeActivityIndicator,
   formatPipeElapsed,
@@ -1918,8 +1918,17 @@ export function PipesSection() {
                             const schedule = pipe.config.schedule;
                             const cronParts = schedule.trim().split(/\s+/);
                             const isCron = cronParts.length === 5;
-                            // Extract current day-of-week from cron (field 5, 0=Sun, 1=Mon..6=Sat)
-                            const currentDow = isCron ? cronParts[4] : "*";
+
+                            // Parse human-readable "every <day> at <time>" schedules
+                            const humanParsed = parseHumanSchedule(schedule);
+                            const humanHour = humanParsed?.hour ?? null;
+
+                            // Extract current day-of-week from cron or human-readable schedule
+                            const currentDow = isCron
+                              ? cronParts[4]
+                              : humanParsed
+                                ? humanParsed.dow
+                                : "*";
                             const allDays = currentDow === "*";
                             // Parse active days into a Set
                             const activeDays = new Set<number>();
@@ -1959,19 +1968,24 @@ export function PipesSection() {
                                 // For "every Xm" format, convert to cron first
                                 let newSchedule: string;
                                 if (!isCron) {
-                                  // Can't add days to simple "every 30m" — keep as is
-                                  if (next.size === 7) return; // already all days
-                                  const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
-                                  if (everyMatch) {
-                                    const n = parseInt(everyMatch[1]);
-                                    const unit = everyMatch[2].toLowerCase();
-                                    if (unit === "m") {
-                                      newSchedule = `*/${n} * * * *`;
-                                    } else {
-                                      newSchedule = `0 */${n} * * *`;
-                                    }
+                                  if (humanHour !== null) {
+                                    // "every day/monday at Xam/pm" → cron with all days
+                                    newSchedule = `0 ${humanHour} * * *`;
                                   } else {
-                                    return;
+                                    // Can't add days to simple "every 30m" — keep as is
+                                    if (next.size === 7) return; // already all days
+                                    const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
+                                    if (everyMatch) {
+                                      const n = parseInt(everyMatch[1]);
+                                      const unit = everyMatch[2].toLowerCase();
+                                      if (unit === "m") {
+                                        newSchedule = `*/${n} * * * *`;
+                                      } else {
+                                        newSchedule = `0 */${n} * * *`;
+                                      }
+                                    } else {
+                                      return;
+                                    }
                                   }
                                 } else {
                                   newSchedule = [...baseParts, "*"].join(" ");
@@ -2010,6 +2024,9 @@ export function PipesSection() {
                               let baseParts: string[];
                               if (isCron) {
                                 baseParts = cronParts.slice(0, 4);
+                              } else if (humanHour !== null) {
+                                // "every day/monday at Xam/pm" → cron base
+                                baseParts = ["0", String(humanHour), "*", "*"];
                               } else {
                                 // Convert "every Xm/h" to cron base
                                 const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
