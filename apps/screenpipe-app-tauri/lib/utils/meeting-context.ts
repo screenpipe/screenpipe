@@ -470,8 +470,8 @@ export function buildEnrichedSummarizePrompt({
  *   - the bundled meeting-summary pipe (background event-triggered path) —
  *     keep the wording in sync with crates/screenpipe-core/assets/pipes/meeting-summary/pipe.md
  *
- * The agent decides whether to PATCH. Empty transcript / nothing worth saving
- * → say so out loud, skip the PATCH. Useful summary → append under "## Summary"
+ * The agent decides whether to PUT. Empty transcript / nothing worth saving
+ * → say so out loud, skip the PUT. Useful summary → append under "## Summary"
  * preserving the user's existing notes via the same endpoint the autosave uses.
  */
 export function buildMeetingSummarizeInstructions(
@@ -485,17 +485,17 @@ export function buildMeetingSummarizeInstructions(
     `primary transcript source: GET "http://localhost:3030/meetings/${meetingId}/transcript" and use each row's "transcript", "speakerName", "capturedAt", and "source" fields. sort rows by capturedAt before summarizing.`,
     `fallback transcript source: /search?content_type=audio for the meeting time window. audio rows use content.transcription (not content.text); content.text may be missing for audio and should not be treated as an empty transcript.`,
     `if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:`,
-    `  curl -s -X PATCH "http://localhost:3030/meetings/${meetingId}" \\`,
+    `  curl -s -X PUT "http://localhost:3030/meetings/${meetingId}" \\`,
     `    -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \\`,
     `    -H "Content-Type: application/json" \\`,
     `    -d '{"title": "<NEW_TITLE_OR_OMIT>", "note": "<EXISTING_NOTE>\\n\\n## Summary\\n<YOUR_SUMMARY>"}'`,
-    `replace <EXISTING_NOTE> with the meeting's current notes (shown above as "notes:" — empty string if none) so you don't overwrite the user's work; just append your summary under a "## Summary" heading. for the title: if the current "title:" is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PATCH — don't write a placeholder.`,
+    `replace <EXISTING_NOTE> with the meeting's current notes (shown above as "notes:" — empty string if none) so you don't overwrite the user's work; just append your summary under a "## Summary" heading. for the title: if the current "title:" is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder.`,
   ];
 
   if (options?.followUpAsk) {
     lines.push(
       ``,
-      `after the PATCH, ask the user — in one short message — whether they'd like you to (a) update speaker assignments for any of the audio segments above, or (b) push this summary into one of the apps they were using during the meeting (use the "apps used during meeting" + "tabs/docs visited" sections to list 2-3 plausible targets like Notion, Linear, GitHub, etc.). don't act on either until they reply.`,
+      `after the PUT, ask the user — in one short message — whether they'd like you to (a) update speaker assignments for any of the audio segments above, or (b) push this summary into one of the apps they were using during the meeting (use the "apps used during meeting" + "tabs/docs visited" sections to list 2-3 plausible targets like Notion, Linear, GitHub, etc.). don't act on either until they reply.`,
     );
   }
 

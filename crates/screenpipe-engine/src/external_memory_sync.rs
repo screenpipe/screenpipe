@@ -462,6 +462,18 @@ fn select_new_entries<'a>(
 /// one session for the lifetime of the workspace.
 const MEMORIES_SESSION_ID: &str = "screenpipe-memories";
 
+/// Honcho caps a single `add_messages` request at 100 messages
+/// (`MessageBatchCreate.messages` has `max_length = 100`). Posting the whole
+/// backlog in one call 422s the entire request, so we chunk it and advance the
+/// cursor per chunk — a mid-backlog failure keeps whatever already landed.
+const HONCHO_MAX_BATCH: usize = 100;
+
+/// Honcho rejects any single message whose content exceeds this many characters
+/// (`settings.MAX_MESSAGE_SIZE`, default 25_000). One oversized row would 422
+/// its whole batch and wedge every other row behind it forever, so we drop it
+/// with a warning instead.
+const HONCHO_MAX_MESSAGE_CHARS: usize = 25_000;
+
 /// Configuration for connecting to a Honcho instance.
 #[derive(Clone, Debug)]
 struct HonchoClientConfig {
@@ -722,7 +734,25 @@ async fn sync_honcho_inner(
 
     // Incremental delivery: only rows updated since the high-water cursor.
     let cursor = load_honcho_cursor(secret_store, mem_cursor, &cursor_key).await;
-    let selected = select_new_entries(entries, cursor.as_deref());
+    let mut selected = select_new_entries(entries, cursor.as_deref());
+
+    // Drop rows Honcho would reject for size before they reach a batch — one
+    // oversized row 422s its entire request, which would otherwise wedge every
+    // newer row behind it indefinitely.
+    let before = selected.len();
+    selected.retain(|e| {
+        let chars = e.content.chars().count();
+        if chars > HONCHO_MAX_MESSAGE_CHARS {
+            warn!(
+                "honcho: skipping memory (updated_at={}) — content is {} chars, exceeds {} limit",
+                e.updated_at, chars, HONCHO_MAX_MESSAGE_CHARS
+            );
+            false
+        } else {
+            true
+        }
+    });
+    let skipped_oversize = before - selected.len();
 
     if selected.is_empty() {
         return Ok(SyncOutcome::Skipped {
@@ -730,25 +760,44 @@ async fn sync_honcho_inner(
         });
     }
 
-    let messages: Vec<MessagePayload> = selected
-        .iter()
-        .map(|e| MessagePayload {
-            peer_id: peer_name.clone(),
-            content: e.content.clone(),
-        })
-        .collect();
-    client.add_messages(MEMORIES_SESSION_ID, messages).await?;
+    // Chunk boundaries must line up with the cursor's time ordering, so sort
+    // ascending by `updated_at` (RFC3339 → lexicographic == chronological)
+    // before slicing. `select_new_entries` preserves the DB's importance-desc
+    // order, which would otherwise let a mid-backlog failure advance the cursor
+    // past rows still sitting in earlier, unsent chunks.
+    selected.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
 
-    // Advance the cursor only on a successful post — a failed POST above
-    // returns early and leaves the cursor put, so the rows retry next tick
-    // (at-least-once delivery).
-    if let Some(new_max) = selected.iter().map(|e| e.updated_at.as_str()).max() {
-        store_honcho_cursor(secret_store, mem_cursor, &cursor_key, new_max).await;
+    let total = selected.len();
+    let mut pushed = 0usize;
+    for chunk in selected.chunks(HONCHO_MAX_BATCH) {
+        let messages: Vec<MessagePayload> = chunk
+            .iter()
+            .map(|e| MessagePayload {
+                peer_id: peer_name.clone(),
+                content: e.content.clone(),
+            })
+            .collect();
+        // A failed POST bails here, leaving the cursor at the previous chunk's
+        // high-water mark — this chunk and every later one retry next tick
+        // (at-least-once delivery).
+        client.add_messages(MEMORIES_SESSION_ID, messages).await?;
+        pushed += chunk.len();
+
+        // Advance the cursor per successful chunk. Sorted ascending, so the
+        // last row carries this chunk's max `updated_at`.
+        if let Some(new_max) = chunk.last().map(|e| e.updated_at.as_str()) {
+            store_honcho_cursor(secret_store, mem_cursor, &cursor_key, new_max).await;
+        }
     }
+
+    debug!(
+        "honcho: pushed {}/{} new memories ({} skipped for size)",
+        pushed, total, skipped_oversize
+    );
 
     Ok(SyncOutcome::Pushed {
         endpoint,
-        entries: selected.len(),
+        entries: pushed,
     })
 }
 
@@ -1354,5 +1403,143 @@ mod tests {
             None,
             "cursor must stay unset when the post fails"
         );
+    }
+
+    #[tokio::test]
+    async fn sync_honcho_chunks_large_backlog_into_batches_of_100() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v3/workspaces/screenpipe/peers"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "user-default"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v3/workspaces/screenpipe/sessions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"id": "screenpipe-memories"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/v3/workspaces/screenpipe/sessions/screenpipe-memories/messages",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let saved = json!({
+            "honcho": { "enabled": true, "credentials": { "api_url": server.uri() } }
+        });
+        std::fs::write(dir.path().join("connections.json"), saved.to_string()).unwrap();
+
+        // 250 entries with unique, ascending updated_at. Honcho rejects any
+        // add_messages request over 100, so the client must split this into
+        // three POSTs of 100, 100, 50.
+        let entries: Vec<MemoryEntry> = (0..250)
+            .map(|i| {
+                entry_at(
+                    &format!("fact {i}"),
+                    &format!("2026-01-01T{:02}:{:02}:{:02}Z", i / 3600, (i / 60) % 60, i % 60),
+                )
+            })
+            .collect();
+
+        let cell = std::sync::Mutex::new(HashMap::new());
+        let result = sync_honcho(&entries, None, dir.path(), &cell).await;
+
+        match result.outcome {
+            Ok(SyncOutcome::Pushed { entries: n, .. }) => assert_eq!(n, 250),
+            other => panic!("expected Pushed, got {:?}", other),
+        }
+
+        // Inspect what actually hit the wire: three message POSTs, none over the
+        // 100-message cap, summing to the full backlog.
+        let reqs = server.received_requests().await.unwrap();
+        let batches: Vec<usize> = reqs
+            .iter()
+            .filter(|r| r.url.path().ends_with("/screenpipe-memories/messages"))
+            .map(|r| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                body["messages"].as_array().unwrap().len()
+            })
+            .collect();
+
+        assert_eq!(batches.len(), 3, "expected 3 chunked POSTs, got {:?}", batches);
+        assert!(
+            batches.iter().all(|&n| n <= HONCHO_MAX_BATCH),
+            "every batch must respect Honcho's 100-message cap: {:?}",
+            batches
+        );
+        assert_eq!(batches.iter().sum::<usize>(), 250);
+
+        // Cursor lands on the newest entry's updated_at (i = 249 → 00:04:09).
+        let cursor_key = honcho_cursor_key(&server.uri(), "screenpipe", "user-default");
+        assert_eq!(
+            cell.lock().unwrap().get(&cursor_key).cloned(),
+            Some("2026-01-01T00:04:09Z".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_honcho_skips_oversize_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v3/workspaces/screenpipe/peers"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "user-default"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v3/workspaces/screenpipe/sessions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"id": "screenpipe-memories"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/v3/workspaces/screenpipe/sessions/screenpipe-memories/messages",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let saved = json!({
+            "honcho": { "enabled": true, "credentials": { "api_url": server.uri() } }
+        });
+        std::fs::write(dir.path().join("connections.json"), saved.to_string()).unwrap();
+
+        // One row over Honcho's per-message char cap must be dropped, not allowed
+        // to 422 the whole batch and block the small one behind it.
+        let big = "x".repeat(HONCHO_MAX_MESSAGE_CHARS + 1);
+        let entries = vec![
+            entry_at("small fact", "2026-01-01T00:00:00Z"),
+            entry_at(&big, "2026-01-02T00:00:00Z"),
+        ];
+
+        let cell = std::sync::Mutex::new(HashMap::new());
+        let result = sync_honcho(&entries, None, dir.path(), &cell).await;
+
+        match result.outcome {
+            Ok(SyncOutcome::Pushed { entries: n, .. }) => {
+                assert_eq!(n, 1, "only the in-limit row should be delivered");
+            }
+            other => panic!("expected Pushed, got {:?}", other),
+        }
+
+        // The oversized content must never reach the wire.
+        let reqs = server.received_requests().await.unwrap();
+        let sent_big = reqs.iter().any(|r| {
+            r.url.path().ends_with("/messages") && String::from_utf8_lossy(&r.body).contains(&big)
+        });
+        assert!(!sent_big, "oversize content must not be posted to honcho");
     }
 }
