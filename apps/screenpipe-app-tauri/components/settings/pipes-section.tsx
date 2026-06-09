@@ -2054,7 +2054,7 @@ export function PipesSection() {
                                     <button
                                       key={`${d.key}-${i}`}
                                       onClick={() => toggleDay(d.key)}
-                                      title={`${d.name} — ${on ? "on, click to skip" : "off, click to run"}`}
+                                      title={`${d.name} — ${on ? "enabled, click to disable" : "disabled, click to enable"}`}
                                       aria-label={d.name}
                                       aria-pressed={on}
                                       className={cn(
