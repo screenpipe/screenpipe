@@ -5,11 +5,12 @@
 //! VisionManager - Core manager for per-monitor recording tasks
 
 use anyhow::Result;
+use chrono::Utc;
 use dashmap::DashMap;
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::monitor::{get_monitor_by_id, list_monitors};
 use screenpipe_screen::PipelineMetrics;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::{watch, RwLock};
@@ -112,6 +113,53 @@ pub struct VisionManager {
     /// Set when the user's monitor allowlist matched zero connected displays and
     /// we fell back to recording every monitor. Clears the filter for hot-plug too.
     stale_allowlist_fallback: Arc<AtomicBool>,
+    /// Epoch-ms of the last successful capture cycle across all monitors. Each
+    /// capture loop stamps this whenever `do_capture` completes (full write OR
+    /// dedup-skip — both mean the pipeline cycled). The monitor watcher reads it
+    /// to detect a wedged-but-`Running` loop that has stopped producing frames
+    /// after a DB/disk I/O stall (repeated `CAPTURE_OPERATION_TIMEOUT`s) — a
+    /// condition no per-loop-local `Instant` could surface to a supervisor.
+    last_capture_ms: Arc<AtomicU64>,
+}
+
+/// Threshold past which a `Running` VisionManager that has produced no
+/// successful capture is treated as wedged and force-restarted by the monitor
+/// watcher. Fixed at 180s: long enough to clear the longest idle-capture
+/// interval (30s default) with generous margin for slow OCR / DB writes and
+/// legitimate transient stalls, so a healthy-but-quiet pipeline is never
+/// restarted; short enough that a real wedge (DB/disk stall) self-heals within
+/// a few minutes instead of silently losing the rest of a session.
+pub(crate) const VISION_WEDGE_THRESHOLD_MS: u64 = 180_000;
+
+/// Wall-clock epoch milliseconds. Used for the cross-task last-capture stamp
+/// (a monotonic `Instant` can't be shared as an atomic across the loop /
+/// watcher boundary the way an epoch-ms `u64` can).
+fn now_epoch_ms() -> u64 {
+    Utc::now().timestamp_millis().max(0) as u64
+}
+
+/// Pure staleness decision for the vision-wedge watchdog. Returns true only
+/// when the manager is `Running`, capture is NOT legitimately paused (DRM /
+/// schedule / screen-lock), monitors are present, and the last successful
+/// capture is older than `threshold_ms`. Side-effect-free so it can be
+/// unit-tested without a `VisionManager`; the actual DB/disk stall that wedges
+/// the loop can only be exercised by the e2e-macos workflow or manual testing.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn should_restart_wedged_vision(
+    is_running: bool,
+    drm_paused: bool,
+    schedule_paused: bool,
+    screen_locked: bool,
+    monitors_present: bool,
+    capture_age_ms: u64,
+    threshold_ms: u64,
+) -> bool {
+    is_running
+        && !drm_paused
+        && !schedule_paused
+        && !screen_locked
+        && monitors_present
+        && capture_age_ms >= threshold_ms
 }
 
 impl VisionManager {
@@ -163,6 +211,9 @@ impl VisionManager {
             focus_controller,
             high_fps_controller: None,
             stale_allowlist_fallback: Arc::new(AtomicBool::new(false)),
+            // Seed with "now" so a freshly-started manager isn't immediately
+            // judged stale before the first capture lands.
+            last_capture_ms: Arc::new(AtomicU64::new(now_epoch_ms())),
         }
     }
 
@@ -204,6 +255,16 @@ impl VisionManager {
     /// Get current status
     pub async fn status(&self) -> VisionManagerStatus {
         *self.status.read().await
+    }
+
+    /// Milliseconds since the last successful capture cycle on any monitor.
+    /// Saturates at 0 if the clock went backwards. The monitor watcher uses
+    /// this with [`should_restart_wedged_vision`] to detect a wedged loop.
+    pub fn capture_age_ms(&self) -> u64 {
+        let last = self
+            .last_capture_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        now_epoch_ms().saturating_sub(last)
     }
 
     /// Check whether a monitor is allowed by the user's monitor filter settings.
@@ -504,6 +565,7 @@ impl VisionManager {
         let focus_controller = self.focus_controller.clone();
         let linker_tx = Some(self.linker_tx.clone());
         let high_fps_controller = self.high_fps_controller.clone();
+        let last_capture_ms = self.last_capture_ms.clone();
 
         // Spawn the decoupled high-fps HD recorder alongside this monitor's
         // capture loop. It idles until an HD session is active, then records a
@@ -559,6 +621,7 @@ impl VisionManager {
                 focus_controller,
                 linker_tx,
                 high_fps_controller,
+                last_capture_ms,
             )
             .await
             {
@@ -791,6 +854,83 @@ mod tests {
             // the important thing is we didn't hang.
             let _ = result;
         }
+    }
+
+    // --- Vision wedge watchdog decision tests (#3939) ---
+
+    const T: u64 = VISION_WEDGE_THRESHOLD_MS;
+
+    #[test]
+    fn wedge_restarts_when_running_and_capture_stale() {
+        // The core wedge case: Running, nothing paused, monitors present, and
+        // no successful capture for longer than the threshold.
+        assert!(should_restart_wedged_vision(
+            true, false, false, false, true, T + 1, T
+        ));
+    }
+
+    #[test]
+    fn wedge_no_restart_when_capture_fresh() {
+        // Healthy pipeline — a recent capture (or static-screen dedup-skip,
+        // which still stamps the clock) keeps the age below threshold.
+        assert!(!should_restart_wedged_vision(
+            true,
+            false,
+            false,
+            false,
+            true,
+            T - 1,
+            T
+        ));
+    }
+
+    #[test]
+    fn wedge_no_restart_when_not_running() {
+        // Already Stopped / ShuttingDown — the not-Running recovery path owns it.
+        assert!(!should_restart_wedged_vision(
+            false, false, false, false, true, T + 1, T
+        ));
+    }
+
+    #[test]
+    fn wedge_no_restart_while_drm_paused() {
+        // DRM pause intentionally halts capture — not a wedge.
+        assert!(!should_restart_wedged_vision(
+            true, true, false, false, true, T + 1, T
+        ));
+    }
+
+    #[test]
+    fn wedge_no_restart_while_schedule_paused() {
+        // Outside work-hours schedule — capture is intentionally stopped.
+        assert!(!should_restart_wedged_vision(
+            true, false, true, false, true, T + 1, T
+        ));
+    }
+
+    #[test]
+    fn wedge_no_restart_while_screen_locked() {
+        // Screen locked — the loop skips captures on purpose.
+        assert!(!should_restart_wedged_vision(
+            true, false, false, true, true, T + 1, T
+        ));
+    }
+
+    #[test]
+    fn wedge_no_restart_when_no_monitors_present() {
+        // No active monitors (undock / wake) — the not-Running / start-retry
+        // path handles this; don't thrash a stop()+start() over nothing.
+        assert!(!should_restart_wedged_vision(
+            true, false, false, false, false, T + 1, T
+        ));
+    }
+
+    #[test]
+    fn wedge_threshold_boundary_is_inclusive() {
+        // Exactly at the threshold counts as stale (>=).
+        assert!(should_restart_wedged_vision(
+            true, false, false, false, true, T, T
+        ));
     }
 
     /// Verify that an already-finished task completes instantly on stop_monitor.

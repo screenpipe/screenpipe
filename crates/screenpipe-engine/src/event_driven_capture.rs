@@ -23,7 +23,7 @@ use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::utils::capture_monitor_image;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
@@ -573,6 +573,10 @@ pub async fn event_driven_capture_loop(
     // The loop polls `effective_interval_ms()` each tick; `None` here means
     // the override is fully disabled (no auto, no manual, no detector).
     high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
+    // Shared cross-task "last successful capture" stamp (epoch-ms), owned by
+    // VisionManager. Stamped on every completed capture cycle (full write OR
+    // dedup-skip) so the monitor watcher can detect a wedged-but-Running loop.
+    last_capture_ms: Arc<AtomicU64>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -704,6 +708,9 @@ pub async fn event_driven_capture_loop(
         {
             Ok(Ok(output)) => {
                 state.mark_captured();
+                // Cross-task liveness stamp: the pipeline cycled successfully
+                // (this is the startup capture). See the live-loop site below.
+                last_capture_ms.store(Utc::now().timestamp_millis().max(0) as u64, Ordering::Relaxed);
                 if let Some(ref mut comparer) = frame_comparer {
                     let _ = comparer.compare(&output.image);
                 }
@@ -1298,6 +1305,15 @@ pub async fn event_driven_capture_loop(
                 match capture_result {
                     Ok(Ok(output)) => {
                         state.mark_captured();
+                        // Cross-task liveness stamp for the monitor watcher.
+                        // Stamped on EVERY successful cycle — full write and
+                        // dedup-skip alike — so a static screen (Zoom call,
+                        // slide deck, IDE) stays "alive" and is never mistaken
+                        // for a wedge. The wedge signal is the ABSENCE of this
+                        // stamp (repeated CAPTURE_OPERATION_TIMEOUTs), not the
+                        // absence of a DB write.
+                        last_capture_ms
+                            .store(Utc::now().timestamp_millis().max(0) as u64, Ordering::Relaxed);
 
                         if consecutive_capture_errors > 0 {
                             info!(

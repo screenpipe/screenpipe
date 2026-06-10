@@ -224,6 +224,56 @@ pub async fn start_monitor_watcher(
                 continue;
             }
 
+            // ── Wedge watchdog ──────────────────────────────────────────────
+            // A capture loop can keep its status `Running` yet stop producing
+            // frames entirely — e.g. repeated `CAPTURE_OPERATION_TIMEOUT`s under
+            // a DB/disk I/O stall. The reconnect logic below only restarts a
+            // monitor whose task already exited, so a wedged-but-Running loop is
+            // never recovered. Detect it via the shared last-successful-capture
+            // stamp and force a stop()+start() to rebuild the pipeline. Gated by
+            // `should_restart_wedged_vision` so legitimate pauses (DRM / schedule
+            // / screen-lock) and a no-monitor state never false-trigger; a static
+            // screen also can't trigger it because dedup-skips still stamp the
+            // capture clock.
+            {
+                let active_count = vision_manager.active_monitors().await.len();
+                #[cfg(target_os = "macos")]
+                let screen_locked = crate::sleep_monitor::screen_is_locked();
+                #[cfg(not(target_os = "macos"))]
+                let screen_locked = false;
+                if super::manager::should_restart_wedged_vision(
+                    vision_manager.status().await == VisionManagerStatus::Running,
+                    drm_detector::drm_content_paused(),
+                    crate::schedule_monitor::schedule_paused(),
+                    screen_locked,
+                    active_count > 0,
+                    vision_manager.capture_age_ms(),
+                    super::manager::VISION_WEDGE_THRESHOLD_MS,
+                ) {
+                    warn!(
+                        "vision capture wedged ({}ms since last successful capture, {} monitor(s) active) — restarting VisionManager",
+                        vision_manager.capture_age_ms(),
+                        active_count
+                    );
+                    if let Err(e) = vision_manager.stop().await {
+                        warn!("failed to stop wedged VisionManager: {:?}", e);
+                    }
+                    if let Err(e) = vision_manager.start().await {
+                        warn!("failed to restart VisionManager after wedge: {:?}", e);
+                    } else {
+                        info!("VisionManager restarted after capture wedge");
+                        if let Ok(monitors) = list_monitors_detailed().await {
+                            known_monitors = monitors
+                                .iter()
+                                .map(|m| (m.id(), m.name().to_string()))
+                                .collect();
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            }
+
             // Get currently connected monitors with detailed error info
             let current_monitors = match list_monitors_detailed().await {
                 Ok(monitors) => {
