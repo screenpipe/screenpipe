@@ -2924,6 +2924,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
 const KRISP_MCP_URL = "https://mcp.krisp.ai/mcp";
 const PLAUD_MCP_URL = "https://mcp.plaud.ai/mcp";
+const CLICKUP_MCP_URL = "https://mcp.clickup.com/mcp";
 
 function mcpRandomId(): string {
   const bytes = new Uint8Array(8);
@@ -3211,6 +3212,7 @@ export function ConnectionsSection({
   const [customMcpEnabledCount, setCustomMcpEnabledCount] = useState(0);
   const [krispConnected, setKrispConnected] = useState(false);
   const [plaudConnected, setPlaudConnected] = useState(false);
+  const [clickupMcpConnected, setClickupMcpConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
 
@@ -3269,12 +3271,14 @@ export function ConnectionsSection({
       setCustomMcpConnected(enabled.length > 0);
       setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
       setPlaudConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === PLAUD_MCP_URL));
+      setClickupMcpConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === CLICKUP_MCP_URL));
     }).catch(() => {
       setCustomMcpConnected(false);
       setCustomMcpServerCount(0);
       setCustomMcpEnabledCount(0);
       setKrispConnected(false);
       setPlaudConnected(false);
+      setClickupMcpConnected(false);
     });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
@@ -3424,7 +3428,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, clickupMcpConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -3534,6 +3538,13 @@ export function ConnectionsSection({
         description={<>Connect Plaud so your AI can search your Plaud recordings, transcripts, summaries, and notes. Sign-in is handled by Plaud&apos;s OAuth, so screenpipe never sees your password.</>}
         onConnected={() => setPlaudConnected(true)}
         onDisconnected={() => setPlaudConnected(false)}
+      />;
+      case "clickup": return <OAuthMcpPanel
+        name="ClickUp"
+        mcpUrl={CLICKUP_MCP_URL}
+        description={<>Connect ClickUp so your AI can manage tasks, docs, and projects. Sign-in is handled by ClickUp&apos;s OAuth, so screenpipe never sees your password.</>}
+        onConnected={() => setClickupMcpConnected(true)}
+        onDisconnected={() => setClickupMcpConnected(false)}
       />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;

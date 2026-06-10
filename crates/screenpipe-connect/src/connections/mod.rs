@@ -16,7 +16,6 @@ pub mod browser;
 pub mod calcom;
 pub mod calendly;
 pub mod claude_code;
-pub mod clickup;
 pub mod codex;
 pub mod confluence;
 pub mod discord;
@@ -283,7 +282,6 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(toggl::Toggl),
         Box::new(brex::Brex),
         Box::new(posthog::PostHog),
-        Box::new(clickup::ClickUp),
         Box::new(confluence::Confluence),
         Box::new(salesforce::Salesforce),
         Box::new(microsoft365::Microsoft365),
