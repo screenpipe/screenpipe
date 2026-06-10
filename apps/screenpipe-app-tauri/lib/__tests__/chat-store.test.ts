@@ -261,12 +261,13 @@ describe("chat-store: setCurrent clears unread atomically", () => {
   beforeEach(reset);
 
   it("flips currentId AND clears unread on the new current in one set", () => {
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: true }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", lastContentAt: 100 }));
     useChatStore.getState().actions.setCurrent("A");
     const state = useChatStore.getState();
     expect(state.currentId).toBe("A");
     expect(state.sessions.A.unread).toBe(false);
     expect(typeof state.sessions.A.lastViewedAt).toBe("number");
+    expect(state.sessions.A.lastViewedAt).toBeGreaterThanOrEqual(100);
   });
 });
 
@@ -323,35 +324,55 @@ describe("chat-store: recent switcher ordering", () => {
   });
 });
 
-describe("chat-store: markUnread guards", () => {
+describe("chat-store: unread is computed from timestamps", () => {
   beforeEach(reset);
 
-  it("no-ops when the session is the current one", () => {
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
+  it("session with lastContentAt > lastViewedAt is unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 200, lastViewedAt: 100 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+  });
+
+  it("session with lastContentAt < lastViewedAt is not unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 100, lastViewedAt: 200 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+  });
+
+  it("appendMessage bumps lastContentAt and recomputes unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastViewedAt: 50 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+    useChatStore.getState().actions.appendMessage(
+      "A",
+      { id: "m1", role: "assistant", content: "hello", timestamp: Date.now() },
+    );
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastContentAt).toBeGreaterThan(50);
+    expect(session.unread).toBe(true);
+  });
+
+  it("patch with only updatedAt does NOT flip unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 100, lastViewedAt: 200 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+    // Status/preview patches bump updatedAt but should not affect unread.
+    useChatStore.getState().actions.patch("A", { updatedAt: 9_999 });
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+  });
+
+  it("setCurrent sets lastViewedAt and clears unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 200 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
     useChatStore.getState().actions.setCurrent("A");
-    useChatStore.getState().actions.markUnread("A");
     expect(useChatStore.getState().sessions.A.unread).toBe(false);
-  });
-
-  it("no-ops when the session is loaded in the panel even if currentId was cleared", () => {
-    // Bug: navigating away from /home reset currentId to null. Late deltas
-    // for the still-loaded panel chat then re-marked it unread, even though
-    // the user had read everything on screen. Guard on panelSessionId fixes
-    // that — the panel keeps the chat visible-on-return, so deltas there
-    // don't count as "new since last seen".
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
-    useChatStore.setState({ currentId: null, panelSessionId: "A" });
-    useChatStore.getState().actions.markUnread("A");
-    expect(useChatStore.getState().sessions.A.unread).toBe(false);
-  });
-
-  it("DOES mark a different session unread when nav'd away", () => {
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
-    useChatStore.getState().actions.upsert(baseRecord({ id: "B", unread: false }));
-    useChatStore.setState({ currentId: null, panelSessionId: "A" });
-    useChatStore.getState().actions.markUnread("B");
-    expect(useChatStore.getState().sessions.A.unread).toBe(false);
-    expect(useChatStore.getState().sessions.B.unread).toBe(true);
+    expect(useChatStore.getState().sessions.A.lastViewedAt).toBeGreaterThanOrEqual(200);
   });
 });
 

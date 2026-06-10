@@ -720,11 +720,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       ...(await (async () => {
         const { useChatStore } = await import("@/lib/stores/chat-store");
         const sid = piSessionIdRef.current;
-        const fromStore = sid
-          ? useChatStore.getState().sessions[sid]?.lastUserMessageAt
+        const storeSession = sid
+          ? useChatStore.getState().sessions[sid]
           : undefined;
-        const lastUserMessageAt = fromStore ?? existing?.lastUserMessageAt;
-        return lastUserMessageAt ? { lastUserMessageAt } : {};
+        const lastUserMessageAt = storeSession?.lastUserMessageAt ?? existing?.lastUserMessageAt;
+        const lastContentAt = storeSession?.lastContentAt ?? existing?.lastContentAt;
+        return {
+          ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
+          ...(lastContentAt ? { lastContentAt } : {}),
+        };
       })()),
     };
 
@@ -1096,6 +1100,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             ...(persisted.hidden === true ? { hidden: true } : {}),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(persisted.lastContentAt ? { lastContentAt: persisted.lastContentAt } : {}),
           });
         } else {
           store.actions.patch(conv.id, {
@@ -1188,6 +1193,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // foreground/background swaps.
           ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
+          ...((full as any).lastContentAt ? { lastContentAt: (full as any).lastContentAt } : {}),
         });
       } else if (conv.kind || conv.pipeContext) {
         store.actions.patch(conv.id, {

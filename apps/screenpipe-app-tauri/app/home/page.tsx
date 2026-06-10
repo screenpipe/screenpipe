@@ -264,7 +264,7 @@ function HomeContent() {
           });
         }
         if (unreadHint && store.currentId !== id && store.panelSessionId !== id) {
-          store.actions.markUnread(id);
+          store.actions.patch(id, { lastContentAt: Date.now() });
         }
       });
       unlistenFn = unlisten;
