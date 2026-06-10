@@ -3384,6 +3384,7 @@ export function ConnectionsSection({
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false, detected: detectedConnectionIds.has("perplexity") },
       { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected, detected: detectedConnectionIds.has("krisp") },
       { id: "plaud", name: "Plaud", icon: "plaud", connected: plaudConnected },
+      { id: "clickup", name: "ClickUp", icon: "clickup", connected: clickupMcpConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false, detected: customMcpServerCount > 0 },
       { id: "skills", name: "Skills", icon: "skills", connected: importedSkillsCount > 0, category: "Agent" },
     ];
