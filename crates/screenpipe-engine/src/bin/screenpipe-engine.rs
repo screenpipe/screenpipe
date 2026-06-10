@@ -39,6 +39,7 @@ use screenpipe_engine::{
     crash_log,
     high_fps_controller::HighFpsController,
     hot_frame_cache::HotFrameCache,
+    shutdown::{bounded_teardown, TeardownOutcome},
     start_meeting_watcher, start_power_manager, start_sleep_monitor, start_speaker_identification,
     start_ui_recording,
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
@@ -63,6 +64,12 @@ use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, Layer};
 
 #[cfg(target_os = "macos")]
 use tracing_oslog::OsLogger;
+
+/// Hard upper bound on awaiting audio teardown during shutdown. The graceful
+/// path stops each stream with its own ~3s wait, so 10s covers a handful of
+/// devices; beyond that we proceed to exit rather than let a wedged stream stop
+/// keep the process (and the CoreAudio tap) alive indefinitely. See #3942.
+const AUDIO_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Set the file descriptor limit for the process.
 /// This helps prevent "Too many open files" errors during heavy WebSocket/video usage.
@@ -2107,7 +2114,6 @@ async fn main() -> anyhow::Result<()> {
         }
         _ = ctrl_c_future => {
             info!("received ctrl+c, initiating shutdown");
-            audio_manager.shutdown().await?;
             // Stop UI recorder if running
             if let Some(ref handle) = ui_recorder_handle {
                 info!("stopping UI event capture");
@@ -2120,6 +2126,25 @@ async fn main() -> anyhow::Result<()> {
             }
             let _ = shutdown_tx.send(());
         }
+    }
+
+    // #3942: Tear down audio FIRST, synchronously, on EVERY shutdown path — before
+    // the UI-recorder join below (which can block when stop() was never signalled
+    // on a non-ctrl+c arm) and before process exit. `AudioManager::Drop` defers its
+    // teardown — including the CoreAudio process-tap's RAII destruction
+    // (`ProcessTapCapture`/`TapGuard`), the only thing that frees the system-level
+    // tap — into a detached `tokio::spawn` it never awaits, and other
+    // `Arc<AudioManager>` clones outlive the `drop()` below, so relying on the drop
+    // path orphaned the tap on the server/vision arms and wedged coreaudiod until
+    // logout. Await `shutdown()` explicitly, bounded so a stream stop wedged in
+    // cpal/CoreAudio can't hold the process (and the tap) open forever.
+    match bounded_teardown(audio_manager.shutdown(), AUDIO_SHUTDOWN_TIMEOUT).await {
+        TeardownOutcome::Completed => info!("audio shutdown complete"),
+        TeardownOutcome::Failed => error!("audio shutdown reported an error"),
+        TeardownOutcome::TimedOut => error!(
+            "audio shutdown timed out after {:?}; CoreAudio tap may not have torn down cleanly",
+            AUDIO_SHUTDOWN_TIMEOUT
+        ),
     }
 
     // Wait for UI recorder to finish

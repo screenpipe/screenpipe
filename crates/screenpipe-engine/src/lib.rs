@@ -44,6 +44,7 @@ pub mod retention;
 pub mod routes;
 pub mod schedule_monitor;
 pub mod server;
+pub mod shutdown;
 pub mod sleep_monitor;
 pub mod snapshot_compaction;
 mod sync_api;
