@@ -61,8 +61,17 @@ pub async fn process_with_whisper(
     params.set_suppress_nst(true);
     // Entropy threshold: high-entropy (repetitive/looping) output is suppressed
     params.set_entropy_thold(2.4);
-    // Log-probability threshold: low-confidence segments are dropped
-    params.set_logprob_thold(-2.0);
+    // Log-probability threshold: low-confidence segments are dropped. Whisper's
+    // own default is -1.0; the previous -2.0 was unusually lenient and let
+    // low-confidence silence hallucinations ("Thank you.", "you", etc.) through.
+    params.set_logprob_thold(-1.0);
+    // Do not seed the decoder with previously-decoded text. When a silence
+    // hallucination slips through, conditioning the next window on it makes the
+    // model repeat and snowball (the classic "you you you…" / repeated-phrase
+    // loops). Disabling cross-window context stops that at the source and is
+    // fully language-agnostic. `initial_prompt` (vocabulary biasing below) is a
+    // separate field and is unaffected.
+    params.set_no_context(true);
 
     whisper_state.pcm_to_mel(&audio, 2)?;
     let (_, lang_tokens) = whisper_state.lang_detect(0, 2)?;
@@ -104,5 +113,74 @@ pub async fn process_with_whisper(
         }
     }
 
+    // Backstop: even with VAD, the decode thresholds, and no-context decoding
+    // above, Whisper can still emit a single-token repetition loop within one
+    // window on low-energy/non-speech audio. Drop those (language-agnostic)
+    // rather than persist them as junk transcripts.
+    let transcript = strip_repetition_loop(&transcript);
+
     Ok(transcript)
+}
+
+/// Lowercase, trim, and strip surrounding whitespace/punctuation for matching.
+fn normalize_for_match(s: &str) -> String {
+    s.trim()
+        .trim_matches(|c: char| c.is_whitespace() || ".!?,…".contains(c))
+        .to_lowercase()
+}
+
+/// Returns `""` when the transcript is a single-token repetition loop (e.g.
+/// "you you you", "the the the the"), the residual silence-hallucination shape
+/// that survives VAD + decode thresholds + no-context decoding; otherwise
+/// returns the transcript unchanged.
+///
+/// This is intentionally language-agnostic: it keys on the structural signature
+/// (one token repeated) rather than any hard-coded phrase list, so it does not
+/// risk dropping genuine speech and needs no per-language maintenance.
+pub(crate) fn strip_repetition_loop(transcript: &str) -> String {
+    let normalized = normalize_for_match(transcript);
+    if normalized.is_empty() {
+        return String::new();
+    }
+    // A single token repeated >= 3 times, ignoring per-token punctuation.
+    let strip_punct = |t: &str| t.trim_matches(|c: char| ".!?,…".contains(c)).to_string();
+    let tokens: Vec<String> = normalized.split_whitespace().map(strip_punct).collect();
+    if tokens.len() >= 3 {
+        let first = &tokens[0];
+        if !first.is_empty() && tokens.iter().all(|t| t == first) {
+            return String::new();
+        }
+    }
+    transcript.to_string()
+}
+
+#[cfg(test)]
+mod hallucination_tests {
+    use super::strip_repetition_loop;
+
+    #[test]
+    fn strips_repetition_loops() {
+        assert_eq!(strip_repetition_loop("you you you you"), "");
+        assert_eq!(strip_repetition_loop("You. You. You."), "");
+        assert_eq!(strip_repetition_loop("the the the"), "");
+    }
+
+    #[test]
+    fn keeps_real_speech_and_short_repeats() {
+        // Genuine speech is preserved, including phrases that merely contain a
+        // repeated word or stock filler — no phrase blocklist is applied.
+        let s = "thank you so much for the detailed walkthrough";
+        assert_eq!(strip_repetition_loop(s), s);
+        let s2 = "you know what I mean, it works";
+        assert_eq!(strip_repetition_loop(s2), s2);
+        // Fewer than 3 tokens is never treated as a loop.
+        assert_eq!(strip_repetition_loop("you you"), "you you");
+    }
+
+    #[test]
+    fn keeps_normal_speech_and_empty() {
+        assert_eq!(strip_repetition_loop(""), "");
+        let s = "let's move the deploy to Thursday";
+        assert_eq!(strip_repetition_loop(s), s);
+    }
 }
