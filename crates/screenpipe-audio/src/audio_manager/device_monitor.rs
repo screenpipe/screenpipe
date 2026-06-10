@@ -61,6 +61,39 @@ fn is_device_type_running(
     })
 }
 
+/// Inputs to [`should_recover_output`]. Snapshot of the output-device state at
+/// the start of a monitor cycle. Mirrors the input-recovery decision but for
+/// the System Audio (output) ScreenCaptureKit stream, which dies silently on
+/// lid-close / clamshell / screen-lock without ever flipping `is_disconnected`
+/// in a way the input recovery path observes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OutputRecoveryInputs {
+    /// An output device is enrolled in the user's `enabled_devices` set.
+    pub output_enrolled: bool,
+    /// An enrolled output device currently has a live, non-disconnected stream.
+    pub output_streaming: bool,
+    /// Output (SCK) capture is intentionally paused for DRM content. When true
+    /// the monitor must NOT recover — doing so fights the DRM pause.
+    pub drm_paused: bool,
+    /// The user explicitly disabled the output device (privacy / preference).
+    pub output_user_disabled: bool,
+}
+
+/// Pure recovery-decision predicate for the System Audio (output) stream.
+///
+/// Returns true only when an output device is enrolled, is NOT actively
+/// streaming (stale / dead handle), is NOT paused for DRM, and was NOT disabled
+/// by the user. Kept side-effect-free so the decision can be exhaustively
+/// unit-tested without an `AudioManager` (the actual lid-close / clamshell SCK
+/// death that triggers it can only be exercised by the e2e-macos workflow or
+/// manual testing).
+pub(crate) fn should_recover_output(inputs: OutputRecoveryInputs) -> bool {
+    inputs.output_enrolled
+        && !inputs.output_streaming
+        && !inputs.drm_paused
+        && !inputs.output_user_disabled
+}
+
 use super::{AudioManager, AudioManagerStatus};
 
 /// Exponential backoff for output device recovery.
@@ -917,6 +950,100 @@ pub async fn start_device_monitor(
                     }
                 }
 
+                // Manual-mode output (System Audio) liveness recovery.
+                //
+                // The follow-system-default branch above already re-arms a dead
+                // output stream, but in MANUAL device mode nothing did — so when
+                // the SCK output stream dies silently on lid-close / clamshell /
+                // screen-lock (it never flips `is_disconnected` the way an input
+                // disconnect does), `/health` stayed "ok" (the mic was alive) and
+                // meetings were captured mic-only. Mirror the input-recovery path
+                // for the output device here. DRM-pause-aware via
+                // `should_recover_output` so it does not fight an intentional DRM
+                // pause. Uses the stream-liveness signal (`is_device_type_running`
+                // → live, non-disconnected handle), NOT mere silence, so genuine
+                // quiet periods are not treated as failures.
+                if !audio_manager.use_system_default_audio().await {
+                    let current_enabled = audio_manager.enabled_devices().await;
+                    let user_disabled = audio_manager.user_disabled_devices().await;
+                    let output_enrolled = current_enabled.iter().any(|name| {
+                        parse_audio_device(name)
+                            .map(|d| d.device_type == DeviceType::Output)
+                            .unwrap_or(false)
+                    });
+                    let output_streaming = is_device_type_running(
+                        &device_manager,
+                        &current_enabled,
+                        DeviceType::Output,
+                    );
+                    let output_user_disabled = match default_output_device().await {
+                        Ok(d) => user_disabled.contains(&d.to_string()),
+                        Err(_) => false,
+                    };
+                    let drm_paused = audio_manager.output_paused_for_drm().await;
+
+                    let recover = should_recover_output(OutputRecoveryInputs {
+                        output_enrolled,
+                        output_streaming,
+                        drm_paused,
+                        output_user_disabled,
+                    });
+
+                    if recover {
+                        // Reuse the shared backoff so a permanently-unavailable
+                        // output (no display) does not spam logs every 2s.
+                        let backoff_secs = output_recovery_backoff.next_delay_secs();
+                        if output_recovery_backoff.last_attempt.elapsed()
+                            >= Duration::from_secs(backoff_secs)
+                        {
+                            output_recovery_backoff.last_attempt = Instant::now();
+                            match default_output_device().await {
+                                Ok(default_output) => {
+                                    let device_name = default_output.to_string();
+                                    info!(
+                                        "[DEVICE_RECOVERY] output stream not live (attempt {}), restarting System Audio: {}",
+                                        output_recovery_backoff.attempts, device_name
+                                    );
+                                    match audio_manager.start_device(&default_output).await {
+                                        Ok(()) => {
+                                            failed_devices.remove(&device_name);
+                                            output_recovery_backoff.reset();
+                                            info!(
+                                                "[DEVICE_RECOVERY] output device restored, device={}",
+                                                device_name
+                                            );
+                                        }
+                                        Err(e) => {
+                                            output_recovery_backoff.record_failure(false);
+                                            warn!(
+                                                "[DEVICE_RECOVERY] failed to restart output device {} (attempt {}, next retry in {}s): {}",
+                                                device_name, output_recovery_backoff.attempts,
+                                                output_recovery_backoff.next_delay_secs(), e
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let is_permanent = is_permanent_output_error(&e);
+                                    output_recovery_backoff.record_failure(is_permanent);
+                                    if output_recovery_backoff.attempts <= 3
+                                        || output_recovery_backoff.attempts.is_multiple_of(30)
+                                    {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] no output device available for recovery (attempt {}, {}, next retry in {}s): {}",
+                                            output_recovery_backoff.attempts,
+                                            if is_permanent { "permanent" } else { "transient" },
+                                            output_recovery_backoff.next_delay_secs(), e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        output_recovery_backoff.reset();
+                    }
+                }
+
                 // Check for stale recording handles (tasks that have finished/crashed)
                 // This handles cases where audio stream was hijacked by another app
                 let stale_devices = audio_manager.check_stale_recording_handles().await;
@@ -1571,6 +1698,65 @@ mod tests {
         // With a 0s window, the old timestamps are immediately evicted,
         // so we never accumulate 3 within the window
         assert!(!cd.exhausted);
+    }
+
+    // --- Output recovery decision tests (#3901) ---
+
+    #[test]
+    fn output_recovers_when_enrolled_dead_and_not_drm_paused() {
+        // The core lid-close / clamshell case: output enrolled, stream dead,
+        // no DRM pause, user did not disable it → recover.
+        assert!(should_recover_output(OutputRecoveryInputs {
+            output_enrolled: true,
+            output_streaming: false,
+            drm_paused: false,
+            output_user_disabled: false,
+        }));
+    }
+
+    #[test]
+    fn output_no_recover_while_streaming() {
+        // Healthy live stream — quiet periods are not failures.
+        assert!(!should_recover_output(OutputRecoveryInputs {
+            output_enrolled: true,
+            output_streaming: true,
+            drm_paused: false,
+            output_user_disabled: false,
+        }));
+    }
+
+    #[test]
+    fn output_no_recover_while_drm_paused() {
+        // Output intentionally stopped for DRM content — recovering here would
+        // fight the pause and log false "restored" events.
+        assert!(!should_recover_output(OutputRecoveryInputs {
+            output_enrolled: true,
+            output_streaming: false,
+            drm_paused: true,
+            output_user_disabled: false,
+        }));
+    }
+
+    #[test]
+    fn output_no_recover_when_not_enrolled() {
+        // No output device in the enabled set — nothing to recover.
+        assert!(!should_recover_output(OutputRecoveryInputs {
+            output_enrolled: false,
+            output_streaming: false,
+            drm_paused: false,
+            output_user_disabled: false,
+        }));
+    }
+
+    #[test]
+    fn output_no_recover_when_user_disabled() {
+        // User explicitly disabled the output device — respect that.
+        assert!(!should_recover_output(OutputRecoveryInputs {
+            output_enrolled: true,
+            output_streaming: false,
+            drm_paused: false,
+            output_user_disabled: true,
+        }));
     }
 
     // --- Pinned input fallback decider tests ---

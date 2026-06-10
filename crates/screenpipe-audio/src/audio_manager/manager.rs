@@ -1089,6 +1089,14 @@ impl AudioManager {
             .remove(device_name);
     }
 
+    /// True when output (SCK) devices are currently stopped for a DRM pause.
+    /// The device monitor consults this so its output-liveness recovery does
+    /// not fight the intentional DRM pause (which would otherwise log false
+    /// "restored" events and re-arm SCK while protected content is playing).
+    pub async fn output_paused_for_drm(&self) -> bool {
+        !self.drm_stopped_devices.read().await.is_empty()
+    }
+
     /// Stop all SCK-based (Output) audio devices for DRM pause.
     /// Input (microphone) devices are left running. Unlike `stop_device()`,
     /// this does NOT remove devices from `enabled_devices` since DRM pause
