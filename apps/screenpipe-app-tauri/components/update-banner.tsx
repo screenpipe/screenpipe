@@ -73,28 +73,24 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
     const os = platform();
 
     try {
-      // #3622: gate restart on boot-ready. Windows downloadAndInstall calls
-      // process::exit internally, and relaunch() does the same on macOS —
-      // both race onnxruntime teardown against still-initializing native
-      // sessions if startup hasn't finished. Backend waits up to 60s and
-      // returns one of "proceed" | "errored" | "pending".
-      const gate = await commands.awaitSafeRestart(60);
-      if (gate !== "proceed") {
-        setIsInstalling(false);
-        toast({
-          title: "screenpipe is still starting up",
-          description:
-            gate === "errored"
-              ? "startup error — open settings to see details before restarting"
-              : "finish startup first, then click update again",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // On Windows, the update is not pre-downloaded by the backend (unlike macOS/Linux)
-      // We need to check for update, download, and install it before relaunching
+      // Windows: NSIS installer calls process::exit directly, bypassing our
+      // ExitRequested handler — plain relaunch is fine. macOS/Linux go through
+      // restart_for_update which sets QUIT_REQUESTED so the exit isn't blocked
+      // by main.rs (2026-06-10 "stuck on still starting" report).
       if (os === "windows") {
+        const gate = await commands.awaitSafeRestart(60);
+        if (gate !== "proceed") {
+          setIsInstalling(false);
+          toast({
+            title: "screenpipe is still starting up",
+            description:
+              gate === "errored"
+                ? "startup error — open settings to see details before restarting"
+                : "finish startup first, then click update again",
+            variant: "destructive",
+          });
+          return;
+        }
         toast({
           title: "downloading update...",
           description: "please wait while the update is downloaded",
@@ -128,16 +124,35 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
             duration: 3000,
           });
         }
+
+        // Fallback relaunch only if installer didn't run (no update available
+        // at click time); normal path: downloadAndInstall already exited.
+        await relaunch();
       } else {
-        // On macOS/Linux, the update was already downloaded by the backend
+        // macOS/Linux: bundle already staged by backend. `restart_for_update`
+        // gates internally, so no separate `awaitSafeRestart` call needed.
         toast({
           title: "installing update...",
           description: "screenpipe will restart automatically",
           duration: 10000,
         });
+        const res = await commands.restartForUpdate(60);
+        const outcome = res.status === "ok" ? res.data : "errored";
+        if (outcome !== "proceed") {
+          setIsInstalling(false);
+          toast({
+            title: "screenpipe is still starting up",
+            description:
+              outcome === "errored"
+                ? "startup error — open settings to see details before restarting"
+                : "finish startup first, then click update again",
+            variant: "destructive",
+          });
+          return;
+        }
+        // restart scheduled off-thread; runtime will tear down shortly.
+        // Leave button on "restarting…" until the process is replaced.
       }
-
-      await relaunch();
     } catch (error) {
       console.error("failed to update:", error);
       setIsInstalling(false);
