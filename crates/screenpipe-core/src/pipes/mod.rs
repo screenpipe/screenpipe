@@ -96,8 +96,10 @@ pub struct PipeConfig {
     )]
     pub preset: Vec<String>,
 
-    /// Connections this pipe uses (e.g. `["obsidian", "slack"]`).
-    /// The AI can query `GET /connections/<id>` at runtime to get credentials.
+    /// Connections this pipe uses (e.g. `["obsidian", "slack", "github"]`).
+    /// Credential integrations: `GET /connections/<id>` returns saved fields.
+    /// OAuth/proxy integrations: call `POST /connections/<id>/proxy/<api-path>`
+    /// (the proxy injects auth; raw tokens are never exposed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<String>,
 
@@ -3396,7 +3398,7 @@ impl PipeManager {
                     }
 
                     // Setup-mode gate: pipes whose declared `connections` aren't
-                    // all configured (`enabled && credentials present`) must not
+                    // all configured (credentials or OAuth token present) must not
                     // run on schedule or event. Mirrors the manual-run gate in
                     // pipes_api::run_pipe_now. Placed after the schedule/queue
                     // checks so we only hit the SecretStore when the pipe would

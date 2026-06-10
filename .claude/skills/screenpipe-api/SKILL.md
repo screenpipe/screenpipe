@@ -277,20 +277,41 @@ Common patterns: `GROUP BY date(timestamp)` (daily), `GROUP BY strftime('%H:00',
 ## 8. Connections — `GET /connections`
 
 ```bash
-# List all integrations (Telegram, Slack, Discord, Email, Todoist, Teams)
+# List all integrations (Telegram, Slack, Discord, Email, Todoist, Teams, 40+)
 curl http://localhost:3030/connections
 
-# Get credentials for a connected service
+# Get saved credentials for a webhook/token integration
 curl http://localhost:3030/connections/telegram
 ```
 
-Returns credentials to use with service APIs directly:
+**Credential integrations** — `GET /connections/<id>` returns saved fields to use with the service API directly:
 - **Telegram**: `bot_token` + `chat_id` → `POST https://api.telegram.org/bot{token}/sendMessage`
 - **Slack**: `webhook_url` → `POST {webhook_url}` with `{"text": "..."}`
 - **Discord**: `webhook_url` → `POST {webhook_url}` with `{"content": "..."}`
 - **Todoist**: `api_token` → `POST https://api.todoist.com/api/v1/tasks` with Bearer auth
 - **Teams**: `webhook_url` → `POST {webhook_url}` with `{"text": "..."}`
 - **Email**: `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `from_address`
+
+**OAuth/proxy integrations** — tokens are stored in SecretStore and are never exposed via `GET /connections/<id>`. Call the local proxy instead; it injects auth and forwards to the upstream API:
+
+```bash
+# GitHub — create an issue (repo owner/name from pipe settings)
+curl -X POST http://localhost:3030/connections/github/proxy/repos/OWNER/REPO/issues \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Found a bug","body":"Steps to reproduce..."}'
+
+# GitHub — comment on an issue
+curl -X POST http://localhost:3030/connections/github/proxy/repos/OWNER/REPO/issues/42/comments \
+  -H "Content-Type: application/json" \
+  -d '{"body":"Thanks for the report!"}'
+
+# Generic OAuth proxy pattern (Zoom, Vercel, Google Docs, Microsoft 365, etc.)
+curl -X POST http://localhost:3030/connections/<id>/proxy/<upstream-api-path> \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+Do **not** call `https://api.github.com/...` directly from a pipe — use `/connections/github/proxy/...` instead. There is no `/connections/<id>/token` endpoint.
 
 If not connected, tell user to set up in Settings > Connections.
 
