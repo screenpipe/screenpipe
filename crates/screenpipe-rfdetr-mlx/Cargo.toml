@@ -3,7 +3,7 @@ name = "screenpipe-rfdetr-mlx"
 description = "RF-DETR-Nano image-PII detector in MLX via mlx-rs (Apple-Silicon-only)"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 authors.workspace = true
 publish = false
 

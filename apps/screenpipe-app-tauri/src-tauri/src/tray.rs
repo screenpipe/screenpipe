@@ -383,6 +383,17 @@ struct MenuState {
     cloud_subscribed: bool,
     /// Plan id (Free/Basic/Business/…) so plan-label changes also rebuild the menu
     subscription_plan: Option<String>,
+    /// HD high-fps session state, for change detection. Without these, starting
+    /// or stopping an HD session changes nothing in MenuState, so
+    /// update_menu_if_needed computes should_update=false and never re-queues
+    /// the menu — the "Stop HD recording" item then never replaces the "Record
+    /// HD" submenu (and the countdown never ticks). Mirrors what
+    /// create_dynamic_menu renders into the HD label so any visible change
+    /// triggers a rebuild.
+    hd_active: bool,
+    hd_remaining_secs: u64,
+    hd_session_kind: String,
+    hd_interval_ms: u64,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -1392,6 +1403,7 @@ async fn update_menu_if_needed(
 
     let recording_info = get_recording_info();
     let effective_status = get_effective_recording_status();
+    let hd = get_high_fps_status();
     let new_state = MenuState {
         shortcuts: {
             let mut m = HashMap::new();
@@ -1410,6 +1422,10 @@ async fn update_menu_if_needed(
             .collect(),
         cloud_subscribed: data.cloud_subscribed,
         subscription_plan: data.subscription_plan.clone(),
+        hd_active: hd.active,
+        hd_remaining_secs: hd.remaining_secs,
+        hd_session_kind: hd.session_kind,
+        hd_interval_ms: hd.interval_ms,
     };
 
     // Compare with last state (poison-safe: run handler must not panic)

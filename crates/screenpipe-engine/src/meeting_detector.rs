@@ -2452,6 +2452,36 @@ const IDLE_APPS_SCAN_INTERVAL: Duration = Duration::from_secs(10);
 /// Scan interval when idle and no meeting apps are running at all.
 const IDLE_NO_APPS_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Scan interval when idle with meeting apps open but NO recent audio. A
+/// meeting is implausible without audio (you hear people / your mic is live),
+/// so we poll slowly to avoid the costly AX walk. Audio onset re-wakes the loop
+/// instantly, so a call that starts is still detected without added latency.
+const IDLE_QUIET_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How recent audio activity must be to keep scanning at the fast idle rate.
+/// Kept in sync with `screenpipe_audio`'s `AUDIO_RECENCY_WINDOW_MS`.
+const AUDIO_GATE_WINDOW: Duration = Duration::from_secs(45);
+
+/// Scan interval to use when meeting apps are present, gated on audio activity.
+///
+/// Pure (no I/O) so the gating policy is unit-tested directly. Only the Idle
+/// state is gated: with apps open but no recent audio a meeting is implausible,
+/// so we drop from the fast idle rate to the quiet rate (audio onset re-wakes
+/// the loop instantly). Confirming/Active/Ending always scan at `base` so an
+/// in-progress meeting is tracked at full fidelity — the audio gate can never
+/// slow down or end a meeting that the state machine is already tracking.
+fn apps_present_scan_interval(is_idle: bool, audio_recent: bool, base: Duration) -> Duration {
+    if is_idle {
+        if audio_recent {
+            IDLE_APPS_SCAN_INTERVAL
+        } else {
+            IDLE_QUIET_SCAN_INTERVAL
+        }
+    } else {
+        base
+    }
+}
+
 /// Run the meeting detection loop.
 ///
 /// This is the main entry point for the v2 meeting detection system.
@@ -2623,8 +2653,21 @@ pub async fn run_meeting_detection_loop(
     );
 
     loop {
+        // Audio onset wakes us immediately so a call that just started is
+        // detected without waiting out a slow idle interval. With no detector
+        // (tests / detector disabled) this future never resolves, so the cadence
+        // is pure-sleep and byte-identical to the prior behaviour.
+        let audio_onset = async {
+            match detector.as_ref() {
+                Some(d) => d.wait_for_audio_onset().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         tokio::select! {
             _ = tokio::time::sleep(current_interval) => {}
+            _ = audio_onset => {
+                debug!("meeting v2: woken early by audio onset");
+            }
             _ = shutdown_rx.recv() => {
                 info!("meeting v2: shutdown received, exiting detection loop");
                 // If we're in an active meeting, end it cleanly
@@ -2953,12 +2996,17 @@ pub async fn run_meeting_detection_loop(
         let (new_state, action) = advance_state(state, &scan_results, keep_alive);
         state = new_state;
 
-        // Adaptive interval based on state
+        // Adaptive interval based on state, gated on recent audio when Idle.
+        // With no detector, `audio_recent` is true => unchanged fast idle rate.
         idle_scan_count = 0; // reset idle counter when apps are present
-        current_interval = match &state {
-            MeetingState::Idle => IDLE_APPS_SCAN_INTERVAL, // apps open but no call
-            _ => base_interval,                            // Confirming/Active/Ending — scan fast
-        };
+        let audio_recent = detector.as_ref().map_or(true, |d| {
+            d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
+        });
+        current_interval = apps_present_scan_interval(
+            matches!(state, MeetingState::Idle),
+            audio_recent,
+            base_interval,
+        );
 
         // 4. Handle actions
         if let Some(action) = action {
@@ -3410,6 +3458,48 @@ async fn insert_new_meeting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── audio-gated scan cadence tests ─────────────────────────────────
+    // These pin the CPU optimisation: with apps open but no recent audio the
+    // Idle scan rate drops; a tracked meeting (any non-Idle state) is never
+    // slowed, so detection accuracy can't regress.
+
+    #[test]
+    fn idle_with_apps_and_audio_scans_at_fast_idle_rate() {
+        assert_eq!(
+            apps_present_scan_interval(true, true, ACTIVE_SCAN_INTERVAL),
+            IDLE_APPS_SCAN_INTERVAL
+        );
+    }
+
+    #[test]
+    fn idle_with_apps_but_no_audio_scans_slowly() {
+        assert_eq!(
+            apps_present_scan_interval(true, false, ACTIVE_SCAN_INTERVAL),
+            IDLE_QUIET_SCAN_INTERVAL
+        );
+    }
+
+    #[test]
+    fn tracked_meeting_ignores_audio_gate() {
+        // Non-Idle (Confirming/Active/Ending) -> always `base`, with or without
+        // audio. The gate can never slow down or end a tracked meeting.
+        assert_eq!(
+            apps_present_scan_interval(false, false, ACTIVE_SCAN_INTERVAL),
+            ACTIVE_SCAN_INTERVAL
+        );
+        assert_eq!(
+            apps_present_scan_interval(false, true, ACTIVE_SCAN_INTERVAL),
+            ACTIVE_SCAN_INTERVAL
+        );
+    }
+
+    #[test]
+    fn quiet_idle_rate_is_strictly_slower_than_active_idle_rate() {
+        // The whole point: quiet polling is slower than the audio-present rate,
+        // so the AX walk runs less often when no meeting is plausible.
+        assert!(IDLE_QUIET_SCAN_INTERVAL > IDLE_APPS_SCAN_INTERVAL);
+    }
 
     // ── ignoredMeetingApps filter tests ────────────────────────────────
 

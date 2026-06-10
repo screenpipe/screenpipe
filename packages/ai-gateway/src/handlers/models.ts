@@ -425,6 +425,22 @@ const CURATED_MODELS: ModelEntry[] = [
   },
   // ── Included with screenpipe ──
   {
+    id: 'claude-fable-5',
+    object: 'model',
+    owned_by: 'anthropic',
+    name: 'Claude Fable 5',
+    description: 'most capable claude model, frontier reasoning and long-horizon agentic work',
+    tags: ['premium', 'reasoning', 'new'],
+    free: false,
+    context_window: 1000000,
+    best_for: ['hardest tasks', 'complex analysis', 'agentic coding'],
+    speed: 'slow',
+    intelligence: 'highest',
+    cost_tier: 'very_high',
+    recommended_for: ['chat', 'analysis', 'coding'],
+    warning: 'most expensive model ($10/$50 per M tokens). use opus 4.8 or a free model for high-volume pipes',
+  },
+  {
     id: 'claude-opus-4-8',
     object: 'model',
     owned_by: 'anthropic',

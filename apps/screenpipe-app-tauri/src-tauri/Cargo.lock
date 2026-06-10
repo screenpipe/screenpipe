@@ -424,7 +424,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -435,7 +435,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -495,7 +495,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -2190,7 +2190,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3335,7 +3335,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3367,7 +3367,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -3842,7 +3842,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5008,7 +5008,7 @@ dependencies = [
  "gobject-sys 0.21.5",
  "libc",
  "system-deps 7.0.7",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5690,7 +5690,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -6169,7 +6169,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6337,6 +6337,15 @@ checksum = "5dea2b27dd239b2556ed7a25ba842fe47fd602e7fc7433c2a8d6106d4d9edd70"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "keccak"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+dependencies = [
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -7208,7 +7217,7 @@ dependencies = [
  "kem",
  "module-lattice",
  "rand_core 0.10.1",
- "sha3",
+ "sha3 0.11.0",
 ]
 
 [[package]]
@@ -7374,7 +7383,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7678,7 +7687,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7815,7 +7824,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -8579,7 +8588,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8829,7 +8838,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "permission-flow"
 version = "0.1.40"
-source = "git+https://github.com/divanshu-go/permission-flow?rev=8877d0a07802977356911de272435d92bed49227#8877d0a07802977356911de272435d92bed49227"
+source = "git+https://github.com/divanshu-go/permission-flow?rev=d7376a1b95acb78700e93505d8ca058e5ddb94ce#d7376a1b95acb78700e93505d8ca058e5ddb94ce"
 dependencies = [
  "swift-rs",
 ]
@@ -9622,7 +9631,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.37",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9660,9 +9669,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10383,7 +10392,7 @@ dependencies = [
  "inout 0.1.4",
  "internal-russh-forked-ssh-key",
  "internal-russh-num-bigint",
- "keccak",
+ "keccak 0.2.0",
  "log",
  "md5",
  "ml-kem",
@@ -10410,7 +10419,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.10.9",
  "sha2 0.11.0",
- "sha3",
+ "sha3 0.11.0",
  "signature 3.0.0",
  "spki 0.8.0-rc.4",
  "ssh-encoding",
@@ -10545,7 +10554,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10558,7 +10567,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10646,7 +10655,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10901,11 +10910,13 @@ dependencies = [
  "parking_lot",
  "regex",
  "rusqlite",
+ "screenpipe-config",
  "screenpipe-core",
  "screenpipe-db",
  "serde",
  "serde_json",
  "tracing",
+ "url",
  "windows 0.58.0",
  "windows-core 0.58.0",
  "zbus",
@@ -10913,7 +10924,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.21"
+version = "2.5.29"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11040,7 +11051,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11115,7 +11126,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11127,7 +11138,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11166,7 +11177,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11217,7 +11228,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11242,7 +11253,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11311,7 +11322,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11327,8 +11338,9 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -11346,6 +11358,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sha3 0.10.9",
  "sqlx",
  "thiserror 1.0.69",
  "tinfoil",
@@ -11356,7 +11369,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -11367,7 +11380,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11420,7 +11433,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11440,7 +11453,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.8"
+version = "0.4.16"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -12183,12 +12196,22 @@ dependencies = [
 
 [[package]]
 name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest 0.10.7",
+ "keccak 0.1.6",
+]
+
+[[package]]
+name = "sha3"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
  "digest 0.11.2",
- "keccak",
+ "keccak 0.2.0",
 ]
 
 [[package]]
@@ -12372,7 +12395,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12787,7 +12810,6 @@ dependencies = [
  "cfg-if 1.0.4",
  "libc",
  "psm",
- "windows-sys 0.52.0",
  "windows-sys 0.59.0",
 ]
 
@@ -13709,7 +13731,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-permission-flow"
 version = "0.1.40"
-source = "git+https://github.com/divanshu-go/permission-flow?rev=8877d0a07802977356911de272435d92bed49227#8877d0a07802977356911de272435d92bed49227"
+source = "git+https://github.com/divanshu-go/permission-flow?rev=d7376a1b95acb78700e93505d8ca058e5ddb94ce#d7376a1b95acb78700e93505d8ca058e5ddb94ce"
 dependencies = [
  "permission-flow",
  "serde",
@@ -14045,7 +14067,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14816,7 +14838,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14888,7 +14910,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -15880,7 +15902,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

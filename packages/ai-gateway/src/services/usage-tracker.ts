@@ -139,6 +139,10 @@ const MODEL_WEIGHTS: Record<string, number> = {
   // Opus 4.7 is ~3× cheaper per token than 4.5/4.6 ($5/$25 vs $15/$75 per 1M),
   // so it consumes proportionally less daily quota. Longest-prefix match in
   // getModelWeight ensures this override beats the generic 'claude-opus' entry.
+  // Fable 5 is Opus-tier ($10/$50 per MTok, ~2x Opus 4.8). Weight it like premium Opus
+  // so it eats daily quota proportionally. Explicit key: 'claude-fable-5' matches no
+  // 'claude-opus/sonnet/haiku' prefix, so without this it would default to weight 1.
+  'claude-fable-5': 10,
   'claude-opus-4-7': 5,
   'claude-opus': 15,
   'claude-sonnet': 3,

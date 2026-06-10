@@ -716,6 +716,7 @@ async fn load_memories(
             0,
             Some("importance"),
             Some("desc"),
+            &[],
         )
         .await
         .map_err(|e| e.to_string())?;

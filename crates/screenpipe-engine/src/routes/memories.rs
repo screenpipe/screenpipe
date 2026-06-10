@@ -213,6 +213,7 @@ pub(crate) async fn list_memories_handler(
             query.offset,
             query.order_by.as_deref(),
             query.order_dir.as_deref(),
+            &[],
         ),
         state.db.count_memories(
             query.q.as_deref(),
@@ -221,6 +222,7 @@ pub(crate) async fn list_memories_handler(
             query.min_importance,
             query.start_time.as_deref(),
             query.end_time.as_deref(),
+            &[],
         )
     );
 

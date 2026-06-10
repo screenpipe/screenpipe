@@ -3,7 +3,7 @@ name = "screenpipe-a11y"
 version = "0.1.0"
 edition = "2021"
 description = "Accessibility and UI event capture for screenpipe - keyboard, mouse, clipboard"
-license = "MIT"
+license-file = { workspace = true }
 
 [features]
 default = []

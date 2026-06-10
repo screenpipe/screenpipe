@@ -875,7 +875,12 @@ function normalizeConnectionCategory(category: string | null | undefined): strin
   return value
     .split(/[-_\s]+/)
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    // Preserve all-caps acronyms (AI, CRM) instead of mangling them to "Ai"/"Crm".
+    .map((part) =>
+      /^[A-Z0-9]{2,}$/.test(part)
+        ? part
+        : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()
+    )
     .join(" ");
 }
 
@@ -3448,8 +3453,10 @@ export function ConnectionsSection({
     return [...tiles].sort(compareConnectionTiles);
   }, [allTiles, categoryFilter, search]);
 
-  // Category order for grouped view
-  const CATEGORY_ORDER = ["Desktop", "AI", "Productivity", "Project Management", "Communication", "Calendar", "Documents", "Knowledge", "Meetings", "System", "Web", "Research", "Notification", "Agent", "Other"];
+  // Category order for grouped view. Keep in sync with the labels in
+  // CONNECTION_CATEGORY_BY_ID (lib/constants/connections.ts). Unknown
+  // categories sort after these, alphabetically.
+  const CATEGORY_ORDER = ["Desktop", "AI", "Agent", "Automation", "Meetings", "Calendar", "Communication", "Notes", "Documents", "Project Management", "CRM", "Support", "Finance", "Developer", "Wearables", "Notifications", "System", "Other"];
 
   // Grouped tiles by category (default view — excludes suggested items)
   const groupedTiles = useMemo(() => {

@@ -8,7 +8,7 @@ version.workspace = true
 authors.workspace = true
 description = "Async PII redaction reconciliation pipeline (off the capture hot path) for screenpipe — covers OCR, accessibility, audio transcripts, clipboard. See issue #3185."
 repository.workspace = true
-license.workspace = true
+license-file.workspace = true
 edition.workspace = true
 
 [dependencies]

@@ -4,7 +4,7 @@ version = { workspace = true }
 authors = { workspace = true }
 description = "Generic data-sync primitives: pluggable destinations + body encryption + ticketed upload pipeline."
 repository = { workspace = true }
-license = { workspace = true }
+license-file = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]

@@ -31,7 +31,7 @@ const NON_RETRYABLE_ERROR_TYPES: &[&str] = &[
 ];
 
 /// Maximum number of presets to try per request.
-const MAX_FALLBACK_DEPTH: usize = 4;
+pub const MAX_FALLBACK_DEPTH: usize = 4;
 
 // ---------------------------------------------------------------------------
 // Circuit breaker state
@@ -213,10 +213,38 @@ impl PresetFallbackRegistry {
     /// Pick the best preset from the list, respecting circuit breakers.
     /// Returns the preset ID and its index in the list.
     pub fn pick_preset<'a>(&self, presets: &'a [String]) -> Option<(&'a str, usize)> {
+        self.pick_preset_with_floor(presets, 0)
+    }
+
+    /// Like [`pick_preset`], but only considers presets at or after `floor`.
+    ///
+    /// Drives in-run fallback: after the preset at index `floor - 1` failed this
+    /// run, selection starts at `floor` so the retry advances to the next preset
+    /// **regardless of whether the failed preset's circuit breaker tripped**.
+    /// Timeouts and process crashes never trip the breaker, so a breaker-gated
+    /// selector would re-pick the same failing preset forever (#3914). `floor`
+    /// is clamped to the last index, so callers can pass an ever-incrementing
+    /// retry depth safely.
+    pub fn pick_preset_with_floor<'a>(
+        &self,
+        presets: &'a [String],
+        floor: usize,
+    ) -> Option<(&'a str, usize)> {
+        if presets.is_empty() {
+            return None;
+        }
+        let floor = floor.min(presets.len() - 1);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut changed = false;
 
-        for (i, preset_id) in presets.iter().enumerate().take(MAX_FALLBACK_DEPTH) {
+        // `take` before `skip` keeps the "only the first MAX_FALLBACK_DEPTH
+        // presets are ever eligible" cap measured from the start of the list.
+        for (i, preset_id) in presets
+            .iter()
+            .enumerate()
+            .take(MAX_FALLBACK_DEPTH)
+            .skip(floor)
+        {
             let breaker = state.presets.entry(preset_id.clone()).or_default();
 
             // Check if cooldown expired → HALF_OPEN
@@ -236,8 +264,9 @@ impl PresetFallbackRegistry {
             self.persist(&state);
         }
 
-        // All presets are in cooldown — use the first one anyway (best effort)
-        presets.first().map(|id| (id.as_str(), 0))
+        // Everything from `floor` is in cooldown — use the floor preset anyway
+        // (best effort) so the run still attempts the next, untried slot.
+        presets.get(floor).map(|id| (id.as_str(), floor))
     }
 
     /// Record a successful execution for a preset.
@@ -490,5 +519,78 @@ mod tests {
     fn test_retryable_errors() {
         let registry = PresetFallbackRegistry::new(Path::new("/tmp"));
         assert!(registry.record_failure("test", Some("rate_limited")));
+    }
+
+    /// Hermetic registry in a unique temp dir so persisted state can't leak
+    /// between tests (or between repeated runs).
+    fn fresh_registry(tag: &str) -> PresetFallbackRegistry {
+        let dir = std::env::temp_dir().join(format!("sp_preset_fallback_{}", tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        PresetFallbackRegistry::new(&dir)
+    }
+
+    #[test]
+    fn test_pick_preset_with_floor_advances_without_breaker() {
+        // The core #3914 fix: with NO breaker tripped, raising the floor must
+        // still advance to the next preset (timeouts/crashes never trip it).
+        let registry = fresh_registry("advance");
+        let presets = vec![
+            "primary".to_string(),
+            "fallback".to_string(),
+            "third".to_string(),
+        ];
+
+        assert_eq!(
+            registry.pick_preset_with_floor(&presets, 0),
+            Some(("primary", 0))
+        );
+        assert_eq!(
+            registry.pick_preset_with_floor(&presets, 1),
+            Some(("fallback", 1))
+        );
+        assert_eq!(
+            registry.pick_preset_with_floor(&presets, 2),
+            Some(("third", 2))
+        );
+    }
+
+    #[test]
+    fn test_pick_preset_with_floor_clamps_past_end() {
+        let registry = fresh_registry("clamp");
+        let presets = vec!["primary".to_string(), "fallback".to_string()];
+        // Floor beyond the last index clamps to the last preset rather than
+        // returning None / panicking.
+        assert_eq!(
+            registry.pick_preset_with_floor(&presets, 9),
+            Some(("fallback", 1))
+        );
+    }
+
+    #[test]
+    fn test_pick_preset_with_floor_skips_open_breaker() {
+        let registry = fresh_registry("skip_open");
+        let presets = vec![
+            "primary".to_string(),
+            "fallback".to_string(),
+            "third".to_string(),
+        ];
+        // Trip the fallback's breaker; from floor 1 it should be skipped to
+        // "third", while floor 0 still returns the (closed) primary.
+        registry.record_failure("fallback", Some("rate_limited"));
+        assert_eq!(
+            registry.pick_preset_with_floor(&presets, 0),
+            Some(("primary", 0))
+        );
+        assert_eq!(
+            registry.pick_preset_with_floor(&presets, 1),
+            Some(("third", 2))
+        );
+    }
+
+    #[test]
+    fn test_pick_preset_with_floor_empty() {
+        let registry = fresh_registry("empty");
+        assert_eq!(registry.pick_preset_with_floor(&[], 0), None);
     }
 }

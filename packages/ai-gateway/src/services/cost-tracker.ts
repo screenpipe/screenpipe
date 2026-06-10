@@ -28,6 +28,8 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   // Tinfoil — confidential inference (secure enclaves)
   'gemma4-31b': { input: 0.45, output: 1.00 },
   // Anthropic Claude
+  // Fable 5: most capable widely-released model (GA 2026-06-09), 1M ctx, $10/$50 per MTok.
+  'claude-fable-5': { input: 10.00, output: 50.00 },
   'claude-haiku-4-5': { input: 0.80, output: 4.00 },
   'claude-sonnet-4-5': { input: 3.00, output: 15.00 },
   'claude-opus-4-5': { input: 15.00, output: 75.00 },

@@ -2438,11 +2438,15 @@ impl PipeManager {
                 run_api_key,
                 preset_prompt,
                 active_preset_id,
+                active_preset_idx,
             ) = if !config.preset.is_empty() {
-                // Pick the best available preset using circuit breaker
-                let (preset_id, _idx) = self
+                // Pick the best available preset using the circuit breaker, but
+                // start at `retry_depth` so an in-run fallback retry advances to
+                // the next preset even when the failed one's breaker never
+                // tripped (timeouts/crashes don't trip it) — see #3914.
+                let (preset_id, idx) = self
                     .fallback_registry
-                    .pick_preset(&config.preset)
+                    .pick_preset_with_floor(&config.preset, retry_depth)
                     .ok_or_else(|| anyhow!("pipe '{}': no presets configured", name))?;
 
                 match resolve_preset(&self.pipes_dir, preset_id) {
@@ -2453,8 +2457,8 @@ impl PipeManager {
                             preset_id,
                             resolved.model,
                             resolved.provider,
-                            if _idx > 0 {
-                                format!(" (fallback #{})", _idx)
+                            if idx > 0 {
+                                format!(" (fallback #{})", idx)
                             } else {
                                 String::new()
                             }
@@ -2466,6 +2470,7 @@ impl PipeManager {
                             resolved.api_key,
                             resolved.prompt,
                             Some(preset_id.to_string()),
+                            Some(idx),
                         )
                     }
                     None => {
@@ -2504,6 +2509,7 @@ impl PipeManager {
                             resolved.api_key,
                             resolved.prompt,
                             None,
+                            None,
                         )
                     }
                     None => {
@@ -2511,6 +2517,7 @@ impl PipeManager {
                         (
                             config.model.clone(),
                             config.provider.clone(),
+                            None,
                             None,
                             None,
                             None,
@@ -2805,29 +2812,36 @@ impl PipeManager {
                 cleanup_pipe_token(token, self.token_registry.as_ref());
             }
 
-            // Immediate fallback retry: if the pipe failed with a retryable error
-            // and there are fallback presets available, retry now instead of waiting
-            // for the next scheduled run.
-            if !log.success && config.preset.len() > 1 && retry_depth < config.preset.len() - 1 {
-                // Check if the circuit breaker picked a different preset for retry
-                if let Some((next_preset_id, _)) =
-                    self.fallback_registry.pick_preset(&config.preset)
-                {
-                    let should_retry = match &active_preset_id {
-                        Some(current_id) => next_preset_id != current_id.as_str(),
-                        None => false,
-                    };
-                    if should_retry {
+            // Immediate fallback retry: if the run failed and there is another
+            // fallback preset we haven't tried this run, retry now with the next
+            // one instead of waiting for the next scheduled run.
+            //
+            // Advancement is driven by the failed preset's position in the list
+            // (`active_preset_idx`), NOT by its circuit breaker tripping. The
+            // breaker only opens for a narrow set of text-matched provider errors
+            // (`record_failure_from_output`) and never for timeouts or executor
+            // crashes — so gating fallback on it meant the next model silently
+            // never ran when the main one timed out or errored (#3914).
+            let max_attempts = config.preset.len().min(preset_fallback::MAX_FALLBACK_DEPTH);
+            if let (false, Some(cur_idx)) = (log.success, active_preset_idx) {
+                let next_idx = cur_idx + 1;
+                if next_idx < max_attempts {
+                    if let Some(next_preset_id) = config.preset.get(next_idx) {
                         info!(
-                        "pipe '{}': primary preset failed, immediately retrying with fallback '{}'",
-                        name, next_preset_id
-                    );
-                        // Save log of the failed attempt
+                            "pipe '{}': preset '{}' failed, immediately retrying with fallback preset '{}' (attempt {}/{})",
+                            name,
+                            active_preset_id.as_deref().unwrap_or("?"),
+                            next_preset_id,
+                            next_idx + 1,
+                            max_attempts
+                        );
+                        // Save the log of the failed attempt before retrying.
                         self.append_log(name, &log).await;
                         let _ = self.write_log_to_disk(name, &log);
-                        // Retry with next preset
+                        // Re-enter with the selection floor advanced past the
+                        // preset that just failed.
                         return self
-                            .run_pipe_with_trigger_inner(name, trigger, retry_depth + 1)
+                            .run_pipe_with_trigger_inner(name, trigger, next_idx)
                             .await;
                     }
                 }

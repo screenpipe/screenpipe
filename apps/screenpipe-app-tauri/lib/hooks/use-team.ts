@@ -12,6 +12,7 @@ import {
   decryptConfig,
   unwrapKeyWithPassphrase,
 } from "../team-crypto";
+import { encodePlainConfig, parsePlainConfigValue } from "../team-pipes";
 
 const API = "https://screenpi.pe/api/team";
 
@@ -58,6 +59,11 @@ interface TeamState {
   invitePassphrase: string | null;
   /** True when user is in a team but encryption key is not on this device */
   missingKey: boolean;
+  /** True once /configs has been fetched successfully at least once.
+   * Consumers that react to a config DISAPPEARING (e.g. disabling
+   * unshared team pipes) must gate on this — an empty `configs` from a
+   * failed fetch must never look like "everything was unshared". */
+  configsFetched: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -109,6 +115,7 @@ export function useTeam() {
     inviteLink: null,
     invitePassphrase: null,
     missingKey: false,
+    configsFetched: false,
     loading: true,
     error: null,
   });
@@ -237,23 +244,28 @@ export function useTeam() {
         const data = await res.json();
         const configs: TeamConfig[] = data.configs || [];
 
-        // decrypt configs locally if we have the key
+        // plaintext rows (sentinel nonce, e.g. pipe shares) parse without a
+        // key; encrypted rows decrypt locally when we have the team key
         const cryptoKey = key ?? teamKeyRef.current;
-        if (cryptoKey) {
-          for (const c of configs) {
-            try {
-              c.value = (await decryptConfig(
-                c.value_encrypted,
-                c.nonce,
-                cryptoKey
-              )) as object;
-            } catch {
-              // decryption failed — possibly wrong key
-            }
+        for (const c of configs) {
+          const plain = parsePlainConfigValue(c);
+          if (plain !== undefined) {
+            c.value = plain;
+            continue;
+          }
+          if (!cryptoKey) continue;
+          try {
+            c.value = (await decryptConfig(
+              c.value_encrypted,
+              c.nonce,
+              cryptoKey
+            )) as object;
+          } catch {
+            // decryption failed — possibly wrong key
           }
         }
 
-        setState((s) => ({ ...s, configs }));
+        setState((s) => ({ ...s, configs, configsFetched: true }));
       } catch {}
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -427,6 +439,7 @@ export function useTeam() {
       inviteLink: null,
       invitePassphrase: null,
       missingKey: false,
+      configsFetched: false,
       loading: false,
       error: null,
     });
@@ -457,6 +470,7 @@ export function useTeam() {
       inviteLink: null,
       invitePassphrase: null,
       missingKey: false,
+      configsFetched: false,
       loading: false,
       error: null,
     });
@@ -500,6 +514,36 @@ export function useTeam() {
           config_type: configType,
           key,
           ...encrypted,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "failed to push config");
+      }
+
+      await fetchConfigs();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [token, fetchConfigs]
+  );
+
+  // push a PLAINTEXT config to team (no team key needed). Used for pipe
+  // shares: pipes are workflow prompts, not credentials, and the E2E key
+  // ceremony (invite-link fragments, keys that don't follow accounts,
+  // unrecoverable data) was killing the sharing UX. The server stores the
+  // JSON as-is under a sentinel nonce — see team-pipes.ts.
+  const pushConfigPlain = useCallback(
+    async (configType: string, key: string, value: object) => {
+      if (!token) throw new Error("not logged in");
+
+      const res = await fetch(`${API}/configs`, {
+        method: "PUT",
+        headers: headers(),
+        body: JSON.stringify({
+          scope: "team",
+          config_type: configType,
+          key,
+          ...encodePlainConfig(value),
         }),
       });
       if (!res.ok) {
@@ -577,6 +621,7 @@ export function useTeam() {
   return {
     ...state,
     fetchTeam,
+    fetchConfigs,
     createTeam,
     initializeTeamKey,
     joinTeam,
@@ -584,6 +629,7 @@ export function useTeam() {
     deleteTeam,
     removeMember,
     pushConfig,
+    pushConfigPlain,
     deleteConfig,
     refreshInviteLink,
     generateInviteToken,

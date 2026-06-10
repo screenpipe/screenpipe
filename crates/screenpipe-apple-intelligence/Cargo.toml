@@ -3,7 +3,7 @@ name = "screenpipe-apple-intelligence"
 version = "0.1.0"
 edition = "2021"
 description = "On-device AI processing using Apple Foundation Models framework (macOS 26+)"
-license = "MIT"
+license-file = { workspace = true }
 
 [features]
 default = []

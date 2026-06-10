@@ -8,7 +8,7 @@ version = { workspace = true }
 authors = { workspace = true }
 description = "Meeting-detection state-machine eval harness (scenario replay, precision/recall/flap metrics)"
 repository = { workspace = true }
-license = { workspace = true }
+license-file = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]

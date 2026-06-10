@@ -157,12 +157,12 @@ Want to translate screenpipe into another language? See [`translated_readmes/`](
 
 ## About screenpipe
 
-screenpipe is an open source application (MIT license) that continuously captures your screen and audio, creating a searchable, AI-powered memory of everything you do on your computer. All data is stored locally on your device. It is the leading open source alternative to Rewind.ai (now Limitless), Microsoft Recall, Granola, and Otter.ai. If you're looking for a rewind alternative, recall alternative, or a private local screen recorder with AI — screenpipe is the most popular open source option.
+screenpipe is a source-available application that continuously captures your screen and audio, creating a searchable, AI-powered memory of everything you do on your computer. All data is stored locally on your device. It is the leading source-available alternative to Rewind.ai (now Limitless), Microsoft Recall, Granola, and Otter.ai. If you're looking for a rewind alternative, recall alternative, or a private local screen recorder with AI, screenpipe is the most popular option you can fully audit.
 
 - **Website**: https://screenpi.pe
 - **Documentation**: https://docs.screenpi.pe
 - **Discord**: https://discord.gg/screenpipe
-- **License**: MIT
+- **License**: Screenpipe Commercial License (source-available; free for personal use, commercial use requires a license, see [LICENSE.md](LICENSE.md))
 
 ## Who screenpipe is for
 
@@ -242,7 +242,7 @@ On supported Macs, screenpipe uses Apple Intelligence for on-device AI processin
 ## Privacy and security
 
 - **100% local by default**: All data stored on your device in a local SQLite database. Nothing sent to external servers.
-- **Open source**: MIT licensed, fully auditable codebase.
+- **Source-available**: fully auditable codebase; free for personal use.
 - **Local AI support**: Use Ollama or any local model — no data sent to any cloud.
 - **No account required**: Core application works without any sign-up.
 - **You own your data**: Export, delete, or back up at any time.
@@ -253,7 +253,7 @@ On supported Macs, screenpipe uses Apple Intelligence for on-device AI processin
 
 | Feature | screenpipe | Rewind / Limitless | Microsoft Recall | Granola |
 |---------|-----------|-------------------|-----------------|---------|
-| Open source | ✅ MIT license | ❌ | ❌ | ❌ |
+| Source-available | ✅ fully auditable | ❌ | ❌ | ❌ |
 | Platforms | macOS, Windows, Linux | macOS, Windows | Windows only | macOS only |
 | Data storage | 100% local | Cloud required | Local (Windows) | Cloud |
 | Multi-monitor | ✅ All monitors | ❌ Active window only | ✅ | ❌ Meetings only |
@@ -266,7 +266,7 @@ On supported Macs, screenpipe uses Apple Intelligence for on-device AI processin
 
 ## Pricing
 
-The core engine and CLI are free and open source (MIT). The signed desktop app uses a subscription:
+The source is available and free for personal use (see [LICENSE.md](LICENSE.md)). The signed desktop app uses a subscription:
 
 - **Standard**: $25/month. Local-first capture, search, and timeline, all on your device.
 - **Pro**: $50/seat/month. Everything in Standard plus cloud sync, cloud AI, and integrations. Teams buy 5+ seats self-serve.
@@ -336,7 +336,7 @@ Make sure to understand the main branch is moving fast and breaking things, if y
 ## Frequently asked questions
 
 **Is screenpipe free?**
-The core engine and CLI are free and open source (MIT license), so you can run screenpipe yourself for free. The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid.
+The source is available and free for personal, non-commercial use, so you can build and run screenpipe yourself for free (see [LICENSE.md](LICENSE.md)); commercial use of the source requires a license. The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid.
 
 **Does screenpipe send my data to the cloud?**
 No. All data is stored locally by default. You can use fully local AI models via Ollama for complete privacy.

@@ -302,6 +302,11 @@ const TOOLS: Tool[] = [
         },
         speaker_ids: { type: "string", description: "Comma-separated speaker IDs to filter audio" },
         speaker_name: { type: "string", description: "Filter audio by speaker name (case-insensitive partial match)" },
+        tags: {
+          type: "string",
+          description:
+            "Comma-separated tags; returns only items carrying ALL of them (e.g. 'person:ada,project:atlas'). Works for screen + audio (content_type 'ocr'/'audio'/'all', tags written by add-tags) AND memories (content_type 'memory', tags written by update-memory). Same tag string links across all three, so two items sharing a tag are connected. Use namespaced tags (person:, project:, topic:) to link people/projects/topics. content_type 'input' and 'accessibility' have no tags and return nothing when this is set.",
+        },
         max_content_length: {
           type: "integer",
           description: "Truncate each result's text via middle-truncation. Use 200-500 to keep responses compact.",
@@ -420,7 +425,7 @@ const TOOLS: Tool[] = [
       properties: {
         id: { type: "integer", description: "Memory ID — omit to create new, provide to update/delete" },
         content: { type: "string", description: "Memory text (required for creation)" },
-        tags: { type: "array", items: { type: "string" }, description: "Categorization tags (e.g. ['work', 'project-x'])" },
+        tags: { type: "array", items: { type: "string" }, description: "Tags. Prefer namespaced (person:ada, project:atlas, topic:pricing) so this memory links to the same people/projects you tag on frames/audio. Retrieve with search-content content_type='memory' tags='person:ada'." },
         importance: { type: "number", description: "0.0 (trivial) to 1.0 (critical). Default 0.5." },
         source_context: { type: "object", description: "Optional metadata linking to source (app, timestamp, etc.)" },
         delete: { type: "boolean", description: "Set true to delete the memory identified by id" },
@@ -483,14 +488,18 @@ const TOOLS: Tool[] = [
   {
     name: "add-tags",
     description:
-      "Add tags to a content item (vision frame or audio chunk) for organization and retrieval.",
+      "Tag a screen frame (vision) or audio chunk (audio) so it can be retrieved later. " +
+      "Tags are a shared linking layer: use namespaced tags (person:ada, project:atlas, topic:pricing) to connect a capture to a person, project, or topic. " +
+      "The SAME tag string also works on memories (via update-memory), so tagging a frame and a memory with person:ada links them. " +
+      "Retrieve later with search-content tags='person:ada' (add content_type+start_time/end_time to scope to a timeframe). " +
+      "Note: frames are pruned by retention, so for durable links prefer tagging a memory; tag frames/audio for shorter-term recall.",
     annotations: { title: "Add Tags", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
-        content_type: { type: "string", enum: ["vision", "audio"], description: "Type of content to tag" },
-        id: { type: "integer", description: "Content item ID" },
-        tags: { type: "array", items: { type: "string" }, description: "Tags to add" },
+        content_type: { type: "string", enum: ["vision", "audio"], description: "vision = screen frame, audio = audio chunk. Get the id from search-content results (frame_id / chunk_id)." },
+        id: { type: "integer", description: "Content item ID (OCR result frame_id, or audio result chunk_id)" },
+        tags: { type: "array", items: { type: "string" }, description: "Tags to add. Prefer namespaced: person:<name>, project:<name>, topic:<name>." },
       },
       required: ["content_type", "id", "tags"],
     },

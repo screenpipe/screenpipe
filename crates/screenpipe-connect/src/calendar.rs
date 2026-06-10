@@ -11,14 +11,21 @@
 //!
 //! All operations are synchronous and safe to call from a tokio blocking task.
 
-use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, Utc};
 use eventkit::{
     AuthorizationStatus, CalendarInfo, EventKitError, EventsManager, Result as EKResult,
 };
-use objc2::rc::Retained;
-use objc2_event_kit::{EKCalendar, EKEventStore};
-use objc2_foundation::{NSArray, NSDate, NSURL};
-use tracing::debug;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use tracing::{info, warn};
+
+/// Set once Calendar access is granted in this process (the user accepted the
+/// macOS popup). macOS's static `authorizationStatusForEntityType:` can keep
+/// returning a stale, non-`FullAccess` value for minutes after an in-process
+/// grant (observed on macOS 26), which would otherwise make every read
+/// hard-fail with `AuthorizationDenied` even though TCC has actually granted
+/// access. Once we've seen a grant, we trust it and let the query run.
+static ACCESS_GRANTED_THIS_SESSION: AtomicBool = AtomicBool::new(false);
 
 /// A calendar event with attendee information.
 /// Times are stored in both UTC (for comparison) and Local (for display).
@@ -42,17 +49,47 @@ pub struct CalendarEvent {
 }
 
 /// Thin wrapper around `eventkit::EventsManager` with screenpipe-specific additions.
+/// Uses a singleton EventsManager (which internally contains an EKEventStore) to avoid
+/// multiple permission prompts and EventKit blocking.
+///
+/// CRITICAL: Apple's EventKit throttles/blocks apps that create multiple EKEventStore instances.
+/// Each EventsManager::new() creates an EKEventStore, so we MUST use a singleton pattern.
 pub struct ScreenpipeCalendar {
-    manager: EventsManager,
-    store: Retained<EKEventStore>,
+    manager: &'static EventsManager,
+}
+
+// Singleton EventsManager to prevent multiple EKEventStore instances.
+// This is CRITICAL for avoiding EventKit permission blocking.
+// Each EventsManager::new() creates a new EKEventStore internally,
+// which creates a new XPC connection to eventkitservice.
+// Apple throttles/blocks apps that create too many connections.
+struct SingletonManager(EventsManager);
+
+// SAFETY: EKEventStore (inside EventsManager) is known to be safe to use across threads.
+// See: https://stackoverflow.com/a/21372672
+// We enforce a single shared instance via OnceLock to prevent concurrent creation.
+unsafe impl Send for SingletonManager {}
+unsafe impl Sync for SingletonManager {}
+
+static CALENDAR_SINGLETON: OnceLock<SingletonManager> = OnceLock::new();
+
+fn get_singleton() -> &'static EventsManager {
+    &CALENDAR_SINGLETON
+        .get_or_init(|| {
+            // This creates ONE EKEventStore internally
+            SingletonManager(EventsManager::new())
+        })
+        .0
 }
 
 impl ScreenpipeCalendar {
-    /// Create a new instance. Does NOT trigger any permission popup.
+    /// Create a new instance using the shared singleton EventsManager.
+    /// Does NOT trigger any permission popup.
+    /// The singleton pattern prevents multiple EventKit sessions and permission blocks.
     pub fn new() -> Self {
-        let manager = EventsManager::new();
-        let store = unsafe { EKEventStore::new() };
-        Self { manager, store }
+        Self {
+            manager: get_singleton(),
+        }
     }
 
     // ── Authorization ──────────────────────────────────────────────────
@@ -60,6 +97,13 @@ impl ScreenpipeCalendar {
     /// Check current TCC status without triggering a popup.
     pub fn authorization_status() -> AuthorizationStatus {
         EventsManager::authorization_status()
+    }
+
+    /// True once the user granted Calendar access in this process, even if the
+    /// OS's cached authorization status hasn't caught up yet. See
+    /// [`ACCESS_GRANTED_THIS_SESSION`].
+    pub fn access_granted_this_session() -> bool {
+        ACCESS_GRANTED_THIS_SESSION.load(Ordering::Relaxed)
     }
 
     /// Request full access (shows popup on first call, then persists).
@@ -71,18 +115,18 @@ impl ScreenpipeCalendar {
     pub fn request_access(&self) -> EKResult<bool> {
         let granted = self.manager.request_access()?;
         if granted {
+            ACCESS_GRANTED_THIS_SESSION.store(true, Ordering::Relaxed);
             self.reset();
         }
         Ok(granted)
     }
 
-    /// Reset EventKit stores after the user grants Calendar access.
+    /// Reset EventKit store after the user grants Calendar access.
     ///
     /// Apple documents this as required if an event store was used before full
     /// access was granted; otherwise reads can keep returning stale/empty data.
     pub fn reset(&self) {
         self.manager.reset();
-        unsafe { self.store.reset() };
     }
 
     // ── Calendar listing ───────────────────────────────────────────────
@@ -116,6 +160,7 @@ impl ScreenpipeCalendar {
     }
 
     /// Fetch events in a date range, including attendee names.
+    /// Uses EventsManager::fetch_events which already includes attendee info.
     fn fetch_events_with_attendees(
         &self,
         start: DateTime<Local>,
@@ -128,78 +173,69 @@ impl ScreenpipeCalendar {
         // Ensure read authorization. EventKit's WriteOnly mode is insufficient
         // here: screenpipe reads existing calendar events, attendees, URLs, and
         // locations for meeting detection.
+        //
+        // macOS's static authorization status can lag a fresh in-process grant
+        // by minutes (observed on macOS 26): `request_access` returns granted,
+        // yet `authorization_status()` still reports a non-`FullAccess` value.
+        // That previously hard-failed every read with `AuthorizationDenied`, so
+        // a user who had just connected their calendar saw nothing. When we've
+        // seen a grant this session, trust it and re-sync the store instead of
+        // failing. Explicit Denied/Restricted always blocks.
         let status = Self::authorization_status();
-        if status != AuthorizationStatus::FullAccess {
-            return Err(EventKitError::AuthorizationDenied);
+        match status {
+            AuthorizationStatus::FullAccess => {}
+            AuthorizationStatus::Denied | AuthorizationStatus::Restricted => {
+                return Err(EventKitError::AuthorizationDenied);
+            }
+            _ => {
+                if Self::access_granted_this_session() {
+                    warn!(
+                        "calendar: os status is {} but access was granted this session — re-syncing and reading anyway",
+                        status
+                    );
+                    self.reset();
+                } else {
+                    return Err(EventKitError::AuthorizationDenied);
+                }
+            }
         }
 
-        let start_date = datetime_to_nsdate(start);
-        let end_date = datetime_to_nsdate(end);
+        // Refresh sources so this freshly created store reflects the latest
+        // grant + synced calendar data. The singleton store can otherwise
+        // return stale/empty results after a fresh grant.
+        // Note: We access the store via the singleton's internal manager.
+        // The EventsManager internally has an EKEventStore, but we can't call
+        // refreshSourcesIfNecessary directly on it from here without exposing it.
+        // The reset() call above should handle the refresh for now.
 
-        let predicate = unsafe {
-            self.store
-                .predicateForEventsWithStartDate_endDate_calendars(
-                    &start_date,
-                    &end_date,
-                    None::<&NSArray<EKCalendar>>,
-                )
-        };
+        // Use EventsManager::fetch_events which already includes attendee information
+        let events = self.manager.fetch_events(start, end, None)?;
 
-        let events = unsafe { self.store.eventsMatchingPredicate(&predicate) };
+        let items: Vec<CalendarEvent> = events
+            .into_iter()
+            .map(|event| {
+                let meeting_url = event
+                    .URL
+                    .or_else(|| extract_meeting_url(event.location.as_deref()))
+                    .or_else(|| extract_meeting_url(event.notes.as_deref()));
 
-        let mut items = Vec::new();
-        for event in events.iter() {
-            let id = unsafe { event.eventIdentifier() }
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            let title = unsafe { event.title() }.to_string();
-            let location = unsafe { event.location() }.map(|l| l.to_string());
-            let event_url = unsafe { event.URL() }.and_then(nsurl_to_string);
-            let notes = unsafe { event.notes() }.map(|n| n.to_string());
-            let meeting_url = event_url
-                .or_else(|| extract_meeting_url(location.as_deref()))
-                .or_else(|| extract_meeting_url(notes.as_deref()));
-            let is_all_day = unsafe { event.isAllDay() };
-            let calendar_name = unsafe { event.calendar() }
-                .map(|c| unsafe { c.title() }.to_string())
-                .unwrap_or_default();
+                CalendarEvent {
+                    id: event.identifier,
+                    title: event.title,
+                    start: event.start_date.with_timezone(&Utc),
+                    end: event.end_date.with_timezone(&Utc),
+                    start_local: event.start_date,
+                    end_local: event.end_date,
+                    attendees: event.attendees.into_iter().filter_map(|a| a.name).collect(),
+                    location: event.location,
+                    meeting_url,
+                    calendar_name: event.calendar_title.unwrap_or_default(),
+                    is_all_day: event.all_day,
+                }
+            })
+            .collect();
 
-            let start_ns: Retained<NSDate> = unsafe { event.startDate() };
-            let end_ns: Retained<NSDate> = unsafe { event.endDate() };
-            let event_start_local = nsdate_to_local(&start_ns);
-            let event_end_local = nsdate_to_local(&end_ns);
-            let event_start_utc = event_start_local.with_timezone(&Utc);
-            let event_end_utc = event_end_local.with_timezone(&Utc);
-
-            // Extract attendee names
-            let attendees = unsafe { event.attendees() }
-                .map(|participants| {
-                    participants
-                        .iter()
-                        .filter_map(|p| unsafe { p.name() }.map(|n| n.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            items.push(CalendarEvent {
-                id,
-                title,
-                start: event_start_utc,
-                end: event_end_utc,
-                start_local: event_start_local,
-                end_local: event_end_local,
-                attendees,
-                location,
-                meeting_url,
-                calendar_name,
-                is_all_day,
-            });
-        }
-
-        // Sort by start date
-        items.sort_by(|a, b| a.start.cmp(&b.start));
-        debug!("calendar: fetched {} events", items.len());
-
+        info!("calendar: fetched {} events", items.len());
         Ok(items)
     }
 }
@@ -210,23 +246,7 @@ impl Default for ScreenpipeCalendar {
     }
 }
 
-// ── Date helpers ─────────────────────────────────────────────────────────
-
-fn datetime_to_nsdate(dt: DateTime<Local>) -> Retained<NSDate> {
-    let timestamp = dt.timestamp() as f64;
-    NSDate::dateWithTimeIntervalSince1970(timestamp)
-}
-
-fn nsdate_to_local(date: &NSDate) -> DateTime<Local> {
-    let timestamp = date.timeIntervalSince1970();
-    Local.timestamp_opt(timestamp as i64, 0).unwrap()
-}
-
-fn nsurl_to_string(url: Retained<NSURL>) -> Option<String> {
-    url.absoluteString()
-        .map(|s| s.to_string())
-        .and_then(normalize_meeting_url)
-}
+// ── Meeting URL helpers ─────────────────────────────────────────────────
 
 fn normalize_meeting_url(raw: String) -> Option<String> {
     let trimmed = raw

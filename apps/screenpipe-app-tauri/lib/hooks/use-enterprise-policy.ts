@@ -425,12 +425,16 @@ export function useEnterprisePolicy() {
       // Fire-and-forget heartbeat
       sendHeartbeat(licenseKey);
 
-      // Sync managed pipes to local filesystem
-      if (result.managedPipes.length > 0) {
-        syncManagedPipes(result.managedPipes).catch((e) =>
-          console.warn("[enterprise] failed to sync managed pipes:", e)
-        );
-      }
+      // Sync managed pipes to local filesystem. Always runs (even with an
+      // empty list) so pipes removed from the policy get disabled on devices.
+      // Pruning is only allowed when the server actually returned the
+      // managedPipes field — an older backend that omits it must not
+      // mass-disable the fleet.
+      syncManagedPipes(result.managedPipes, {
+        pruneUnlisted: Array.isArray(data.managedPipes),
+      }).catch((e) =>
+        console.warn("[enterprise] failed to sync managed pipes:", e)
+      );
 
       // Push hidden sections to Rust so tray menu can use them
       try {

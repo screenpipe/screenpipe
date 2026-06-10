@@ -59,7 +59,18 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | `window_name` | string | No | Window title substring |
 | `speaker_name` | string | No | Filter audio by speaker (case-insensitive partial) |
 | `focused` | boolean | No | Only focused windows |
+| `tags` | string | No | Comma-separated; return only items carrying ALL of them (e.g. `person:ada,project:atlas`). Works for screen/audio and, with `content_type=memory`, memories. See Tags below. |
 | `max_content_length` | integer | No | Truncate each result's text (middle-truncation) |
+
+### Tags — linking people, projects, topics
+
+Tags are a shared label layer across screen, audio, and memories under one string namespace. Use namespaced tags: `person:ada`, `project:atlas`, `topic:pricing`. Two items sharing a tag are connected.
+
+- Add to a frame/audio: `POST /tags/vision/{frame_id}` or `POST /tags/audio/{chunk_id}` body `{"tags":["person:ada"]}`.
+- Add to a memory: include `tags` in `POST /memories` (or `PUT /memories/{id}`).
+- Retrieve by tag: `GET /search?tags=person:ada&start_time=30d%20ago` (screen+audio), or add `content_type=memory` for memories. Multiple tags AND together; matching is exact, not substring.
+
+Frames are pruned by retention, so for a durable link tag a memory (memories also carry `created_at` and a `frame_id` back to the moment). Tag frames/audio for short-term recall. To pull everything about a person across time: one call for captures (`content_type=all&tags=person:ada`) plus one for facts (`content_type=memory&tags=person:ada`).
 
 ### Critical Rules
 

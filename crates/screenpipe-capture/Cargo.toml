@@ -3,7 +3,7 @@ name = "screenpipe-capture"
 version = "0.1.0"
 edition = "2021"
 description = "Paired screenshot + accessibility-tree capture, persisted to the screenpipe DB. Shared by the engine binary and the SDK."
-license = "MIT"
+license-file = { workspace = true }
 
 [dependencies]
 screenpipe-a11y = { path = "../screenpipe-a11y" }

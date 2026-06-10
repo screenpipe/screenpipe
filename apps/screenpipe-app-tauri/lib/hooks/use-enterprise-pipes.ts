@@ -15,6 +15,7 @@ import {
   readTextFile,
   exists,
   mkdir,
+  readDir,
 } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { localFetch } from "@/lib/api";
@@ -69,17 +70,24 @@ function parseVersion(content: string): number | null {
 /**
  * Sync managed pipes from the enterprise policy to local filesystem.
  * Writes/overwrites pipe.md files. Disables removed pipes.
+ *
+ * `pruneUnlisted` disables local enterprise-managed pipes that are no longer
+ * in the policy (so pausing/rolling back a pipe actually pulls it off the
+ * fleet). Callers must only set it when the policy response actually
+ * contained the managed-pipes field — an older backend that omits the field
+ * must never mass-disable a fleet.
  */
 export async function syncManagedPipes(
-  managedPipes: ManagedPipe[]
+  managedPipes: ManagedPipe[],
+  opts: { pruneUnlisted?: boolean } = {}
 ): Promise<void> {
-  if (!managedPipes || managedPipes.length === 0) return;
+  const pipesToSync = managedPipes || [];
 
   try {
     const home = await homeDir();
     const pipesDir = await join(home, ".screenpipe", "pipes");
 
-    for (const pipe of managedPipes) {
+    for (const pipe of pipesToSync) {
       try {
         const pipeDir = await join(pipesDir, pipe.name);
         const pipeMdPath = await join(pipeDir, "pipe.md");
@@ -120,8 +128,54 @@ export async function syncManagedPipes(
         console.warn(`[enterprise-pipes] failed to sync ${pipe.name}:`, e);
       }
     }
+
+    if (opts.pruneUnlisted) {
+      await disableUnlistedManagedPipes(pipesToSync, pipesDir);
+    }
   } catch (e) {
     console.error("[enterprise-pipes] sync error:", e);
+  }
+}
+
+/**
+ * Disable (never delete) local enterprise-managed pipes that the policy no
+ * longer lists. Only pipes carrying the enterprise marker are touched — a
+ * user's own pipes and team-shared pipes are invisible to this sweep.
+ */
+async function disableUnlistedManagedPipes(
+  managedPipes: ManagedPipe[],
+  pipesDir: string
+): Promise<void> {
+  const keep = new Set(managedPipes.map((p) => p.name));
+
+  let entries: Awaited<ReturnType<typeof readDir>>;
+  try {
+    entries = await readDir(pipesDir);
+  } catch {
+    return; // pipes dir may not exist yet
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory || keep.has(entry.name)) continue;
+    try {
+      const pipeMdPath = await join(pipesDir, entry.name, "pipe.md");
+      if (!(await exists(pipeMdPath))) continue;
+
+      const content = await readTextFile(pipeMdPath);
+      if (parseVersion(content) === null) continue; // not enterprise-managed
+      if (!/^enabled: true$/m.test(content)) continue; // already off
+
+      const updated = content.replace(
+        /^enabled: (true|false)$/m,
+        "enabled: false"
+      );
+      await writeTextFile(pipeMdPath, updated);
+      console.log(
+        `[enterprise-pipes] ${entry.name}: disabled (removed from policy)`
+      );
+    } catch (e) {
+      console.warn(`[enterprise-pipes] failed to prune ${entry.name}:`, e);
+    }
   }
 }
 

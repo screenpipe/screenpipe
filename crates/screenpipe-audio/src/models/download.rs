@@ -253,7 +253,13 @@ async fn download_model(
             // most common reason a model download fails. The raw reqwest error
             // is opaque, so attach an actionable hint when we can recognize it.
             return Err(match download_failure_hint(&e) {
-                Some(hint) => anyhow!("failed to download {} from {}: {} ({})", filename, url, hint, e),
+                Some(hint) => anyhow!(
+                    "failed to download {} from {}: {} ({})",
+                    filename,
+                    url,
+                    hint,
+                    e
+                ),
                 None => anyhow!("failed to download {} from {}: {}", filename, url, e),
             });
         }
@@ -265,10 +271,17 @@ async fn download_model(
             407 => "; proxy authentication required, configure your corporate proxy credentials",
             401 | 403 => "; request blocked, a proxy or firewall may be filtering this host",
             511 => "; captive portal, sign in to your network then retry",
-            _ if status.is_redirection() => "; unexpected redirect, a captive portal or proxy may be intercepting the request",
+            _ if status.is_redirection() => {
+                "; unexpected redirect, a captive portal or proxy may be intercepting the request"
+            }
             _ => "",
         };
-        return Err(anyhow!("download failed: HTTP {} for {}{}", status, url, hint));
+        return Err(anyhow!(
+            "download failed: HTTP {} for {}{}",
+            status,
+            url,
+            hint
+        ));
     }
 
     // A captive portal / proxy login page answers 200 OK with an HTML body
@@ -292,7 +305,12 @@ async fn download_model(
         Ok(bytes) => bytes,
         Err(e) => {
             return Err(match download_failure_hint(&e) {
-                Some(hint) => anyhow!("failed reading {} download body: {} ({})", filename, hint, e),
+                Some(hint) => anyhow!(
+                    "failed reading {} download body: {} ({})",
+                    filename,
+                    hint,
+                    e
+                ),
                 None => anyhow!("failed reading {} download body: {}", filename, e),
             });
         }
@@ -360,12 +378,16 @@ mod tests {
         }
 
         // DNS / connection / timeout buckets.
-        assert!(classify_download_failure("failed to lookup address information")
-            .unwrap()
-            .contains("DNS"));
-        assert!(classify_download_failure("tcp connect error: Connection refused (os error 61)")
-            .unwrap()
-            .contains("firewall"));
+        assert!(
+            classify_download_failure("failed to lookup address information")
+                .unwrap()
+                .contains("DNS")
+        );
+        assert!(
+            classify_download_failure("tcp connect error: Connection refused (os error 61)")
+                .unwrap()
+                .contains("firewall")
+        );
         assert!(classify_download_failure("operation timed out")
             .unwrap()
             .contains("timed out"));
