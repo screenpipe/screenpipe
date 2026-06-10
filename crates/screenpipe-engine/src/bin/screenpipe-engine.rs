@@ -1186,10 +1186,21 @@ async fn main() -> anyhow::Result<()> {
         let h = runtime.spawn(async move {
             let mut shutdown_rx = shutdown_tx_clone2.subscribe();
 
-            // Start VisionManager
+            // Start VisionManager. A failed start here is NOT fatal and must not
+            // abort this task: the common cause is the screen being locked at
+            // startup (auto-update restart, reboot into the lock screen, sleep),
+            // where macOS enumerates 0 monitors, so start() returns Err and rolls
+            // status back to Stopped. We must still start the monitor watcher
+            // below — its retry loop waits on the screen-unlock notification and
+            // is exactly what recovers vision once the screen unlocks. Returning
+            // here instead stranded vision dead until the next process restart.
+            // (#3702 — PR #3705 fixed the Tauri app path; this CLI binary path
+            // was left with the original `return`.)
             if let Err(e) = vm_clone.start().await {
-                error!("Failed to start VisionManager: {:?}", e);
-                return;
+                warn!(
+                    "VisionManager initial start failed ({:?}); monitor watcher will retry (e.g. once the screen unlocks)",
+                    e
+                );
             }
 
             // Start MonitorWatcher for dynamic detection (with audio DRM pause support)
