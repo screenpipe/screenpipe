@@ -324,12 +324,20 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setSessionAccessRequest(null);
         setSessionAccessAnswer(null);
         setV20CookieBlock(null);
-        setVisible(true);
-        setCollapsed(false);
         setCurrentUrl(url);
         setCurrentTitle(null);
         setLoading(true);
-        persistState({ url, collapsed: false });
+        // Agent-driven navigations (owner is set) always open the panel.
+        // Ownerless events (restore/reload after chat switch) must not
+        // override the persisted collapsed state — otherwise switching
+        // away from a chat with a collapsed sidebar and back re-opens it.
+        if (owner) {
+          setVisible(true);
+          setCollapsed(false);
+          persistState({ url, collapsed: false });
+        } else {
+          persistState({ url });
+        }
       },
     );
     return () => {
