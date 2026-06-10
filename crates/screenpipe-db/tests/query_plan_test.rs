@@ -581,6 +581,42 @@ mod query_plan_tests {
     }
 
     // ──────────────────────────────────────────────────────────
+    // Background snapshot-compaction scan (#183)
+    // Must use the partial (device_name, timestamp) WHERE
+    // snapshot_path IS NOT NULL index and avoid a temp B-tree sort,
+    // so it scans only uncompacted frames instead of the whole table.
+    // ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_snapshot_compaction_scan_uses_partial_index() {
+        let db = setup_test_db().await;
+        seed_data(&db, 200).await;
+
+        let plan = explain(
+            &db,
+            r#"SELECT id, snapshot_path, device_name, timestamp
+            FROM frames
+            WHERE snapshot_path IS NOT NULL
+              AND timestamp < '2030-01-01'
+            ORDER BY device_name, timestamp ASC
+            LIMIT 5000"#,
+        )
+        .await;
+
+        let joined = plan.join("\n");
+        assert!(
+            joined.contains("idx_frames_snapshot_compaction"),
+            "snapshot-compaction scan does not use the partial index.\nPlan:\n{}",
+            joined
+        );
+        assert!(
+            !joined.to_uppercase().contains("TEMP B-TREE"),
+            "snapshot-compaction scan still sorts via a temp B-tree (index ORDER BY unused).\nPlan:\n{}",
+            joined
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────
     // Dedup query (runs before every audio insert)
     // ──────────────────────────────────────────────────────────
 
