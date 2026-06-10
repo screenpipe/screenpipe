@@ -290,23 +290,23 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
 
     let mut data = serde_json::to_value(&list).unwrap_or(json!([]));
     if let Some(arr) = data.as_array_mut() {
-        // Native calendar (macOS / Windows)
-        let cal_available = tokio::task::spawn_blocking(is_native_calendar_available)
-            .await
-            .unwrap_or(false);
-        arr.push(json!({
-            "id": "apple-calendar",
-            "name": "Apple Calendar",
-            "icon": "apple-calendar",
-            "category": "calendar",
-            "description": format!(
-                "Read-only access to your native {} calendar. \
-                Query events via GET /connections/calendar/events?hours_back=1&hours_ahead=8",
-                std::env::consts::OS
-            ),
-            "fields": [],
-            "connected": cal_available,
-        }));
+        // Native calendar — macOS only (EventKit). Windows/Linux have no equivalent.
+        #[cfg(target_os = "macos")]
+        {
+            let cal_available = tokio::task::spawn_blocking(is_native_calendar_available)
+                .await
+                .unwrap_or(false);
+            arr.push(json!({
+                "id": "apple-calendar",
+                "name": "Apple Calendar",
+                "icon": "apple-calendar",
+                "category": "calendar",
+                "description": "Read-only access to your Apple Calendar. \
+                    Query events via GET /connections/calendar/events?hours_back=1&hours_ahead=8",
+                "fields": [],
+                "connected": cal_available,
+            }));
+        }
 
         let (ics_feed_count, ics_enabled_count, ics_error) =
             match screenpipe_connect::ics_calendar::load_ics_calendar_settings_from_store(
