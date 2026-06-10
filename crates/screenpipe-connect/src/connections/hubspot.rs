@@ -92,7 +92,7 @@ impl Integration for HubSpot {
         };
 
         let resp: Value = client
-            .get("https://api.hubapi.com/crm/v3/objects/contacts?limit=1")
+            .get("https://api.hubapi.com/integrations/v1/me")
             .bearer_auth(&token)
             .send()
             .await?
@@ -100,7 +100,10 @@ impl Integration for HubSpot {
             .json()
             .await?;
 
-        let total = resp["total"].as_u64().unwrap_or(0);
-        Ok(format!("connected to HubSpot ({} contacts)", total))
+        let hub = resp["hubDomain"]
+            .as_str()
+            .or_else(|| resp["portalId"].as_str())
+            .unwrap_or("unknown portal");
+        Ok(format!("connected to HubSpot ({})", hub))
     }
 }
