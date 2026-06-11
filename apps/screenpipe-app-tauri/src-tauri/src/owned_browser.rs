@@ -129,17 +129,18 @@ struct OwnedBrowserStateEvent {
     title: Option<String>,
     loading: Option<bool>,
     /// Conversation/session that issued the navigation currently in flight.
-    /// See [`OwnedBrowserNavigateEvent::owner`]. `None` for the sidebar's own
-    /// restore/reload; the frontend always honors those.
+    /// See [`OwnedBrowserNavigateEvent::owner`]. `None` means stale/legacy;
+    /// supported restore/reload paths now send the foreground conversation id.
     owner: Option<String>,
 }
 
 /// Payload of [`NAVIGATE_EVENT`]. `owner` is the chat/session id that drove the
 /// navigation — `sid` for a chat agent (equals the frontend `conversationId`),
-/// `pipe:<name>` for a background pipe, `None` for the sidebar's own
-/// restore/reload. The owned browser is a singleton broadcast to every window,
-/// so the frontend uses `owner` to ignore navigations that belong to a chat
-/// other than the one on screen.
+/// `pipe:<name>` for a background pipe. `None` means stale/legacy; supported
+/// restore/reload paths now send the foreground conversation id. The owned
+/// browser is a singleton broadcast to every window, so the frontend uses
+/// `owner` to ignore navigations that belong to a chat other than the one on
+/// screen.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OwnedBrowserNavigateEvent {
@@ -1089,17 +1090,24 @@ mod normalize_url_tests {
     }
 }
 
-/// Navigate the embedded webview to `url`. Used by the sidebar when restoring
-/// per-chat state or on user reload — i.e. always an action of the chat that's
-/// on screen, so it carries no owner (`None`) and the frontend always honors
-/// it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
+/// Navigate the embedded webview to `url`.
+///
+/// Frontend restore/reload calls pass the foreground conversation id as
+/// `owner`, so the entire browser lifecycle stays scoped to that chat. Retry
+/// paths that are continuing a pipe/chat-owned navigation (for example after an
+/// extension or cookie-consent flow) can pass the original `owner` through so
+/// the follow-up navigate does not look like a fresh restore in every chat.
 #[specta::specta]
 #[tauri::command]
-pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn owned_browser_navigate(
+    app: AppHandle,
+    url: String,
+    owner: Option<String>,
+) -> Result<(), String> {
     let state = browser_state();
     let parsed: url::Url = normalize_url(&url)?;
 
-    prepare_navigation(&app, &state, &parsed, None).await;
+    prepare_navigation(&app, &state, &parsed, owner.as_deref()).await;
     inject_cookies_for_url(&app, &parsed).await;
     if let Some(active) = state.active().await {
         // Visibility is owned by the frontend sidebar — never force-show here

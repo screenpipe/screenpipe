@@ -34,13 +34,11 @@ describe("owned-browser ownership", () => {
       expect(isForeignNavigation("conv-C", "conv-C")).toBe(false);
     });
 
-    it("honors untagged navigations (the sidebar's own restore/reload)", () => {
-      expect(isForeignNavigation(null, "conv-C")).toBe(false);
-      expect(isForeignNavigation(undefined, "conv-C")).toBe(false);
-      expect(isForeignNavigation("", "conv-C")).toBe(false);
-      // Untagged is honored even when no chat is bound — that's a fresh
-      // chat's own restore/reload, not a foreign pipe.
-      expect(isForeignNavigation(null, null)).toBe(false);
+    it("drops ownerless navigations (stale/legacy emits)", () => {
+      expect(isForeignNavigation(null, "conv-C")).toBe(true);
+      expect(isForeignNavigation(undefined, "conv-C")).toBe(true);
+      expect(isForeignNavigation("", "conv-C")).toBe(true);
+      expect(isForeignNavigation(null, null)).toBe(true);
     });
 
     it("gates a tagged navigation when no chat is bound (fresh/unsaved chat)", () => {

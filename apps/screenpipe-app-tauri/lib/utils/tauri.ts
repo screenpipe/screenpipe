@@ -1059,14 +1059,17 @@ async ownedBrowserHide() : Promise<Result<null, string>> {
 }
 },
 /**
- * Navigate the embedded webview to `url`. Used by the sidebar when restoring
- * per-chat state or on user reload — i.e. always an action of the chat that's
- * on screen, so it carries no owner (`None`) and the frontend always honors
- * it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
+ * Navigate the embedded webview to `url`.
+ *
+ * Frontend restore/reload calls pass the foreground conversation id as
+ * `owner`, so the entire browser lifecycle stays scoped to that chat. Retry
+ * paths that are continuing a pipe/chat-owned navigation (for example after an
+ * extension or cookie-consent flow) can pass the original `owner` through so
+ * the follow-up navigate does not look like a fresh restore in every chat.
  */
-async ownedBrowserNavigate(url: string) : Promise<Result<null, string>> {
+async ownedBrowserNavigate(url: string, owner: string | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url }) };
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url, owner }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
