@@ -91,8 +91,10 @@ impl Integration for HubSpot {
             ));
         };
 
+        // account-info is the current (non-legacy) endpoint and accepts both
+        // OAuth access tokens and Private App tokens with no extra scope.
         let resp: Value = client
-            .get("https://api.hubapi.com/integrations/v1/me")
+            .get("https://api.hubapi.com/account-info/v3/details")
             .bearer_auth(&token)
             .send()
             .await?
@@ -100,10 +102,11 @@ impl Integration for HubSpot {
             .json()
             .await?;
 
-        let hub = resp["hubDomain"]
-            .as_str()
-            .or_else(|| resp["portalId"].as_str())
-            .unwrap_or("unknown portal");
+        // portalId is a JSON number, not a string.
+        let hub = resp["portalId"]
+            .as_u64()
+            .map(|n| format!("portal {}", n))
+            .unwrap_or_else(|| "unknown portal".into());
         Ok(format!("connected to HubSpot ({})", hub))
     }
 }
