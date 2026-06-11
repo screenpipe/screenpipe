@@ -139,6 +139,10 @@ fn selected_engine_model(session: &TranscriptionSession) -> Option<String> {
         TranscriptionSession::ParakeetMlx { .. } => {
             AudioTranscriptionEngine::ParakeetMlx.to_string()
         }
+        #[cfg(all(target_os = "macos", feature = "apple-native"))]
+        TranscriptionSession::AppleNative { .. } => {
+            AudioTranscriptionEngine::AppleNative.to_string()
+        }
         TranscriptionSession::Deepgram { .. } => AudioTranscriptionEngine::Deepgram.to_string(),
         TranscriptionSession::OpenAICompatible { .. } => {
             AudioTranscriptionEngine::OpenAICompatible.to_string()

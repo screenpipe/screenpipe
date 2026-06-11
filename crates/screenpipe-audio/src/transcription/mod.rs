@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use crate::core::device::AudioDevice;
 
+#[cfg(all(target_os = "macos", feature = "apple-native"))]
+pub mod apple_native;
 pub mod deepgram;
 pub mod diarization;
 pub mod engine;

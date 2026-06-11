@@ -213,6 +213,19 @@ pub async fn stt(
                 audio_transcription_engine
             ))
         }
+    } else if *audio_transcription_engine == AudioTranscriptionEngine::AppleNative {
+        // Apple SpeechAnalyzer (on-device, macOS 26+)
+        #[cfg(all(target_os = "macos", feature = "apple-native"))]
+        {
+            let locale = crate::transcription::apple_native::locale_for_languages(&languages);
+            crate::transcription::apple_native::transcribe_blocking(audio, sample_rate, locale)
+        }
+        #[cfg(not(all(target_os = "macos", feature = "apple-native")))]
+        {
+            Err(anyhow::anyhow!(
+                "apple-native engine requires macOS 26+ and the 'apple-native' feature to be enabled"
+            ))
+        }
     } else if audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible.into() {
         // OpenAI Compatible implementation
         let mut config = openai_compatible_config.unwrap_or_default();

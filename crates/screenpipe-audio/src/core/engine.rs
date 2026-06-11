@@ -18,6 +18,7 @@ pub enum AudioTranscriptionEngine {
     Qwen3Asr,
     Parakeet,
     ParakeetMlx,
+    AppleNative,
     Disabled,
 }
 
@@ -36,6 +37,7 @@ impl std::str::FromStr for AudioTranscriptionEngine {
             "qwen3-asr" => Ok(Self::Qwen3Asr),
             "parakeet" | "parakeet-tdt-0.6b-v2" => Ok(Self::Parakeet),
             "parakeet-mlx" => Ok(Self::ParakeetMlx),
+            "apple-native" => Ok(Self::AppleNative),
             "disabled" => Ok(Self::Disabled),
             _ => Err(format!("unknown audio engine: {s}")),
         }
@@ -60,6 +62,7 @@ impl fmt::Display for AudioTranscriptionEngine {
             AudioTranscriptionEngine::Qwen3Asr => write!(f, "Qwen3Asr"),
             AudioTranscriptionEngine::Parakeet => write!(f, "Parakeet"),
             AudioTranscriptionEngine::ParakeetMlx => write!(f, "ParakeetMlx"),
+            AudioTranscriptionEngine::AppleNative => write!(f, "AppleNative"),
             AudioTranscriptionEngine::Disabled => write!(f, "Disabled"),
         }
     }

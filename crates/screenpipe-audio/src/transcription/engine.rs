@@ -92,6 +92,11 @@ pub enum TranscriptionEngine {
         model: Arc<StdMutex<audiopipe::Model>>,
         vocabulary: Vec<VocabularyEntry>,
     },
+    #[cfg(all(target_os = "macos", feature = "apple-native"))]
+    AppleNative {
+        locale: &'static str,
+        vocabulary: Vec<VocabularyEntry>,
+    },
     Deepgram {
         config: DeepgramTranscriptionConfig,
         languages: Vec<Language>,
@@ -319,6 +324,32 @@ impl TranscriptionEngine {
                 }
             }
 
+            AudioTranscriptionEngine::AppleNative => {
+                #[cfg(all(target_os = "macos", feature = "apple-native"))]
+                {
+                    let locale =
+                        crate::transcription::apple_native::locale_for_languages(&languages);
+                    info!(
+                        "transcription engine runtime: AppleNative (SpeechAnalyzer) locale={}",
+                        locale
+                    );
+                    // Fail fast with a clear reason: macOS < 26, unsupported
+                    // locale, or speech model assets not downloaded yet.
+                    tokio::task::spawn_blocking(move || {
+                        crate::transcription::apple_native::check_availability(locale)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("apple-native availability check panicked: {}", e))??;
+                    Ok(Self::AppleNative { locale, vocabulary })
+                }
+                #[cfg(not(all(target_os = "macos", feature = "apple-native")))]
+                {
+                    Err(anyhow!(
+                        "apple-native engine requires macOS 26+ and the 'apple-native' feature to be enabled"
+                    ))
+                }
+            }
+
             // All Whisper variants
             _ => {
                 info!("transcription engine runtime: Whisper variant={}", *config);
@@ -420,6 +451,11 @@ impl TranscriptionEngine {
                 model: model.clone(),
                 vocabulary: vocabulary.clone(),
             }),
+            #[cfg(all(target_os = "macos", feature = "apple-native"))]
+            Self::AppleNative { locale, vocabulary } => Ok(TranscriptionSession::AppleNative {
+                locale,
+                vocabulary: vocabulary.clone(),
+            }),
             Self::Deepgram {
                 config,
                 languages,
@@ -470,6 +506,8 @@ impl TranscriptionEngine {
             Self::Parakeet { .. } => AudioTranscriptionEngine::Parakeet,
             #[cfg(feature = "parakeet-mlx")]
             Self::ParakeetMlx { .. } => AudioTranscriptionEngine::ParakeetMlx,
+            #[cfg(all(target_os = "macos", feature = "apple-native"))]
+            Self::AppleNative { .. } => AudioTranscriptionEngine::AppleNative,
             Self::Deepgram { .. } => AudioTranscriptionEngine::Deepgram,
             Self::OpenAICompatible { .. } => AudioTranscriptionEngine::OpenAICompatible,
             Self::Disabled => AudioTranscriptionEngine::Disabled,
@@ -501,6 +539,11 @@ pub enum TranscriptionSession {
     #[cfg(feature = "parakeet-mlx")]
     ParakeetMlx {
         model: Arc<StdMutex<audiopipe::Model>>,
+        vocabulary: Vec<VocabularyEntry>,
+    },
+    #[cfg(all(target_os = "macos", feature = "apple-native"))]
+    AppleNative {
+        locale: &'static str,
         vocabulary: Vec<VocabularyEntry>,
     },
     Deepgram {
@@ -706,6 +749,22 @@ impl TranscriptionSession {
                 Ok(result.text)
             }
 
+            #[cfg(all(target_os = "macos", feature = "apple-native"))]
+            Self::AppleNative { locale, .. } => {
+                // The Swift bridge blocks on a semaphore — keep it off the async executor.
+                let locale = *locale;
+                let audio = audio.to_vec();
+                tokio::task::spawn_blocking(move || {
+                    crate::transcription::apple_native::transcribe_blocking(
+                        &audio,
+                        sample_rate,
+                        locale,
+                    )
+                })
+                .await
+                .map_err(|e| anyhow!("apple-native transcription task panicked: {}", e))?
+            }
+
             Self::Whisper {
                 state,
                 languages,
@@ -763,6 +822,8 @@ impl TranscriptionSession {
                     Self::Parakeet { vocabulary, .. } => vocabulary,
                     #[cfg(feature = "parakeet-mlx")]
                     Self::ParakeetMlx { vocabulary, .. } => vocabulary,
+                    #[cfg(all(target_os = "macos", feature = "apple-native"))]
+                    Self::AppleNative { vocabulary, .. } => vocabulary,
                     Self::Deepgram { vocabulary, .. } => vocabulary,
                     Self::OpenAICompatible { vocabulary, .. } => vocabulary,
                     Self::Disabled => return Ok(text),
