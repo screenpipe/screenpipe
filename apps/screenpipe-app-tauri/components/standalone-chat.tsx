@@ -69,7 +69,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
-import { useSqlAutocomplete, useVisionTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
+import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -2505,7 +2505,7 @@ export function StandaloneChat({
   // className) — the embedded variant is below the host's chrome anyway.
   const isFullscreen = useIsFullscreen();
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
-  const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useVisionTagAutocomplete();
+  const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
   // Connected integrations (gmail, google-sheets, slack, etc.) surfaced in the
@@ -2776,6 +2776,7 @@ export function StandaloneChat({
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
+  const [mentionTrigger, setMentionTrigger] = useState<"@" | "#">("@");
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
   const [isLoadingSpeakers, setIsLoadingSpeakers] = useState(false);
@@ -4103,6 +4104,41 @@ export function StandaloneChat({
     [tagItems]
   );
 
+  const allTagMentionSuggestions = React.useMemo(
+    () => buildTagMentionSuggestions(tagItems, tagItems.length),
+    [tagItems]
+  );
+
+  const tagMentionSections = React.useMemo(() => {
+    type TagCountKey = "memory_count" | "audio_count" | "frame_count";
+    const used = new Set<string>();
+
+    const sourceCount = (item: (typeof tagItems)[number], key: TagCountKey) =>
+      item[key] ?? 0;
+
+    const pick = (key: TagCountKey) => {
+      const picked = tagItems
+        .filter((item) => sourceCount(item, key) > 0 && !used.has(item.name))
+        .sort((a, b) => {
+          const sourceDelta = sourceCount(b, key) - sourceCount(a, key);
+          if (sourceDelta !== 0) return sourceDelta;
+          const totalDelta = b.count - a.count;
+          if (totalDelta !== 0) return totalDelta;
+          return a.name.localeCompare(b.name);
+        })
+        .slice(0, TAG_SUGGESTION_LIMIT);
+
+      for (const item of picked) used.add(item.name);
+      return buildTagMentionSuggestions(picked, TAG_SUGGESTION_LIMIT);
+    };
+
+    return [
+      { label: "memory tags", suggestions: pick("memory_count") },
+      { label: "audio tags", suggestions: pick("audio_count") },
+      { label: "screen tags", suggestions: pick("frame_count") },
+    ].filter((section) => section.suggestions.length > 0);
+  }, [tagItems]);
+
   const appTagMap = React.useMemo(() => {
     const map: Record<string, string> = {};
     for (const suggestion of appMentionSuggestions) {
@@ -4197,6 +4233,11 @@ export function StandaloneChat({
 
   // Fetch speakers dynamically
   useEffect(() => {
+    if (mentionTrigger !== "@") {
+      setSpeakerSuggestions([]);
+      return;
+    }
+
     if (!mentionFilter || mentionFilter.length < 1) {
       setSpeakerSuggestions([]);
       return;
@@ -4237,17 +4278,38 @@ export function StandaloneChat({
 
     const debounceTimeout = setTimeout(searchSpeakers, 300);
     return () => clearTimeout(debounceTimeout);
-  }, [mentionFilter, baseMentionSuggestions]);
+  }, [mentionFilter, mentionTrigger, baseMentionSuggestions]);
 
   const filteredMentions = React.useMemo(() => {
+    if (mentionTrigger === "#") {
+      const tagSuggestions = !mentionFilter
+        ? tagMentionSuggestions
+        : allTagMentionSuggestions.filter(
+            s => s.tag.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+                 s.description.toLowerCase().includes(mentionFilter.toLowerCase())
+          );
+      return tagSuggestions;
+    }
+
+    const searchableSuggestions = mentionFilter
+      ? [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions, ...allTagMentionSuggestions]
+      : baseMentionSuggestions;
     const suggestions = !mentionFilter
-      ? baseMentionSuggestions
-      : baseMentionSuggestions.filter(
+      ? searchableSuggestions
+      : searchableSuggestions.filter(
           s => s.tag.toLowerCase().includes(mentionFilter.toLowerCase()) ||
                s.description.toLowerCase().includes(mentionFilter.toLowerCase())
         );
     return [...suggestions, ...speakerSuggestions];
-  }, [mentionFilter, speakerSuggestions, baseMentionSuggestions]);
+  }, [
+    mentionFilter,
+    mentionTrigger,
+    speakerSuggestions,
+    baseMentionSuggestions,
+    appMentionSuggestions,
+    tagMentionSuggestions,
+    allTagMentionSuggestions,
+  ]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -4263,15 +4325,17 @@ export function StandaloneChat({
 
     const cursorPos = e.target.selectionStart || 0;
     const textBeforeCursor = value.slice(0, cursorPos);
-    const atMatch = textBeforeCursor.match(/@([\w-]*)$/);
+    const mentionMatch = textBeforeCursor.match(/([@#])([\w:.-]*)$/);
 
-    if (atMatch) {
+    if (mentionMatch) {
       setShowMentionDropdown(true);
-      setMentionFilter(atMatch[1]);
+      setMentionTrigger(mentionMatch[1] as "@" | "#");
+      setMentionFilter(mentionMatch[2]);
       setSelectedMentionIndex(0);
     } else {
       setShowMentionDropdown(false);
       setMentionFilter("");
+      setMentionTrigger("@");
     }
   };
 
@@ -4280,14 +4344,18 @@ export function StandaloneChat({
     const textBeforeCursor = input.slice(0, cursorPos);
     const textAfterCursor = input.slice(cursorPos);
 
-    const atIndex = textBeforeCursor.lastIndexOf("@");
-    if (atIndex !== -1) {
-      const newValue = textBeforeCursor.slice(0, atIndex) + tag + " " + textAfterCursor;
+    const mentionIndex = Math.max(
+      textBeforeCursor.lastIndexOf("@"),
+      textBeforeCursor.lastIndexOf("#")
+    );
+    if (mentionIndex !== -1) {
+      const newValue = textBeforeCursor.slice(0, mentionIndex) + tag + " " + textAfterCursor;
       setInput(newValue);
     }
 
     setShowMentionDropdown(false);
     setMentionFilter("");
+    setMentionTrigger("@");
     inputRef.current?.focus();
   };
 
@@ -4589,16 +4657,17 @@ export function StandaloneChat({
   }, [appFilterOpen, recentSpeakers.length]);
 
   // Apps/tags load on mount, but the first fetch often races server startup.
-  // Retry when the filter popover opens and the list is still empty.
+  // App names are stable enough to retry only when empty; tags can change
+  // from Brain/timeline while chat is open, so refresh them on menu open.
   useEffect(() => {
     if (!appFilterOpen) return;
     if (appItems.length === 0 && !appsLoading) {
       void refreshAppItems();
     }
-    if (tagItems.length === 0 && !tagsLoading) {
+    if (!tagsLoading) {
       void refreshTagItems();
     }
-  }, [appFilterOpen, appItems.length, tagItems.length, appsLoading, tagsLoading, refreshAppItems, refreshTagItems]);
+  }, [appFilterOpen, appItems.length, appsLoading, tagsLoading, refreshAppItems, refreshTagItems]);
 
   // Pi project dir is managed Rust-side at boot
 
@@ -7939,36 +8008,43 @@ export function StandaloneChat({
         <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
           tags
         </div>
-        {tagMentionSuggestions.length === 0 ? (
+        {allTagMentionSuggestions.length === 0 ? (
           <div className="px-3 py-2 text-[10px] text-muted-foreground">
             {tagsLoading ? "loading tags..." : "no tags yet"}
           </div>
         ) : (
-          tagMentionSuggestions.map((suggestion) => {
-            const tagName = suggestion.tag.slice(1);
-            const isActive = activeFilters.tagNames.includes(tagName);
-            return (
-              <button
-                key={`tag-${suggestion.tag}`}
-                type="button"
-                onClick={() => {
-                  if (isActive) {
-                    removeFilter("tag", tagName);
-                  } else {
-                    setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
-                  }
-                  setAppFilterOpen(false);
-                }}
-                className={cn(
-                  "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
-                  isActive && "bg-muted"
-                )}
-              >
-                <span>{suggestion.tag}</span>
-                <span className="text-[10px] text-muted-foreground truncate">{suggestion.description}</span>
-              </button>
-            );
-          })
+          tagMentionSections.map((section) => (
+            <React.Fragment key={section.label}>
+              <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80 bg-muted/20 border-b border-border/40">
+                {section.label}
+              </div>
+              {section.suggestions.map((suggestion) => {
+                const tagName = suggestion.tag.slice(1);
+                const isActive = activeFilters.tagNames.includes(tagName);
+                return (
+                  <button
+                    key={`tag-${section.label}-${suggestion.tag}`}
+                    type="button"
+                    onClick={() => {
+                      if (isActive) {
+                        removeFilter("tag", tagName);
+                      } else {
+                        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+                      }
+                      setAppFilterOpen(false);
+                    }}
+                    className={cn(
+                      "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+                      isActive && "bg-muted"
+                    )}
+                  >
+                    <span>{suggestion.tag}</span>
+                    <span className="text-[10px] text-muted-foreground truncate">{suggestion.description}</span>
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))
         )}
 
         {connections.length > 0 && (

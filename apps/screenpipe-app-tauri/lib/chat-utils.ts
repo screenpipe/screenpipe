@@ -567,6 +567,9 @@ export interface MentionSuggestion {
 type AppAutocompleteItem = {
   name: string;
   count: number;
+  frame_count?: number;
+  audio_count?: number;
+  memory_count?: number;
 };
 
 export function normalizeAppTag(name: string) {
@@ -603,7 +606,22 @@ export function buildTagMentionSuggestions(
 ): MentionSuggestion[] {
   return items.slice(0, limit).map((item) => ({
     tag: `#${item.name}`,
-    description: `${item.count} frames`,
+    description: formatTagAutocompleteDescription(item),
     category: "tag" as const,
   }));
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatTagAutocompleteDescription(item: AppAutocompleteItem) {
+  const parts = [
+    item.frame_count ? pluralize(item.frame_count, "frame") : null,
+    item.audio_count ? pluralize(item.audio_count, "audio clip") : null,
+    item.memory_count ? pluralize(item.memory_count, "memory", "memories") : null,
+  ].filter((part): part is string => Boolean(part));
+
+  if (parts.length > 0) return parts.join(", ");
+  return pluralize(item.count, "use");
 }

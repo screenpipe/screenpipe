@@ -9,6 +9,9 @@ export interface AutocompleteItem {
   name: string;
   count: number;
   app_name?: string;
+  frame_count?: number;
+  audio_count?: number;
+  memory_count?: number;
 }
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
@@ -124,8 +127,8 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
 
 const TAG_CACHE: { data?: AutocompleteItem[]; ts?: number } = {};
 
-/** Distinct vision tags with frame counts, for chat/search filter pickers. */
-export function useVisionTagAutocomplete() {
+/** Distinct tags across screen, audio, and memories for chat/search filter pickers. */
+export function useTagAutocomplete() {
   const [items, setItems] = useState<AutocompleteItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -146,12 +149,52 @@ export function useVisionTagAutocomplete() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query: `
-            SELECT t.name, COUNT(vt.vision_id) as count
-            FROM tags t
-            JOIN vision_tags vt ON t.id = vt.tag_id
-            GROUP BY t.id, t.name
+            SELECT
+              name,
+              SUM(count) as count,
+              SUM(frame_count) as frame_count,
+              SUM(audio_count) as audio_count,
+              SUM(memory_count) as memory_count
+            FROM (
+              SELECT
+                t.name as name,
+                COUNT(DISTINCT vt.vision_id) as count,
+                COUNT(DISTINCT vt.vision_id) as frame_count,
+                0 as audio_count,
+                0 as memory_count
+              FROM tags t
+              JOIN vision_tags vt ON t.id = vt.tag_id
+              WHERE t.name IS NOT NULL AND t.name != ''
+              GROUP BY t.name
+
+              UNION ALL
+
+              SELECT
+                t.name as name,
+                COUNT(DISTINCT audio_tag_rows.audio_chunk_id) as count,
+                0 as frame_count,
+                COUNT(DISTINCT audio_tag_rows.audio_chunk_id) as audio_count,
+                0 as memory_count
+              FROM tags t
+              JOIN audio_tags audio_tag_rows ON t.id = audio_tag_rows.tag_id
+              WHERE t.name IS NOT NULL AND t.name != ''
+              GROUP BY t.name
+
+              UNION ALL
+
+              SELECT
+                json_tags.value as name,
+                COUNT(DISTINCT memories.id) as count,
+                0 as frame_count,
+                0 as audio_count,
+                COUNT(DISTINCT memories.id) as memory_count
+              FROM memories, json_each(memories.tags) json_tags
+              WHERE json_tags.value IS NOT NULL AND json_tags.value != ''
+              GROUP BY json_tags.value
+            )
+            GROUP BY name
             ORDER BY count DESC
-            LIMIT 50
+            LIMIT 100
           `,
         }),
       });
@@ -167,7 +210,7 @@ export function useVisionTagAutocomplete() {
       setItems(result);
     } catch (error) {
       const msg = (error as Error)?.stack ?? (error as Error)?.message ?? String(error);
-      console.error("failed to fetch vision tags:", msg);
+      console.error("failed to fetch tags:", msg);
     } finally {
       setIsLoading(false);
     }

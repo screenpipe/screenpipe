@@ -52,18 +52,33 @@ describe("global chat mentions", () => {
     expect(mentions.cleanedInput).toBe("summarize browsing");
   });
 
-  it("builds tag suggestions from vision tag counts", () => {
+  it("builds tag suggestions from tag counts", () => {
     const suggestions = buildTagMentionSuggestions(
       [
-        { name: "firefox", count: 833 },
-        { name: "coding", count: 138 },
+        { name: "firefox", count: 833, frame_count: 833 },
+        { name: "coding", count: 140, frame_count: 138, memory_count: 2 },
       ],
       10,
     );
 
     expect(suggestions).toEqual([
       { tag: "#firefox", description: "833 frames", category: "tag" },
-      { tag: "#coding", description: "138 frames", category: "tag" },
+      { tag: "#coding", description: "138 frames, 2 memories", category: "tag" },
+    ]);
+  });
+
+  it("builds tag suggestions from memory and audio counts", () => {
+    const suggestions = buildTagMentionSuggestions(
+      [
+        { name: "person:louis", count: 3, memory_count: 3 },
+        { name: "call", count: 2, audio_count: 2 },
+      ],
+      10,
+    );
+
+    expect(suggestions).toEqual([
+      { tag: "#person:louis", description: "3 memories", category: "tag" },
+      { tag: "#call", description: "2 audio clips", category: "tag" },
     ]);
   });
 
