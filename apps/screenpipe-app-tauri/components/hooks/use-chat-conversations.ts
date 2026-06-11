@@ -168,6 +168,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       lastUserMessageAt,
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
+      sidebarGroup: conversation.sidebarGroup,
     };
 
     setFileConversations((prev) => {
@@ -429,6 +430,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // plain chat (kind/pipeContext dropped on disk).
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+      ...(existing?.sidebarGroup ? { sidebarGroup: existing.sidebarGroup } : {}),
       // Preserve sort key across reloads. Source of truth: the in-memory
       // chat-store, which is bumped exactly once per user-send.
       ...(await (async () => {
@@ -497,6 +499,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(conversation.lastUserMessageAt
             ? { lastUserMessageAt: conversation.lastUserMessageAt }
             : {}),
+          sidebarGroup: conversation.sidebarGroup,
         });
       }
     } catch (e) {
@@ -833,11 +836,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // foreground/background swaps.
           ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
+          ...(conv.sidebarGroup ? { sidebarGroup: conv.sidebarGroup } : full.sidebarGroup ? { sidebarGroup: full.sidebarGroup } : {}),
         });
-      } else if (conv.kind || conv.pipeContext) {
+      } else if (conv.kind || conv.pipeContext || conv.sidebarGroup || full.sidebarGroup) {
         store.actions.patch(conv.id, {
           ...(conv.kind ? { kind: conv.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : {}),
+          ...(conv.sidebarGroup ? { sidebarGroup: conv.sidebarGroup } : full.sidebarGroup ? { sidebarGroup: full.sidebarGroup } : {}),
         });
       }
       store.actions.setMessages(conv.id, messagesForPanel as any);

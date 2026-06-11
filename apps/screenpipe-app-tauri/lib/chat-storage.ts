@@ -170,6 +170,8 @@ export interface ConversationMeta {
   kind: ConversationKind;
   /** Pipe metadata for `pipe-*` kinds. Undefined for plain chats. */
   pipeContext?: PipeContext;
+  /** Optional user-assigned sidebar group label. */
+  sidebarGroup?: string;
 }
 
 interface ConversationEntry {
@@ -278,6 +280,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     lastUserMessageAt,
     kind: conv.kind ?? "chat",
     pipeContext: conv.pipeContext,
+    sidebarGroup: typeof conv.sidebarGroup === "string" ? conv.sidebarGroup : undefined,
   };
 }
 
@@ -399,7 +402,7 @@ export async function searchConversations(
  */
 export async function updateConversationFlags(
   id: string,
-  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "browserState">>
+  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "browserState" | "sidebarGroup">>
 ): Promise<void> {
   const conv = await loadConversationFile(id);
   if (!conv) return;

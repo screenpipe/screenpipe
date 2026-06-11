@@ -30,7 +30,7 @@
  * survives app restart. Delete removes the file.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Pin,
   Archive,
@@ -39,6 +39,9 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
+  Folder,
+  FolderMinus,
+  FolderPlus,
   MessageSquare,
   X,
   MoreVertical,
@@ -74,6 +77,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -88,8 +94,8 @@ import { Button } from "@/components/ui/button";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  type SidebarItem,
-  buildGroupedRecents,
+  buildSidebarRecentsSections,
+  recurringPipeGroupKeys,
 } from "@/lib/utils/chat-sidebar-grouping";
 
 interface ChatSidebarProps {
@@ -118,6 +124,18 @@ function useCollapsedPref(key: string, defaultValue = false) {
     }
   };
   return [collapsed, setCollapsed] as const;
+}
+
+function normalizeSidebarGroup(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim().replace(/\s+/g, " ");
+  return trimmed || undefined;
+}
+
+function groupTestId(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "group";
 }
 
 function useVisibleChatSections(): {
@@ -254,7 +272,15 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const { pinned, recents, archived } = useVisibleChatSections();
-  const groupedRecents = useMemo(() => buildGroupedRecents(recents), [recents]);
+  const recentsSections = useMemo(() => buildSidebarRecentsSections(recents), [recents]);
+  const hasRecentItems = recentsSections.some((section) => section.items.length > 0);
+  const sidebarGroupLabels = useMemo(() => {
+    return [...new Set(
+      recents
+        .map((session) => normalizeSidebarGroup(session.sidebarGroup))
+        .filter((group): group is string => Boolean(group))
+    )];
+  }, [recents]);
 
   // O(1) lookup used by ScheduledRow's kebab menu (Pin / Rename / Archive / Delete).
   // Keyed by pipeName so the render site can do runningPipeSessions.get(p.pipeName).
@@ -305,11 +331,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   useEffect(() => {
     if (!diskHydrated) return;
     try {
-      const currentKeys = new Set(
-        groupedRecents
-          .filter((item): item is Extract<SidebarItem, { kind: "group" }> => item.kind === "group")
-          .map((item) => item.key)
-      );
+      const currentKeys = recurringPipeGroupKeys(recents);
       const toRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
@@ -319,7 +341,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       }
       for (const k of toRemove) localStorage.removeItem(k);
     } catch {}
-  }, [groupedRecents, diskHydrated]);
+  }, [recents, diskHydrated]);
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
@@ -466,6 +488,49 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       // best-effort persistence — UI already updated
     }
   };
+
+  const handleMoveToGroup = useCallback(async (id: string, groupRaw: string | undefined) => {
+    const sidebarGroup = normalizeSidebarGroup(groupRaw);
+    actions.patch(id, { sidebarGroup });
+    try {
+      await updateConversationFlags(id, { sidebarGroup });
+    } catch {
+      // best-effort persistence — UI already updated
+    }
+  }, [actions]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (window as any).__e2eMoveChatToGroup = (id: string, group?: string) => {
+      void handleMoveToGroup(id, group);
+    };
+    (window as any).__e2eOpenChatSidebarMenu = (id: string | null) => {
+      setOpenConversationMenuId(id);
+    };
+    (window as any).__e2ePatchChatSidebarSession = (
+      id: string,
+      patch: {
+        title?: string;
+        sidebarGroup?: string | null;
+        activityAt?: number;
+      }
+    ) => {
+      const next: Partial<SessionRecord> = {};
+      if (typeof patch.title === "string") next.title = patch.title;
+      if ("sidebarGroup" in patch) next.sidebarGroup = normalizeSidebarGroup(patch.sidebarGroup);
+      if (typeof patch.activityAt === "number") {
+        next.createdAt = patch.activityAt;
+        next.updatedAt = patch.activityAt;
+        next.lastUserMessageAt = patch.activityAt;
+      }
+      actions.patch(id, next);
+    };
+    return () => {
+      delete (window as any).__e2eMoveChatToGroup;
+      delete (window as any).__e2eOpenChatSidebarMenu;
+      delete (window as any).__e2ePatchChatSidebarSession;
+    };
+  }, [actions, handleMoveToGroup]);
 
   // Stop an in-flight pipe execution. Used by the Scheduled-row kebab so
   // the user can cancel a run without dropping into Settings → Pipes. We
@@ -628,65 +693,84 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : groupedRecents.length === 0 ? (
+              ) : !hasRecentItems ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                groupedRecents.map((item) => {
-                  if (item.kind === "single") {
-                    return (
-                      <SidebarChatRow
-                        key={item.session.id}
-                        session={item.session}
-                        isCurrent={item.session.id === currentId}
-                        queuedCount={queueDepths.get(item.session.id) ?? 0}
-                        onSelect={handleSelect}
-                        onArchive={handleArchive}
-                        onUnarchive={handleUnarchive}
-                        onDeleteRequest={setDeletingSessionId}
-                        onTogglePin={handleTogglePin}
-                        onRenameRequest={handleRenameRequest}
-                        openConversationMenuId={openConversationMenuId}
-                        setOpenConversationMenuId={setOpenConversationMenuId}
-                      />
-                    );
-                  }
-                  const isOpen = expandedGroups.has(item.key);
-                  return (
-                    <div key={item.key}>
-                      <button
-                        type="button"
-                        onClick={() => toggleGroup(item.key)}
-                        className="w-full flex items-center gap-2 pl-2 py-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors select-none"
-                      >
-                        {isOpen
-                          ? <ChevronDown className="h-3 w-3 shrink-0" />
-                          : <ChevronRight className="h-3 w-3 shrink-0" />
-                        }
-                        <span className="text-xs truncate flex-1 text-left font-mono">{item.title}</span>
-                        <span className="text-[10px] bg-muted rounded px-1 py-0.5 tabular-nums">{item.sessions.length}</span>
-                      </button>
-                      {isOpen && item.sessions.map((s) => (
-                        <div key={s.id} className="pl-3">
+                recentsSections.map((section) => (
+                  <div
+                    key={section.key}
+                    data-testid={section.title ? `chat-sidebar-group-${groupTestId(section.title)}` : "chat-sidebar-recents-flat"}
+                    className="flex flex-col"
+                  >
+                    {section.title && (
+                      <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground/55">
+                        {section.title}
+                      </div>
+                    )}
+                    {section.items.map((item) => {
+                      if (item.kind === "single") {
+                        return (
                           <SidebarChatRow
-                            session={s}
-                            isCurrent={s.id === currentId}
-                            queuedCount={queueDepths.get(s.id) ?? 0}
+                            key={item.session.id}
+                            session={item.session}
+                            isCurrent={item.session.id === currentId}
+                            queuedCount={queueDepths.get(item.session.id) ?? 0}
                             onSelect={handleSelect}
                             onArchive={handleArchive}
                             onUnarchive={handleUnarchive}
                             onDeleteRequest={setDeletingSessionId}
                             onTogglePin={handleTogglePin}
                             onRenameRequest={handleRenameRequest}
+                            sidebarGroupLabels={sidebarGroupLabels}
+                            onMoveToGroup={handleMoveToGroup}
                             openConversationMenuId={openConversationMenuId}
                             setOpenConversationMenuId={setOpenConversationMenuId}
                           />
+                        );
+                      }
+                      const isOpen = expandedGroups.has(item.key);
+                      return (
+                        <div key={item.key}>
+                          <button
+                            type="button"
+                            onClick={() => toggleGroup(item.key)}
+                            className="w-full flex items-center gap-2 pl-2 py-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors select-none"
+                            data-testid={`chat-sidebar-pipe-group-${groupTestId(item.title)}`}
+                            aria-expanded={isOpen}
+                          >
+                            {isOpen
+                              ? <ChevronDown className="h-3 w-3 shrink-0" />
+                              : <ChevronRight className="h-3 w-3 shrink-0" />
+                            }
+                            <span className="text-xs truncate flex-1 text-left font-mono">{item.title}</span>
+                            <span className="text-[10px] bg-muted rounded px-1 py-0.5 tabular-nums">{item.sessions.length}</span>
+                          </button>
+                          {isOpen && item.sessions.map((s) => (
+                            <div key={s.id} className="pl-3">
+                              <SidebarChatRow
+                                session={s}
+                                isCurrent={s.id === currentId}
+                                queuedCount={queueDepths.get(s.id) ?? 0}
+                                onSelect={handleSelect}
+                                onArchive={handleArchive}
+                                onUnarchive={handleUnarchive}
+                                onDeleteRequest={setDeletingSessionId}
+                                onTogglePin={handleTogglePin}
+                                onRenameRequest={handleRenameRequest}
+                                sidebarGroupLabels={sidebarGroupLabels}
+                                onMoveToGroup={handleMoveToGroup}
+                                openConversationMenuId={openConversationMenuId}
+                                setOpenConversationMenuId={setOpenConversationMenuId}
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  );
-                })
+                      );
+                    })}
+                  </div>
+                ))
               )}
             </Section>
           </div>
@@ -1442,6 +1526,8 @@ interface ChatRowProps {
   onDeleteRequest: (id: string | null) => void;
   onTogglePin: (id: string) => Promise<void> | void;
   onRenameRequest: (id: string) => void;
+  sidebarGroupLabels?: string[];
+  onMoveToGroup?: (id: string, group: string | undefined) => Promise<void> | void;
   showActions?: boolean;
   openConversationMenuId?: string | null;
   setOpenConversationMenuId?: (id: string | null) => void;
@@ -1477,6 +1563,8 @@ export function SidebarChatRow({
   onDeleteRequest,
   onTogglePin,
   onRenameRequest,
+  sidebarGroupLabels = [],
+  onMoveToGroup,
   showActions = true,
   openConversationMenuId,
   setOpenConversationMenuId,
@@ -1493,6 +1581,14 @@ export function SidebarChatRow({
   const age = formatCompactAge(activityAt, now);
   const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
   const menuOpen = openConversationMenuId === session.id;
+  const normalizedCurrentGroup = normalizeSidebarGroup(session.sidebarGroup);
+  const moveToGroupOptions = sidebarGroupLabels.filter((group) => group !== normalizedCurrentGroup);
+  const handleCreateGroup = () => {
+    if (!onMoveToGroup) return;
+    const next = normalizeSidebarGroup(window.prompt("New group name"));
+    if (!next) return;
+    void onMoveToGroup(session.id, next);
+  };
   return (
     <div
       className={cn(
@@ -1588,6 +1684,7 @@ export function SidebarChatRow({
               sideOffset={4}
               collisionPadding={8}
               className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+              data-testid={`chat-row-menu-${session.id}`}
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
@@ -1611,6 +1708,63 @@ export function SidebarChatRow({
                 <Pencil className="h-3 w-3 text-muted-foreground" />
                 Rename
               </DropdownMenuItem>
+              {onMoveToGroup && (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    data-testid={`chat-row-move-to-group-${session.id}`}
+                  >
+                    <Folder className="h-3 w-3 text-muted-foreground" />
+                    Move to group
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent
+                    className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+                    data-testid={`chat-row-move-to-group-menu-${session.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    {moveToGroupOptions.map((group) => (
+                      <DropdownMenuItem
+                        key={group}
+                        className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                        onSelect={(e) => {
+                          e.stopPropagation();
+                          void onMoveToGroup(session.id, group);
+                        }}
+                      >
+                        <Folder className="h-3 w-3 text-muted-foreground" />
+                        <span className="truncate">{group}</span>
+                      </DropdownMenuItem>
+                    ))}
+                    {normalizedCurrentGroup && (
+                      <DropdownMenuItem
+                        className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                        onSelect={(e) => {
+                          e.stopPropagation();
+                          void onMoveToGroup(session.id, undefined);
+                        }}
+                      >
+                        <FolderMinus className="h-3 w-3 text-muted-foreground" />
+                        Remove from group
+                      </DropdownMenuItem>
+                    )}
+                    {(moveToGroupOptions.length > 0 || normalizedCurrentGroup) && (
+                      <DropdownMenuSeparator className="my-1 bg-border/70" />
+                    )}
+                    <DropdownMenuItem
+                      className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                      data-testid={`chat-row-new-group-${session.id}`}
+                      onSelect={(e) => {
+                        e.stopPropagation();
+                        handleCreateGroup();
+                      }}
+                    >
+                      <FolderPlus className="h-3 w-3 text-muted-foreground" />
+                      New group...
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
               {!session.hidden ? (
                 <DropdownMenuItem
                   className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"

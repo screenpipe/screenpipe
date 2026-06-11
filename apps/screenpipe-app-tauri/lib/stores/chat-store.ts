@@ -125,6 +125,8 @@ export interface SessionRecord {
   kind?: ConversationKind;
   /** Pipe metadata — only meaningful when `kind !== "chat"`. */
   pipeContext?: PipeContext;
+  /** Optional user-assigned sidebar group label. */
+  sidebarGroup?: string;
 }
 
 interface ChatStoreState {
@@ -263,6 +265,7 @@ export const useChatStore = create<ChatStore>((set) => ({
                 messageCount: r.messageCount,
                 pinned: existing.pinned || r.pinned,
                 hidden: existing.hidden ?? r.hidden ?? false,
+                sidebarGroup: existing.sidebarGroup ?? r.sidebarGroup,
                 // updatedAt: take the larger so memory doesn't get clobbered
                 updatedAt: Math.max(existing.updatedAt, r.updatedAt),
               }
@@ -562,6 +565,7 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     lastUserMessageAt: m.lastUserMessageAt,
     kind: m.kind,
     pipeContext: m.pipeContext,
+    sidebarGroup: m.sidebarGroup,
   };
 }
 
