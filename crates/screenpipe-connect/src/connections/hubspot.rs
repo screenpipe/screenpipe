@@ -9,12 +9,13 @@ use async_trait::async_trait;
 use screenpipe_secrets::SecretStore;
 use serde_json::{Map, Value};
 
-// HubSpot OAuth app registered at https://developers.hubspot.com/apps
+// screenpipe's HubSpot OAuth app (app id 42350513, HubSpot account 245485039),
+// managed as a developer project named "screenpipe" via the HubSpot CLI.
 // Redirect URI registered: http://localhost:3030/connections/oauth/callback
-// client_secret lives in the screenpi.pe proxy server env (HUBSPOT_CLIENT_SECRET).
+// client_secret lives in the screenpi.pe proxy env (OAUTH_HUBSPOT_CLIENT_SECRET).
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://app.hubspot.com/oauth/authorize",
-    client_id: "a6527e57-7f73-4028-8c32-5648c3614ea7",
+    client_id: "a0587eeb-0bbb-4de4-b9b2-42556cac50a7",
     extra_auth_params: &[(
         "scope",
         "crm.objects.contacts.read crm.objects.contacts.write \
