@@ -1067,9 +1067,9 @@ async ownedBrowserHide() : Promise<Result<null, string>> {
  * extension or cookie-consent flow) can pass the original `owner` through so
  * the follow-up navigate does not look like a fresh restore in every chat.
  */
-async ownedBrowserNavigate(url: string, owner: string | null) : Promise<Result<null, string>> {
+async ownedBrowserNavigate(url: string, owner: string | null, reveal: boolean | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url, owner }) };
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url, owner, reveal }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

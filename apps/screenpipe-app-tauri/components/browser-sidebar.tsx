@@ -345,7 +345,7 @@ export function BrowserSidebar({
     const unlistenPromise = listen<OwnedBrowserNavigatePayload>(
       NAVIGATE_EVENT,
       (e) => {
-        const { url, owner, navigationId } = parseNavigatePayload(e.payload);
+        const { url, owner, navigationId, reveal } = parseNavigatePayload(e.payload);
         if (!url) return;
         // The owned browser is a singleton shared across every chat and
         // background pipe. Ignore navigations owned by a *different*
@@ -365,9 +365,13 @@ export function BrowserSidebar({
         setCurrentNavigationId(navigationId);
         setCurrentTitle(null);
         setLoading(true);
-        setVisible(true);
-        setCollapsed(false);
-        persistState({ url, collapsed: false });
+        if (reveal) {
+          setVisible(true);
+          setCollapsed(false);
+          persistState({ url, collapsed: false });
+        } else {
+          persistState({ url });
+        }
       },
     );
     return () => {
@@ -590,7 +594,7 @@ export function BrowserSidebar({
         // browser silently fails to restore. Retry once when Rust emits
         // `owned-browser:ready` so the saved state survives app quit.
         const tryNavigate = () =>
-          commands.ownedBrowserNavigate(url, conversationId).catch((e) => {
+          commands.ownedBrowserNavigate(url, conversationId, false).catch((e) => {
             const msg = typeof e === "string" ? e : String(e);
             return msg.includes("not initialized") ? "retry" : null;
           });

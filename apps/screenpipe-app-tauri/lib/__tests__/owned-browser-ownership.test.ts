@@ -59,11 +59,13 @@ describe("owned-browser ownership", () => {
           url: "https://example.com",
           owner: "pipe:x",
           navigationId: "nav-1",
+          reveal: false,
         }),
       ).toEqual({
         url: "https://example.com",
         owner: "pipe:x",
         navigationId: "nav-1",
+        reveal: false,
       });
     });
 
@@ -72,6 +74,7 @@ describe("owned-browser ownership", () => {
         url: "https://example.com",
         owner: null,
         navigationId: null,
+        reveal: true,
       });
     });
 
@@ -80,16 +83,19 @@ describe("owned-browser ownership", () => {
         url: "https://example.com",
         owner: null,
         navigationId: null,
+        reveal: true,
       });
       expect(parseNavigatePayload({})).toEqual({
         url: null,
         owner: null,
         navigationId: null,
+        reveal: true,
       });
       expect(parseNavigatePayload("")).toEqual({
         url: null,
         owner: null,
         navigationId: null,
+        reveal: true,
       });
     });
   });

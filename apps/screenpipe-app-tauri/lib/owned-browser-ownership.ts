@@ -21,24 +21,31 @@
  *  upgrade still navigates. */
 export type OwnedBrowserNavigatePayload =
   | string
-  | { url?: string | null; owner?: string | null; navigationId?: string | null };
+  | {
+      url?: string | null;
+      owner?: string | null;
+      navigationId?: string | null;
+      reveal?: boolean | null;
+    };
 
 export function parseNavigatePayload(payload: OwnedBrowserNavigatePayload): {
   url: string | null;
   owner: string | null;
   navigationId: string | null;
+  reveal: boolean;
 } {
   if (typeof payload === "string") {
-    return { url: payload || null, owner: null, navigationId: null };
+    return { url: payload || null, owner: null, navigationId: null, reveal: true };
   }
   if (payload && typeof payload === "object") {
     return {
       url: payload.url ?? null,
       owner: payload.owner ?? null,
       navigationId: payload.navigationId ?? null,
+      reveal: payload.reveal !== false,
     };
   }
-  return { url: null, owner: null, navigationId: null };
+  return { url: null, owner: null, navigationId: null, reveal: true };
 }
 
 /**
