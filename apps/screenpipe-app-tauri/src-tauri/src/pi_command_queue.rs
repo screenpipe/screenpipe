@@ -191,6 +191,42 @@ impl PiQueueState {
         self.steer_in_flight.load(Ordering::SeqCst)
     }
 
+    /// Wait until the agent stops streaming a turn (`agent_active` flips to
+    /// false), or until `timeout` elapses, whichever comes first. Returns
+    /// `true` if the session became idle in time, `false` on timeout.
+    ///
+    /// This extends the queue's existing prompt-level serialization
+    /// (`wait_for_done_or_terminated`) to *process-level* operations: callers
+    /// of `pi_start` use this to avoid killing a Pi that's currently
+    /// streaming a reply. Without it, any caller that re-invokes `pi_start`
+    /// during an active turn (preset watcher, connections-change effect,
+    /// `pi-reauth` listener) silently truncates the user's response and
+    /// triggers the auto-restart-after-crash cascade in
+    /// `standalone-chat.tsx`.
+    ///
+    /// Loops on every `done_notify` wake-up because a freshly-arrived
+    /// follow-up prompt can flip `agent_active` back to true before we
+    /// finish — the loop guarantees we observe a true "idle" window before
+    /// returning success.
+    pub async fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
+        if !self.is_agent_active() {
+            return true;
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        while self.is_agent_active() {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            tokio::select! {
+                _ = self.done_notify.notified() => {}
+                _ = self.terminated_notify.notified() => return true,
+                _ = tokio::time::sleep(remaining) => return false,
+            }
+        }
+        true
+    }
+
     /// Called by the stdout reader when the process terminates (EOF).
     pub fn signal_terminated(&self) {
         let _ = self.alive.send(false);
@@ -845,6 +881,96 @@ mod tests {
 
         let result = h.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_idle_returns_immediately_when_idle() {
+        let state = PiQueueState::new();
+        let start = std::time::Instant::now();
+        let ok = state.wait_for_idle(std::time::Duration::from_secs(5)).await;
+        assert!(ok, "should return true when already idle");
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(50),
+            "should not block when already idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_idle_blocks_then_returns_on_done() {
+        let state = PiQueueState::new();
+        state.mark_agent_active();
+
+        let state_clone = state.clone();
+        let signaller = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            state_clone.mark_agent_idle();
+            state_clone.signal_done();
+        });
+
+        let ok = state.wait_for_idle(std::time::Duration::from_secs(2)).await;
+        assert!(ok, "should return true once agent becomes idle");
+        signaller.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_idle_returns_false_on_timeout() {
+        let state = PiQueueState::new();
+        state.mark_agent_active();
+
+        let start = std::time::Instant::now();
+        let ok = state
+            .wait_for_idle(std::time::Duration::from_millis(120))
+            .await;
+        assert!(!ok, "should return false when timeout elapses while busy");
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(100),
+            "should actually wait the timeout (got {:?})",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_idle_returns_true_on_termination() {
+        let state = PiQueueState::new();
+        state.mark_agent_active();
+
+        let state_clone = state.clone();
+        let signaller = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            state_clone.signal_terminated();
+        });
+
+        let ok = state.wait_for_idle(std::time::Duration::from_secs(2)).await;
+        assert!(
+            ok,
+            "should return true when process terminates (no point waiting further)"
+        );
+        signaller.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_idle_loops_on_spurious_done() {
+        // A follow-up prompt can flip agent_active back to true between the
+        // moment `done_notify` fires and the moment we re-check the flag.
+        // The loop must observe a real idle window before returning true.
+        let state = PiQueueState::new();
+        state.mark_agent_active();
+
+        let state_clone = state.clone();
+        let signaller = tokio::spawn(async move {
+            // First done — but the agent is "still active" from the perspective
+            // of the wait loop (simulating: prompt N finished, prompt N+1
+            // already streaming).
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            state_clone.signal_done(); // wakes the wait, but flag is still true
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            state_clone.mark_agent_idle();
+            state_clone.signal_done();
+        });
+
+        let ok = state.wait_for_idle(std::time::Duration::from_secs(2)).await;
+        assert!(ok, "should keep waiting until agent is genuinely idle");
+        signaller.await.unwrap();
     }
 
     #[tokio::test]

@@ -1438,6 +1438,53 @@ pub async fn pi_start_inner(
     };
 
     let sid = session_id.to_string();
+
+    // Defense against killing a Pi mid-turn. A prompt that's currently
+    // streaming holds `agent_active=true` on its `PiQueueState`. If we
+    // proceeded straight to `m.stop()` below, any caller that re-invokes
+    // `pi_start` during a streaming response (preset watcher,
+    // connections-change effect, `pi-reauth` listener in
+    // `standalone-chat.tsx`) would silently truncate the user's reply and
+    // trigger the auto-restart-after-crash cascade.
+    //
+    // Wait briefly for the active turn to finish before respawning. The wait
+    // happens outside the main pool lock so other sessions (and the stdout
+    // reader that signals `done`) can keep operating. On timeout we fall
+    // through to the original kill-and-respawn behavior with a warning so
+    // the regression is visible in logs.
+    //
+    // 120s aligns with typical max turn length (most replies finish in
+    // <60s; long tool-using turns can take ~2 min). The queue itself uses a
+    // 300s safety timeout for waiting on `done` after a single command, so
+    // 120s here is a deliberately tighter cap — at 120s something is wrong
+    // enough that respawning is the lesser evil.
+    {
+        let queue_state = {
+            let pool = state.0.lock().await;
+            pool.sessions
+                .get(&sid)
+                .and_then(|m| m.queue_state.clone())
+        };
+        if let Some(qs) = queue_state {
+            if qs.is_agent_active() {
+                info!(
+                    "pi_start for session '{}' deferred — waiting for active turn to finish before respawn",
+                    sid
+                );
+                if !qs
+                    .wait_for_idle(std::time::Duration::from_secs(120))
+                    .await
+                {
+                    warn!(
+                        "pi_start for session '{}' proceeding despite active turn — \
+                         wait_for_idle timed out after 120s; respawn will truncate the in-flight reply",
+                        sid
+                    );
+                }
+            }
+        }
+    }
+
     let mut pool = state.0.lock().await;
 
     // Stop existing instance for this session if running
