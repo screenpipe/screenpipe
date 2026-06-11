@@ -8,6 +8,12 @@ export type SidebarItem =
   | { kind: "single"; session: SessionRecord }
   | { kind: "group"; key: string; title: string; sessions: SessionRecord[] };
 
+export interface SidebarRecentsSection {
+  key: string;
+  title: string;
+  items: SidebarItem[];
+}
+
 export function sessionGroupKey(s: SessionRecord): string | null {
   if (s.pipeContext?.pipeName) return `pipe:${s.pipeContext.pipeName}`;
   return null;
@@ -15,6 +21,19 @@ export function sessionGroupKey(s: SessionRecord): string | null {
 
 export function sessionGroupTitle(s: SessionRecord): string {
   return s.pipeContext?.pipeName ?? s.title;
+}
+
+export function recurringPipeGroupKeys(recents: SessionRecord[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const s of recents) {
+    const key = sessionGroupKey(s);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count >= 2)
+      .map(([key]) => key)
+  );
 }
 
 /**
@@ -41,7 +60,7 @@ export function buildGroupedRecents(
         existing.push(s);
         continue;
       }
-      if (result.length >= cap) break;
+      if (result.length >= cap) continue;
       if ((keyCounts.get(key) ?? 1) < 2) {
         result.push({ kind: "single", session: s });
       } else {
@@ -50,9 +69,51 @@ export function buildGroupedRecents(
         result.push({ kind: "group", key, title: sessionGroupTitle(s), sessions: group });
       }
     } else {
-      if (result.length >= cap) break;
+      if (result.length >= cap) continue;
       result.push({ kind: "single", session: s });
     }
   }
   return result;
+}
+
+export function buildSidebarRecentsSections(
+  recents: SessionRecord[],
+  cap = 15
+): SidebarRecentsSection[] {
+  const manualGroups = new Map<string, SessionRecord[]>();
+  const ungrouped: SessionRecord[] = [];
+
+  for (const session of recents) {
+    const group = session.sidebarGroup?.trim();
+    if (group) {
+      const existing = manualGroups.get(group);
+      if (existing) {
+        existing.push(session);
+      } else {
+        manualGroups.set(group, [session]);
+      }
+    } else {
+      ungrouped.push(session);
+    }
+  }
+
+  const sections: SidebarRecentsSection[] = [];
+  for (const [group, sessions] of manualGroups) {
+    sections.push({
+      key: `manual:${group}`,
+      title: group,
+      items: buildGroupedRecents(sessions, Number.POSITIVE_INFINITY),
+    });
+  }
+
+  const ungroupedItems = buildGroupedRecents(ungrouped, cap);
+  if (ungroupedItems.length > 0 || sections.length === 0) {
+    sections.push({
+      key: "manual:__ungrouped__",
+      title: sections.length > 0 ? "ungrouped" : "",
+      items: ungroupedItems,
+    });
+  }
+
+  return sections;
 }

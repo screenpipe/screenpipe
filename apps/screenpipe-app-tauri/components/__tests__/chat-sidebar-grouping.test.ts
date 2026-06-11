@@ -7,13 +7,16 @@ import {
   sessionGroupKey,
   sessionGroupTitle,
   buildGroupedRecents,
+  buildSidebarRecentsSections,
+  recurringPipeGroupKeys,
 } from "@/lib/utils/chat-sidebar-grouping";
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
 function s(
   id: string,
   title: string,
-  pipeName?: string
+  pipeName?: string,
+  sidebarGroup?: string
 ): SessionRecord {
   return {
     id,
@@ -26,6 +29,7 @@ function s(
     pinned: false,
     unread: false,
     ...(pipeName ? { pipeContext: { pipeName } } : {}),
+    ...(sidebarGroup ? { sidebarGroup } : {}),
   };
 }
 
@@ -140,6 +144,24 @@ describe("buildGroupedRecents", () => {
     }
   });
 
+  it("cap: later non-contiguous members of a visible group still bypass the cap", () => {
+    const sessions = [
+      s("p1", "nightly #1", "nightly"),
+      ...Array.from({ length: 14 }, (_, i) => s(`single-${i}`, `chat ${i}`)),
+      s("overflow", "extra chat"),
+      s("p2", "nightly #2", "nightly"),
+    ];
+    const result = buildGroupedRecents(sessions);
+
+    expect(result).toHaveLength(15);
+    const group = result[0];
+    expect(group.kind).toBe("group");
+    if (group.kind === "group") {
+      expect(group.sessions.map((session) => session.id)).toEqual(["p1", "p2"]);
+    }
+    expect(result.some((item) => item.kind === "single" && item.session.id === "overflow")).toBe(false);
+  });
+
   it("respects a custom cap argument", () => {
     const sessions = Array.from({ length: 10 }, (_, i) =>
       s(`id-${i}`, `chat ${i}`)
@@ -150,5 +172,46 @@ describe("buildGroupedRecents", () => {
 
   it("empty input returns empty result", () => {
     expect(buildGroupedRecents([])).toHaveLength(0);
+  });
+});
+
+describe("recurringPipeGroupKeys", () => {
+  it("returns group keys from the full recents list, not just visible rows", () => {
+    const sessions = [
+      ...Array.from({ length: 20 }, (_, i) => s(`single-${i}`, `chat ${i}`)),
+      s("p1", "later #1", "later"),
+      s("p2", "later #2", "later"),
+    ];
+
+    expect(recurringPipeGroupKeys(sessions)).toEqual(new Set(["pipe:later"]));
+  });
+
+  it("ignores one-off pipe sessions because they do not render as groups", () => {
+    expect(recurringPipeGroupKeys([s("p1", "solo #1", "solo")])).toEqual(new Set());
+  });
+});
+
+describe("buildSidebarRecentsSections", () => {
+  it("renders manual sidebar groups before ungrouped recents", () => {
+    const result = buildSidebarRecentsSections([
+      s("a", "enterprise product", undefined, "product"),
+      s("b", "content", undefined, "money"),
+      s("c", "worktrace"),
+    ]);
+
+    expect(result.map((section) => section.title)).toEqual(["product", "money", "ungrouped"]);
+    expect(result[0].items[0]).toMatchObject({ kind: "single", session: { id: "a" } });
+    expect(result[2].items[0]).toMatchObject({ kind: "single", session: { id: "c" } });
+  });
+
+  it("keeps recurring pipe grouping inside a manual group", () => {
+    const result = buildSidebarRecentsSections([
+      s("p1", "daily #1", "daily", "product"),
+      s("p2", "daily #2", "daily", "product"),
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].title).toBe("product");
+    expect(result[0].items[0].kind).toBe("group");
   });
 });
