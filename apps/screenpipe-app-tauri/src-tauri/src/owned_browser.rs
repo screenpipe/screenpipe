@@ -379,6 +379,27 @@ impl OwnedBrowserState {
             })
     }
 
+    fn remember_committed_url_for_context(&self, url: &str, context: &NavigationContext) {
+        if let Ok(mut guard) = self.recent_navigations.lock() {
+            if guard
+                .iter()
+                .rev()
+                .any(|ctx| ctx.navigation_id == context.navigation_id && ctx.requested_url == url)
+            {
+                return;
+            }
+            guard.push(NavigationContext {
+                navigation_id: context.navigation_id.clone(),
+                owner: context.owner.clone(),
+                requested_url: url.to_string(),
+            });
+            if guard.len() > RECENT_NAVIGATION_CONTEXT_LIMIT {
+                let drop_count = guard.len() - RECENT_NAVIGATION_CONTEXT_LIMIT;
+                guard.drain(0..drop_count);
+            }
+        }
+    }
+
     fn current_context(&self) -> Option<NavigationContext> {
         let navigation_id = self.pending_navigation_id();
         let owner = self.pending_owner();
@@ -464,10 +485,24 @@ fn emit_state_event(
     loading: Option<bool>,
 ) {
     let state = browser_state();
-    let context = url
-        .as_deref()
-        .and_then(|u| state.context_for_url(u))
-        .or_else(|| state.current_context());
+    let context = if let Some(ref current_url) = url {
+        if let Some(context) = state.context_for_url(current_url) {
+            Some(context)
+        } else {
+            let fallback = state.current_context();
+            if let Some(ref context) = fallback {
+                // Redirects commit a different main-document URL than the one
+                // we originally requested. Bind that committed URL onto the
+                // same navigation context so later title/state events resolve
+                // by exact URL instead of depending on the mutable pending
+                // fallback.
+                state.remember_committed_url_for_context(current_url, context);
+            }
+            fallback
+        }
+    } else {
+        state.current_context()
+    };
     let payload = OwnedBrowserStateEvent {
         url,
         title,
@@ -1104,7 +1139,7 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
 
 #[cfg(test)]
 mod normalize_url_tests {
-    use super::{normalize_url, title_after_eval_marker};
+    use super::{normalize_url, title_after_eval_marker, OwnedBrowserState};
 
     #[test]
     fn keeps_fully_qualified() {
@@ -1171,6 +1206,37 @@ mod normalize_url_tests {
         assert_eq!(
             title_after_eval_marker("Example Domain", "not json"),
             "Example Domain"
+        );
+    }
+
+    #[test]
+    fn redirect_committed_url_keeps_same_navigation_context() {
+        let state = OwnedBrowserState::new();
+        let context =
+            state.remember_navigation("http://example.com".to_string(), Some("conv-1".to_string()));
+
+        assert_eq!(
+            state
+                .context_for_url("http://example.com")
+                .as_ref()
+                .map(|ctx| ctx.navigation_id.as_str()),
+            Some(context.navigation_id.as_str())
+        );
+        assert!(state.context_for_url("https://www.example.com").is_none());
+
+        state.remember_committed_url_for_context("https://www.example.com", &context);
+
+        let redirected = state
+            .context_for_url("https://www.example.com")
+            .expect("redirect target should resolve to the original navigation context");
+        assert_eq!(redirected.navigation_id, context.navigation_id);
+        assert_eq!(redirected.owner, context.owner);
+        assert_eq!(
+            state
+                .context_for_url("http://example.com")
+                .as_ref()
+                .map(|ctx| ctx.navigation_id.as_str()),
+            Some(context.navigation_id.as_str())
         );
     }
 }
