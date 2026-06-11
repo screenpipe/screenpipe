@@ -218,8 +218,15 @@ private enum AN {
                     return text
                 }
 
-                try await analyzer.start(inputSequence: stream)
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
+                do {
+                    try await analyzer.start(inputSequence: stream)
+                    try await analyzer.finalizeAndFinishThroughEndOfInput()
+                } catch {
+                    // Make sure the results-consuming task does not leak when
+                    // the analyzer fails before reaching end of input.
+                    resultsTask.cancel()
+                    throw error
+                }
                 let text = try await resultsTask.value
 
                 out_text.pointee = makeCString(text)
