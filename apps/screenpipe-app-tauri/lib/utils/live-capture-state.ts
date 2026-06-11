@@ -58,9 +58,11 @@ export interface ComputeLiveCaptureStateInput {
   health?: LiveCaptureHealth | null;
   devices?: LiveCaptureDevice[];
   hasTranscriptContent?: boolean;
+  nowMs?: number;
 }
 
 const SILENT_RMS_THRESHOLD = 0.001;
+const RECENT_AUDIO_WINDOW_MS = 60_000;
 
 const STATES: Record<LiveCaptureKind, LiveCaptureState> = {
   idle: {
@@ -174,6 +176,7 @@ export function computeLiveCaptureState({
   health,
   devices = [],
   hasTranscriptContent = false,
+  nowMs = Date.now(),
 }: ComputeLiveCaptureStateInput): LiveCaptureState {
   if (!isLive) return STATES.idle;
 
@@ -196,7 +199,14 @@ export function computeLiveCaptureState({
   }
 
   if (audioStatus === "not_started") return STATES["audio-not-started"];
-  if (audioStatus === "stale" || audioStatus === "active_no_data") {
+  const hasRecentAudio = isRecentAudioTimestamp(
+    health?.last_audio_timestamp,
+    nowMs,
+  );
+  if (
+    audioStatus === "stale" ||
+    (audioStatus === "active_no_data" && !hasRecentAudio)
+  ) {
     return STATES["audio-stalled"];
   }
 
@@ -222,6 +232,17 @@ export function computeLiveCaptureState({
   }
 
   return STATES.recording;
+}
+
+function isRecentAudioTimestamp(
+  timestamp: string | null | undefined,
+  nowMs: number,
+): boolean {
+  if (!timestamp) return false;
+  const parsed = Date.parse(timestamp);
+  if (Number.isNaN(parsed)) return false;
+  const ageMs = nowMs - parsed;
+  return ageMs >= 0 && ageMs < RECENT_AUDIO_WINDOW_MS;
 }
 
 export function isLiveCaptureDegraded(state: LiveCaptureState): boolean {

@@ -92,7 +92,9 @@ fn capture_status(
     audio_level_rms: f64,
     chunks_sent: u64,
     last_audio_ts: u64,
+    now_ts: u64,
 ) -> CaptureStatusInfo {
+    let audio_recent = last_audio_ts > 0 && now_ts.saturating_sub(last_audio_ts) < 60;
     let (status, severity, reason) = if audio_disabled {
         (
             "disabled",
@@ -111,7 +113,7 @@ fn capture_status(
             "warning",
             "audio capture has not produced data yet",
         )
-    } else if audio_status == "stale" || audio_status == "active_no_data" {
+    } else if audio_status == "stale" || (audio_status == "active_no_data" && !audio_recent) {
         (
             "audio_stalled",
             "warning",
@@ -129,9 +131,9 @@ fn capture_status(
             "waiting",
             "audio is queued for transcription",
         )
-    } else if audio_status == "ok"
+    } else if (audio_status == "ok" || audio_status == "active_no_data")
         && active_audio_devices > 0
-        && (chunks_sent > 0 || last_audio_ts > 0)
+        && (chunks_sent > 0 || audio_recent)
         && audio_level_rms <= SILENT_AUDIO_RMS_THRESHOLD
     {
         (
@@ -757,7 +759,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         pending_transcription_segments,
         audio_snap.audio_level_rms,
         audio_snap.chunks_sent,
-        last_audio_ts,
+        last_audio_ts.max(most_recent_audio_timestamp),
+        now_ts,
     );
 
     // Format device statuses as a string for a more detailed view
@@ -1235,6 +1238,48 @@ mod tests {
             hostname: None,
             version: None,
         }
+    }
+
+    #[test]
+    fn capture_status_does_not_show_stalled_for_recovered_active_no_data() {
+        let state = capture_status(
+            false,
+            "active_no_data",
+            1,
+            1,
+            0,
+            0,
+            false,
+            None,
+            0.0,
+            4,
+            120,
+            121,
+        );
+
+        assert_eq!(state.status, "waiting_for_voice");
+        assert_eq!(state.severity, "waiting");
+    }
+
+    #[test]
+    fn capture_status_still_warns_for_active_no_data_without_fresh_audio() {
+        let state = capture_status(
+            false,
+            "active_no_data",
+            1,
+            1,
+            0,
+            0,
+            false,
+            None,
+            0.0,
+            4,
+            1,
+            120,
+        );
+
+        assert_eq!(state.status, "audio_stalled");
+        assert_eq!(state.severity, "warning");
     }
 
     #[tokio::test]

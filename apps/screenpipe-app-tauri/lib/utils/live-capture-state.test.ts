@@ -110,12 +110,45 @@ describe("computeLiveCaptureState", () => {
     ).toBe("audio-not-started");
   });
 
-  it("surfaces stalled audio statuses", () => {
+  it("surfaces stale audio as stalled", () => {
+    expect(
+      computeLiveCaptureState({
+        isLive: true,
+        health: { ...healthyHealth, audio_status: "stale" },
+        devices: [activeMic],
+      }).kind,
+    ).toBe("audio-stalled");
+  });
+
+  it("does not surface recovered active_no_data as stalled", () => {
+    const nowMs = Date.parse("2026-06-11T11:20:30.000Z");
+
+    expect(
+      computeLiveCaptureState({
+        isLive: true,
+        health: {
+          ...healthyHealth,
+          audio_status: "active_no_data",
+          audio_pipeline: {
+            ...healthyHealth.audio_pipeline,
+            audio_level_rms: 0,
+          },
+        },
+        devices: [activeMic],
+        nowMs,
+      }).kind,
+    ).toBe("waiting-for-voice");
+  });
+
+  it("surfaces active_no_data as stalled when audio is not recent", () => {
+    const nowMs = Date.parse("2026-06-11T11:22:00.000Z");
+
     expect(
       computeLiveCaptureState({
         isLive: true,
         health: { ...healthyHealth, audio_status: "active_no_data" },
         devices: [activeMic],
+        nowMs,
       }).kind,
     ).toBe("audio-stalled");
   });
