@@ -59,6 +59,7 @@ import {
 } from "@/components/pipe-activity-indicator";
 import { getApiBaseUrl, localFetch } from "@/lib/api";
 import { useTeam } from "@/lib/hooks/use-team";
+import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { CloudPipesTab } from "./cloud-pipes-tab";
 import {
   writeTextFile,
@@ -726,6 +727,8 @@ export function PipesSection() {
   const [publishPipeName, setPublishPipeName] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual" | "cloud">("scheduled");
+  // "cloud" (the org's cloud runner) is an enterprise-build-only surface
+  const isEnterpriseBuild = useIsEnterpriseBuild();
   // Favorites — per-machine preference persisted via /pipes/favorites.
   // `showOnly` toggles a filter that hides non-starred pipes.
   const pipeFavorites = usePipeFavorites();
@@ -1629,21 +1632,26 @@ export function PipesSection() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
-              {pipeTypeFilter} ({pipeTypeFilter === "cloud" ? teamPipeConfigs.length : tabCounts[pipeTypeFilter]})
+              {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts[pipeTypeFilter]})`}
               <ChevronDown className="h-3 w-3 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {(["scheduled", "triggered", "manual", "cloud"] as const).map((tab) => (
+            {([
+              "scheduled",
+              "triggered",
+              "manual",
+              ...(isEnterpriseBuild ? (["cloud"] as const) : []),
+            ] as const).map((tab) => (
               <DropdownMenuItem
                 key={tab}
                 onClick={() => setPipeTypeFilter(tab)}
                 className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
               >
                 <span className="flex-1">{tab}</span>
-                <span className="text-muted-foreground text-xs">
-                  {tab === "cloud" ? teamPipeConfigs.length : tabCounts[tab]}
-                </span>
+                {tab !== "cloud" && (
+                  <span className="text-muted-foreground text-xs">{tabCounts[tab]}</span>
+                )}
                 {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
               </DropdownMenuItem>
             ))}

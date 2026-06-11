@@ -7497,11 +7497,9 @@ checksum = "62e0021ea2c22aed41653bc7e1419abb2c97e038ff2c33d0e1309e49a97deec0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "encoding_rs",
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -7510,7 +7508,6 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
- "mime",
  "mime_guess",
  "percent-encoding",
  "pin-project-lite",
@@ -8120,7 +8117,7 @@ dependencies = [
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "evdev",
  "libc",
  "objc2-app-kit",
@@ -8158,7 +8155,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8171,7 +8168,7 @@ dependencies = [
  "criterion",
  "crossbeam",
  "dashmap",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "env_logger",
  "futures",
  "hf-hub 0.3.2",
@@ -8220,7 +8217,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8258,7 +8255,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -8271,7 +8268,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8312,7 +8309,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8327,7 +8324,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
  "cron",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "ffmpeg-sidecar",
  "futures",
  "hex",
@@ -8338,7 +8335,7 @@ dependencies = [
  "objc",
  "objc-foundation",
  "once_cell",
- "rand 0.8.6",
+ "rand 0.9.4",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-events",
@@ -8356,7 +8353,7 @@ dependencies = [
  "tracing",
  "uiautomation",
  "uuid",
- "which 6.0.3",
+ "which 7.0.3",
  "windows-sys 0.59.0",
  "wiremock",
  "zeroize",
@@ -8364,7 +8361,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8374,7 +8371,7 @@ dependencies = [
  "libsqlite3-sys",
  "oasgen",
  "once_cell",
- "rand 0.8.6",
+ "rand 0.9.4",
  "regex",
  "screenpipe-config",
  "screenpipe-core",
@@ -8390,7 +8387,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8407,7 +8404,7 @@ dependencies = [
  "crossbeam",
  "dashmap",
  "dhat",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "env_logger",
  "fastrand",
  "futures",
@@ -8466,7 +8463,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8484,7 +8481,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -8496,14 +8493,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "aho-corasick",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "image",
  "moka",
  "ndarray",
@@ -8528,7 +8525,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "image",
  "mlx-rs",
@@ -8539,7 +8536,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -8586,7 +8583,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "keyring",
- "rand 0.8.6",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "sqlx",
@@ -8597,14 +8594,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
  "chacha20poly1305",
  "hex",
- "rand 0.8.6",
+ "rand 0.9.4",
  "reqwest 0.13.3",
  "serde",
  "serde_json",
@@ -8619,7 +8616,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -8628,11 +8625,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "argon2",
  "chacha20poly1305",
- "rand 0.8.6",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "tempfile",

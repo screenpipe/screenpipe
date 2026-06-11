@@ -425,6 +425,38 @@ fn decide_status(
     }
 }
 
+/// Cap how long the `is_starting*` session flags may pin the tray on
+/// "Starting…" while the server is RESPONDING. The flags are AtomicBools
+/// cleared across many exit paths in recording.rs, and `capture_running`
+/// comes from a `try_lock` that can fail under contention — a leaked flag or
+/// permanently contended lock pinned a Windows enterprise machine on
+/// "Starting…" for hours while /health showed capture flowing (2026-06-11
+/// feedback log, device 40af21d0). A real server-up-but-capture-booting
+/// window is seconds; even a 100GB DB migration happens BEFORE the server
+/// responds. Past this ceiling we stop trusting the flag and let the
+/// health-derived status through. Generous on purpose.
+const START_PIN_CEILING: Duration = Duration::from_secs(300);
+
+/// Returns the start-in-progress flag, clamped: once it has been
+/// continuously true for longer than `ceiling` (tracked via `since`), it
+/// reads as false so a leaked flag can't pin the status forever. Resets the
+/// timer whenever the raw flag drops.
+fn clamp_start_in_progress(
+    raw: bool,
+    since: &mut Option<Instant>,
+    ceiling: Duration,
+) -> bool {
+    if !raw {
+        *since = None;
+        return false;
+    }
+    let started = since.get_or_insert_with(Instant::now);
+    if started.elapsed() > ceiling {
+        return false;
+    }
+    true
+}
+
 fn apply_capture_session_status(
     base_status: RecordingStatus,
     server_responding: bool,
@@ -579,6 +611,11 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     let mut last_restart_triggered: Option<Instant> = None;
     // Track last known spawn epoch to detect user-initiated restarts
     let mut last_known_spawn_epoch: u64 = 0;
+    // How long the recording-session "start in progress" flags have been
+    // continuously true — feeds clamp_start_in_progress so a leaked flag
+    // can't pin the tray on "Starting…" forever (see START_PIN_CEILING).
+    let mut start_in_progress_since: Option<Instant> = None;
+    let mut start_pin_warned = false;
 
     tokio::spawn(async move {
         loop {
@@ -623,7 +660,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 current_status,
             );
 
-            let (capture_running, start_in_progress) = if let Some(recording_state) =
+            let (capture_running, start_in_progress_raw) = if let Some(recording_state) =
                 app.try_state::<crate::recording::RecordingState>()
             {
                 let start_in_progress = recording_state.is_starting.load(Ordering::SeqCst)
@@ -637,6 +674,27 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             } else {
                 (None, false)
             };
+            // Clamp the flag so a leaked atomic / contended capture lock can't
+            // pin the tray on "Starting…" forever while capture is actually
+            // flowing (see START_PIN_CEILING).
+            let start_in_progress = clamp_start_in_progress(
+                start_in_progress_raw,
+                &mut start_in_progress_since,
+                START_PIN_CEILING,
+            );
+            if start_in_progress_raw && !start_in_progress {
+                if !start_pin_warned {
+                    start_pin_warned = true;
+                    warn!(
+                        "start-in-progress flag stuck for >{}s while server responding — \
+                         ignoring it for tray status (capture_running={:?})",
+                        START_PIN_CEILING.as_secs(),
+                        capture_running
+                    );
+                }
+            } else if !start_in_progress_raw {
+                start_pin_warned = false;
+            }
 
             // Engine intentionally pauses capture outside the work-hours
             // schedule and reports it in /health; surface it as ScheduledPause
@@ -1768,5 +1826,30 @@ mod tests {
         let result = wait_for_boot_ready(Duration::from_secs(5)).await;
         assert_eq!(result, BootReadiness::Ready);
         set_boot_phase("idle", None);
+    }
+
+    #[test]
+    fn clamp_start_in_progress_passes_within_ceiling_and_resets() {
+        let mut since: Option<Instant> = None;
+        // raw=false → false, no timer
+        assert!(!clamp_start_in_progress(false, &mut since, Duration::from_secs(60)));
+        assert!(since.is_none());
+        // raw=true within ceiling → true, timer starts
+        assert!(clamp_start_in_progress(true, &mut since, Duration::from_secs(60)));
+        assert!(since.is_some());
+        // raw drops → false + timer resets (a fresh start later gets a fresh window)
+        assert!(!clamp_start_in_progress(false, &mut since, Duration::from_secs(60)));
+        assert!(since.is_none());
+    }
+
+    #[test]
+    fn clamp_start_in_progress_stops_trusting_leaked_flag_past_ceiling() {
+        // Timer started in the past; with a ZERO ceiling any elapsed time
+        // exceeds it — models the leaked-flag case that pinned the Windows
+        // enterprise tray on "Starting…" for hours.
+        let mut since = Some(Instant::now() - Duration::from_secs(1));
+        assert!(!clamp_start_in_progress(true, &mut since, Duration::ZERO));
+        // Timer must NOT reset while raw stays true — the episode is one pin.
+        assert!(since.is_some());
     }
 }

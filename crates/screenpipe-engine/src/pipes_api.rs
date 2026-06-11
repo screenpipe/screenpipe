@@ -394,18 +394,25 @@ pub async fn set_pipe_favorite(
     }
 }
 
+/// Fallback glob cap: pipes without explicit `artifacts:` declarations
+/// contribute at most this many files (newest by mtime) to listings.
+pub const ARTIFACT_FALLBACK_CAP: usize = 50;
+
 /// GET /pipes/artifacts — list all declared artifacts across pipes.
 ///
 /// Iterates pipe configs, resolves artifact paths relative to each pipe
 /// directory, and checks the filesystem for existence, size, and mtime.
 /// Returns a flat list of artifacts with metadata. No database, no
 /// migration — the data is fully derivable at request time.
+///
+/// Prefer GET /artifacts, which unifies these with registered outputs and
+/// supports pagination + filtering. Kept for backward compatibility.
 pub async fn list_artifacts(State(pm): State<SharedPipeManager>) -> Json<Value> {
     let mgr = pm.lock().await;
     if let Err(e) = mgr.reload_pipes().await {
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
-    let declarations = mgr.list_artifact_declarations().await;
+    let declarations = mgr.list_artifact_declarations(ARTIFACT_FALLBACK_CAP).await;
     drop(mgr);
 
     let mut artifacts = Vec::new();

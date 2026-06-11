@@ -778,23 +778,20 @@ mod runtime {
             || -> Result<Session, ort::Error> {
                 let builder = Session::builder()?
                     .with_optimization_level(GraphOptimizationLevel::Level3)?
-                    .with_intra_threads(num_cpus_physical())?;
-                #[cfg(feature = "onnx-coreml")]
-                let builder = builder.with_execution_providers([
-                    ort::execution_providers::CoreMLExecutionProvider::default()
-                        // MLProgram + ComputeUnits::All offloads to the Apple Neural
-                        // Engine; measured ~3.4x faster than the legacy NeuralNetwork
-                        // default (which is slower than CPU) and lower CPU/GPU power.
-                        .with_model_format(
-                            ort::execution_providers::coreml::CoreMLModelFormat::MLProgram,
-                        )
-                        .with_compute_units(
-                            ort::execution_providers::coreml::CoreMLComputeUnits::All,
-                        )
-                        .with_subgraphs(true)
-                        .build(),
-                    ort::execution_providers::CPUExecutionProvider::default().build(),
-                ])?;
+                    // This session serves a background batch worker — never let the
+                    // intra-op pool busy-spin between ops. A spinning full-width
+                    // pool burned ~4 cores in ThreadPoolTempl::WorkerLoop while the
+                    // redaction backlog drained (340% CPU regression after 3b9a1a105).
+                    .with_intra_op_spinning(false)?
+                    // Half the cores is enough for a background batch worker and
+                    // keeps the drain from monopolizing the machine.
+                    .with_intra_threads((num_cpus_physical() / 2).max(2))?;
+                // NO CoreML EP here, deliberately: this text model is int8-quantized
+                // RoBERTa with dynamic sequence lengths, and the ANE compiler rejects
+                // every layer ("E5RT: unbounded dimension is not supported"), so
+                // CoreML contributes nothing but per-partition compile attempts and
+                // EP handoff overhead. The image model (rfdetr.rs, fixed-size input)
+                // is the one that actually runs on the ANE.
                 #[cfg(feature = "onnx-directml")]
                 let builder = builder.with_execution_providers([
                     ort::execution_providers::DirectMLExecutionProvider::default()

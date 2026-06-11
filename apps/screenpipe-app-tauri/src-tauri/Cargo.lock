@@ -8838,7 +8838,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "permission-flow"
 version = "0.1.40"
-source = "git+https://github.com/divanshu-go/permission-flow?rev=d7376a1b95acb78700e93505d8ca058e5ddb94ce#d7376a1b95acb78700e93505d8ca058e5ddb94ce"
+source = "git+https://github.com/divanshu-go/permission-flow?rev=38a64e3704aa32e692bab95cffe704859e191a51#38a64e3704aa32e692bab95cffe704859e191a51"
 dependencies = [
  "swift-rs",
 ]
@@ -10903,7 +10903,7 @@ dependencies = [
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "evdev",
  "libc",
  "objc2-app-kit",
@@ -10924,7 +10924,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.29"
+version = "2.5.31"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11051,7 +11051,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11063,7 +11063,7 @@ dependencies = [
  "cpal",
  "crossbeam",
  "dashmap",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "env_logger",
  "futures",
  "hf-hub 0.3.2",
@@ -11126,7 +11126,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11138,7 +11138,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11177,7 +11177,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11192,7 +11192,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "cron",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "ffmpeg-sidecar",
  "futures",
  "hex",
@@ -11203,7 +11203,7 @@ dependencies = [
  "objc",
  "objc-foundation",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.9.2",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-events",
@@ -11221,14 +11221,14 @@ dependencies = [
  "tracing",
  "uiautomation",
  "uuid",
- "which 6.0.3",
+ "which 7.0.3",
  "windows-sys 0.59.0",
  "zeroize",
 ]
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11238,7 +11238,7 @@ dependencies = [
  "libsqlite3-sys",
  "oasgen",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.9.2",
  "regex",
  "screenpipe-config",
  "serde",
@@ -11253,7 +11253,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11267,7 +11267,7 @@ dependencies = [
  "colored",
  "crossbeam",
  "dashmap",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "fastrand",
  "futures",
  "hostname",
@@ -11322,7 +11322,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11338,14 +11338,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "aho-corasick",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "image 0.25.10",
  "moka",
  "ndarray",
@@ -11369,7 +11369,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -11380,7 +11380,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11423,7 +11423,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "keyring",
- "rand 0.8.5",
+ "rand 0.9.2",
  "serde",
  "serde_json",
  "sqlx",
@@ -11433,14 +11433,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
  "chacha20poly1305",
  "hex",
- "rand 0.8.5",
+ "rand 0.9.2",
  "reqwest 0.13.3",
  "serde",
  "serde_json",
@@ -11453,11 +11453,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "argon2",
  "chacha20poly1305",
- "rand 0.8.5",
+ "rand 0.9.2",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -13731,7 +13731,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-permission-flow"
 version = "0.1.40"
-source = "git+https://github.com/divanshu-go/permission-flow?rev=d7376a1b95acb78700e93505d8ca058e5ddb94ce#d7376a1b95acb78700e93505d8ca058e5ddb94ce"
+source = "git+https://github.com/divanshu-go/permission-flow?rev=38a64e3704aa32e692bab95cffe704859e191a51#38a64e3704aa32e692bab95cffe704859e191a51"
 dependencies = [
  "permission-flow",
  "serde",

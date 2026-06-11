@@ -8,8 +8,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { localFetch } from "@/lib/api";
-import { exists, readTextFile } from "@tauri-apps/plugin-fs";
-import { homeDir } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
@@ -147,24 +145,23 @@ export default function ShortcutReminderPage() {
     }
   }, []);
 
-  // Read shortcuts directly from the store.bin file on disk (bypasses TS store plugin)
+  // Read shortcuts via the store plugin. This page used to read
+  // ~/.screenpipe/store.bin RAW off disk (to skip a plugin roundtrip), but
+  // that breaks completely when store encryption is on: the file starts with
+  // the SPSTORE1 magic, JSON.parse throws, and the change-listener turned
+  // that into hundreds of error lines per session (Windows enterprise log,
+  // 2026-06-11). The plugin read decrypts transparently and works for both
+  // plain and encrypted stores.
   const loadShortcutsFromFile = useCallback(async () => {
     try {
-      const home = await homeDir();
-      const path = `${home}/.screenpipe/store.bin`;
-      // Missing file is a valid first-run state (defaults will be applied by caller).
-      // Silently skipping avoids a webview→Rust error roundtrip per call, which
-      // compounded into thousands of log lines when the store-change listener fires.
-      if (!(await exists(path))) return;
-      const raw = await readTextFile(path);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      applyReminderSettings(data?.settings as ReminderSettings | undefined);
+      const store = await getStore();
+      const settings = await store.get<ReminderSettings | undefined>("settings");
+      applyReminderSettings(settings ?? undefined);
     } catch (e) {
       // Error objects don't survive JSON.stringify — extract the human-readable parts
       // so the report isn't just "{}".
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      console.error("Failed to read shortcuts from store file:", msg);
+      console.error("Failed to read shortcuts from store:", msg);
     }
   }, [applyReminderSettings]);
 

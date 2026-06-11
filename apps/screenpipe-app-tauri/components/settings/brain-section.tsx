@@ -33,8 +33,10 @@ import { Input } from "@/components/ui/input";
 import { CompactMarkdown } from "@/components/settings/compact-markdown";
 import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
 import { localFetch } from "@/lib/api";
-import { useOutputs, type Output } from "@/lib/hooks/use-outputs";
-import { useArtifacts, type Artifact } from "@/lib/hooks/use-artifacts";
+import {
+  useUnifiedArtifacts,
+  type UnifiedArtifact,
+} from "@/lib/hooks/use-unified-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -55,73 +57,23 @@ interface MemoryListResponse {
 }
 
 const PAGE_SIZE = 20;
+// How many rows are mounted at once. The full dataset stays in memory for
+// filtering/counts; only this window hits the DOM, growing as you scroll.
+const RENDER_WINDOW = 30;
 
 // ---------------------------------------------------------------------------
-// Artifact display helpers (ported from artifacts-library.tsx)
+// Artifact display helpers — items come pre-merged and pre-filtered from
+// GET /artifacts (registered outputs + pipe fs artifacts, deduped by path).
 // ---------------------------------------------------------------------------
 
-type DisplayItem =
-  | { type: "output"; data: Output }
-  | { type: "artifact"; data: Artifact };
-
-function artifactItemKey(item: DisplayItem): string {
-  return item.type === "output"
-    ? `output:${item.data.id}`
-    : `artifact:${item.data.pipe_name}:${item.data.path}`;
+function artifactItemKey(a: UnifiedArtifact): string {
+  return a.registered
+    ? `output:${a.id}`
+    : `artifact:${a.source}:${a.path}`;
 }
 
-function artifactItemTitle(item: DisplayItem): string {
-  return item.data.title;
-}
-
-function artifactItemSource(item: DisplayItem): string {
-  if (item.type === "output") {
-    return item.data.source_type === "chat" ? "chat" : item.data.source;
-  }
-  return item.data.pipe_name;
-}
-
-function artifactItemPath(item: DisplayItem): string {
-  return item.type === "output" ? item.data.output_path : item.data.path;
-}
-
-function artifactItemPreview(item: DisplayItem): string | null | undefined {
-  return item.data.preview;
-}
-
-function artifactItemSize(item: DisplayItem): number | null | undefined {
-  return item.data.size_bytes;
-}
-
-function artifactItemDate(item: DisplayItem): string | null | undefined {
-  return item.type === "output" ? item.data.updated_at : item.data.modified_at;
-}
-
-function mergeArtifactItems(
-  outputs: Output[],
-  artifacts: Artifact[],
-  deletedPaths: Set<string>,
-): DisplayItem[] {
-  const items: DisplayItem[] = [];
-  const registeredPaths = new Set<string>();
-  for (const o of outputs) {
-    registeredPaths.add(o.output_path);
-    if (o.original_path) registeredPaths.add(o.original_path);
-  }
-  for (const o of outputs) {
-    items.push({ type: "output", data: o });
-  }
-  for (const a of artifacts) {
-    if (registeredPaths.has(a.path)) continue;
-    if (deletedPaths.has(a.path)) continue;
-    items.push({ type: "artifact", data: a });
-  }
-  items.sort((a, b) => {
-    const da = artifactItemDate(a) ?? "";
-    const db = artifactItemDate(b) ?? "";
-    return db.localeCompare(da);
-  });
-  return items;
+function artifactItemSource(a: UnifiedArtifact): string {
+  return a.source_type === "chat" ? "chat" : a.source;
 }
 
 function formatBytes(n: number): string {
@@ -134,9 +86,11 @@ function formatBytes(n: number): string {
 // Unified item type for interleaved list
 // ---------------------------------------------------------------------------
 
+// sortDate is a parsed epoch — sources emit timestamps with different UTC
+// offsets, so string comparison would bias the merge.
 type UnifiedItem =
-  | { kind: "memory"; data: MemoryRecord; sortDate: string }
-  | { kind: "artifact"; data: DisplayItem; sortDate: string };
+  | { kind: "memory"; data: MemoryRecord; sortDate: number }
+  | { kind: "artifact"; data: UnifiedArtifact; sortDate: number };
 
 type TypeFilter = "all" | "memories" | "artifacts";
 
@@ -212,18 +166,8 @@ export function BrainSection() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
 
-  // artifact data
-  const {
-    outputs,
-    isLoading: outputsLoading,
-    deleteOutput,
-  } = useOutputs();
-  const {
-    artifacts,
-    isLoading: artifactsLoading,
-  } = useArtifacts();
-  const [deletedArtifactPaths, setDeletedArtifactPaths] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [visibleCount, setVisibleCount] = useState(RENDER_WINDOW);
 
   // expanded content rows
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -284,6 +228,18 @@ export function BrainSection() {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // artifact data — GET /artifacts merges registered outputs + pipe fs
+  // artifacts server-side; q/source filtering and totals are server-side too.
+  const {
+    artifacts,
+    total: artifactsTotal,
+    sources: artifactSources,
+    isLoading: artifactsLoading,
+    hasMore: artifactsHaveMore,
+    loadMore: loadMoreArtifacts,
+    deleteRegistered,
+  } = useUnifiedArtifacts(debouncedQuery, activeTag);
 
   // fetch all tags once on mount
   useEffect(() => {
@@ -379,27 +335,6 @@ export function BrainSection() {
     const id = setInterval(check, 30_000);
     return () => clearInterval(id);
   }, []);
-
-  // infinite scroll via IntersectionObserver
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (
-          entries[0].isIntersecting &&
-          !loadingMoreRef.current &&
-          memories.length < total
-        ) {
-          fetchPage(memories.length, true);
-        }
-      },
-      { root: scrollRef.current, threshold: 0 },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [memories.length, total, fetchPage]);
 
   const deleteMemory = async (id: number) => {
     setDeletingId(id);
@@ -531,43 +466,92 @@ export function BrainSection() {
     }
   };
 
-  // Build the unified interleaved list
+  // Build the unified interleaved list. Both sources arrive pre-filtered
+  // (memories: server-side q/tags; artifacts: server-side q/source). Only a
+  // window of the merged result is rendered (see visibleCount).
   const unifiedItems: UnifiedItem[] = React.useMemo(() => {
     const items: UnifiedItem[] = [];
 
     // Add memories (unless filtered to artifacts-only)
     if (typeFilter !== "artifacts") {
       for (const m of memories) {
-        items.push({ kind: "memory", data: m, sortDate: m.created_at });
+        items.push({
+          kind: "memory",
+          data: m,
+          sortDate: Date.parse(m.created_at) || 0,
+        });
       }
     }
 
     // Add artifacts (unless filtered to memories-only or importance sort is active)
     if (typeFilter !== "memories" && sortField !== "importance") {
-      const merged = mergeArtifactItems(outputs, artifacts, deletedArtifactPaths);
-      let filtered = debouncedQuery
-        ? merged.filter((item) => {
-            const q = debouncedQuery.toLowerCase();
-            return (
-              artifactItemTitle(item).toLowerCase().includes(q) ||
-              (artifactItemPreview(item) ?? "").toLowerCase().includes(q) ||
-              artifactItemSource(item).toLowerCase().includes(q)
-            );
-          })
-        : merged;
-      if (activeTag) {
-        filtered = filtered.filter((item) => artifactItemSource(item) === activeTag);
-      }
-      for (const item of filtered) {
-        const date = artifactItemDate(item) ?? "";
-        items.push({ kind: "artifact", data: item, sortDate: date });
+      for (const a of artifacts) {
+        items.push({
+          kind: "artifact",
+          data: a,
+          sortDate: Date.parse(a.modified_at) || 0,
+        });
       }
     }
 
     // Sort all by date descending
-    items.sort((a, b) => b.sortDate.localeCompare(a.sortDate));
+    items.sort((a, b) => b.sortDate - a.sortDate);
     return items;
-  }, [memories, outputs, artifacts, deletedArtifactPaths, typeFilter, activeTag, sortField, debouncedQuery]);
+  }, [memories, artifacts, typeFilter, sortField]);
+
+  // True total across the full dataset: both totals are server-side and
+  // already reflect the active search/tag filters.
+  const totalCount =
+    (typeFilter !== "artifacts" ? total : 0) +
+    (typeFilter !== "memories" && sortField !== "importance"
+      ? artifactsTotal
+      : 0);
+
+  // Collapse the render window whenever the visible dataset changes shape.
+  useEffect(() => {
+    setVisibleCount(RENDER_WINDOW);
+  }, [debouncedQuery, activeTag, typeFilter, sortField, sortDir]);
+
+  // infinite scroll via IntersectionObserver — grows the render window and
+  // pulls the next page of whichever source is running low
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0].isIntersecting) return;
+        if (visibleCount < unifiedItems.length) {
+          setVisibleCount((c) => c + RENDER_WINDOW);
+        }
+        const windowNearsEnd =
+          visibleCount + RENDER_WINDOW >= unifiedItems.length;
+        if (
+          typeFilter !== "artifacts" &&
+          !loadingMoreRef.current &&
+          memories.length < total &&
+          windowNearsEnd
+        ) {
+          fetchPage(memories.length, true);
+        }
+        if (typeFilter !== "memories" && artifactsHaveMore && windowNearsEnd) {
+          loadMoreArtifacts();
+        }
+      },
+      { root: scrollRef.current, threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    memories.length,
+    total,
+    fetchPage,
+    visibleCount,
+    unifiedItems.length,
+    typeFilter,
+    artifactsHaveMore,
+    loadMoreArtifacts,
+  ]);
 
   // Prune selectedIds when the list changes (e.g. individual delete, filter change)
   useEffect(() => {
@@ -577,7 +561,7 @@ export function BrainSection() {
         unifiedItems.map((item) =>
           item.kind === "memory"
             ? `mem:${(item.data as MemoryRecord).id}`
-            : artifactItemKey(item.data as DisplayItem)
+            : artifactItemKey(item.data as UnifiedArtifact)
         )
       );
       const pruned = new Set([...prev].filter((k) => validKeys.has(k)));
@@ -585,28 +569,18 @@ export function BrainSection() {
     });
   }, [unifiedItems]);
 
-  const artifactSources = React.useMemo(() => {
-    const merged = mergeArtifactItems(outputs, artifacts, deletedArtifactPaths);
-    return [...new Set(merged.map(artifactItemSource))];
-  }, [outputs, artifacts, deletedArtifactPaths]);
-
   const combinedTags = React.useMemo(() => {
     const set = new Set([...allTags, ...artifactSources]);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [allTags, artifactSources]);
 
   const handleDeleteArtifact = useCallback(
-    async (output: Output) => {
-      setDeletedArtifactPaths((prev) => {
-        const next = new Set(prev);
-        next.add(output.output_path);
-        if (output.original_path) next.add(output.original_path);
-        return next;
-      });
-      await deleteOutput(output.id);
+    async (a: UnifiedArtifact) => {
+      if (!a.registered || a.id == null) return;
+      await deleteRegistered(a.id);
       toast({ title: "artifact deleted" });
     },
-    [deleteOutput, toast],
+    [deleteRegistered, toast],
   );
 
   const toggleSelectAll = () => {
@@ -618,7 +592,7 @@ export function BrainSection() {
           unifiedItems.map((item) =>
             item.kind === "memory"
               ? `mem:${(item.data as MemoryRecord).id}`
-              : artifactItemKey(item.data as DisplayItem)
+              : artifactItemKey(item.data as UnifiedArtifact)
           )
         )
       );
@@ -647,11 +621,12 @@ export function BrainSection() {
       setMemories((prev) => prev.filter((m) => !memIdSet.has(m.id)));
       setTotal((prev) => prev - memIds.length);
 
-      // delete output-type artifacts
+      // delete output-type artifacts (registered ones only — fs artifacts
+      // belong to their pipe and have no delete)
       for (const key of artKeys) {
         if (!key.startsWith("output:")) continue;
         const outputId = Number(key.slice(7));
-        const match = outputs.find((o) => o.id === outputId);
+        const match = artifacts.find((a) => a.registered && a.id === outputId);
         if (match) await handleDeleteArtifact(match);
       }
 
@@ -809,11 +784,11 @@ export function BrainSection() {
 
       {/* filters row */}
       <div className="flex items-center gap-2 flex-wrap">
-        {loading && outputsLoading && artifactsLoading ? (
+        {loading && artifactsLoading ? (
           <Skeleton className="h-6 w-16 rounded-full" />
         ) : (
           <Badge variant="secondary" className="text-xs">
-            {unifiedItems.length} {unifiedItems.length === 1 ? "item" : "items"}
+            {totalCount.toLocaleString()} {totalCount === 1 ? "item" : "items"}
           </Badge>
         )}
 
@@ -963,7 +938,7 @@ export function BrainSection() {
         </div>
       )}
 
-      {loading && (outputsLoading || artifactsLoading) ? (
+      {loading && artifactsLoading ? (
         <BrainSkeleton />
       ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
@@ -1000,16 +975,16 @@ export function BrainSection() {
           ref={scrollRef}
           className="space-y-1.5 flex-1 overflow-y-auto pr-1"
         >
-          {unifiedItems.map((item) => {
+          {unifiedItems.slice(0, visibleCount).map((item) => {
             if (item.kind === "artifact") {
               const artItem = item.data;
-              const artPath = artifactItemPath(artItem);
-              const artPreview = artifactItemPreview(artItem);
-              const artSize = artifactItemSize(artItem);
-              const artDate = artifactItemDate(artItem);
+              const artPath = artItem.path;
+              const artPreview = artItem.preview;
+              const artSize = artItem.size_bytes;
+              const artDate = artItem.modified_at;
 
               const artKey = artifactItemKey(artItem);
-              const artTestId = artItem.type === "output" ? String(artItem.data.id) : artKey;
+              const artTestId = artItem.registered ? String(artItem.id) : artKey;
               const fullContent = artifactContents.get(artKey);
               const isArtExpanded = expandedArtifactKeys.has(artKey);
               const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
@@ -1075,7 +1050,7 @@ export function BrainSection() {
                     >
                       <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
-                    {artItem.type === "output" && (
+                    {artItem.registered && (
                       <ConfirmDeleteDialog
                         trigger={
                           <Button
@@ -1090,7 +1065,7 @@ export function BrainSection() {
                         }
                         title="delete artifact"
                         description="this artifact will be permanently deleted. this cannot be undone."
-                        onConfirm={() => void handleDeleteArtifact(artItem.data)}
+                        onConfirm={() => void handleDeleteArtifact(artItem)}
                       />
                     )}
                   </div>

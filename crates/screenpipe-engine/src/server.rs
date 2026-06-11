@@ -51,8 +51,8 @@ use crate::{
             update_memory_handler,
         },
         outputs::{
-            delete_output_handler, get_output_handler, list_outputs_handler,
-            register_output_handler,
+            delete_output_handler, get_output_handler, list_artifacts_unified_handler,
+            list_outputs_handler, register_output_handler,
         },
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
@@ -684,6 +684,7 @@ impl SCServer {
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
             .post("/outputs/register", register_output_handler)
+            .get("/artifacts", list_artifacts_unified_handler)
             .get("/outputs", list_outputs_handler)
             .get("/outputs/:id", get_output_handler)
             .delete("/outputs/:id", delete_output_handler)

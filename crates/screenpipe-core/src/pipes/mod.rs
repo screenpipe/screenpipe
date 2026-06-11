@@ -407,6 +407,17 @@ fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
     out
 }
 
+/// Keep the newest `cap` files by mtime (ties broken by path, descending,
+/// so the result is deterministic on filesystems with coarse mtimes).
+fn select_newest_files(
+    mut files: Vec<(std::path::PathBuf, std::time::SystemTime)>,
+    cap: usize,
+) -> Vec<(std::path::PathBuf, std::time::SystemTime)> {
+    files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+    files.truncate(cap);
+    files
+}
+
 // ---------------------------------------------------------------------------
 // Tombstone tracking — prevents deleted pipes from being restored by
 // builtin installation or cloud sync.
@@ -1719,9 +1730,13 @@ impl PipeManager {
     ///
     /// Two exclusive modes per pipe:
     /// - If the pipe declares `artifacts:` in frontmatter, use only those.
-    /// - Otherwise, fall back to scanning `<pipe_dir>/output/` for files.
+    /// - Otherwise, fall back to scanning `<pipe_dir>/output/` for files,
+    ///   keeping only the newest `fallback_cap` by mtime. Chatty pipes write
+    ///   hundreds of files there; without a cap a single pipe dominates the
+    ///   listing and the payload grows unbounded.
     pub async fn list_artifact_declarations(
         &self,
+        fallback_cap: usize,
     ) -> Vec<(String, Vec<(ArtifactDeclaration, std::path::PathBuf)>)> {
         let pipes = self.pipes.lock().await;
         let mut result = Vec::new();
@@ -1745,27 +1760,41 @@ impl PipeManager {
                     resolved.push((a.clone(), normalized));
                 }
             } else {
-                // Fallback: no declarations → scan <pipe_dir>/output/
+                // Fallback: no declarations → scan <pipe_dir>/output/, newest
+                // `fallback_cap` files by mtime.
                 let output_dir = pipe_dir.join("output");
+                let mut candidates: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
                 if let Ok(mut entries) = tokio::fs::read_dir(&output_dir).await {
                     while let Ok(Some(entry)) = entries.next_entry().await {
                         let path = entry.path();
                         if !path.is_file() {
                             continue;
                         }
-                        let kind = match path.extension().and_then(|e| e.to_str()) {
-                            Some("md") => "markdown",
-                            Some("json") => "json",
-                            Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
-                            _ => "text",
-                        };
-                        let decl = ArtifactDeclaration {
-                            path: format!("output/{}", entry.file_name().to_string_lossy()),
-                            title: None,
-                            kind: Some(kind.to_string()),
-                        };
-                        resolved.push((decl, normalize_path(&path)));
+                        let mtime = entry
+                            .metadata()
+                            .await
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::UNIX_EPOCH);
+                        candidates.push((path, mtime));
                     }
+                }
+                for (path, _) in select_newest_files(candidates, fallback_cap) {
+                    let kind = match path.extension().and_then(|e| e.to_str()) {
+                        Some("md") => "markdown",
+                        Some("json") => "json",
+                        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
+                        _ => "text",
+                    };
+                    let file_name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let decl = ArtifactDeclaration {
+                        path: format!("output/{}", file_name),
+                        title: None,
+                        kind: Some(kind.to_string()),
+                    };
+                    resolved.push((decl, normalize_path(&path)));
                 }
             }
 
@@ -4927,6 +4956,42 @@ mod tests {
             std::env::temp_dir().join(format!("screenpipe-test-pipes-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         PipeManager::new(dir, HashMap::new(), None, 0)
+    }
+
+    #[test]
+    fn test_select_newest_files_caps_by_mtime() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let f = |name: &str, secs: u64| {
+            (
+                std::path::PathBuf::from(name),
+                UNIX_EPOCH + Duration::from_secs(secs),
+            )
+        };
+        let files = vec![
+            f("a.md", 100),
+            f("b.md", 300),
+            f("c.md", 200),
+            f("d.md", 400),
+        ];
+        let kept = select_newest_files(files, 2);
+        let names: Vec<_> = kept
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["d.md", "b.md"]);
+
+        // ties broken deterministically by path desc
+        let files = vec![f("a.md", 100), f("b.md", 100), f("c.md", 100)];
+        let kept = select_newest_files(files, 2);
+        let names: Vec<_> = kept
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["c.md", "b.md"]);
+
+        // cap larger than input keeps everything
+        let files = vec![f("a.md", 100)];
+        assert_eq!(select_newest_files(files, 50).len(), 1);
     }
 
     #[tokio::test]

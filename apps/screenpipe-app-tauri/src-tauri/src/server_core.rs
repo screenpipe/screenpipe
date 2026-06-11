@@ -498,7 +498,11 @@ impl ServerCore {
                             // Hold the lock only to collect declarations, then drop it
                             let items = {
                                 let mgr = pm.lock().await;
-                                let all = mgr.list_artifact_declarations().await;
+                                let all = mgr
+                                    .list_artifact_declarations(
+                                        screenpipe_engine::pipes_api::ARTIFACT_FALLBACK_CAP,
+                                    )
+                                    .await;
                                 all.into_iter()
                                     .find(|(n, _)| n == &name)
                                     .map(|(_, items)| items)

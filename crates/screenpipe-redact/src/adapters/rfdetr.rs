@@ -245,7 +245,18 @@ mod imp {
             || -> Result<Session, ort::Error> {
                 let builder = Session::builder()?
                     .with_optimization_level(GraphOptimizationLevel::Level3)?
-                    .with_intra_threads(num_cpus_physical())?;
+                    // Background batch worker — never busy-spin between ops. With
+                    // CoreML active the graph is partitioned ANE/CPU and a spinning
+                    // full-width pool burned ~4 cores in WorkerLoop while the
+                    // redaction backlog drained (340% CPU regression after 3b9a1a105).
+                    .with_intra_op_spinning(false)?
+                    // With CoreML the CPU pool only runs CoreML-rejected fallback
+                    // ops; 2 threads is plenty. CPU-only builds keep the full pool.
+                    .with_intra_threads(if cfg!(feature = "onnx-coreml") {
+                        2
+                    } else {
+                        num_cpus_physical()
+                    })?;
                 // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
                 // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
                 // faster than the legacy default and keeps the work off the CPU/GPU.
