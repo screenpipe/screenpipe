@@ -18,6 +18,178 @@ fn main() {
     if !is_bun_installed() {
         install_bun();
     }
+
+    // apple-native STT (SpeechAnalyzer) Swift bridge — macOS only, feature gated.
+    if std::env::var("CARGO_FEATURE_APPLE_NATIVE").is_ok()
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+    {
+        build_apple_native_bridge();
+    }
+}
+
+/// Compile swift/apple_native_stt.swift into a static library wrapping
+/// SpeechAnalyzer / SpeechTranscriber (Speech.framework, macOS 26+).
+/// Follows the same pattern as screenpipe-apple-intelligence/build.rs:
+/// targets macOS 14+ with all macOS 26 API usage behind @available, and
+/// falls back to a C stub when the SDK is too old to know SpeechAnalyzer.
+fn build_apple_native_bridge() {
+    use std::path::PathBuf;
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let swift_src = PathBuf::from("swift/apple_native_stt.swift");
+    let lib_path = out_dir.join("libapple_native_stt_bridge.a");
+
+    println!("cargo:rerun-if-changed=swift/apple_native_stt.swift");
+
+    let sdk_output = Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        .expect("failed to run xcrun --show-sdk-path");
+    let sdk_path = String::from_utf8(sdk_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    // SpeechAnalyzer ships with the macOS 26 SDK. Older SDKs get a stub
+    // that reports unavailability at runtime instead of failing the build.
+    let sdk_settings_path = format!("{}/SDKSettings.json", sdk_path);
+    let has_macos26_sdk = std::fs::read_to_string(&sdk_settings_path)
+        .map(|contents| {
+            contents.contains("\"26.") || contents.contains("\"27.") || contents.contains("\"28.")
+        })
+        .unwrap_or(false);
+
+    if !has_macos26_sdk {
+        println!("cargo:warning=macOS SDK does not include SpeechAnalyzer (need macOS 26+ SDK), building apple-native stub");
+        let stub_src = out_dir.join("apple_native_stub.c");
+        std::fs::write(
+            &stub_src,
+            r#"// Stub: SpeechAnalyzer not available on this SDK
+#include <stdlib.h>
+#include <string.h>
+
+static char* make_string(const char* s) {
+    char* p = malloc(strlen(s) + 1);
+    if (p) strcpy(p, s);
+    return p;
+}
+
+int an_check_availability(const char* locale, char** out_reason) {
+    if (out_reason) *out_reason = make_string("apple-native transcription not available (built without macOS 26 SDK)");
+    return 3;
+}
+
+int an_transcribe(const float* samples, size_t samples_len, double sample_rate,
+                  const char* locale, char** out_text, char** out_error) {
+    if (out_error) *out_error = make_string("apple-native transcription not available (built without macOS 26 SDK)");
+    if (out_text) *out_text = 0;
+    return -1;
+}
+
+void an_free_string(char* ptr) { if (ptr) free(ptr); }
+"#,
+        )
+        .expect("failed to write apple-native stub");
+
+        let stub_obj = out_dir.join("apple_native_stub.o");
+        let status = Command::new("cc")
+            .args(["-c", "-o"])
+            .arg(stub_obj.to_str().unwrap())
+            .arg(stub_src.to_str().unwrap())
+            .status()
+            .expect("failed to compile apple-native stub");
+        assert!(status.success(), "apple-native stub compilation failed");
+
+        let status = Command::new("ar")
+            .args(["rcs"])
+            .arg(&lib_path)
+            .arg(stub_obj.to_str().unwrap())
+            .status()
+            .expect("failed to create apple-native stub archive");
+        assert!(status.success(), "apple-native stub archive failed");
+
+        println!("cargo:rustc-link-search=native={}", out_dir.display());
+        println!("cargo:rustc-link-lib=static=apple_native_stt_bridge");
+        return;
+    }
+
+    let status = Command::new("swiftc")
+        .args([
+            "-emit-library",
+            "-static",
+            "-module-name",
+            "AppleNativeSttBridge",
+            "-sdk",
+            &sdk_path,
+            "-target",
+            "arm64-apple-macos14.0",
+            "-O",
+            "-whole-module-optimization",
+            "-o",
+        ])
+        .arg(&lib_path)
+        .arg(&swift_src)
+        .status()
+        .expect("failed to run swiftc");
+    assert!(
+        status.success(),
+        "swiftc compilation of apple_native_stt.swift failed"
+    );
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=apple_native_stt_bridge");
+
+    // Weak-link Speech so the binary can launch on macOS versions where the
+    // SpeechAnalyzer symbols are missing (only available on macOS 26+).
+    println!("cargo:rustc-link-arg=-Wl,-weak_framework,Speech");
+    println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=AVFAudio");
+
+    // Swift runtime library search paths.
+    let toolchain_output = Command::new("xcrun")
+        .args(["--toolchain", "default", "--show-sdk-platform-path"])
+        .output()
+        .expect("failed to find toolchain");
+    let platform_path = String::from_utf8(toolchain_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let swift_lib_paths = [
+        format!("{}/Developer/usr/lib/swift/macosx", platform_path),
+        "/usr/lib/swift".to_string(),
+        format!("{}/usr/lib/swift", sdk_path),
+        format!("{}/usr/lib/swift/macosx", sdk_path),
+    ];
+    for path in &swift_lib_paths {
+        if std::path::Path::new(path).exists() {
+            println!("cargo:rustc-link-search=native={}", path);
+        }
+    }
+
+    if let Ok(xcode_dev_output) = Command::new("xcode-select").arg("-p").output() {
+        let xcode_dev = String::from_utf8(xcode_dev_output.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        for dir in ["swift", "swift_static"] {
+            let path = format!(
+                "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/{}/macosx",
+                xcode_dev, dir
+            );
+            if std::path::Path::new(&path).exists() {
+                println!("cargo:rustc-link-search=native={}", path);
+            }
+        }
+        println!(
+            "cargo:rustc-link-arg=-Wl,-rpath,{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx",
+            xcode_dev
+        );
+    }
+
+    // rpaths so Swift runtime dylibs resolve at runtime.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../lib/swift/macosx");
 }
 
 fn is_bun_installed() -> bool {

@@ -146,6 +146,9 @@ pulseaudio = ["dep:libpulse-binding", "dep:libpulse-simple-binding"]
 qwen3-asr = ["dep:audiopipe"]
 parakeet = ["dep:audiopipe"]
 parakeet-mlx = ["dep:audiopipe", "audiopipe?/parakeet-mlx", "dep:mlx-rs"]
+# Apple SpeechAnalyzer STT (Speech.framework, macOS 26+). macOS only —
+# build.rs compiles the Swift bridge and weak-links Speech.
+apple-native = []
 
 [[example]]
 name = "screenpipe-audio"
