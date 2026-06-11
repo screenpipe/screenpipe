@@ -72,6 +72,7 @@ import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
   useChatStore,
+  isSessionForeground,
   sessionRecordFromMeta,
   type SessionStatus,
   type SessionRecord,
@@ -251,6 +252,9 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   const patch: Partial<SessionRecord> = { updatedAt: Date.now() };
   if (nextStatus) patch.status = nextStatus;
   if (writePreview) patch.preview = snippet!;
+  // Background assistant text should mark the session as having new
+  // unseen content once the user has switched away.
+  if (snippet && !isSessionForeground(store, sid)) patch.lastContentAt = Date.now();
   if (nextStatus === "error" && err) patch.lastError = err;
   if (nextStatus && nextStatus !== "error") patch.lastError = undefined;
 

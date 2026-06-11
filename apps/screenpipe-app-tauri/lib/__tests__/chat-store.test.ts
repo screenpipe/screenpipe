@@ -19,7 +19,7 @@ import {
 } from "../stores/chat-store";
 
 function reset() {
-  useChatStore.setState({ sessions: {}, currentId: null });
+  useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 }
 
 function baseRecord(overrides: Partial<SessionRecord> = {}): SessionRecord {
@@ -265,6 +265,7 @@ describe("chat-store: setCurrent clears unread atomically", () => {
     useChatStore.getState().actions.setCurrent("A");
     const state = useChatStore.getState();
     expect(state.currentId).toBe("A");
+    expect(state.panelSessionId).toBe("A");
     expect(state.sessions.A.unread).toBe(false);
     expect(typeof state.sessions.A.lastViewedAt).toBe("number");
     expect(state.sessions.A.lastViewedAt).toBeGreaterThanOrEqual(100);
@@ -353,6 +354,35 @@ describe("chat-store: unread is computed from timestamps", () => {
     const session = useChatStore.getState().sessions.A;
     expect(session.lastContentAt).toBeGreaterThan(50);
     expect(session.unread).toBe(true);
+  });
+
+  it("appendMessage keeps the current session read while it stays open", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastViewedAt: 50 }),
+    );
+    useChatStore.getState().actions.setCurrent("A");
+    useChatStore.getState().actions.appendMessage(
+      "A",
+      { id: "m1", role: "assistant", content: "hello", timestamp: Date.now() },
+    );
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastContentAt).toBeDefined();
+    expect(session.lastViewedAt).toBe(session.lastContentAt);
+    expect(session.unread).toBe(false);
+  });
+
+  it("appendMessage keeps the mounted panel session read when home is hidden", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastViewedAt: 50 }),
+    );
+    useChatStore.setState({ currentId: null, panelSessionId: "A" });
+    useChatStore.getState().actions.appendMessage(
+      "A",
+      { id: "m1", role: "assistant", content: "hello", timestamp: Date.now() },
+    );
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastViewedAt).toBe(session.lastContentAt);
+    expect(session.unread).toBe(false);
   });
 
   it("patch with only updatedAt does NOT flip unread", () => {

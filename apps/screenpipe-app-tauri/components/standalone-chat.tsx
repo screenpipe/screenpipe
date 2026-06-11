@@ -61,7 +61,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
-import { statusForEvent } from "@/lib/stores/pi-event-router";
+import { handlePiEvent, statusForEvent } from "@/lib/stores/pi-event-router";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { buildChipModelContent, buildChipDisplayContent, parseConnectionChip } from "@/lib/utils/connection-chip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -3924,6 +3924,13 @@ export function StandaloneChat({
       await mountAgentEventBus();
       if (cancelled) return;
       off = registerForeground(conversationId, (envelope) => {
+        if (envelope.sessionId !== piSessionIdRef.current) {
+          // The user switched chats, but the old foreground registration
+          // has not cleaned up yet. Hand the event to the background
+          // router so the old session can accrue unread state normally.
+          void handlePiEvent(envelope);
+          return;
+        }
         if (!mountedRef.current) return;
         handleAgentEventDataRef.current?.(envelope.event);
       });

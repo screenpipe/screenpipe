@@ -288,6 +288,13 @@ interface ChatStoreActions {
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
 type ChatSessionsState = Pick<ChatStoreState, "sessions">;
 
+export function isSessionForeground(
+  state: Pick<ChatStoreState, "currentId" | "panelSessionId">,
+  id: string,
+): boolean {
+  return state.currentId === id || state.panelSessionId === id;
+}
+
 /** Compute unread from timestamps — immune to non-content writes.
  *  A session is unread when its most recent real message append happened
  *  AFTER the last time the user viewed it. Falls back to
@@ -381,6 +388,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (id && s.sessions[id]) {
           return {
             currentId: id,
+            panelSessionId: id,
             sessions: {
               ...s.sessions,
               [id]: { ...s.sessions[id], unread: false, lastViewedAt: viewedAt },
@@ -440,6 +448,10 @@ export const useChatStore = create<ChatStore>((set) => ({
           preview: preview ?? existing.preview,
           updatedAt: now,
           lastContentAt: now,
+          // Foreground ownership includes the mounted panel session even
+          // when the home section is hidden, so trailing content there
+          // should stay read.
+          ...(isSessionForeground(s, id) ? { lastViewedAt: now } : {}),
         };
         patched.unread = isUnread(patched);
         return {

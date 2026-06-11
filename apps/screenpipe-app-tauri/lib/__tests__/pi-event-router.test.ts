@@ -132,6 +132,37 @@ describe("pi-event-router: status mirroring for backgrounded sessions", () => {
     expect(useChatStore.getState().sessions.fresh).toBeDefined();
     expect(useChatStore.getState().sessions.fresh.status).toBe("streaming");
   });
+
+  it("marks a switched-away session unread when new assistant text arrives", async () => {
+    seed("A", {
+      lastViewedAt: 100,
+      streamingMessageId: "msg-1",
+      streamingText: "",
+      contentBlocks: [],
+      messages: [
+        {
+          id: "msg-1",
+          role: "assistant",
+          content: "",
+          contentBlocks: [],
+          timestamp: 100,
+        },
+      ],
+      messageCount: 1,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hello" },
+      }),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastContentAt).toBeGreaterThan(100);
+    expect(session.unread).toBe(true);
+  });
 });
 
 describe("pi-event-router: browser state preservation", () => {
