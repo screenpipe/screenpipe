@@ -494,86 +494,98 @@ function HomeContent() {
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
   const recordingDevicesSnapshotRef = useRef("");
 
-  useEffect(() => {
-    let cancelled = false;
-    const fetchDevices = () => {
-      Promise.all([
+  const refreshRecordingDevices = useCallback(async () => {
+    try {
+      const [health, audioStatus]: [
+        { monitors?: string[]; device_status_details?: string } | null,
+        AudioDeviceStatus[] | null,
+      ] = await Promise.all([
         localFetch("/health")
           .then((r) => r.ok ? r.json() : null)
           .catch(() => null),
         localFetch("/audio/device/status")
           .then((r) => r.ok ? r.json() : null)
           .catch(() => null),
-      ])
-        .then(([health, audioStatus]: [
-          { monitors?: string[]; device_status_details?: string } | null,
-          AudioDeviceStatus[] | null,
-        ]) => {
-          if (cancelled) return;
-          const devices: RecordingDevice[] = [];
-          // Parse monitors — filter to only those actually being recorded
-          if (health?.monitors) {
-            const monitorIds: string[] = settings.monitorIds ?? ["default"];
-            const useAll = settings.useAllMonitors ?? true;
-            for (const name of health.monitors) {
-              // If user selected specific monitors, filter to only those
-              if (!useAll && monitorIds.length > 0 && monitorIds[0] !== "default") {
-                // Health format: "Display 3 (1920x1080)"
-                // Stable ID format: "Display 3_1920x1080_0,0"
-                const healthName = name.split(" (")[0];
-                const matched = monitorIds.some((id) => {
-                  const idName = id.split("_")[0];
-                  return healthName === idName;
-                });
-                if (!matched) continue;
-              }
-              devices.push({ name, fullName: name, kind: "monitor", active: true });
-            }
-          }
+      ]);
 
-          const visibleAudioDevices = Array.isArray(audioStatus)
-            ? audioStatus.filter((d) => d.is_running || d.is_user_disabled)
-            : [];
+      const devices: RecordingDevice[] = [];
+      // Parse monitors — filter to only those actually being recorded
+      if (health?.monitors) {
+        const monitorIds: string[] = settings.monitorIds ?? ["default"];
+        const useAll = settings.useAllMonitors ?? true;
+        for (const name of health.monitors) {
+          // If user selected specific monitors, filter to only those
+          if (!useAll && monitorIds.length > 0 && monitorIds[0] !== "default") {
+            // Health format: "Display 3 (1920x1080)"
+            // Stable ID format: "Display 3_1920x1080_0,0"
+            const healthName = name.split(" (")[0];
+            const matched = monitorIds.some((id) => {
+              const idName = id.split("_")[0];
+              return healthName === idName;
+            });
+            if (!matched) continue;
+          }
+          devices.push({ name, fullName: name, kind: "monitor", active: true });
+        }
+      }
 
-          if (visibleAudioDevices.length > 0) {
-            for (const device of visibleAudioDevices) {
-              const kind = device.name.includes("(output)") ? "output" as const : "input" as const;
-              const name = device.name.replace(/\s*\((input|output)\)\s*/gi, "").trim();
-              devices.push({
-                name,
-                fullName: device.name,
-                kind,
-                active: device.is_running,
-              });
-            }
-          } else if (health?.device_status_details) {
-            // Fallback for older sidecars that do not expose /audio/device/status.
-            // Format: "DeviceName (input): active (last activity: 2s ago)"
-            for (const part of health.device_status_details.split(", ")) {
-              const match = part.split(": ");
-              if (match.length < 2) continue;
-              const nameAndType = match[0];
-              const active = match[1].startsWith("active");
-              const kind = nameAndType.includes("(input)") ? "input" as const
-                : nameAndType.includes("(output)") ? "output" as const
-                : "input" as const;
-              const name = nameAndType.replace(/\s*\((input|output)\)\s*/gi, "").trim();
-              const suffix = kind === "input" ? "input" : "output";
-              devices.push({ name, fullName: `${name} (${suffix})`, kind, active });
-            }
-          }
-          const snapshot = JSON.stringify(devices);
-          if (snapshot !== recordingDevicesSnapshotRef.current) {
-            recordingDevicesSnapshotRef.current = snapshot;
-            setRecordingDevices(devices);
-          }
-        })
-        .catch(() => {});
-    };
-    fetchDevices();
-    const interval = setInterval(fetchDevices, 10000);
-    return () => { cancelled = true; clearInterval(interval); };
+      const visibleAudioDevices = Array.isArray(audioStatus)
+        ? audioStatus.filter((d) => d.is_running || d.is_user_disabled)
+        : [];
+
+      if (visibleAudioDevices.length > 0) {
+        for (const device of visibleAudioDevices) {
+          const kind = device.name.includes("(output)") ? "output" as const : "input" as const;
+          const name = device.name.replace(/\s*\((input|output)\)\s*/gi, "").trim();
+          devices.push({
+            name,
+            fullName: device.name,
+            kind,
+            active: device.is_running,
+          });
+        }
+      } else if (health?.device_status_details) {
+        // Fallback for older sidecars that do not expose /audio/device/status.
+        // Format: "DeviceName (input): active (last activity: 2s ago)"
+        for (const part of health.device_status_details.split(", ")) {
+          const match = part.split(": ");
+          if (match.length < 2) continue;
+          const nameAndType = match[0];
+          const active = match[1].startsWith("active");
+          const kind = nameAndType.includes("(input)") ? "input" as const
+            : nameAndType.includes("(output)") ? "output" as const
+            : "input" as const;
+          const name = nameAndType.replace(/\s*\((input|output)\)\s*/gi, "").trim();
+          const suffix = kind === "input" ? "input" : "output";
+          devices.push({ name, fullName: `${name} (${suffix})`, kind, active });
+        }
+      }
+
+      const snapshot = JSON.stringify(devices);
+      if (snapshot !== recordingDevicesSnapshotRef.current) {
+        recordingDevicesSnapshotRef.current = snapshot;
+        setRecordingDevices(devices);
+      }
+    } catch {
+      // Device status is advisory UI state; keep the last known snapshot.
+    }
   }, [settings.monitorIds, settings.useAllMonitors]);
+
+  useEffect(() => {
+    void refreshRecordingDevices();
+    const interval = setInterval(() => {
+      void refreshRecordingDevices();
+    }, 10000);
+    return () => { clearInterval(interval); };
+  }, [refreshRecordingDevices]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen("audio-device-status-changed", () => {
+      void refreshRecordingDevices();
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [refreshRecordingDevices]);
 
   // Active meeting state — lights up the phone icon for ANY active meeting
   // (manual OR auto-detected: Teams, Zoom, etc.).
@@ -836,6 +848,8 @@ function HomeContent() {
             meetingLoading={meetingLoading}
             onToggleMeeting={toggleMeeting}
             onFocusModeChange={handleMeetingFocusModeChange}
+            captureDevices={recordingDevices}
+            onCaptureDevicesRefresh={refreshRecordingDevices}
           />
         );
       case "help":

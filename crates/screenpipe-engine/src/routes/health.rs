@@ -78,6 +78,82 @@ fn suspected_stall_cause(read_idle: u32, write_idle: u32) -> &'static str {
     }
 }
 
+const SILENT_AUDIO_RMS_THRESHOLD: f64 = 0.001;
+
+fn capture_status(
+    audio_disabled: bool,
+    audio_status: &str,
+    active_audio_devices: usize,
+    active_input_devices: usize,
+    paused_audio_devices: usize,
+    paused_input_devices: usize,
+    transcription_paused: bool,
+    pending_transcription_segments: Option<u64>,
+    audio_level_rms: f64,
+    chunks_sent: u64,
+    last_audio_ts: u64,
+) -> CaptureStatusInfo {
+    let (status, severity, reason) = if audio_disabled {
+        (
+            "disabled",
+            "warning",
+            "audio capture is disabled for this recorder",
+        )
+    } else if paused_input_devices > 0 && active_input_devices == 0 {
+        (
+            "mic_paused",
+            "warning",
+            "all microphone input devices are paused by the user",
+        )
+    } else if audio_status == "not_started" {
+        (
+            "audio_not_started",
+            "warning",
+            "audio capture has not produced data yet",
+        )
+    } else if audio_status == "stale" || audio_status == "active_no_data" {
+        (
+            "audio_stalled",
+            "warning",
+            "audio capture is not reaching the recorder",
+        )
+    } else if transcription_paused {
+        (
+            "transcript_paused",
+            "warning",
+            "audio can continue, but transcription is paused",
+        )
+    } else if pending_transcription_segments.unwrap_or(0) > 0 {
+        (
+            "transcript_pending",
+            "waiting",
+            "audio is queued for transcription",
+        )
+    } else if audio_status == "ok"
+        && active_audio_devices > 0
+        && (chunks_sent > 0 || last_audio_ts > 0)
+        && audio_level_rms <= SILENT_AUDIO_RMS_THRESHOLD
+    {
+        (
+            "waiting_for_voice",
+            "waiting",
+            "audio capture is ready and waiting for speech",
+        )
+    } else {
+        ("recording", "ok", "audio capture is running")
+    };
+
+    CaptureStatusInfo {
+        status: status.to_string(),
+        severity: severity.to_string(),
+        reason: reason.to_string(),
+        audio_disabled,
+        active_audio_devices,
+        paused_audio_devices,
+        pending_transcription_segments,
+    }
+}
+
 use screenpipe_screen::monitor::{
     get_cached_monitor_descriptions, get_monitor_by_id, list_monitors, list_monitors_detailed,
     MonitorListError,
@@ -104,6 +180,10 @@ pub struct HealthCheckResponse {
     pub message: String,
     pub verbose_instructions: Option<String>,
     pub device_status_details: Option<String>,
+    /// Explicit audio capture state for meeting/live-note UIs. This avoids
+    /// clients inferring "recording" from meeting activity when the mic is
+    /// paused, disabled, stalled, or only waiting for speech.
+    pub capture_status: CaptureStatusInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitors: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,6 +216,21 @@ pub struct HealthCheckResponse {
     /// Screenpipe version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+}
+
+#[derive(Serialize, OaSchema, Deserialize, Clone)]
+pub struct CaptureStatusInfo {
+    /// Stable machine-readable status.
+    pub status: String,
+    /// One of `ok`, `waiting`, or `warning`.
+    pub severity: String,
+    /// Short diagnostic reason for clients and logs.
+    pub reason: String,
+    pub audio_disabled: bool,
+    pub active_audio_devices: usize,
+    pub paused_audio_devices: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_transcription_segments: Option<u64>,
 }
 
 #[derive(Serialize, OaSchema, Deserialize, Clone)]
@@ -283,6 +378,15 @@ fn degraded_response() -> HealthCheckResponse {
         message: "health check timed out before producing a snapshot".to_string(),
         verbose_instructions: None,
         device_status_details: None,
+        capture_status: CaptureStatusInfo {
+            status: "unknown".to_string(),
+            severity: "warning".to_string(),
+            reason: "health check timed out before producing a snapshot".to_string(),
+            audio_disabled: false,
+            active_audio_devices: 0,
+            paused_audio_devices: 0,
+            pending_transcription_segments: None,
+        },
         monitors: None,
         pipeline: None,
         audio_pipeline: None,
@@ -352,6 +456,11 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // Get the status of all devices
     let audio_devices = state.audio_manager.current_devices();
+    let user_disabled_audio_devices: std::collections::HashSet<String> = if !state.audio_disabled {
+        state.audio_manager.user_disabled_devices().await
+    } else {
+        std::collections::HashSet::new()
+    };
     let mut device_statuses = Vec::new();
     let mut global_audio_active = false;
     let mut most_recent_audio_timestamp = 0; // Track the most recent timestamp
@@ -619,6 +728,38 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         "stale".to_string()
     };
 
+    let transcription_paused = if !state.audio_disabled {
+        state
+            .audio_manager
+            .transcription_paused
+            .load(Ordering::Relaxed)
+    } else {
+        false
+    };
+    let active_audio_devices = audio_devices.len();
+    let active_input_devices = audio_devices
+        .iter()
+        .filter(|device| device.to_string().contains("(input)"))
+        .count();
+    let paused_audio_devices = user_disabled_audio_devices.len();
+    let paused_input_devices = user_disabled_audio_devices
+        .iter()
+        .filter(|device| device.contains("(input)"))
+        .count();
+    let capture_status = capture_status(
+        state.audio_disabled,
+        &audio_status,
+        active_audio_devices,
+        active_input_devices,
+        paused_audio_devices,
+        paused_input_devices,
+        transcription_paused,
+        pending_transcription_segments,
+        audio_snap.audio_level_rms,
+        audio_snap.chunks_sent,
+        last_audio_ts,
+    );
+
     // Format device statuses as a string for a more detailed view
     let device_status_details = if !device_statuses.is_empty() {
         let now_secs = now.timestamp() as u64;
@@ -853,6 +994,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         message,
         verbose_instructions,
         device_status_details,
+        capture_status,
         monitors,
         pipeline,
         accessibility: {
@@ -875,11 +1017,6 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             }
         },
         audio_pipeline: if !state.audio_disabled {
-            let is_paused = state
-                .audio_manager
-                .transcription_paused
-                .load(Ordering::Relaxed);
-
             // meeting_detected / meeting_app were queried earlier (next to
             // the stall gates that depend on them) — reuse them here.
             let device_names: Vec<String> = audio_devices.iter().map(|d| d.to_string()).collect();
@@ -922,7 +1059,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 } else {
                     Some("realtime".to_string())
                 },
-                transcription_paused: Some(is_paused),
+                transcription_paused: Some(transcription_paused),
                 segments_deferred: if audio_snap.segments_deferred > 0 {
                     Some(audio_snap.segments_deferred)
                 } else {
@@ -1076,6 +1213,15 @@ mod tests {
             message: "test".to_string(),
             verbose_instructions: None,
             device_status_details: None,
+            capture_status: CaptureStatusInfo {
+                status: "recording".to_string(),
+                severity: "ok".to_string(),
+                reason: "audio capture is running".to_string(),
+                audio_disabled: false,
+                active_audio_devices: 1,
+                paused_audio_devices: 0,
+                pending_transcription_segments: None,
+            },
             monitors: None,
             pipeline: None,
             audio_pipeline: None,

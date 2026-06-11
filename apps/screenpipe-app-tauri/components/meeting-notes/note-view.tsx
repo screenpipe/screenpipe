@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   AudioLines,
   Calendar,
@@ -60,6 +61,11 @@ import {
   formatDuration,
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
+import type {
+  LiveCaptureDevice,
+  LiveCaptureState,
+} from "@/lib/utils/live-capture-state";
+import { isLiveCaptureDegraded } from "@/lib/utils/live-capture-state";
 import {
   buildEnrichedSummarizePrompt,
   extractImageDataUrlsFromMarkdown,
@@ -100,6 +106,9 @@ interface NoteViewProps {
   onResume: () => void | Promise<void>;
   onSaved: (meeting: MeetingRecord) => void;
   onDeleted: (id: number) => void;
+  captureState?: LiveCaptureState;
+  captureDevices?: LiveCaptureDevice[];
+  onCaptureDevicesRefresh?: () => void | Promise<void>;
   calendarEvents?: CalendarEvent[];
   initialTranscriptOpen?: boolean;
   transcriptOpenRequestKey?: number;
@@ -111,8 +120,9 @@ type SaveState =
   | { kind: "saved"; at: number }
   | { kind: "error"; reason: string };
 
-interface AudioStatusDevice {
+interface AudioStatusDevice extends LiveCaptureDevice {
   name: string;
+  fullName?: string;
   kind: "input" | "output";
   active: boolean;
   level: number;
@@ -142,6 +152,9 @@ export function NoteView({
   onResume,
   onSaved,
   onDeleted,
+  captureState,
+  captureDevices = [],
+  onCaptureDevicesRefresh,
   calendarEvents = [],
   initialTranscriptOpen = false,
   transcriptOpenRequestKey,
@@ -156,6 +169,7 @@ export function NoteView({
   const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [resumingCapture, setResumingCapture] = useState(false);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
   const [transcriptOpen, setTranscriptOpenState] = useState(() =>
     initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
@@ -842,6 +856,53 @@ export function NoteView({
     await onResume();
   };
 
+  const pausedInputDevices = useMemo(
+    () =>
+      captureDevices.filter(
+        (device) => device.kind === "input" && !device.active,
+      ),
+    [captureDevices],
+  );
+
+  const handleResumeInputCapture = async () => {
+    if (pausedInputDevices.length === 0) return;
+    setResumingCapture(true);
+    try {
+      await Promise.all(
+        pausedInputDevices.map((device) =>
+          localFetch("/audio/device/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              device_name: device.fullName ?? `${device.name} (input)`,
+            }),
+          }).then((response) => {
+            if (!response.ok) {
+              throw new Error(`audio device start failed: ${response.status}`);
+            }
+          }),
+        ),
+      );
+      try {
+        await onCaptureDevicesRefresh?.();
+      } catch (refreshErr) {
+        console.warn("meeting notes: failed to refresh capture devices", refreshErr);
+      }
+      toast({
+        title: "microphone capture resumed",
+        description: "Transcript should start once speech is detected.",
+      });
+    } catch (err) {
+      toast({
+        title: "couldn't resume microphone",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setResumingCapture(false);
+    }
+  };
+
   const handleJoinMeeting = async (link: CalendarMeetingLink) => {
     try {
       await openExternal(link.url);
@@ -1031,12 +1092,21 @@ export function NoteView({
               onDismiss={() => setDismissedJoinUrl(joinSuggestion.link.url)}
             />
           )}
+          {isLive && captureState && isLiveCaptureDegraded(captureState) && (
+            <LiveCaptureIssueBanner
+              state={captureState}
+              canResumeInput={pausedInputDevices.length > 0}
+              resuming={resumingCapture}
+              onResumeInput={() => void handleResumeInputCapture()}
+            />
+          )}
           <TranscriptPanel
             meeting={meeting}
             isOpen={transcriptOpen}
             onClose={() => setTranscriptOpen(false)}
             isLive={isLive}
             refreshKey={transcriptRefreshKey}
+            captureState={captureState}
             headerActions={
               <AudioHealthButton
                 devices={audioStatusDevices}
@@ -1052,7 +1122,9 @@ export function NoteView({
               <span
                 className={cn(
                   "flex h-8 w-8 shrink-0 items-center justify-center border border-border",
-                  isLive
+                  isLive && captureState?.severity === "warning"
+                    ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                    : isLive
                     ? "bg-foreground text-background"
                     : "bg-muted text-muted-foreground",
                 )}
@@ -1061,9 +1133,18 @@ export function NoteView({
               </span>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-sm font-medium">
-                  <span>{isLive ? "Recording" : "Meeting saved"}</span>
-                  {isLive && (
-                    <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
+                  <span>
+                    {isLive ? (captureState?.label ?? "Recording") : "Meeting saved"}
+                  </span>
+                  {isLive && captureState?.severity !== "warning" && (
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        captureState?.severity === "waiting"
+                          ? "bg-muted-foreground"
+                          : "bg-foreground animate-pulse",
+                      )}
+                    />
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
@@ -1427,6 +1508,51 @@ function InactivityResumeBanner({
   );
 }
 
+function LiveCaptureIssueBanner({
+  state,
+  canResumeInput,
+  resuming,
+  onResumeInput,
+}: {
+  state: LiveCaptureState;
+  canResumeInput: boolean;
+  resuming: boolean;
+  onResumeInput: () => void;
+}) {
+  return (
+    <div className="mb-3 flex items-center justify-between gap-3 border border-amber-500/30 bg-amber-500/10 px-3 py-2 shadow-sm">
+      <div className="flex min-w-0 items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
+        <div className="min-w-0">
+          <div className="text-sm font-medium leading-snug text-foreground">
+            {state.label}
+          </div>
+          <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+            {state.description}
+            {state.recordingContinues ? " Recording continues." : ""}
+          </div>
+        </div>
+      </div>
+      {canResumeInput && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="h-8 shrink-0 rounded-none px-3"
+          onClick={onResumeInput}
+          disabled={resuming}
+        >
+          {resuming ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            "resume mic"
+          )}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function AudioDeviceRow({
   icon,
   label,
@@ -1689,6 +1815,7 @@ function parseAudioStatusDevices(
     if (!name) continue;
     devices.push({
       name,
+      fullName: nameAndType,
       kind,
       active: status.toLowerCase().startsWith("active"),
       level: audioDeviceLevelFor(

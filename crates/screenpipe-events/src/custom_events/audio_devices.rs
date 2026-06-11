@@ -66,3 +66,37 @@ impl AudioDeviceFallbackEvent {
         }
     }
 }
+
+/// Published as `"audio_device_status_changed"` when a user explicitly
+/// pauses or resumes an audio device through the local API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioDeviceStatusChangedEvent {
+    /// Full device name, e.g. `"MacBook Air Microphone (input)"`.
+    pub device_name: String,
+    /// True when the device is currently recording.
+    pub is_running: bool,
+    /// True when the user explicitly paused the device.
+    pub is_user_disabled: bool,
+}
+
+impl AudioDeviceStatusChangedEvent {
+    pub fn started(device_name: impl Into<String>) -> Self {
+        Self {
+            device_name: device_name.into(),
+            is_running: true,
+            is_user_disabled: false,
+        }
+    }
+
+    pub fn stopped(device_name: impl Into<String>) -> Self {
+        Self {
+            device_name: device_name.into(),
+            is_running: false,
+            is_user_disabled: true,
+        }
+    }
+
+    pub fn event_name(&self) -> &'static str {
+        "audio_device_status_changed"
+    }
+}
