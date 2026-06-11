@@ -28,7 +28,7 @@ pre-commit:
         crates=$(echo "{staged_files}" | tr ' ' '\n' \
           | grep -oE 'crates/[^/]+' | sort -u | sed 's|crates/||')
         for c in $crates; do
-          cargo clippy -p "screenpipe-$c" --all-targets -- -W clippy::all
+          cargo clippy -p "$c" --all-targets -- -W clippy::all
         done
 
     biome:
