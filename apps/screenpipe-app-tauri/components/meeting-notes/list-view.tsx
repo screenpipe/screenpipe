@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatDuration, type MeetingRecord } from "@/lib/utils/meeting-format";
+import type { LiveCaptureState } from "@/lib/utils/live-capture-state";
 import type { CalendarEvent, CalendarSource } from "@/lib/utils/calendar";
 import { ComingUp, type ComingUpStatus } from "./coming-up";
 import { PastMeetings } from "./past-meetings";
@@ -42,6 +43,7 @@ interface ListViewProps {
   onOpenCalendarConnections: () => void;
   onCalendarConnectionChange: () => void | Promise<void>;
   meetingActive: boolean;
+  captureState?: LiveCaptureState;
   searchInput: string;
   onSearchInputChange: (value: string) => void;
   searching: boolean;
@@ -70,6 +72,7 @@ export function ListView({
   onOpenCalendarConnections,
   onCalendarConnectionChange,
   meetingActive,
+  captureState,
   searchInput,
   onSearchInputChange,
   searching,
@@ -92,6 +95,7 @@ export function ListView({
               onOpen={() => onSelect(activeMeeting.id)}
               onStop={onStop}
               stopping={starting}
+              captureState={captureState}
             />
           ) : (
             !trulyEmpty && (
@@ -288,24 +292,41 @@ function RecordingStrip({
   onOpen,
   onStop,
   stopping,
+  captureState,
 }: {
   meeting: MeetingRecord;
   onOpen: () => void;
   onStop: () => void | Promise<void>;
   stopping: boolean;
+  captureState?: LiveCaptureState;
 }) {
   const title = meeting.title?.trim() || "untitled meeting";
   const duration = formatDuration(meeting.meeting_start, meeting.meeting_end);
+  const statusLabel = captureState?.shortLabel ?? "recording";
+  const degraded = captureState?.severity === "warning";
+  const waiting = captureState?.severity === "waiting";
   return (
-    <div className="border border-foreground/30 bg-muted/20 px-4 py-3 flex items-center gap-3">
+    <div
+      className={cn(
+        "border bg-muted/20 px-4 py-3 flex items-center gap-3",
+        degraded ? "border-amber-500/40" : "border-foreground/30",
+      )}
+    >
       <span
-        className="h-2 w-2 rounded-full bg-foreground animate-pulse shrink-0"
-        aria-label="recording"
+        className={cn(
+          "h-2 w-2 rounded-full shrink-0",
+          degraded
+            ? "bg-amber-500"
+            : waiting
+              ? "bg-muted-foreground"
+              : "bg-foreground animate-pulse",
+        )}
+        aria-label={statusLabel}
       />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[10px] uppercase tracking-[0.18em] text-foreground/80 shrink-0">
-            recording
+            {statusLabel}
           </span>
           <span className="text-muted-foreground/60" aria-hidden>
             ·

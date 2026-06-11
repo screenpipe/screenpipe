@@ -597,6 +597,37 @@ fn copy_permission_flow_bundle() {
             panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set")
         });
 
+    // permission-flow's build.rs predicts the SwiftPM output dir from the
+    // TARGET arch, but swift-rs 1.0.7 always passes `--arch <host>` (codegen
+    // is overridden via `-Xswiftc -target`), so products land in the
+    // HOST-arch-named dir. On cross-compiles (x86_64 app build on arm64 CI)
+    // the predicted path is wrong; probe the host-arch sibling before
+    // concluding the bundle wasn't emitted.
+    let bundle_src = if bundle_src.exists() {
+        bundle_src
+    } else {
+        let host_arch = match std::env::consts::ARCH {
+            "aarch64" => "arm64",
+            a => a,
+        };
+        bundle_src
+            .parent() // <config>/
+            .and_then(|c| c.parent()) // <arch>-apple-macosx/
+            .and_then(|a| a.parent()) // PermissionFlowShimFFI/
+            .map(|ffi| {
+                ffi.join(format!("{host_arch}-apple-macosx"))
+                    .join(
+                        bundle_src
+                            .parent()
+                            .and_then(|c| c.file_name())
+                            .unwrap_or_default(),
+                    )
+                    .join(bundle_name)
+            })
+            .filter(|p| p.exists())
+            .unwrap_or(bundle_src)
+    };
+
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let bundle_dst = std::path::PathBuf::from(&manifest_dir).join(bundle_name);
 

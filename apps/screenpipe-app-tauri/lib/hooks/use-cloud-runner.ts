@@ -45,10 +45,22 @@ export interface CloudRunnerInfo {
 export interface OrgPipe {
   name: string;
   display_name: string;
-  schedule: string;
+  schedule: string | null;
   enabled: boolean;
   version: number;
-  updated_at: string;
+  updated_at: string | null;
+  /** "dashboard" = enterprise managed pipe, "team" = shared from the app */
+  source: "dashboard" | "team";
+}
+
+/** Which AI the runner uses. Org-managed presets from the enterprise
+ * dashboard flow to the VM automatically (same policy poll as devices);
+ * presets with their own endpoint + key are self-sufficient in the cloud,
+ * screenpipe-cloud ones still need the manual runner key. */
+export interface CloudAiSummary {
+  managed_preset_count: number;
+  default_preset: { id: string; provider: string; model: string } | null;
+  usable_in_cloud: boolean;
 }
 
 interface CloudRunnerState {
@@ -59,6 +71,7 @@ interface CloudRunnerState {
   orgName: string | null;
   runner: CloudRunnerInfo | null;
   orgPipes: OrgPipe[];
+  ai: CloudAiSummary | null;
 }
 
 export function useCloudRunner(active: boolean) {
@@ -72,6 +85,7 @@ export function useCloudRunner(active: boolean) {
     orgName: null,
     runner: null,
     orgPipes: [],
+    ai: null,
   });
   const [mutating, setMutating] = useState(false);
 
@@ -107,6 +121,7 @@ export function useCloudRunner(active: boolean) {
         orgName: data.org_name || null,
         runner: data.runner || null,
         orgPipes: data.org_pipes || [],
+        ai: data.ai || null,
       });
     } catch (e: any) {
       setState((s) => ({

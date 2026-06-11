@@ -47,6 +47,7 @@ import {
   CONVERSATION_DEDUP_WINDOW_MS,
   __resetChatStorageCachesForTests,
   conversationDedupKey,
+  conversationMetaFromJson,
   dedupeConversationMetas,
   listConversations,
   searchConversations,
@@ -178,6 +179,38 @@ describe("chat-storage bounded history", () => {
     });
 
     expect(rows.map((row) => row.id)).toEqual(["visible-old"]);
+  });
+
+  it("repairs stale persisted lastUserMessageAt from newer user-message timestamps", () => {
+    const meta = conversationMetaFromJson({
+      id: "stale-last-user",
+      title: "stale-last-user",
+      createdAt: 100,
+      updatedAt: 5_000,
+      lastUserMessageAt: 1_000,
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "first",
+          timestamp: 1_000,
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "reply",
+          timestamp: 1_500,
+        },
+        {
+          id: "u2",
+          role: "user",
+          content: "latest",
+          timestamp: 4_500,
+        },
+      ],
+    });
+
+    expect(meta?.lastUserMessageAt).toBe(4_500);
   });
 });
 

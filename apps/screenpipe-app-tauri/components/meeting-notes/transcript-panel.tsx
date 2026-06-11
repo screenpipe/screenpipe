@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import type { LiveCaptureState } from "@/lib/utils/live-capture-state";
 import {
   fetchMeetingAudio,
   type MeetingAudioChunk,
@@ -40,6 +41,7 @@ interface TranscriptPanelProps {
   /** Incremented by the parent after a meeting-level retranscribe finishes. */
   refreshKey?: number;
   headerActions?: React.ReactNode;
+  captureState?: LiveCaptureState;
 }
 
 const AUTO_FOLLOW_THRESHOLD_PX = 48;
@@ -253,6 +255,7 @@ export function TranscriptPanel({
   isLive,
   refreshKey = 0,
   headerActions,
+  captureState,
 }: TranscriptPanelProps) {
   const [chunks, setChunks] = useState<MeetingAudioChunk[]>([]);
   const [loading, setLoading] = useState(false);
@@ -605,9 +608,11 @@ export function TranscriptPanel({
       return `${liveErrorSummary(liveError)}. Background recording is still running.`;
     }
     if (chunks.length === 0 && visibleLiveBlocks.length === 0) {
-      return isLive
-        ? "no transcript captured yet — speak into your mic or wait a moment"
-        : "no transcript was captured for this meeting";
+      if (!isLive) return "no transcript was captured for this meeting";
+      return (
+        captureState?.transcriptEmptyCopy ??
+        "listening — transcript will appear when the first segment arrives"
+      );
     }
     if (filteredBlocks.length === 0 && query.trim()) {
       return `no matches for "${query.trim()}"`;
@@ -622,6 +627,7 @@ export function TranscriptPanel({
     loaded,
     isLive,
     liveError,
+    captureState,
   ]);
   const compactEmptyState =
     Boolean(emptyCopy) && !loading && !hasTranscriptContent;

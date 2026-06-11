@@ -282,16 +282,20 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
   if (!conv || typeof conv.id !== "string") return null;
 
   const messages = Array.isArray(conv.messages) ? conv.messages : [];
-  let lastUserMessageAt = conv.lastUserMessageAt;
-  if (lastUserMessageAt == null) {
-    for (const m of messages) {
-      if (m?.role === "user" && typeof m.timestamp === "number") {
-        if (lastUserMessageAt == null || m.timestamp > lastUserMessageAt) {
-          lastUserMessageAt = m.timestamp;
-        }
+  let newestUserMessageAt: number | undefined;
+  for (const m of messages) {
+    if (m?.role === "user" && typeof m.timestamp === "number") {
+      if (newestUserMessageAt == null || m.timestamp > newestUserMessageAt) {
+        newestUserMessageAt = m.timestamp;
       }
     }
   }
+  const persistedLastUserMessageAt =
+    typeof conv.lastUserMessageAt === "number" ? conv.lastUserMessageAt : undefined;
+  const lastUserMessageAt =
+    newestUserMessageAt == null
+      ? persistedLastUserMessageAt
+      : Math.max(persistedLastUserMessageAt ?? 0, newestUserMessageAt);
 
   // lastContentAt: prefer the persisted field; fall back to
   // lastUserMessageAt for older on-disk files that predate it.

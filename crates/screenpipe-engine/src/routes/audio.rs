@@ -13,10 +13,12 @@ use oasgen::{oasgen, OaSchema};
 use screenpipe_audio::core::device::{
     default_input_device, default_output_device, list_audio_devices,
 };
+use screenpipe_events::{send_event, AudioDeviceStatusChangedEvent};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tracing::warn;
 
 use crate::server::AppState;
 
@@ -101,6 +103,11 @@ pub(crate) async fn start_audio_device(
         ));
     }
 
+    let event = AudioDeviceStatusChangedEvent::started(device_name.clone());
+    if let Err(err) = send_event(event.event_name(), event) {
+        warn!("failed to publish audio device status change: {}", err);
+    }
+
     Ok(Json(AudioDeviceControlResponse {
         success: true,
         message: format!("started device: {}", device_name),
@@ -122,6 +129,11 @@ pub(crate) async fn stop_audio_device(
                 "message": format!("Failed to stop recording device {}: {}", device_name, e)
             })),
         ));
+    }
+
+    let event = AudioDeviceStatusChangedEvent::stopped(device_name.clone());
+    if let Err(err) = send_event(event.event_name(), event) {
+        warn!("failed to publish audio device status change: {}", err);
     }
 
     Ok(Json(AudioDeviceControlResponse {

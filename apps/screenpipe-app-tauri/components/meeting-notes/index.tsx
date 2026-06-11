@@ -14,6 +14,11 @@ import { Loader2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
+import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import {
+  computeLiveCaptureState,
+  type LiveCaptureDevice,
+} from "@/lib/utils/live-capture-state";
 import type { MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
 import {
@@ -40,6 +45,8 @@ interface MeetingNotesSectionProps {
     attendees?: string;
     resumeMeetingId?: number;
   }) => Promise<MeetingRecord | void> | MeetingRecord | void;
+  captureDevices?: LiveCaptureDevice[];
+  onCaptureDevicesRefresh?: () => void | Promise<void>;
   /**
    * Called when the section enters or exits focused note mode.
    * The host (HomeContent) collapses the sidebar on enter and
@@ -53,8 +60,11 @@ export function MeetingNotesSection({
   meetingState,
   meetingLoading,
   onToggleMeeting,
+  captureDevices = [],
+  onCaptureDevicesRefresh,
   onFocusModeChange,
 }: MeetingNotesSectionProps) {
+  const { health } = useHealthCheck();
   const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -536,6 +546,15 @@ export function MeetingNotesSection({
   const activeMeeting = activeId
     ? (meetings.find((m) => m.id === activeId) ?? null)
     : null;
+  const activeCaptureState = useMemo(
+    () =>
+      computeLiveCaptureState({
+        isLive: meetingState.active === true,
+        health,
+        devices: captureDevices,
+      }),
+    [captureDevices, health, meetingState.active],
+  );
   const comingUp = useMemo(
     () =>
       pickComingUp(upcoming, {
@@ -591,6 +610,9 @@ export function MeetingNotesSection({
         onResume={() => handleResume(selected)}
         onSaved={handleSaved}
         onDeleted={handleDeleted}
+        captureState={isLive ? activeCaptureState : undefined}
+        captureDevices={captureDevices}
+        onCaptureDevicesRefresh={onCaptureDevicesRefresh}
         calendarEvents={upcoming}
         initialTranscriptOpen={openTranscriptRequest?.id === selected.id}
         transcriptOpenRequestKey={
@@ -625,6 +647,7 @@ export function MeetingNotesSection({
       onOpenCalendarConnections={openCalendarConnections}
       onCalendarConnectionChange={refreshUpcoming}
       meetingActive={meetingState.active === true}
+      captureState={activeCaptureState}
       searchInput={searchInput}
       onSearchInputChange={setSearchInput}
       searching={refetching}

@@ -748,7 +748,16 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       const title = existing?.title || derivedTitle;
 
       const storeSession = useChatStore.getState().sessions[sid];
+      let computedLastUserMessageAt: number | undefined;
+      for (const message of messages as any[]) {
+        if (message?.role !== "user" || typeof message.timestamp !== "number") continue;
+        if (computedLastUserMessageAt == null || message.timestamp > computedLastUserMessageAt) {
+          computedLastUserMessageAt = message.timestamp;
+        }
+      }
+
       const lastUserMessageAt =
+        computedLastUserMessageAt ??
         storeSession?.lastUserMessageAt ??
         existing?.lastUserMessageAt;
 

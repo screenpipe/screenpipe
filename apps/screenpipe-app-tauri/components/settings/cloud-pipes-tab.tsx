@@ -216,9 +216,20 @@ export function CloudPipesTab({ active }: { active: boolean }) {
               ) : (
                 <>
                   <span className="text-xs text-muted-foreground flex-1">
-                    {r.has_ai_key ? "AI key configured for cloud pipes" : "no AI key — pipes that call models will fail in the cloud"}
+                    {r.has_ai_key
+                      ? "AI key set for the runner"
+                      : cloud.ai?.usable_in_cloud && cloud.ai.default_preset
+                        ? `AI: org preset "${cloud.ai.default_preset.id}" (${cloud.ai.default_preset.model}) from the dashboard`
+                        : cloud.ai?.default_preset
+                          ? `org preset "${cloud.ai.default_preset.id}" is ${cloud.ai.default_preset.provider}, the runner needs a key for it`
+                          : "no AI configured. set an org preset in the enterprise dashboard, or add a key here"}
                   </span>
-                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setShowAiKeyInput(true)}>
+                  <Button
+                    variant={cloud.ai?.usable_in_cloud || r.has_ai_key ? "ghost" : "outline"}
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setShowAiKeyInput(true)}
+                  >
                     {r.has_ai_key ? "replace" : "add key"}
                   </Button>
                   {r.has_ai_key && (
@@ -237,8 +248,8 @@ export function CloudPipesTab({ active }: { active: boolean }) {
       {/* org managed pipes — managed in the enterprise dashboard */}
       {cloud.orgPipes.length === 0 ? (
         <EmptyState
-          title="no managed pipes in your org"
-          body="push a pipe from the enterprise dashboard (or the v1 pipes api) and the runner picks it up within a minute."
+          title="no pipes for the runner yet"
+          body="share a pipe to your team (share button on any pipe) or push one from the enterprise dashboard. the runner picks it up within a minute."
         />
       ) : (
         <div className="space-y-1.5">
@@ -252,11 +263,14 @@ export function CloudPipesTab({ active }: { active: boolean }) {
                     <div className="flex items-center gap-2">
                       <span className="text-sm truncate">{pipe.display_name || pipe.name}</span>
                       <span className="text-[10px] text-muted-foreground">v{pipe.version}</span>
+                      <Badge variant="outline" className="text-[10px] opacity-70">
+                        {pipe.source === "team" ? "team share" : "dashboard"}
+                      </Badge>
                       {ps?.is_running && <Badge variant="outline" className="text-[10px]">running</Badge>}
                       {!pipe.enabled && <Badge variant="outline" className="text-[10px] opacity-60">disabled</Badge>}
                     </div>
                     <p className="text-xs text-muted-foreground truncate">
-                      {pipe.schedule}
+                      {pipe.schedule || "manual"}
                       {ps?.last_run_at
                         ? ` · last run ${timeAgo(ps.last_run_at)}${ps.last_run_status ? ` (${ps.last_run_status})` : ""}`
                         : r.status === "running"
