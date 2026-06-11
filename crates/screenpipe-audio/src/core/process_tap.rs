@@ -10,7 +10,7 @@
 //! returns empty displays after sleep/wake cycles.
 
 use anyhow::{anyhow, Result};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -301,6 +301,11 @@ mod exclusions {
 // IO proc callback
 // ---------------------------------------------------------------------------
 
+/// Monotonic generation id assigned to each tap build. Logged on lifecycle
+/// events and sampled from the callback so a stale-generation call (a callback
+/// firing for a tap we thought we'd torn down) is visible in a support log.
+static TAP_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 struct TapCallbackCtx {
     tx: broadcast::Sender<Vec<f32>>,
     channels: u16,
@@ -310,6 +315,26 @@ struct TapCallbackCtx {
     // and with the polling thread below (drops the whole capture in ~30μs).
     // cpal/SCK paths don't check is_running either — only is_disconnected.
     is_disconnected: Arc<AtomicBool>,
+
+    // --- Teardown coordination (fixes the IO-callback-vs-stop UAF) ---
+    //
+    // CoreAudio's IO thread (HALC_ProxyIOContext::IOWorkLoop) can be executing
+    // `tap_io_proc` while the rebuild thread tears this capture down. cidre's
+    // StartedDevice::drop calls only AudioDeviceStop, which does NOT drain an
+    // in-flight callback on an aggregate/proxy device, so freeing this ctx
+    // right after the stop is a use-after-free. These three fields let the
+    // teardown path keep the ctx alive until no callback can touch it.
+    /// Generation id for this build. Diagnostics only.
+    generation: u64,
+    /// Set true at the very start of teardown, BEFORE AudioDeviceStop, so a
+    /// callback CoreAudio dispatches during the stop/destroy window does no
+    /// work (never touches `tx`) and returns immediately.
+    stopping: AtomicBool,
+    /// Number of callbacks currently inside `tap_io_proc` for this ctx.
+    /// Incremented on entry, decremented on every exit. Teardown drains this
+    /// to zero — after the device is stopped + destroyed, so no *new* callback
+    /// can start — before freeing the ctx.
+    active: AtomicUsize,
 }
 
 // Diagnostic counters — report callback rate + peak amplitude at INFO level
@@ -366,6 +391,26 @@ extern "C" fn tap_io_proc(
         None => return Default::default(),
     };
 
+    // RAII active-call guard. Mark this callback in-flight before doing any
+    // work and clear it on every return path. Teardown waits for the count to
+    // reach zero before freeing `ctx`, so the pointer CoreAudio handed us
+    // stays valid for the whole duration of this call. Acquire/Release pair
+    // with the teardown's load so the drain observes our increment.
+    ctx.active.fetch_add(1, Ordering::Acquire);
+    struct ActiveGuard<'a>(&'a AtomicUsize);
+    impl Drop for ActiveGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::Release);
+        }
+    }
+    let _active = ActiveGuard(&ctx.active);
+
+    // Teardown has begun (stop/destroy in progress). Drop the frame; do not
+    // touch `tx` or buffers. The guard above still drains us correctly.
+    if ctx.stopping.load(Ordering::Acquire) {
+        return Default::default();
+    }
+
     if ctx.is_disconnected.load(Ordering::Relaxed) {
         return Default::default();
     }
@@ -407,8 +452,8 @@ extern "C" fn tap_io_proc(
         let max_amp = f32::from_bits(TAP_MAX_AMP_BITS.swap(0, Ordering::Relaxed));
         let rate = count as f64 / 10.0;
         info!(
-            "[tap_io_proc] {:.1} callbacks/s over 10s, {} samples/call, peak_amp={:.5}, ch={}",
-            rate, sample_count, max_amp, ctx.channels
+            "[tap_io_proc] gen {} — {:.1} callbacks/s over 10s, {} samples/call, peak_amp={:.5}, ch={}",
+            ctx.generation, rate, sample_count, max_amp, ctx.channels
         );
     }
 
@@ -423,26 +468,85 @@ extern "C" fn tap_io_proc(
 // ---------------------------------------------------------------------------
 
 /// Owns all CoreAudio resources for a Process Tap capture session.
-/// Drop order: _started (stops IO) → _tap (destroys tap) → _ctx_ptr (frees memory).
+///
+/// Teardown order (see `Drop`): mark `stopping` → stop+destroy the device →
+/// drain in-flight callbacks → free the ctx → (`_tap` destroyed last by the
+/// compiler-generated field drop).
 struct ProcessTapCapture {
     _started: Option<cidre::core_audio::hardware::StartedDevice<ca::AggregateDevice>>,
     _tap: ca::hardware_tapping::TapGuard,
     _ctx_ptr: *mut TapCallbackCtx,
+    generation: u64,
 }
 
 unsafe impl Send for ProcessTapCapture {}
 
 impl Drop for ProcessTapCapture {
     fn drop(&mut self) {
-        info!("Process Tap capture stopping");
-        // Drop started device first to stop CoreAudio thread synchronously before freeing context
+        let generation = self.generation;
+        info!("Process Tap gen {} stopping", generation);
+
+        // 1. Signal teardown BEFORE stopping the device. Any callback CoreAudio
+        //    dispatches during the stop/destroy window will see this and return
+        //    without touching `tx` — but it still bumps `active`, so the drain
+        //    below waits for it.
+        if !self._ctx_ptr.is_null() {
+            unsafe { (*self._ctx_ptr).stopping.store(true, Ordering::Release) };
+        }
+
+        // 2. Stop the IO proc and destroy the aggregate device. cidre's
+        //    StartedDevice::drop does AudioDeviceStop, then dropping the
+        //    AggregateDevice calls AudioHardwareDestroyAggregateDevice. After
+        //    this returns, CoreAudio will not *begin* new IO callbacks for this
+        //    generation; at most one may still be in-flight from before the stop.
         if let Some(started) = self._started.take() {
             std::mem::drop(started);
         }
+
+        // 3. Drain in-flight callbacks. A callback that started before the stop
+        //    completed has already dereferenced `ctx` (valid then) and bumped
+        //    `active`; wait for it to exit so we never free underneath it. This
+        //    is the fix for the IO-thread vs StopIOProc use-after-free.
+        //
+        //    Bounded: tap callbacks run for ~microseconds, so this returns
+        //    almost immediately. If something pathological keeps a callback
+        //    "active" past the deadline we LEAK the ctx rather than free memory
+        //    CoreAudio might still touch — a small one-time leak is strictly
+        //    better than a segfault.
         if !self._ctx_ptr.is_null() {
+            let active = unsafe { &(*self._ctx_ptr).active };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let mut spins: u64 = 0;
+            loop {
+                let in_flight = active.load(Ordering::Acquire);
+                if in_flight == 0 {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    warn!(
+                        "Process Tap gen {} teardown: {} callback(s) still active after 500ms — \
+                         leaking ctx to avoid use-after-free",
+                        generation, in_flight
+                    );
+                    // Leak: skip the free below by nulling the pointer.
+                    self._ctx_ptr = std::ptr::null_mut();
+                    break;
+                }
+                std::hint::spin_loop();
+                spins = spins.wrapping_add(1);
+                if spins % 1024 == 0 {
+                    std::thread::yield_now();
+                }
+            }
+        }
+
+        // 4. No callback can run for this generation now — free the ctx.
+        if !self._ctx_ptr.is_null() {
+            debug!("Process Tap gen {} freeing ctx", generation);
             unsafe {
                 let _ = Box::from_raw(self._ctx_ptr);
             }
+            self._ctx_ptr = std::ptr::null_mut();
         }
     }
 }
@@ -541,10 +645,16 @@ fn build_capture(
     );
     let config = AudioStreamConfig::new(sample_rate as u32, channels);
 
+    let generation = TAP_GENERATION
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
     let mut ctx = Box::new(TapCallbackCtx {
         tx,
         channels,
         is_disconnected,
+        generation,
+        stopping: AtomicBool::new(false),
+        active: AtomicUsize::new(0),
     });
 
     let proc_id = agg_device
@@ -553,12 +663,17 @@ fn build_capture(
 
     let started = ca::device_start(agg_device, Some(proc_id))
         .map_err(|s| anyhow!("Failed to start aggregate device: {:?}", s))?;
+    debug!(
+        "Process Tap gen {} started (device '{}', {} ch)",
+        generation, output_uid_str, channels
+    );
 
     let ctx_ptr = Box::into_raw(ctx);
     let capture = ProcessTapCapture {
         _started: Some(started),
         _tap: tap,
         _ctx_ptr: ctx_ptr,
+        generation,
     };
 
     Ok((capture, config, output_uid_str, snapshot))
@@ -617,9 +732,18 @@ pub fn spawn_process_tap_capture(
         // actual cause is that nothing is playing (e.g. user isn't in a
         // call) rather than a broken anchor.
         const REBUILD_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+        // Exponential backoff for silence-driven rebuilds: if rebuilding doesn't
+        // restore audio, the cause is usually "nothing is playing" rather than a
+        // broken anchor, so doubling the cooldown each consecutive silence
+        // rebuild stops the once-a-minute teardown/start churn (and the extra
+        // CoreAudio teardown windows that go with it). Capped so the tap still
+        // recovers within a few minutes once audio resumes. Reset on real audio
+        // or any non-silence rebuild (device switch / exclusion change).
+        const SILENCE_BACKOFF_CAP: u32 = 4; // 60s → 120 → 240 → 480 → 960s max
 
         let mut silence_started: Option<std::time::Instant> = None;
         let mut last_rebuild: Option<std::time::Instant> = None;
+        let mut silence_rebuild_streak: u32 = 0;
 
         while !is_disconnected.load(Ordering::Relaxed) {
             std::thread::sleep(POLL);
@@ -631,6 +755,7 @@ pub fn spawn_process_tap_capture(
 
             if got_real_audio {
                 silence_started = None;
+                silence_rebuild_streak = 0;
             } else if window_callbacks > 0 {
                 // Callback IS firing — buffers are just silent. Start (or
                 // continue) the silence window.
@@ -643,11 +768,15 @@ pub fn spawn_process_tap_capture(
             // device-change path already covers it, and rebuilding when
             // the device is genuinely asleep will just fail.
 
+            // Cooldown grows with the consecutive-silence-rebuild streak.
+            let silence_cooldown = REBUILD_COOLDOWN
+                .checked_mul(1u32 << silence_rebuild_streak.min(SILENCE_BACKOFF_CAP))
+                .unwrap_or(REBUILD_COOLDOWN);
             let should_rebuild_for_silence = silence_started
                 .map(|t| t.elapsed().as_secs() >= WATCHDOG_SILENCE_SECS)
                 .unwrap_or(false)
                 && last_rebuild
-                    .map(|t| t.elapsed() >= REBUILD_COOLDOWN)
+                    .map(|t| t.elapsed() >= silence_cooldown)
                     .unwrap_or(true);
 
             // Check the current default output device UID.
@@ -713,6 +842,12 @@ pub fn spawn_process_tap_capture(
                 );
             }
 
+            // Whether this rebuild is purely silence-driven — used to drive the
+            // exponential backoff (a switch/exclusion rebuild resets it).
+            let silence_only_rebuild = should_rebuild_for_silence
+                && !should_rebuild_for_switch
+                && !should_rebuild_for_exclusions;
+
             // Drop the old capture BEFORE building the new one. The old
             // aggregate device is still bound to the previous sub-device
             // which is no longer the default — keeping it alive just wastes
@@ -749,6 +884,14 @@ pub fn spawn_process_tap_capture(
                     last_rebuild = Some(std::time::Instant::now());
                 }
             }
+
+            // Update the silence backoff: grow on a silence-only rebuild,
+            // reset on any switch/exclusion rebuild.
+            silence_rebuild_streak = if silence_only_rebuild {
+                silence_rebuild_streak.saturating_add(1)
+            } else {
+                0
+            };
         }
 
         drop(current);
