@@ -128,6 +128,7 @@ struct OwnedBrowserStateEvent {
     url: Option<String>,
     title: Option<String>,
     loading: Option<bool>,
+    navigation_id: Option<String>,
     /// Conversation/session that issued the navigation currently in flight.
     /// See [`OwnedBrowserNavigateEvent::owner`]. `None` means stale/legacy;
     /// supported restore/reload paths now send the foreground conversation id.
@@ -145,6 +146,7 @@ struct OwnedBrowserStateEvent {
 #[serde(rename_all = "camelCase")]
 struct OwnedBrowserNavigateEvent {
     url: String,
+    navigation_id: String,
     owner: Option<String>,
 }
 
@@ -161,6 +163,7 @@ struct BrowserSessionAccessRequestPayload {
     url: String,
     host: String,
     already_granted: bool,
+    navigation_id: Option<String>,
     /// Owner of the navigation that triggered this prompt — see
     /// [`OwnedBrowserNavigateEvent::owner`].
     owner: Option<String>,
@@ -178,6 +181,7 @@ struct V20CookieBlockPayload {
     /// "v20" = app-bound encryption blocked decrypt; "locked" = browser running, DB inaccessible
     #[serde(default)]
     reason: String,
+    navigation_id: Option<String>,
     /// Owner of the navigation that triggered this block — see
     /// [`OwnedBrowserNavigateEvent::owner`].
     owner: Option<String>,
@@ -308,6 +312,7 @@ struct OwnedBrowserInner {
 struct OwnedBrowserState {
     inner: Mutex<OwnedBrowserInner>,
     last_title: StdMutex<String>,
+    pending_navigation_id: StdMutex<Option<String>>,
     /// Owner (chat/session id) of the most recent navigation. Set by
     /// `prepare_navigation` and read by the native page-state / cookie event
     /// emitters, which fire from sync callbacks that don't carry the owner.
@@ -324,8 +329,22 @@ impl OwnedBrowserState {
         Self {
             inner: Mutex::new(OwnedBrowserInner::default()),
             last_title: StdMutex::new(String::new()),
+            pending_navigation_id: StdMutex::new(None),
             pending_owner: StdMutex::new(None),
         }
+    }
+
+    fn set_pending_navigation_id(&self, navigation_id: Option<String>) {
+        if let Ok(mut guard) = self.pending_navigation_id.lock() {
+            *guard = navigation_id;
+        }
+    }
+
+    fn pending_navigation_id(&self) -> Option<String> {
+        self.pending_navigation_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     fn set_pending_owner(&self, owner: Option<String>) {
@@ -393,6 +412,7 @@ fn emit_state_event(
         url,
         title,
         loading,
+        navigation_id: browser_state().pending_navigation_id(),
         // Native page-load/title callbacks don't know which navigation they
         // belong to; tag with the owner of the most recent navigate so the
         // frontend can drop state for a chat other than the one on screen.
@@ -907,23 +927,26 @@ async fn prepare_navigation(
     parsed: &url::Url,
     owner: Option<&str>,
 ) {
+    let navigation_id = Uuid::new_v4().to_string();
     // Record the owner before emitting anything so the provisional state event
     // below — and the native page-load/title callbacks that follow — carry the
     // same tag. `owner` is the chat/session that issued this navigation; the
     // frontend uses it to keep a background pipe's page out of whatever chat is
     // on screen.
+    state.set_pending_navigation_id(Some(navigation_id.clone()));
     state.set_pending_owner(owner.map(|s| s.to_string()));
-    // Provisional omnibox URL while a top-level navigation is in flight
-    // (agent or sidebar initiated). Committed URL comes from `webview.url()`
-    // on main-document load finish / title change.
-    emit_state_event(app, Some(parsed.as_str().to_string()), None, Some(true));
     let _ = app.emit(
         NAVIGATE_EVENT,
         OwnedBrowserNavigateEvent {
             url: parsed.as_str().to_string(),
+            navigation_id,
             owner: owner.map(|s| s.to_string()),
         },
     );
+    // Provisional omnibox URL while a top-level navigation is in flight
+    // (agent or sidebar initiated). Committed URL comes from `webview.url()`
+    // on main-document load finish / title change.
+    emit_state_event(app, Some(parsed.as_str().to_string()), None, Some(true));
     state.store_pending_url(parsed.clone()).await;
 }
 
@@ -1235,6 +1258,7 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
                         v20_count: block.v20_count,
                         sources: block.sources,
                         reason: "v20".to_string(),
+                        navigation_id: browser_state().pending_navigation_id(),
                         owner: browser_state().pending_owner(),
                     };
                     if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
@@ -1454,6 +1478,7 @@ async fn browser_session_decision_for_url(
                 v20_count: 0,
                 sources: block.sources,
                 reason: "locked".to_string(),
+                navigation_id: browser_state().pending_navigation_id(),
                 owner: browser_state().pending_owner(),
             };
             if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
@@ -1559,6 +1584,7 @@ async fn browser_session_decision_for_url(
         url: url.as_str().to_string(),
         host: host_key.clone(),
         already_granted,
+        navigation_id: browser_state().pending_navigation_id(),
         owner: browser_state().pending_owner(),
     };
 

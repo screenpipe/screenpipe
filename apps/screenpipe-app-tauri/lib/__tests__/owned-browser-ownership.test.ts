@@ -18,6 +18,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isForeignNavigation,
+  isMismatchedNavigation,
   parseNavigatePayload,
 } from "@/lib/owned-browser-ownership";
 
@@ -54,14 +55,23 @@ describe("owned-browser ownership", () => {
   describe("parseNavigatePayload", () => {
     it("parses the object payload with an owner", () => {
       expect(
-        parseNavigatePayload({ url: "https://example.com", owner: "pipe:x" }),
-      ).toEqual({ url: "https://example.com", owner: "pipe:x" });
+        parseNavigatePayload({
+          url: "https://example.com",
+          owner: "pipe:x",
+          navigationId: "nav-1",
+        }),
+      ).toEqual({
+        url: "https://example.com",
+        owner: "pipe:x",
+        navigationId: "nav-1",
+      });
     });
 
     it("treats a bare string (legacy/stale emit) as un-owned", () => {
       expect(parseNavigatePayload("https://example.com")).toEqual({
         url: "https://example.com",
         owner: null,
+        navigationId: null,
       });
     });
 
@@ -69,9 +79,34 @@ describe("owned-browser ownership", () => {
       expect(parseNavigatePayload({ url: "https://example.com" })).toEqual({
         url: "https://example.com",
         owner: null,
+        navigationId: null,
       });
-      expect(parseNavigatePayload({})).toEqual({ url: null, owner: null });
-      expect(parseNavigatePayload("")).toEqual({ url: null, owner: null });
+      expect(parseNavigatePayload({})).toEqual({
+        url: null,
+        owner: null,
+        navigationId: null,
+      });
+      expect(parseNavigatePayload("")).toEqual({
+        url: null,
+        owner: null,
+        navigationId: null,
+      });
+    });
+  });
+
+  describe("isMismatchedNavigation", () => {
+    it("rejects missing navigation ids", () => {
+      expect(isMismatchedNavigation(null, "nav-1")).toBe(true);
+      expect(isMismatchedNavigation(undefined, null)).toBe(true);
+    });
+
+    it("accepts the first adopted navigation when none is active yet", () => {
+      expect(isMismatchedNavigation("nav-1", null)).toBe(false);
+    });
+
+    it("rejects a different navigation once one is active", () => {
+      expect(isMismatchedNavigation("nav-2", "nav-1")).toBe(true);
+      expect(isMismatchedNavigation("nav-1", "nav-1")).toBe(false);
     });
   });
 });
