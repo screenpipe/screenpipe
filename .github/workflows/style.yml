@@ -52,19 +52,23 @@ jobs:
       - name: Install dependencies
         run: .github/scripts/install_dependencies.sh
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny,cargo-consolidate
 
       - name: Security audit
         continue-on-error: true
         run: cargo audit
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny
-
       - name: Check duplicate dependencies
         continue-on-error: true
         run: cargo deny check bans
+
+      - name: Check workspace dependency consolidation
+        run: |
+          cargo consolidate
+          cargo consolidate --path ee/sdk
 
   knip:
     name: Knip (frontend dead code)

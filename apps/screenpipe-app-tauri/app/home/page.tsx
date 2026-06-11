@@ -8,6 +8,7 @@ import {
   Settings as SettingsIcon,
   Workflow,
   Plus,
+  Brain,
   Clock,
   Gift,
   HelpCircle,
@@ -20,7 +21,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
-  Sparkles,
   Phone,
   Plug,
   NotebookPen,
@@ -43,7 +43,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
-import { MemoriesSection } from "@/components/settings/memories-section";
+import { BrainSection } from "@/components/settings/brain-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
@@ -84,7 +84,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "meetings" | "help";
+type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
   id: string | null;
   category: string | null;
@@ -93,8 +93,10 @@ type ConnectionFocusRequest = {
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "memories", "connections", "meetings", "history",
+  "home", "timeline", "pipes", "help", "brain", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
+  "memories", // backwards compat → maps to "brain"
+  "artifacts", // backwards compat → maps to "brain"
 ];
 
 // Settings sections that should redirect to /settings
@@ -115,6 +117,8 @@ function HomeContent() {
     defaultValue: "home",
     parse: (value) => {
       if (value === "feedback") return "help"; // backwards compat
+      if (value === "memories") return "brain"; // backwards compat — renamed to brain
+      if (value === "artifacts") return "brain"; // backwards compat — artifacts merged into brain
       // Settings sections redirect to /settings page
       if (SETTINGS_SECTIONS.has(value)) return value; // handled by redirect effect below
       return ALL_SECTIONS.includes(value) ? value : "home";
@@ -812,8 +816,8 @@ function HomeContent() {
         // avoids a flash of the disabled placeholder on reload.
         if (settings.disableTimeline) return null;
         return <Timeline embedded />;
-      case "memories":
-        return <MemoriesSection />;
+      case "brain":
+        return <BrainSection />;
       case "pipes":
         return <PipeStoreView />;
       case "connections":
@@ -865,10 +869,10 @@ function HomeContent() {
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
     { id: "meetings", label: "Meeting notes", icon: <NotebookPen className="h-3.5 w-3.5" /> },
-    { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
+    { id: "brain", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   ]
-    .filter((s) => !isSectionHidden(s.id))
+    .filter((s) => !isSectionHidden(s.id) && !(s.id === "brain" && isSectionHidden("memories")))
     // Timeline can be turned off in Display settings — when it is, drop it from
     // the sidebar entirely (the "Timeline Disabled" placeholder was poor UX).
     .filter((s) => !(s.id === "timeline" && (settings.disableTimeline ?? false)));

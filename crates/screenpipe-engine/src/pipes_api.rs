@@ -177,11 +177,12 @@ pub async fn run_pipe_now(
             let ss = secret_store.as_ref().map(|e| e.0.as_ref());
             let mut missing = Vec::new();
             for conn_id in required {
-                let configured =
-                    screenpipe_connect::connections::load_connection(ss, &screenpipe_dir, conn_id)
-                        .await
-                        .map(|c| c.enabled && !c.credentials.is_empty())
-                        .unwrap_or(false);
+                let configured = screenpipe_connect::connections::is_connection_configured(
+                    ss,
+                    &screenpipe_dir,
+                    conn_id,
+                )
+                .await;
                 if !configured {
                     missing.push(conn_id.as_str());
                 }
@@ -391,4 +392,68 @@ pub async fn set_pipe_favorite(
         Ok(list) => Json(json!({ "success": true, "data": list })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
+}
+
+/// GET /pipes/artifacts — list all declared artifacts across pipes.
+///
+/// Iterates pipe configs, resolves artifact paths relative to each pipe
+/// directory, and checks the filesystem for existence, size, and mtime.
+/// Returns a flat list of artifacts with metadata. No database, no
+/// migration — the data is fully derivable at request time.
+pub async fn list_artifacts(State(pm): State<SharedPipeManager>) -> Json<Value> {
+    let mgr = pm.lock().await;
+    if let Err(e) = mgr.reload_pipes().await {
+        tracing::warn!("failed to reload pipes from disk: {}", e);
+    }
+    let declarations = mgr.list_artifact_declarations().await;
+    drop(mgr);
+
+    let mut artifacts = Vec::new();
+    for (pipe_name, items) in declarations {
+        for (decl, abs_path) in items {
+            let mut entry = json!({
+                "pipe_name": pipe_name,
+                "title": decl.title.as_deref().unwrap_or_else(|| {
+                    abs_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                }),
+                "kind": decl.kind.as_deref().unwrap_or("text"),
+                "path": abs_path.to_string_lossy(),
+            });
+
+            match tokio::fs::metadata(&abs_path).await {
+                Ok(meta) => {
+                    entry["exists"] = json!(true);
+                    entry["size_bytes"] = json!(meta.len());
+                    if let Ok(modified) = meta.modified() {
+                        let datetime: chrono::DateTime<chrono::Utc> = modified.into();
+                        entry["modified_at"] = json!(datetime.to_rfc3339());
+                    }
+
+                    // Read a short preview for text-like files (first 256
+                    // bytes only — no need to load the whole file).
+                    let kind = decl.kind.as_deref().unwrap_or("text");
+                    if kind != "image" && meta.len() > 0 {
+                        if let Ok(file) = tokio::fs::File::open(&abs_path).await {
+                            use tokio::io::AsyncReadExt;
+                            let mut buf = vec![0u8; 256];
+                            let mut reader = tokio::io::BufReader::new(file);
+                            if let Ok(n) = reader.read(&mut buf).await {
+                                if let Ok(text) = std::str::from_utf8(&buf[..n]) {
+                                    entry["preview"] = json!(text);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    entry["exists"] = json!(false);
+                }
+            }
+            artifacts.push(entry);
+        }
+    }
+
+    Json(json!({ "data": artifacts }))
 }

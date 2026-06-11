@@ -375,6 +375,37 @@ pub async fn load_connection(
     file_store.get(key).cloned()
 }
 
+/// Returns true when a connection id is configured and ready for pipes.
+/// OAuth integrations are checked via `oauth:<id>` tokens in SecretStore;
+/// credential-based integrations via `cred:<id>` / `connections.json`.
+pub async fn is_connection_configured(
+    secret_store: Option<&SecretStore>,
+    screenpipe_dir: &Path,
+    conn_id: &str,
+) -> bool {
+    let integration = all_integrations()
+        .into_iter()
+        .find(|i| i.def().id == conn_id);
+
+    let Some(integration) = integration else {
+        return false;
+    };
+
+    if integration.oauth_config().is_some() {
+        for inst in oauth::list_oauth_instances(secret_store, conn_id).await {
+            if oauth::is_oauth_instance_connected(secret_store, conn_id, inst.as_deref()).await {
+                return true;
+            }
+        }
+        false
+    } else {
+        load_connection(secret_store, screenpipe_dir, conn_id)
+            .await
+            .map(|c| c.enabled && !c.credentials.is_empty())
+            .unwrap_or(false)
+    }
+}
+
 /// Write a `SavedConnection` to SecretStore. Falls back to the legacy
 /// `connections.json` file only when no SecretStore is available.
 async fn save_connection(
@@ -933,6 +964,26 @@ mod tests {
         let context = render_context(&dir, 3030, None).await;
         assert!(context.contains("## Discord (discord, instance: work)"));
         assert!(context.contains("webhook_url: https://example.com/webhook"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn oauth_integration_counts_as_configured() {
+        use screenpipe_secrets::SecretStore;
+        use serde_json::json;
+        use sqlx::SqlitePool;
+
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let store = SecretStore::new(pool, None).await.unwrap();
+        store
+            .set_json("oauth:github", &json!({"access_token": "gho_test"}))
+            .await
+            .unwrap();
+        let dir = temp_screenpipe_dir();
+
+        assert!(is_connection_configured(Some(&store), &dir, "github").await);
+        assert!(!is_connection_configured(Some(&store), &dir, "discord").await);
 
         let _ = std::fs::remove_dir_all(dir);
     }

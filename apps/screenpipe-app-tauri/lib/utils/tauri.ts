@@ -1581,6 +1581,21 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Banner-click restart. plugin-process `relaunch()` fires
+ * `ExitRequested` which `main.rs` blocks unless `QUIT_REQUESTED` is set —
+ * banner never set it, so the exit was silently cancelled and the button
+ * hung on "restarting…". Mirror the auto-update path: gate, stop server,
+ * set `QUIT_REQUESTED`, then `app.restart()`. See 2026-06-10 report.
+ */
+async restartForUpdate(timeoutSecs: number | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("restart_for_update", { timeoutSecs }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async resumeGlobalShortcuts() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("resume_global_shortcuts") };

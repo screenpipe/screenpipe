@@ -605,6 +605,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     linear: <img src="/images/linear.svg" alt="Linear" className="w-5 h-5" />,
     krisp: <img src="/images/krisp.svg" alt="Krisp" className="w-5 h-5 dark:invert" />,
     plaud: <img src="/images/plaud.png" alt="Plaud" className="w-5 h-5 dark:invert" />,
+    excalidraw: <img src="/images/excalidraw.svg" alt="Excalidraw" className="w-5 h-5" />,
     odoo: <img src="/images/odoo.svg" alt="Odoo" className="w-5 h-5" />,
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     posthog: <img src="/images/posthog.svg" alt="PostHog" className="w-5 h-5" />,
@@ -820,6 +821,7 @@ const HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "perplexity": "Search the web with Perplexity AI",
   "krisp": "Search Krisp meeting transcripts and notes",
   "plaud": "Search Plaud recordings and transcripts",
+  "excalidraw": "Search and edit your Excalidraw+ whiteboards",
   "custom-mcp": "Connect any MCP-compatible server",
   "skills": "Import Claude Code skills for AI automations",
 };
@@ -923,6 +925,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   granola: "Show notes from my recent meetings",
   zoom: "Summarize my recent Zoom calls",
   krisp: "Search my meeting transcripts for action items",
+  excalidraw: "What's on my recent Excalidraw boards?",
   whatsapp: "What were the latest messages in my WhatsApp?",
   discord: "What was discussed in my Discord servers recently?",
   teams: "Show me recent Microsoft Teams messages",
@@ -2924,6 +2927,10 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
 const KRISP_MCP_URL = "https://mcp.krisp.ai/mcp";
 const PLAUD_MCP_URL = "https://mcp.plaud.ai/mcp";
+// Excalidraw+ exposes the workspace (scenes, collections, search) over a
+// remote MCP gated by a static API key, not OAuth (no discovery metadata on
+// the host), so it uses the ApiKeyMcpPanel below instead of OAuthMcpPanel.
+const EXCALIDRAW_MCP_URL = "https://api.excalidraw.com/api/v1/mcp";
 
 function mcpRandomId(): string {
   const bytes = new Uint8Array(8);
@@ -3148,6 +3155,199 @@ function OAuthMcpPanel({
   );
 }
 
+// Featured API-key MCP cards (Excalidraw+): same one-click idea as the OAuth
+// cards above, but for providers whose remote MCP is gated by a static bearer
+// key instead of OAuth. The key is validated with an ad-hoc probe first and
+// only then persisted (value lands in the secret store via the generic
+// /mcp-servers machinery), so, like the OAuth cards, a server config existing
+// for the provider URL means the connection works.
+
+function ApiKeyMcpPanel({
+  name,
+  mcpUrl,
+  description,
+  keyPlaceholder,
+  createKeyUrl,
+  createKeyLabel,
+  onConnected,
+  onDisconnected,
+}: {
+  name: string;
+  mcpUrl: string;
+  description: React.ReactNode;
+  keyPlaceholder: string;
+  createKeyUrl: string;
+  createKeyLabel: string;
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
+  const [serverId, setServerId] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  // Reflect reality on open: find this provider's MCP server from a prior
+  // connect (matched by URL, same as the tile dot in refreshStatus).
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await localFetch("/mcp-servers");
+      if (!r.ok) return;
+      const body = await r.json();
+      const list = (body?.data ?? []) as { id: string; url?: string; enabled?: boolean }[];
+      const existing = list.find(
+        (s) => (s.url ?? "").replace(/\/+$/, "") === mcpUrl
+      );
+      setServerId(existing?.id ?? null);
+      setConnected(!!existing?.enabled);
+    } catch {}
+  }, [mcpUrl]);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
+  const handleConnect = async () => {
+    const key = apiKey.trim();
+    if (!key || busy) return;
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      const headers = [{ name: "Authorization", value: `Bearer ${key}` }];
+      // Validate the key against the provider before persisting anything.
+      const probe = await localFetch("/mcp-servers/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: mcpUrl, headers }),
+      });
+      if (!probe.ok) {
+        const pb = await probe.json().catch(() => ({}));
+        setStatusMsg(pb?.error ?? `${name} rejected the key (HTTP ${probe.status})`);
+        return;
+      }
+      const targetId = serverId ?? mcpRandomId();
+      const res = await localFetch(
+        `/mcp-servers/${encodeURIComponent(targetId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, url: mcpUrl, headers, enabled: true }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setStatusMsg(body?.error ?? `Save failed (HTTP ${res.status})`);
+        return;
+      }
+      setServerId(targetId);
+      setConnected(true);
+      setApiKey("");
+      notifyConnectionsUpdated();
+      onConnected?.();
+    } catch (e: any) {
+      setStatusMsg(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!serverId) return;
+    setBusy(true);
+    try {
+      // Deleting the server also wipes the stored key from the secret store.
+      await localFetch(`/mcp-servers/${encodeURIComponent(serverId)}`, {
+        method: "DELETE",
+      });
+      setServerId(null);
+      setConnected(false);
+      setStatusMsg(null);
+      notifyConnectionsUpdated();
+      onDisconnected?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-3 text-sm">
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        {description}
+      </p>
+      {connected ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
+            <Check className="h-3.5 w-3.5" /> Connected
+          </span>
+          <Button
+            onClick={handleDisconnect}
+            disabled={busy}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal ml-auto"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <LogOut className="h-3 w-3" />
+            )}
+            Disconnect
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleConnect();
+                }}
+                placeholder={keyPlaceholder}
+                className="h-7 text-xs pr-8"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={showKey ? "Hide key" : "Show key"}
+              >
+                {showKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </button>
+            </div>
+            <Button
+              onClick={handleConnect}
+              disabled={busy || !apiKey.trim()}
+              size="sm"
+              className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+            >
+              {busy ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <LogIn className="h-3 w-3" />
+              )}
+              Connect
+            </Button>
+          </div>
+          <button
+            type="button"
+            onClick={() => openUrl(createKeyUrl)}
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+          >
+            <ExternalLink className="h-3 w-3" /> {createKeyLabel}
+          </button>
+        </div>
+      )}
+      {statusMsg && !connected && (
+        <p className="text-xs text-muted-foreground">{statusMsg}</p>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main connections section
 // ---------------------------------------------------------------------------
@@ -3211,6 +3411,7 @@ export function ConnectionsSection({
   const [customMcpEnabledCount, setCustomMcpEnabledCount] = useState(0);
   const [krispConnected, setKrispConnected] = useState(false);
   const [plaudConnected, setPlaudConnected] = useState(false);
+  const [excalidrawConnected, setExcalidrawConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
 
@@ -3259,6 +3460,7 @@ export function ConnectionsSection({
         setCustomMcpEnabledCount(0);
         setKrispConnected(false);
         setPlaudConnected(false);
+        setExcalidrawConnected(false);
         return;
       }
       const body = await r.json();
@@ -3269,12 +3471,14 @@ export function ConnectionsSection({
       setCustomMcpConnected(enabled.length > 0);
       setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
       setPlaudConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === PLAUD_MCP_URL));
+      setExcalidrawConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === EXCALIDRAW_MCP_URL));
     }).catch(() => {
       setCustomMcpConnected(false);
       setCustomMcpServerCount(0);
       setCustomMcpEnabledCount(0);
       setKrispConnected(false);
       setPlaudConnected(false);
+      setExcalidrawConnected(false);
     });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
@@ -3380,6 +3584,7 @@ export function ConnectionsSection({
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false, detected: detectedConnectionIds.has("perplexity") },
       { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected, detected: detectedConnectionIds.has("krisp") },
       { id: "plaud", name: "Plaud", icon: "plaud", connected: plaudConnected },
+      { id: "excalidraw", name: "Excalidraw", icon: "excalidraw", connected: excalidrawConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false, detected: customMcpServerCount > 0 },
       { id: "skills", name: "Skills", icon: "skills", connected: importedSkillsCount > 0, category: "Agent" },
     ];
@@ -3424,7 +3629,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -3534,6 +3739,16 @@ export function ConnectionsSection({
         description={<>Connect Plaud so your AI can search your Plaud recordings, transcripts, summaries, and notes. Sign-in is handled by Plaud&apos;s OAuth, so screenpipe never sees your password.</>}
         onConnected={() => setPlaudConnected(true)}
         onDisconnected={() => setPlaudConnected(false)}
+      />;
+      case "excalidraw": return <ApiKeyMcpPanel
+        name="Excalidraw"
+        mcpUrl={EXCALIDRAW_MCP_URL}
+        description={<>Connect Excalidraw+ so your AI can search, read, and edit the whiteboard scenes in your workspace. Excalidraw doesn&apos;t offer OAuth here, so paste an API key from your Excalidraw+ workspace settings instead. The key is stored securely on this device and only ever sent to Excalidraw.</>}
+        keyPlaceholder="Excalidraw+ API key"
+        createKeyUrl="https://plus.excalidraw.com/docs/mcp/getting-started"
+        createKeyLabel="How to create an API key"
+        onConnected={() => setExcalidrawConnected(true)}
+        onDisconnected={() => setExcalidrawConnected(false)}
       />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;

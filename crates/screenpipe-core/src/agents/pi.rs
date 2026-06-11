@@ -626,6 +626,18 @@ impl PiExecutor {
         Ok(())
     }
 
+    /// Install the register-artifact extension so pipes can register files
+    /// as artifacts mid-execution via the local /outputs/register API.
+    pub fn ensure_register_artifact_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/register-artifact.ts");
+        let ext_path = ext_dir.join("register-artifact.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        debug!("register-artifact extension installed at {:?}", ext_path);
+        Ok(())
+    }
+
     pub fn ensure_context_pruning_extension(project_dir: &Path) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         std::fs::create_dir_all(&ext_dir)?;
@@ -1308,6 +1320,11 @@ impl PiExecutor {
         // background pipe's browser stays out of whatever chat is on screen.
         if let Some(owner) = session_owner {
             cmd.env("SCREENPIPE_SESSION_ID", owner);
+            // Expose the bare pipe name for extensions (e.g. register-artifact)
+            // that need it without the "pipe:" routing prefix.
+            if let Some(name) = owner.strip_prefix("pipe:") {
+                cmd.env("SCREENPIPE_PIPE_NAME", name);
+            }
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
@@ -1475,6 +1492,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
+        Self::ensure_register_artifact_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -1587,6 +1605,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
+        Self::ensure_register_artifact_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(

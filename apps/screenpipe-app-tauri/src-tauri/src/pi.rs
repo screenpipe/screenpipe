@@ -1010,6 +1010,22 @@ fn ensure_mcp_bridge_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_save_artifact_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+
+    let ext_path = ext_dir.join("save-artifact.ts");
+    let ext_content = include_str!("../assets/extensions/save-artifact.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write save-artifact extension: {}", e))?;
+
+    debug!("save-artifact extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 /// Configuration for which AI provider Pi should use
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1397,6 +1413,9 @@ pub async fn pi_start_inner(
     // MCP bridge: lets the agent reach user-registered MCP servers.
     ensure_mcp_bridge_extension(&project_dir)?;
 
+    // Save artifact: lets the agent register deliverables in the Artifacts library.
+    ensure_save_artifact_extension(&project_dir)?;
+
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
 
@@ -1690,6 +1709,9 @@ pub async fn pi_start_inner(
     // If the user switches to another chat mid-run, this agent's later
     // navigations no longer match the on-screen conversation and stay hidden.
     cmd.env("SCREENPIPE_SESSION_ID", &sid);
+
+    // Chat session ID for per-session artifact isolation
+    cmd.env("SCREENPIPE_CHAT_SESSION_ID", &sid);
 
     // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
     // shim sourced from $BASH_ENV on every subshell. See bash_env.rs in

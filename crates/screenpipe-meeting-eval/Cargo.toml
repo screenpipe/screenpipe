@@ -12,11 +12,11 @@ license-file = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-anyhow = "1.0.86"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-toml = "0.8"
-clap = { version = "4.3", features = ["derive"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
 
 # The whole point of this crate: drive `advance_state` from the prod
 # meeting detector against scripted scan traces. We pull

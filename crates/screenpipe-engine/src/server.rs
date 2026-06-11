@@ -50,6 +50,10 @@ use crate::{
             list_memories_handler, list_memory_tags_handler, sync_external_memories_handler,
             update_memory_handler,
         },
+        outputs::{
+            delete_output_handler, get_output_handler, list_outputs_handler,
+            register_output_handler,
+        },
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         speakers::{
@@ -679,6 +683,10 @@ impl SCServer {
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
+            .post("/outputs/register", register_output_handler)
+            .get("/outputs", list_outputs_handler)
+            .get("/outputs/:id", get_output_handler)
+            .delete("/outputs/:id", delete_output_handler)
             .post("/experimental/frames/merge", merge_frames_handler)
             .get("/experimental/validate/media", validate_media_handler)
             .post("/audio/start", start_audio)
@@ -811,8 +819,12 @@ impl SCServer {
                     "/install",
                     axum::routing::post(crate::pipes_api::install_pipe),
                 )
-                // Favorites — register before `/:id` so axum doesn't match
-                // "favorites" as a pipe id.
+                // Artifacts & favorites — register before `/:id` so axum
+                // doesn't match these as a pipe id.
+                .route(
+                    "/artifacts",
+                    axum::routing::get(crate::pipes_api::list_artifacts),
+                )
                 .route(
                     "/favorites",
                     axum::routing::get(crate::pipes_api::list_favorites),

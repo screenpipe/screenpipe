@@ -39,7 +39,9 @@
       "icons/screenpipe-logo-tray-black.png"
     ],
     "resources": [
-      "assets/*"
+      "assets/*",
+      "mlx.metallib",
+      "PermissionFlow_PermissionFlow.bundle"
     ],
     "macOS": {
       "entitlements": "entitlements.plist"

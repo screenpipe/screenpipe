@@ -14,34 +14,34 @@ edition.workspace = true
 [dependencies]
 # Re-exports & shared deps
 aho-corasick = "1"
-anyhow = "1"
-async-trait = "0.1"
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "5"
-image = "0.25"
-moka = { version = "0.12", features = ["future"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+image = { workspace = true }
+moka = { workspace = true }
 once_cell = { workspace = true }
-regex = "1"
+regex = { workspace = true }
 reqwest = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
+serde = { workspace = true }
+sha2 = { workspace = true }
 sha3 = "0.10"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
-thiserror = "1"
+sqlx = { workspace = true, features = ["chrono"] }
+thiserror = { workspace = true }
 # Tinfoil enclave attestation: AMD SEV-SNP attestation + Sigstore code-
 # provenance verification + TLS cert pinning for the privacy-filter PII
 # redaction service. See adapters/tinfoil.rs for the threat model
 # (without this a compromised CA can still observe unredacted text in
 # transit even though the enclave itself is honest).
-tinfoil = { git = "https://github.com/tinfoilsh/tinfoil-rs", rev = "82143d767b540195dea265df0b01c4b4fc93c424" }
+tinfoil = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-tempfile = "3"
-image = "0.25"
+tempfile = { workspace = true }
+image = { workspace = true }
 
 [[example]]
 name = "v45_phase3_smoke"
@@ -80,19 +80,19 @@ opf-text = ["dep:opf"]
 mlx-mac = ["dep:screenpipe-rfdetr-mlx"]
 
 [dependencies.ort]
-version = "=2.0.0-rc.10"
+workspace = true
 features = ["ndarray"]
 optional = true
 
 [dependencies.ndarray]
-version = "0.16"
+workspace = true
 optional = true
 
 # HuggingFace fast tokenizers, used by the ONNX text adapter to load
 # the v45 phase 3 tokenizer.json. ~200 KB compiled, no extra runtime
 # deps beyond what onnxruntime already pulls in. Pinned major version.
 [dependencies.tokenizers]
-version = "0.21"
+workspace = true
 default-features = false
 features = ["onig"]
 optional = true
@@ -101,7 +101,7 @@ optional = true
 # mapping for the 27 BIO tags). Workspace already pulls serde_json
 # transitively; declare explicitly so the dep graph is honest.
 [dependencies.serde_json]
-version = "1"
+workspace = true
 optional = true
 
 # OPF text redactor (pure-Rust candle port; same model as the v3

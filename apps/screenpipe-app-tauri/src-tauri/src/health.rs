@@ -173,6 +173,10 @@ pub enum RecordingStatus {
     Recording,
     /// Capture paused but server (HTTP/pipes/search) still alive.
     Paused,
+    /// Capture intentionally stopped by the user's work-hours schedule. Kept
+    /// distinct from `Paused` so the tray can say "outside work hours" rather
+    /// than implying a transient/manual pause the user can just click to resume.
+    ScheduledPause,
     Stopped,
     Error,
 }
@@ -346,6 +350,12 @@ struct HealthCheckResponse {
     /// DRM streaming content detected — capture should be fully stopped
     #[serde(default)]
     drm_content_paused: bool,
+    /// Recording intentionally paused by the user's work-hours schedule. The
+    /// engine reports this in /health; when true it has stopped capture on
+    /// purpose, so the tray must say "outside work hours" instead of letting a
+    /// stale start flag render a stuck "Starting…".
+    #[serde(default)]
+    schedule_paused: bool,
 }
 
 /// Decide recording status based on health check result and time since startup.
@@ -420,9 +430,20 @@ fn apply_capture_session_status(
     server_responding: bool,
     capture_running: Option<bool>,
     start_in_progress: bool,
+    schedule_paused: bool,
 ) -> RecordingStatus {
     if !server_responding {
         return base_status;
+    }
+
+    // The work-hours schedule intentionally parks capture outside the user's
+    // window. Honor it BEFORE the start-in-progress / capture-absent branches:
+    // when a boot lands outside work hours, capture never comes up (it's held
+    // off on purpose) and never errors, so the asserted start flag would
+    // otherwise pin the tray on a misleading "Starting…" forever — the exact
+    // bug a user with a work-hours schedule hit when booting before their window.
+    if schedule_paused {
+        return RecordingStatus::ScheduledPause;
     }
 
     if capture_running == Some(true) {
@@ -445,6 +466,9 @@ fn status_to_icon_key(status: RecordingStatus) -> &'static str {
         RecordingStatus::Starting => "starting",
         RecordingStatus::Recording => "healthy",
         RecordingStatus::Paused => "starting",
+        // Outside work hours is a neutral, intentional state — show the calm
+        // "starting"/amber icon, never the red error/unhealthy variant.
+        RecordingStatus::ScheduledPause => "starting",
         RecordingStatus::Stopped => "error",
         RecordingStatus::Error => "unhealthy",
     }
@@ -614,11 +638,16 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 (None, false)
             };
 
+            // Engine intentionally pauses capture outside the work-hours
+            // schedule and reports it in /health; surface it as ScheduledPause
+            // so the tray doesn't show a stuck "Starting…".
+            let schedule_paused = matches!(&health_result, Ok(h) if h.schedule_paused);
             let status = apply_capture_session_status(
                 status,
                 health_result.is_ok(),
                 capture_running,
                 start_in_progress,
+                schedule_paused,
             );
 
             // NOTE: Runtime permission-loss detection has moved to
@@ -1052,6 +1081,7 @@ mod tests {
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
             drm_content_paused: false,
+            schedule_paused: false,
         })
     }
 
@@ -1073,6 +1103,7 @@ mod tests {
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
             drm_content_paused: false,
+            schedule_paused: false,
         })
     }
 
@@ -1305,36 +1336,90 @@ mod tests {
     #[test]
     fn test_capture_absent_with_live_server_is_paused() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), false);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), false, false);
         assert_eq!(status, RecordingStatus::Paused);
     }
 
     #[test]
     fn test_capture_absent_while_starting_stays_starting() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true, false);
         assert_eq!(status, RecordingStatus::Starting);
     }
 
     #[test]
     fn test_capture_status_does_not_mask_connection_error() {
         let status =
-            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false);
+            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false, false);
         assert_eq!(status, RecordingStatus::Stopped);
     }
 
     #[test]
     fn test_running_capture_keeps_recording_status() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false, false);
         assert_eq!(status, RecordingStatus::Recording);
     }
 
     #[test]
     fn test_running_capture_wins_over_stale_starting_flag() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), true);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), true, false);
         assert_eq!(status, RecordingStatus::Recording);
+    }
+
+    // ── Work-hours schedule pause ───────────────────────────────────────────
+    //
+    // Repro of a field report: a user with a work-hours schedule booted
+    // before their window, the engine started then immediately
+    // stopped capture ("outside work-hours schedule — stopping all capture"),
+    // and the tray sat on a stuck "Starting…". The inputs below are identical
+    // to `test_capture_absent_while_starting_stays_starting` (server up, no
+    // capture session, start flag still asserted) — only `schedule_paused` is
+    // true. Before the fix this returned Starting; now it must report the
+    // honest ScheduledPause so the tray can say "outside work hours".
+    #[test]
+    fn test_schedule_paused_overrides_stuck_starting() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true, true);
+        assert_eq!(status, RecordingStatus::ScheduledPause);
+    }
+
+    // A live capture session struct that the engine has schedule-stopped behind
+    // our back must NOT keep reading as Recording — that's the "overlay says
+    // recording but nothing is captured" footgun. schedule_paused wins.
+    #[test]
+    fn test_schedule_paused_overrides_recording() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false, true);
+        assert_eq!(status, RecordingStatus::ScheduledPause);
+    }
+
+    // Within the work-hours window (schedule_paused = false) nothing changes:
+    // the stale-start-flag path still yields Starting, exactly as before.
+    #[test]
+    fn test_within_schedule_leaves_starting_untouched() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true, false);
+        assert_eq!(status, RecordingStatus::Starting);
+    }
+
+    // schedule_paused only comes from a successful /health read, but guard the
+    // precedence anyway: a connection error must surface the real Stopped/boot
+    // state, never a stale "outside work hours".
+    #[test]
+    fn test_schedule_paused_ignored_when_server_down() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false, true);
+        assert_eq!(status, RecordingStatus::Stopped);
+    }
+
+    // Outside work hours is intentional, not a failure — calm icon, not red.
+    #[test]
+    fn test_scheduled_pause_shows_healthy_icon() {
+        assert!(!is_unhealthy_icon(status_to_icon_key(
+            RecordingStatus::ScheduledPause
+        )));
     }
 
     #[test]

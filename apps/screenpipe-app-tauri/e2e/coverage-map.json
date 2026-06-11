@@ -553,6 +553,26 @@
       "notes": "Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism)."
     },
     {
+      "spec": "outputs-api.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api"],
+      "features": ["local-api-auth", "outputs"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "api",
+      "notes": "CRUD coverage for output registration, validation, listing, fetch, upsert, and delete."
+    },
+    {
+      "spec": "brain-section.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e"],
+      "features": ["brain", "artifacts", "memories", "viewer-deeplink"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview."
+    },
+    {
       "spec": "zz-app-entitlement-gate.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "billing", "real-ui-e2e"],

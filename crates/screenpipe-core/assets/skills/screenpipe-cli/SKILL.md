@@ -100,6 +100,28 @@ curl -X POST http://localhost:3030/pipes/<name>/config \
   -d '{"config": {"schedule": "every 1h", "enabled": true}}'
 ```
 
+### Output & Artifacts
+
+Pipes can produce user-facing output files that appear in the Artifacts library.
+
+**Standard path** — for files inside the pipe directory:
+- Declare them in frontmatter under `artifacts:`:
+  ```yaml
+  artifacts:
+    - path: "output/report.md"
+      title: "Weekly Report"
+      kind: "markdown"
+  ```
+- Write results to the declared path. After execution, they are auto-registered.
+
+**External path** — for files outside the pipe directory (shared locations, user folders, vaults):
+- Use the `register_artifact` tool during execution:
+  ```
+  register_artifact(file_path="/path/to/deliverable.md", title="Weekly Report")
+  ```
+- The tool registers an existing file by its absolute path. The file must already exist on disk.
+- Only register finished deliverables — not scratch files, caches, or internal state.
+
 ### Rules
 
 1. Use `pipe list` (not `--json`) — table output is compact

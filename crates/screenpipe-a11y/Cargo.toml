@@ -14,21 +14,21 @@ screenpipe-db = { path = "../screenpipe-db", optional = true }
 screenpipe-core = { path = "../screenpipe-core" }
 screenpipe-config = { path = "../screenpipe-config" }
 # Core
-anyhow = "1.0"
-tracing = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Concurrency
 crossbeam-channel = "0.5"
-parking_lot = "0.12"
-arc-swap = "1"
+parking_lot = { workspace = true }
+arc-swap = { workspace = true }
 
 # Regex for privacy patterns
-regex = "1.10"
+regex = { workspace = true }
 
 # Clipboard access (native NSPasteboard/Win32/X11 — no subprocess)
 arboard = "3"
@@ -37,7 +37,7 @@ arboard = "3"
 # (Obsidian / VS Code fork state files live under `dirs::config_dir()`
 # on every supported OS — `~/Library/Application Support` on macOS,
 # `%APPDATA%` on Windows, `~/.config` on Linux).
-dirs = "5.0"
+dirs = { workspace = true }
 
 # VS Code fork document_path resolution reads `state.vscdb` (SQLite).
 # Pinned to 0.29 because that's the last release on libsqlite3-sys 0.26 —
@@ -45,7 +45,7 @@ dirs = "5.0"
 # copy of the C library into the workspace. `bundled` ensures we ship our
 # own SQLite on every OS rather than depending on the system's.
 rusqlite = { version = "0.29", features = ["bundled"] }
-url = "2.5"
+url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
@@ -54,7 +54,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native Windows APIs - no rdev dependency
 windows-core = "0.58"
-windows = { version = "0.58", features = [
+windows = { workspace = true, features = [
     "implement",
     "Win32_Foundation",
     "Win32_System_Com",
@@ -72,18 +72,18 @@ windows = { version = "0.58", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # AT-SPI2 accessibility via D-Bus (pure Rust, no system deps for compilation)
-zbus = { version = "5", features = ["blocking"] }
+zbus = { workspace = true }
 # Input device events from /dev/input/event*
 evdev = "0.13"
 # fcntl for non-blocking I/O on evdev fds
-libc = "0.2"
+libc = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-tempfile = "3"
+tokio = { workspace = true }
+tempfile = { workspace = true }
 # Linux debug examples are compiled by `cargo clippy --all-targets` on every
 # developer OS, so keep their D-Bus dependency available outside Linux too.
-zbus = { version = "5", features = ["blocking"] }
+zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-libc = "0.2"
+libc = { workspace = true }

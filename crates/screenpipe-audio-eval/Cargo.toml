@@ -12,14 +12,14 @@ license-file = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-anyhow = "1.0.86"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-toml = "0.8"
-clap = { version = "4.3", features = ["derive"] }
-hound = "3.5"
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
+hound = { workspace = true }
 tokio = { workspace = true }
-chrono = { version = "0.4.31", features = ["serde"] }
+chrono = { workspace = true }
 
 # The whole point of this crate: drive the screenpipe-audio diarization
 # pipeline using only public API. We pull in screenpipe-audio for
@@ -44,10 +44,10 @@ screenpipe-db = { path = "../screenpipe-db" }
 # the engine. Without this, `TranscriptionEngine::new` returns
 # `Disabled` while audiopipe's background download thread runs and the
 # eval silently emits empty hypotheses.
-audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", rev = "2fd5c360651157a5df504394066e509ad4d1bdc9", default-features = false, features = ["parakeet"] }
+audiopipe = { workspace = true, features = ["parakeet"] }
 
 [dev-dependencies]
-tempfile = "3.3.0"
+tempfile = { workspace = true }
 
 [[bin]]
 name = "screenpipe-eval-diarization"

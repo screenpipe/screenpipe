@@ -12,9 +12,9 @@ name = "screenpipe_rfdetr_mlx"
 path = "src/lib.rs"
 
 [dependencies]
-mlx-rs = { version = "0.25", features = ["safetensors"] }
+mlx-rs = { workspace = true, features = ["safetensors"] }
 mlx-sys = "0.2"
 # Pin to the version mlx-rs uses internally so the TensorView types match.
 safetensors = "0.6"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-thiserror = "1"
+image = { workspace = true, features = ["png", "jpeg"] }
+thiserror = { workspace = true }

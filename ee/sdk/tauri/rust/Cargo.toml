@@ -19,12 +19,12 @@ links = "screenpipe"
 # lets this plugin avoid spawning a Node helper at runtime.
 screenpipe-recorder = { path = "../../recorder-core" }
 
-base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
+base64 = { workspace = true }
+serde = { workspace = true }
 serde_json = "1"
 tauri = { version = "2", default-features = false }
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 # Native telemetry sender (PostHog + Sentry). The `rustls` feature avoids a
 # system OpenSSL dependency, keeping the plugin portable across macOS/Windows/Linux.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -36,4 +36,4 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 tauri-plugin = { version = "2", features = ["build"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

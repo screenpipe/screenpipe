@@ -141,7 +141,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.commit_hash || github.ref }}
+          # Pin to the triggering SHA (github.sha), not the branch ref: main
+          # keeps moving while builds queue/run, so a branch ref lets platforms
+          # check out different code (and re-runs pick up commits that were
+          # never in the release). The published tag points at the bump commit.
+          ref: ${{ github.event.inputs.commit_hash || github.sha }}
 
       - name: Update version in Cargo.toml
         if: github.event.inputs.commit_hash && github.event.inputs.version
@@ -235,7 +239,11 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.commit_hash || github.ref }}
+          # Pin to the triggering SHA (github.sha), not the branch ref: main
+          # keeps moving while builds queue/run, so a branch ref lets platforms
+          # check out different code (and re-runs pick up commits that were
+          # never in the release). The published tag points at the bump commit.
+          ref: ${{ github.event.inputs.commit_hash || github.sha }}
 
       - name: Shorten target dir to avoid MAX_PATH (Windows)
         if: matrix.os_type == 'windows'

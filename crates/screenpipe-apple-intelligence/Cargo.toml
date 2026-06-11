@@ -11,15 +11,15 @@ screenpipe-query = ["dep:reqwest", "dep:tokio"]
 server = ["dep:axum", "dep:tokio", "dep:uuid", "dep:tokio-stream"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
-chrono = "0.4"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net"], optional = true }
-axum = { version = "0.7", optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
-tokio-stream = { version = "0.1", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true, optional = true }
+chrono = { workspace = true }
+tokio = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
 
 [[bin]]
 name = "fm-server"
@@ -27,6 +27,6 @@ path = "src/server_bin.rs"
 required-features = ["server"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.13", features = ["json"] }
-chrono = "0.4"
+tokio = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }

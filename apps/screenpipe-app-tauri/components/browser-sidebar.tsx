@@ -32,7 +32,15 @@ import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { platform as getPlatform } from "@tauri-apps/plugin-os";
-import { Cookie, ExternalLink, KeyRound, Loader2, RotateCw, PanelRightClose, PanelRightOpen } from "lucide-react";
+import {
+  Cookie,
+  ExternalLink,
+  KeyRound,
+  Loader2,
+  RotateCw,
+  PanelRightClose,
+  PanelRightOpen,
+} from "lucide-react";
 import {
   loadConversationFile,
   updateConversationFlags,
@@ -44,6 +52,7 @@ import {
   setCachedBrowserState,
 } from "@/lib/browser-state-cache";
 import { Button } from "@/components/ui/button";
+import { FilePreviewSidebar } from "@/components/file-preview-sidebar";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
 import {
@@ -64,6 +73,13 @@ const CHROME_WEBSTORE_URL =
 
 interface BrowserSidebarProps {
   conversationId: string | null;
+  filePreview?: {
+    path: string;
+    visible: boolean;
+    previousMode: "browser" | "hidden";
+  } | null;
+  onCloseFilePreview?: () => void;
+  onReplaceFilePreviewPath?: (path: string) => void;
 }
 
 interface SessionAccessEvent {
@@ -123,7 +139,12 @@ function clampWidth(want: number, available: number): number {
   return Math.max(MIN_WIDTH, Math.min(want, max));
 }
 
-export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
+export function BrowserSidebar({
+  conversationId,
+  filePreview,
+  onCloseFilePreview,
+  onReplaceFilePreviewPath,
+}: BrowserSidebarProps) {
   const { settings, updateSettings } = useSettings();
   const [visible, setVisible] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -157,9 +178,12 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(
     null,
   );
+  const previewActive = filePreview?.visible === true && !!filePreview.path;
+  const previewPath = previewActive ? filePreview.path : null;
 
   const effectiveWidth = clampWidth(requestedWidth, availableW);
-  const panelOpen = visible && !collapsed && effectiveWidth > 0;
+  const browserPanelOpen = visible && !collapsed && effectiveWidth > 0;
+  const panelOpen = previewActive || browserPanelOpen;
 
   useEffect(() => {
     try {
@@ -324,12 +348,20 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setSessionAccessRequest(null);
         setSessionAccessAnswer(null);
         setV20CookieBlock(null);
-        setVisible(true);
-        setCollapsed(false);
         setCurrentUrl(url);
         setCurrentTitle(null);
         setLoading(true);
-        persistState({ url, collapsed: false });
+        // Agent-driven navigations (owner is set) always open the panel.
+        // Ownerless events (restore/reload after chat switch) must not
+        // override the persisted collapsed state — otherwise switching
+        // away from a chat with a collapsed sidebar and back re-opens it.
+        if (owner) {
+          setVisible(true);
+          setCollapsed(false);
+          persistState({ url, collapsed: false });
+        } else {
+          persistState({ url });
+        }
       },
     );
     return () => {
@@ -559,6 +591,12 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     };
   }, [conversationId]);
 
+  useEffect(() => {
+    if (previewActive) {
+      commands.ownedBrowserHide().catch(() => {});
+    }
+  }, [previewActive]);
+
   // ---------------------------------------------------------------------------
   // Bounds tracking — covers slide-in, window resize, drag-resize, and
   // chat/app sidebar layout changes. The native browser is now a child
@@ -568,6 +606,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
 
   useEffect(() => {
     if (!panelOpen) {
+      commands.ownedBrowserHide().catch(() => {});
+      return;
+    }
+    if (previewActive) {
       commands.ownedBrowserHide().catch(() => {});
       return;
     }
@@ -587,7 +629,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     return () => {
       ro.disconnect();
     };
-  }, [panelOpen, effectiveWidth, availableW, schedulePushBounds]);
+  }, [panelOpen, effectiveWidth, availableW, schedulePushBounds, previewActive]);
 
   // ---------------------------------------------------------------------------
   // Drag-resize
@@ -816,60 +858,70 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-10 w-1 rounded-full bg-border group-hover/resize:bg-foreground/60 group-hover/resize:w-1.5 transition-all" />
           </div>
 
-          <div className="relative flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
-            <div
-              className="flex-1 min-w-0 text-muted-foreground"
-              title={currentUrl ?? headerTitle}
-            >
-              <div className="text-xs truncate">{headerTitle}</div>
-              {currentTitle && currentUrl && (
-                <div className="text-[10px] leading-3 truncate opacity-70">
-                  {currentUrl}
+          {previewActive ? (
+            previewPath ? (
+              <FilePreviewSidebar
+                path={previewPath}
+                onClose={onCloseFilePreview}
+                onReplacePath={onReplaceFilePreviewPath}
+              />
+            ) : null
+          ) : (
+            <>
+              <div className="relative flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
+                <div
+                  className="flex-1 min-w-0 text-muted-foreground"
+                  title={currentUrl ?? headerTitle}
+                >
+                  <div className="text-xs truncate">{headerTitle}</div>
+                  {currentTitle && currentUrl && (
+                    <div className="text-[10px] leading-3 truncate opacity-70">
+                      {currentUrl}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            {isMac && (
-              <button
-                onClick={openCookieMenu}
-                title="Browser session cookies"
-                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-              >
-                <Cookie className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              onClick={reload}
-              title="Reload"
-              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <RotateCw className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={collapse}
-              title="Hide panel"
-              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <PanelRightClose className="h-3.5 w-3.5" />
-            </button>
-            {loading && (
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-0.5 overflow-hidden bg-border/25"
-                role="progressbar"
-                aria-label="Page loading"
-              >
-                <div className="h-full w-1/3 min-w-20 bg-foreground/70 animate-owned-browser-load" />
+                {isMac && (
+                  <button
+                    onClick={openCookieMenu}
+                    title="Browser session cookies"
+                    className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                  >
+                    <Cookie className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <button
+                  onClick={reload}
+                  title="Reload"
+                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={collapse}
+                  title="Hide panel"
+                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                >
+                  <PanelRightClose className="h-3.5 w-3.5" />
+                </button>
+                {loading && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-0.5 overflow-hidden bg-border/25"
+                    role="progressbar"
+                    aria-label="Page loading"
+                  >
+                    <div className="h-full w-1/3 min-w-20 bg-foreground/70 animate-owned-browser-load" />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          {/* Placeholder — native child webview is positioned over this rect only. */}
-          <div
-            ref={placeholderRef}
-            className="flex-1 bg-background relative"
-            aria-hidden={
-              sessionAccessRequest || v20CookieBlock ? true : undefined
-            }
-          />
-          {sessionAccessRequest && (
+              {/* Placeholder — native child webview is positioned over this rect only. */}
+              <div
+                ref={placeholderRef}
+                className="flex-1 bg-background relative"
+                aria-hidden={
+                  sessionAccessRequest || v20CookieBlock ? true : undefined
+                }
+              />
+              {sessionAccessRequest && (
             <div className="absolute inset-0 z-40 flex items-center justify-center bg-background p-4">
                 <div className="w-full max-w-sm border border-border bg-card p-4 shadow-sm">
                   <div className="mb-3 flex items-start gap-3">
@@ -924,7 +976,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                 </div>
             </div>
           )}
-          {v20CookieBlock && (
+              {v20CookieBlock && (
             <div className="absolute inset-0 z-40 flex items-center justify-center bg-background p-4">
                 <div className="w-full max-w-sm border border-border bg-card p-4 shadow-sm">
                   <div className="mb-3 flex items-start gap-3">
@@ -1006,6 +1058,8 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                   </div>
                 </div>
             </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -1013,7 +1067,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       {/* Floating re-open affordance: shown when a URL is saved but the
           panel is collapsed. Pinned to the viewport's top-right corner so
           it's discoverable regardless of the chat layout state. */}
-      {visible && collapsed && currentUrl && (
+      {!previewActive && visible && collapsed && currentUrl && (
         <button
           onClick={expand}
           title={`Show browser (${currentUrl})`}

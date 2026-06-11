@@ -47,8 +47,14 @@ const EMPTY_POLICY: EnterprisePolicy = {
   orgName: "",
 };
 
-// Sections always hidden in enterprise builds (regardless of policy)
-const ENTERPRISE_DEFAULT_HIDDEN = ["account", "referral"];
+// Sections always hidden in enterprise builds (regardless of policy).
+// "account" is deliberately NOT here: its visibility is admin-controlled via
+// the workspace policy's UI-visibility toggle (hidden_sections), because the
+// Account section carries the sign-in button — and team pipe sharing + role
+// detection need sign-in. Hardcoding it hidden made signing in impossible on
+// enterprise devices. "referral" stays hardcoded (consumer growth surface,
+// meaningless in a managed org).
+const ENTERPRISE_DEFAULT_HIDDEN = ["referral"];
 
 // Re-fetch policy every 5 minutes so admin changes propagate without app restart
 const POLL_INTERVAL_MS = 5 * 60 * 1000;

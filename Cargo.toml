@@ -19,7 +19,7 @@ edition = "2021"
 
 [workspace.dependencies]
 # AI
-tokenizers = "0.21.0"
+tokenizers = { version = "0.21.0", default-features = false }
 hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", rev = "437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760", default-features = false, features = [
     "native-tls",
     "tokio",
@@ -47,6 +47,101 @@ http-cache-reqwest = "0.15.0"
 # Windows MSVC links cleanly because of bswap_shim.c in the tauri app crate.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "form", "query", "rustls"] }
 reqwest-middleware = "0.4.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async / concurrency
+futures = "0.3"
+async-trait = "0.1"
+tokio-stream = "0.1"
+tokio-tungstenite = "0.24"
+parking_lot = "0.12"
+arc-swap = "1"
+bytes = "1"
+
+# CLI
+clap = { version = "4.3", features = ["derive"] }
+
+# Utilities
+tempfile = "3"
+url = "2"
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+lazy_static = "1.4"
+libc = "0.2"
+env_logger = "0.10"
+sysinfo = "0.29"
+axum = { version = "0.7", features = ["ws", "multipart"] }
+hex = "0.4"
+base64 = "0.22"
+sha2 = "0.10"
+
+# Database
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
+
+# Math / ML
+ndarray = "0.16"
+rand = "0.9"
+ort = { version = "=2.0.0-rc.10", default-features = false }
+
+# Platform
+dirs = "6"
+which = "7"
+zbus = { version = "5.5", default-features = false, features = ["blocking"] }
+windows = "0.58"
+xcap = "0.9"
+keyring = "3"
+ort-sys = { version = "=2.0.0-rc.10", default-features = false }
+samplerate = "0.2.4"
+libsamplerate-sys = "0.1.10"
+
+# Crypto
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zeroize = { version = "1.8", features = ["derive"] }
+
+# Tauri type generation
+specta = { version = "=2.0.0-rc.20", features = ["derive"] }
+
+# Testing
+wiremock = "0.6"
+
+# Audio
+hound = "3.5"
+audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", rev = "2fd5c360651157a5df504394066e509ad4d1bdc9", default-features = false }
+mlx-rs = "0.25"
+
+# Privacy filter enclave attestation (shared by engine + redact)
+tinfoil = { git = "https://github.com/tinfoilsh/tinfoil-rs", rev = "82143d767b540195dea265df0b01c4b4fc93c424" }
+
+# Cache
+moka = { version = "0.12", features = ["future"] }
+
+# SQLite bundled C lib (pinned so all crates link the same copy)
+libsqlite3-sys = { version = "0.26", features = ["bundled"] }
+
+# String similarity
+strsim = "0.10"
+
+# macOS platform deps (used in target-conditional sections)
+objc = "0.2.7"
+accessibility-sys = { git = "https://github.com/eiz/accessibility.git", rev = "173e898d4a52ee0afe0224ecb458d324057856e7" }
+core-foundation = "0.10"
+core-graphics = { version = "0.24", features = ["highsierra"] }
+
+# Windows platform deps
+uiautomation = "0.16.1"
 
 
 [patch.crates-io]

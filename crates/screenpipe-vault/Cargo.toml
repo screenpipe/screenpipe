@@ -9,20 +9,20 @@ edition.workspace = true
 
 [dependencies]
 # Crypto
-chacha20poly1305 = "0.10"
-argon2 = "0.5"
-zeroize = { version = "1.8", features = ["derive"] }
-rand = "0.8"
+chacha20poly1305 = { workspace = true }
+argon2 = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }
 
 # Async
 tokio = { workspace = true }
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Error handling
-thiserror = "1"
+thiserror = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
@@ -31,7 +31,7 @@ tracing = { workspace = true }
 walkdir = "2"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [features]
 default = []

@@ -1431,14 +1431,12 @@ async fn main() -> anyhow::Result<()> {
             Box::pin(async move {
                 let mut missing = Vec::new();
                 for conn_id in required {
-                    let configured = screenpipe_connect::connections::load_connection(
+                    let configured = screenpipe_connect::connections::is_connection_configured(
                         ss.as_deref(),
                         &dir,
                         &conn_id,
                     )
-                    .await
-                    .map(|c| c.enabled && !c.credentials.is_empty())
-                    .unwrap_or(false);
+                    .await;
                     if !configured {
                         missing.push(conn_id);
                     }

@@ -42,6 +42,7 @@ pub struct CaptureParams<'a> {
     pub device_name: &'a str,
     pub snapshot_writer: &'a SnapshotWriter,
     pub tree_walker_config: &'a TreeWalkerConfig,
+    pub window_filters: WindowFilters,
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
     pub languages: &'a [screenpipe_core::Language],
@@ -320,8 +321,6 @@ pub struct EventDrivenCapture {
     last_capture: Instant,
     /// Time reference for periodic idle captures.
     last_idle_reference: Instant,
-    /// Last known idle_ms from ActivityFeed
-    last_idle_ms: u64,
 }
 
 impl EventDrivenCapture {
@@ -331,7 +330,6 @@ impl EventDrivenCapture {
             config,
             last_capture: now,
             last_idle_reference: now,
-            last_idle_ms: 0,
         }
     }
 
@@ -364,10 +362,7 @@ impl EventDrivenCapture {
             >= Duration::from_millis(self.config.idle_capture_interval_ms)
     }
 
-    /// Poll activity state and return a trigger if a capture should happen.
-    ///
-    /// Call this in a loop at ~50ms intervals. Returns `Some(trigger)` when
-    /// a state transition is detected that warrants a capture.
+    /// Poll timer-driven state and return a trigger if a capture should happen.
     ///
     /// Note: `TypingPause` used to fire from here based on ActivityFeed
     /// timing, but that path was untraceable — the resulting frame
@@ -376,14 +371,11 @@ impl EventDrivenCapture {
     /// event (already burst-end-debounced at `text_timeout_ms`),
     /// carrying that row's correlation_id so the linker can populate
     /// `frame_id`.
-    pub fn poll_activity(&mut self, feed: &ActivityFeed) -> Option<CaptureTrigger> {
-        let idle_ms = feed.idle_ms();
-        // Detect idle capture need
+    pub fn poll_activity(&mut self) -> Option<CaptureTrigger> {
         if self.needs_idle_capture() {
             return Some(CaptureTrigger::Idle);
         }
 
-        self.last_idle_ms = idle_ms;
         None
     }
 }
@@ -671,6 +663,11 @@ pub async fn event_driven_capture_loop(
         device_name: &device_name,
         snapshot_writer: &snapshot_writer,
         tree_walker_config: &tree_walker_config,
+        window_filters: WindowFilters::new(
+            &tree_walker_config.ignored_windows,
+            &tree_walker_config.included_windows,
+            &tree_walker_config.ignored_urls,
+        ),
         use_pii_removal,
         pause_on_drm_content,
         languages: &languages,
@@ -1055,7 +1052,7 @@ pub async fn event_driven_capture_loop(
         if let Some(warm) = warm_trigger_override.take() {
             trigger = Some(warm);
         } else if trigger_channel_closed {
-            trigger = state.poll_activity(&activity_feed);
+            trigger = state.poll_activity();
             if trigger.is_none() {
                 tokio::time::sleep(poll_interval).await;
             }
@@ -1157,7 +1154,7 @@ pub async fn event_driven_capture_loop(
             }
             // If draining produced nothing, fall back to internal sources.
             if trigger.is_none() {
-                trigger = state.poll_activity(&activity_feed);
+                trigger = state.poll_activity();
             }
         }
 
@@ -1178,12 +1175,7 @@ pub async fn event_driven_capture_loop(
             activity_feed.keyboard_idle_ms(),
         ) {
             last_visual_check = Instant::now();
-            let vc_filters = WindowFilters::new(
-                &capture_params.tree_walker_config.ignored_windows,
-                &capture_params.tree_walker_config.included_windows,
-                &capture_params.tree_walker_config.ignored_urls,
-            );
-            let mut fresh_ids = get_excluded_sck_window_ids(&vc_filters);
+            let mut fresh_ids = get_excluded_sck_window_ids(&capture_params.window_filters);
             fresh_ids.sort_unstable();
             fresh_ids.dedup();
             if fresh_ids != cached_excluded_ids {
@@ -1420,8 +1412,8 @@ pub async fn event_driven_capture_loop(
                         consecutive_capture_errors += 1;
 
                         // Mark captured on failure to reset idle timer — without
-                        // this, needs_idle_capture() fires every poll tick (50ms)
-                        // once 30s elapses, creating ~20 capture attempts/second
+                        // this, needs_idle_capture() fires every poll tick
+                        // once 30s elapses, creating repeated capture attempts
                         // on systems where capture fundamentally can't work
                         // (e.g. Wayland without ZwlrScreencopy).
                         state.mark_captured();
@@ -1754,12 +1746,7 @@ async fn do_capture(
     // excludes them from the capture buffer (zero overhead, pixel-perfect).
     // Sort + dedup so the persistent stream isn't needlessly recreated when
     // transient windows (tooltips, popups) cause ordering changes.
-    let window_filters = WindowFilters::new(
-        &params.tree_walker_config.ignored_windows,
-        &params.tree_walker_config.included_windows,
-        &params.tree_walker_config.ignored_urls,
-    );
-    let mut excluded_ids = get_excluded_sck_window_ids(&window_filters);
+    let mut excluded_ids = get_excluded_sck_window_ids(&params.window_filters);
     excluded_ids.sort_unstable();
     excluded_ids.dedup();
 

@@ -85,10 +85,11 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   mochi: "Notes",
   workflowy: "Notes",
 
-  // Documents — docs, spreadsheets & wikis
+  // Documents — docs, spreadsheets, wikis & whiteboards
   "google-docs": "Documents",
   "google-sheets": "Documents",
   confluence: "Documents",
+  excalidraw: "Documents",
 
   // Project Management — issues, tasks & time tracking
   linear: "Project Management",

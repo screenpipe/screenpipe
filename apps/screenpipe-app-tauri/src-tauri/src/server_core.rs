@@ -454,19 +454,6 @@ impl ServerCore {
             pipe_store,
             config.port,
         );
-        pipe_manager.set_on_run_complete(Arc::new(
-            |pipe_name, success, duration_secs, error_type| {
-                let mut props = serde_json::json!({
-                    "pipe": pipe_name,
-                    "success": success,
-                    "duration_secs": duration_secs,
-                });
-                if let Some(et) = error_type {
-                    props["error_type"] = serde_json::Value::String(et.to_string());
-                }
-                analytics::capture_event_nonblocking("pipe_scheduled_run", props);
-            },
-        ));
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }
@@ -479,10 +466,58 @@ impl ServerCore {
             warn!("failed to load pipes: {}", e);
         }
         pipe_manager.startup_recovery().await;
-        if let Err(e) = pipe_manager.start_scheduler().await {
+
+        // Wrap in Arc<Mutex> before setting the on_run_complete callback so
+        // the callback can briefly lock the manager to collect artifact
+        // declarations, then release the lock before doing file copies / DB
+        // writes.
+        let shared_pipe_manager = Arc::new(tokio::sync::Mutex::new(pipe_manager));
+        {
+            let db_for_cb = db.clone();
+            let screenpipe_dir_for_cb = config.data_dir.clone();
+            let pm_for_cb = shared_pipe_manager.clone();
+            shared_pipe_manager.lock().await.set_on_run_complete(Arc::new(
+                move |pipe_name, success, duration_secs, error_type| {
+                    let mut props = serde_json::json!({
+                        "pipe": pipe_name,
+                        "success": success,
+                        "duration_secs": duration_secs,
+                    });
+                    if let Some(et) = error_type {
+                        props["error_type"] = serde_json::Value::String(et.to_string());
+                    }
+                    analytics::capture_event_nonblocking("pipe_scheduled_run", props);
+
+                    // Auto-register pipe outputs to ~/.screenpipe/outputs/
+                    if success {
+                        let db = db_for_cb.clone();
+                        let dir = screenpipe_dir_for_cb.clone();
+                        let pm = pm_for_cb.clone();
+                        let name = pipe_name.to_string();
+                        tokio::spawn(async move {
+                            // Hold the lock only to collect declarations, then drop it
+                            let items = {
+                                let mgr = pm.lock().await;
+                                let all = mgr.list_artifact_declarations().await;
+                                all.into_iter()
+                                    .find(|(n, _)| n == &name)
+                                    .map(|(_, items)| items)
+                                    .unwrap_or_default()
+                            };
+                            if !items.is_empty() {
+                                screenpipe_engine::routes::outputs::auto_register_pipe_outputs(
+                                    &db, items, &name, &dir,
+                                )
+                                .await;
+                            }
+                        });
+                    }
+                },
+            ));
+        }
+        if let Err(e) = shared_pipe_manager.lock().await.start_scheduler().await {
             warn!("failed to start pipe scheduler: {}", e);
         }
-        let shared_pipe_manager = Arc::new(tokio::sync::Mutex::new(pipe_manager));
 
         // --- HD-recording controller ---
         // One Arc shared between the HTTP server (so the tray menu,
