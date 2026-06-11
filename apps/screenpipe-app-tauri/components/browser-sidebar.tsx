@@ -490,6 +490,7 @@ export function BrowserSidebar({
               .ownedBrowserNavigate(
                 retryUrl,
                 v20CookieBlock.owner ?? currentOwner ?? conversationId ?? null,
+                true,
               )
               .catch(() => {});
           }
@@ -721,6 +722,7 @@ export function BrowserSidebar({
       await commands.ownedBrowserNavigate(
         currentUrl,
         currentOwner ?? conversationId ?? null,
+        true,
       );
     } catch (e) {
       console.error("reload failed", e);
@@ -740,7 +742,11 @@ export function BrowserSidebar({
     await commands.confirmBrowserCookieAccessForSession();
     setLoading(true);
     await commands
-      .ownedBrowserNavigate(currentUrl, currentOwner ?? conversationId ?? null)
+      .ownedBrowserNavigate(
+        currentUrl,
+        currentOwner ?? conversationId ?? null,
+        true,
+      )
       .catch((e) => {
         console.error("retry cookie navigation failed", e);
       });
@@ -757,6 +763,7 @@ export function BrowserSidebar({
         await commands.ownedBrowserNavigate(
           currentUrl,
           currentOwner ?? conversationId ?? null,
+          true,
         );
       }
     } catch (e) {
