@@ -69,13 +69,14 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
-import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
+import { useSqlAutocomplete, useVisionTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   parseMentions,
   buildAppMentionSuggestions,
+  buildTagMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
   extractConversationHistorySyncUserText,
@@ -156,11 +157,12 @@ function MermaidDiagramBlock({ chart }: { chart: string }) {
 interface MentionSuggestion {
   tag: string;
   description: string;
-  category: "time" | "content" | "app" | "speaker";
+  category: "time" | "content" | "app" | "speaker" | "tag";
   appName?: string;
 }
 
 const APP_SUGGESTION_LIMIT = 10;
+const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
 const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
@@ -2502,7 +2504,8 @@ export function StandaloneChat({
   // (the buttons hide). Only relevant in standalone mode (no parent
   // className) — the embedded variant is below the host's chrome anyway.
   const isFullscreen = useIsFullscreen();
-  const { items: appItems } = useSqlAutocomplete("app");
+  const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
+  const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useVisionTagAutocomplete();
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
   // Connected integrations (gmail, google-sheets, slack, etc.) surfaced in the
@@ -4095,6 +4098,11 @@ export function StandaloneChat({
     [appItems]
   );
 
+  const tagMentionSuggestions = React.useMemo(
+    () => buildTagMentionSuggestions(tagItems, TAG_SUGGESTION_LIMIT),
+    [tagItems]
+  );
+
   const appTagMap = React.useMemo(() => {
     const map: Record<string, string> = {};
     for (const suggestion of appMentionSuggestions) {
@@ -4106,19 +4114,20 @@ export function StandaloneChat({
   }, [appMentionSuggestions]);
 
   const baseMentionSuggestions = React.useMemo(
-    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
-    [appMentionSuggestions]
+    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions, ...tagMentionSuggestions],
+    [appMentionSuggestions, tagMentionSuggestions]
   );
 
   // Parse current input to extract active filters for chip display
   const activeFilters = React.useMemo(() => {
-    if (!input.trim()) return { timeRanges: [], contentType: null, appName: null, speakerName: null };
+    if (!input.trim()) return { timeRanges: [], contentType: null, appName: null, speakerName: null, tagNames: [] as string[] };
     const parsed = parseMentions(input, { appTagMap });
     return {
       timeRanges: parsed.timeRanges,
       contentType: parsed.contentType,
       appName: parsed.appName,
       speakerName: parsed.speakerName,
+      tagNames: parsed.tagNames,
     };
   }, [input, appTagMap]);
 
@@ -4126,23 +4135,26 @@ export function StandaloneChat({
   const hasActiveFilters = activeFilters.timeRanges.length > 0 ||
     activeFilters.contentType ||
     activeFilters.appName ||
-    activeFilters.speakerName;
+    activeFilters.speakerName ||
+    activeFilters.tagNames.length > 0;
   const activeFilterCount = (activeFilters.timeRanges.length > 0 ? 1 : 0) +
     (activeFilters.contentType ? 1 : 0) +
     (activeFilters.appName ? 1 : 0) +
-    (activeFilters.speakerName ? 1 : 0);
+    (activeFilters.speakerName ? 1 : 0) +
+    activeFilters.tagNames.length;
   const activeFilterLabels = React.useMemo(
     () => [
       ...activeFilters.timeRanges.map((range) => range.label),
       activeFilters.contentType,
       activeFilters.appName,
       activeFilters.speakerName,
+      ...activeFilters.tagNames.map((tag) => `#${tag}`),
     ].filter((label): label is string => Boolean(label)),
     [activeFilters]
   );
 
   // Remove a specific @mention from input
-  const removeFilter = (filterType: "time" | "content" | "app" | "speaker", label?: string) => {
+  const removeFilter = (filterType: "time" | "content" | "app" | "speaker" | "tag", label?: string) => {
     let newInput = input;
     if (filterType === "time") {
       // Remove time mentions like @today, @yesterday, @last-hour, etc.
@@ -4174,6 +4186,9 @@ export function StandaloneChat({
     } else if (filterType === "speaker" && activeFilters.speakerName) {
       const speakerPattern = new RegExp(`@"?${activeFilters.speakerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?\\b`, "gi");
       newInput = newInput.replace(speakerPattern, "").trim();
+    } else if (filterType === "tag" && label) {
+      const tagPattern = new RegExp(`#${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+      newInput = newInput.replace(tagPattern, "").trim();
     }
     // Clean up extra spaces
     newInput = newInput.replace(/\s+/g, " ").trim();
@@ -4572,6 +4587,18 @@ export function StandaloneChat({
       }
     })();
   }, [appFilterOpen, recentSpeakers.length]);
+
+  // Apps/tags load on mount, but the first fetch often races server startup.
+  // Retry when the filter popover opens and the list is still empty.
+  useEffect(() => {
+    if (!appFilterOpen) return;
+    if (appItems.length === 0 && !appsLoading) {
+      void refreshAppItems();
+    }
+    if (tagItems.length === 0 && !tagsLoading) {
+      void refreshTagItems();
+    }
+  }, [appFilterOpen, appItems.length, tagItems.length, appsLoading, tagsLoading, refreshAppItems, refreshTagItems]);
 
   // Pi project dir is managed Rust-side at boot
 
@@ -7878,7 +7905,9 @@ export function StandaloneChat({
           apps
         </div>
         {appMentionSuggestions.length === 0 ? (
-          <div className="px-3 py-2 text-[10px] text-muted-foreground">no apps detected yet</div>
+          <div className="px-3 py-2 text-[10px] text-muted-foreground">
+            {appsLoading ? "loading apps..." : "no apps detected yet"}
+          </div>
         ) : (
           appMentionSuggestions.map((suggestion) => {
             const isActive = activeFilters.appName === suggestion.appName;
@@ -7891,6 +7920,41 @@ export function StandaloneChat({
                     removeFilter("app");
                   } else {
                     if (activeFilters.appName) removeFilter("app");
+                    setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+                  }
+                  setAppFilterOpen(false);
+                }}
+                className={cn(
+                  "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+                  isActive && "bg-muted"
+                )}
+              >
+                <span>{suggestion.tag}</span>
+                <span className="text-[10px] text-muted-foreground truncate">{suggestion.description}</span>
+              </button>
+            );
+          })
+        )}
+
+        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
+          tags
+        </div>
+        {tagMentionSuggestions.length === 0 ? (
+          <div className="px-3 py-2 text-[10px] text-muted-foreground">
+            {tagsLoading ? "loading tags..." : "no tags yet"}
+          </div>
+        ) : (
+          tagMentionSuggestions.map((suggestion) => {
+            const tagName = suggestion.tag.slice(1);
+            const isActive = activeFilters.tagNames.includes(tagName);
+            return (
+              <button
+                key={`tag-${suggestion.tag}`}
+                type="button"
+                onClick={() => {
+                  if (isActive) {
+                    removeFilter("tag", tagName);
+                  } else {
                     setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
                   }
                   setAppFilterOpen(false);
@@ -9215,13 +9279,13 @@ export function StandaloneChat({
                     transition={{ duration: 0.1 }}
                     className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-lg shadow-lg overflow-hidden z-50 max-h-[240px] overflow-y-auto"
                   >
-                    {["time", "content", "app", "speaker"].map(category => {
+                    {["time", "content", "app", "tag", "speaker"].map(category => {
                       const items = filteredMentions.filter(m => m.category === category);
                       if (items.length === 0) return null;
                       return (
                         <div key={category}>
                           <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
-                            {category === "time" ? "time" : category === "content" ? "content type" : category === "speaker" ? "speakers" : "apps"}
+                            {category === "time" ? "time" : category === "content" ? "content type" : category === "speaker" ? "speakers" : category === "tag" ? "tags" : "apps"}
                           </div>
                           {items.map((suggestion) => {
                             const globalIndex = filteredMentions.indexOf(suggestion);

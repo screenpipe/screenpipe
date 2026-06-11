@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import "../../vitest.setup";
-import { buildAppMentionSuggestions, parseMentions } from "../../lib/chat-utils";
+import { buildAppMentionSuggestions, buildTagMentionSuggestions, parseMentions } from "../../lib/chat-utils";
 
 describe("global chat mentions", () => {
   it("builds app suggestions from most-used apps", () => {
@@ -39,6 +39,32 @@ describe("global chat mentions", () => {
 
     expect(mentions.appName).toBe("Google Chrome");
     expect(mentions.cleanedInput).toBe("find notes");
+    expect(mentions.tagNames).toEqual([]);
+  });
+
+  it("parses tag mentions using # syntax", () => {
+    const mentions = parseMentions("#firefox @today summarize browsing", {
+      appTagMap: {},
+    });
+
+    expect(mentions.tagNames).toEqual(["firefox"]);
+    expect(mentions.timeRanges).toHaveLength(1);
+    expect(mentions.cleanedInput).toBe("summarize browsing");
+  });
+
+  it("builds tag suggestions from vision tag counts", () => {
+    const suggestions = buildTagMentionSuggestions(
+      [
+        { name: "firefox", count: 833 },
+        { name: "coding", count: 138 },
+      ],
+      10,
+    );
+
+    expect(suggestions).toEqual([
+      { tag: "#firefox", description: "833 frames", category: "tag" },
+      { tag: "#coding", description: "138 frames", category: "tag" },
+    ]);
   });
 
   it("handles @mention trigger with hyphens", () => {

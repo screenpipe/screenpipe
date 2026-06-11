@@ -16,17 +16,26 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 const cache: Record<string, { data: AutocompleteItem[]; timestamp: number }> =
   {};
 
+const APP_LOOKBACK_FILTER = `
+  datetime(timestamp) > datetime('now', '-7 days')
+  AND app_name IS NOT NULL
+  AND app_name != ''
+  AND app_name NOT IN ('screenpipe', 'screenpipe-app')
+`;
+
 export function useSqlAutocomplete(type: "app" | "window" | "url") {
   const [items, setItems] = useState<AutocompleteItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const fetchItems = useCallback(async () => {
+  const fetchItems = useCallback(async (force = false) => {
     setIsLoading(true);
     try {
       const cachedData = cache[type];
-      if (cachedData && Date.now() - cachedData.timestamp < CACHE_DURATION) {
+      if (!force && cachedData && Date.now() - cachedData.timestamp < CACHE_DURATION) {
         setItems(cachedData.data);
-      } else {
+        return;
+      }
+      {
         let query: string;
         if (type === "url") {
           // Query unique domains from browser_url using subquery for proper deduplication
@@ -52,7 +61,7 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
               FROM frames
               WHERE browser_url IS NOT NULL
               AND browser_url != ''
-              AND timestamp > datetime('now', '-7 days')
+              AND datetime(timestamp) > datetime('now', '-7 days')
             )
             WHERE domain != '' AND domain IS NOT NULL
             GROUP BY domain
@@ -64,8 +73,7 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
           query = `
             SELECT app_name as name, app_name, COUNT(*) as count
             FROM frames
-            WHERE timestamp > datetime('now', '-7 days')
-            AND app_name IS NOT NULL AND app_name != ''
+            WHERE ${APP_LOOKBACK_FILTER}
             GROUP BY app_name
             ORDER BY count DESC
             LIMIT 200
@@ -74,9 +82,7 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
           query = `
             SELECT app_name as name, COUNT(*) as count
             FROM frames
-            WHERE timestamp > datetime('now', '-7 days')
-            AND app_name IS NOT NULL
-            AND app_name != ''
+            WHERE ${APP_LOOKBACK_FILTER}
             GROUP BY app_name
             ORDER BY count DESC
             LIMIT 100
@@ -92,7 +98,10 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const result = await response.json();
+        const result: AutocompleteItem[] = await response.json();
+        if (!Array.isArray(result)) {
+          throw new Error("expected array from /raw_sql");
+        }
         setItems(result);
         cache[type] = { data: result, timestamp: Date.now() };
       }
@@ -105,10 +114,72 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
   }, [type]);
 
   useEffect(() => {
-    fetchItems();
+    void fetchItems();
   }, [fetchItems]);
 
-  return { items, isLoading };
+  const refresh = useCallback(() => fetchItems(true), [fetchItems]);
+
+  return { items, isLoading, refresh };
+}
+
+const TAG_CACHE: { data?: AutocompleteItem[]; ts?: number } = {};
+
+/** Distinct vision tags with frame counts, for chat/search filter pickers. */
+export function useVisionTagAutocomplete() {
+  const [items, setItems] = useState<AutocompleteItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const fetchItems = useCallback(async (force = false) => {
+    setIsLoading(true);
+    try {
+      if (
+        !force &&
+        TAG_CACHE.data &&
+        TAG_CACHE.ts &&
+        Date.now() - TAG_CACHE.ts < CACHE_DURATION
+      ) {
+        setItems(TAG_CACHE.data);
+        return;
+      }
+      const response = await localFetch("/raw_sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: `
+            SELECT t.name, COUNT(vt.vision_id) as count
+            FROM tags t
+            JOIN vision_tags vt ON t.id = vt.tag_id
+            GROUP BY t.id, t.name
+            ORDER BY count DESC
+            LIMIT 50
+          `,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const result: AutocompleteItem[] = await response.json();
+      if (!Array.isArray(result)) {
+        throw new Error("expected array from /raw_sql");
+      }
+      TAG_CACHE.data = result;
+      TAG_CACHE.ts = Date.now();
+      setItems(result);
+    } catch (error) {
+      const msg = (error as Error)?.stack ?? (error as Error)?.message ?? String(error);
+      console.error("failed to fetch vision tags:", msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchItems();
+  }, [fetchItems]);
+
+  const refresh = useCallback(() => fetchItems(true), [fetchItems]);
+
+  return { items, isLoading, refresh };
 }
 
 /** A single (app, window) cell returned by the tree query. */
@@ -171,8 +242,9 @@ export function useAppWindowTree() {
             COUNT(*) as count,
             ROW_NUMBER() OVER (PARTITION BY app_name ORDER BY COUNT(*) DESC) as rn
           FROM frames
-          WHERE timestamp > datetime('now','-7 days')
+          WHERE datetime(timestamp) > datetime('now','-7 days')
             AND app_name IS NOT NULL AND app_name != ''
+            AND app_name NOT IN ('screenpipe', 'screenpipe-app')
           GROUP BY app_name, COALESCE(window_name, '')
         ),
         per_app AS (

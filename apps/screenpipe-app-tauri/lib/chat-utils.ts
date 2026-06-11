@@ -340,6 +340,7 @@ export interface ParsedMentions {
   appName: string | null;
   usedSelection: boolean;
   speakerName: string | null;
+  tagNames: string[];
 }
 
 export interface ParseMentionsOptions {
@@ -385,6 +386,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
   let appName: string | null = null;
   let usedSelection = false;
   let speakerName: string | null = null;
+  const tagNames: string[] = [];
 
   // === TIME MENTIONS ===
 
@@ -533,7 +535,22 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
     }
   }
 
-  return { cleanedInput, timeRanges, contentType, appName, usedSelection, speakerName };
+  // === TAG MENTIONS ===
+  // #tagname — matches timeline/search tag syntax. Supports namespaced tags
+  // like person:ada used by the /search?tags= API.
+  const tagPattern = /#([\w:.-]+)/g;
+  let tagMatch: RegExpExecArray | null;
+  while ((tagMatch = tagPattern.exec(input)) !== null) {
+    const tag = tagMatch[1];
+    if (tag && !tagNames.includes(tag)) {
+      tagNames.push(tag);
+    }
+  }
+  if (tagNames.length > 0) {
+    cleanedInput = cleanedInput.replace(tagPattern, "").trim();
+  }
+
+  return { cleanedInput, timeRanges, contentType, appName, usedSelection, speakerName, tagNames };
 }
 
 // ============================================================================
@@ -543,7 +560,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
 export interface MentionSuggestion {
   tag: string;
   description: string;
-  category: "time" | "content" | "app" | "speaker";
+  category: "time" | "content" | "app" | "speaker" | "tag";
   appName?: string;
 }
 
@@ -578,4 +595,15 @@ export function buildAppMentionSuggestions(
       appName: item.name,
     };
   });
+}
+
+export function buildTagMentionSuggestions(
+  items: AppAutocompleteItem[],
+  limit: number
+): MentionSuggestion[] {
+  return items.slice(0, limit).map((item) => ({
+    tag: `#${item.name}`,
+    description: `${item.count} frames`,
+    category: "tag" as const,
+  }));
 }
