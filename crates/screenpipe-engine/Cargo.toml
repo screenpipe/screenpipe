@@ -163,6 +163,8 @@ apple-intelligence = ["dep:screenpipe-apple-intelligence"]
 qwen3-asr = ["screenpipe-audio/qwen3-asr"]
 parakeet = ["screenpipe-audio/parakeet"]
 parakeet-mlx = ["screenpipe-audio/parakeet-mlx"]
+# Apple SpeechAnalyzer STT (macOS 26+, on-device). macOS only.
+apple-native = ["screenpipe-audio/apple-native"]
 # Image-PII detector via MLX (Apple Silicon-only). Compiled into macOS
 # release builds for experiments, but the CLI runtime keeps ONNX as the
 # default stable path unless SCREENPIPE_ENABLE_EXPERIMENTAL_RFDETR_MLX=1

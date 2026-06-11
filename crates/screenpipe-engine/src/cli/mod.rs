@@ -55,6 +55,9 @@ pub enum CliAudioTranscriptionEngine {
     Qwen3Asr,
     #[clap(name = "parakeet")]
     Parakeet,
+    /// Apple SpeechAnalyzer (on-device, macOS 26+, requires the apple-native feature)
+    #[clap(name = "apple-native")]
+    AppleNative,
     /// Disable transcription (audio capture only, no speech-to-text)
     #[clap(name = "disabled")]
     Disabled,
@@ -87,6 +90,7 @@ fn cli_engine_to_str(engine: &CliAudioTranscriptionEngine) -> &'static str {
         CliAudioTranscriptionEngine::OpenAICompatible => "openai-compatible",
         CliAudioTranscriptionEngine::Qwen3Asr => "qwen3-asr",
         CliAudioTranscriptionEngine::Parakeet => "parakeet",
+        CliAudioTranscriptionEngine::AppleNative => "apple-native",
         CliAudioTranscriptionEngine::Disabled => "disabled",
     }
 }
@@ -116,6 +120,7 @@ impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
             }
             CliAudioTranscriptionEngine::Qwen3Asr => CoreAudioTranscriptionEngine::Qwen3Asr,
             CliAudioTranscriptionEngine::Parakeet => CoreAudioTranscriptionEngine::Parakeet,
+            CliAudioTranscriptionEngine::AppleNative => CoreAudioTranscriptionEngine::AppleNative,
             CliAudioTranscriptionEngine::Disabled => CoreAudioTranscriptionEngine::Disabled,
         }
     }
