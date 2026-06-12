@@ -318,6 +318,28 @@ pub struct AudioPipelineHealthInfo {
 /// killed by a watchdog).
 const HEALTH_RESPONSE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Classify a stretch of "no real audio captured recently."
+///
+/// Audio content only ticks the capture timestamp on non-silent buffers
+/// (a deliberate anti-hijack measure), so "no recent audio" is the normal state
+/// of a quiet machine — NOT evidence of a fault. The only case that is a genuine
+/// fault, and that no other health signal already covers, is: the default output
+/// device is actively being driven (something is playing) yet we captured nothing.
+///
+/// * `output_running` — default output device is being driven right now.
+/// * `screen_locked`  — capture is intentionally paused (screen lock / display sleep).
+/// * `recently_woke`  — within the post-wake grace window; capture re-initializing.
+///
+/// Returns `"stale"` (a degraded fault) only for output-playing-but-silent;
+/// everything else is `"idle"` (healthy).
+fn classify_silent_audio(output_running: bool, screen_locked: bool, recently_woke: bool) -> &'static str {
+    if output_running && !screen_locked && !recently_woke {
+        "stale"
+    } else {
+        "idle"
+    }
+}
+
 #[oasgen]
 pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<HealthCheckResponse> {
     let now_ts = std::time::SystemTime::now()
@@ -1391,5 +1413,29 @@ mod tests {
             audio_status_2, "ok",
             "audio_status should be 'ok' when stream_timeouts == 0 and device is active"
         );
+    }
+
+    #[test]
+    fn silent_audio_is_stale_only_when_output_playing() {
+        // Output is being driven but we captured nothing — genuine capture stall.
+        assert_eq!(super::classify_silent_audio(true, false, false), "stale");
+    }
+
+    #[test]
+    fn silent_audio_is_idle_when_nothing_playing() {
+        // Nothing playing — legitimate idle, not a fault.
+        assert_eq!(super::classify_silent_audio(false, false, false), "idle");
+    }
+
+    #[test]
+    fn silent_audio_is_idle_when_screen_locked() {
+        // Screen locked — capture paused, silence expected even if output "runs".
+        assert_eq!(super::classify_silent_audio(true, true, false), "idle");
+    }
+
+    #[test]
+    fn silent_audio_is_idle_just_after_wake() {
+        // Recently woke from sleep — capture re-initializing, grace period.
+        assert_eq!(super::classify_silent_audio(true, false, true), "idle");
     }
 }
