@@ -209,17 +209,60 @@ impl AudioStream {
                     unreachable!()
                 }
             } else {
-                Self::start_cpal_stream(
-                    &device,
-                    tx,
-                    stream_control_rx,
-                    &is_running,
-                    &is_disconnected,
-                    &stream_control_tx,
-                    windows_input_aec,
-                    macos_input_vpio,
-                )
-                .await?
+                #[cfg(target_os = "macos")]
+                {
+                    use super::device::{DeviceType, MACOS_OUTPUT_AUDIO_DEVICE_NAME};
+                    let is_system_audio = device.device_type == DeviceType::Output
+                        && device.name == MACOS_OUTPUT_AUDIO_DEVICE_NAME;
+                    match Self::start_cpal_stream(
+                        &device,
+                        tx.clone(),
+                        stream_control_rx,
+                        &is_running,
+                        &is_disconnected,
+                        &stream_control_tx,
+                        windows_input_aec,
+                        macos_input_vpio,
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        // ScreenCaptureKit's System Audio enumeration is unreliable under
+                        // sustained GPU/Metal load (e.g. Parakeet on MLX): it returns empty
+                        // displays → "device not found" and never recovers. The CoreAudio
+                        // Process Tap doesn't touch the GPU, so fall back to it automatically.
+                        // (Mirrors the reverse tap→SCK fallback in the `use_process_tap` arm.)
+                        Err(e)
+                            if is_system_audio
+                                && super::process_tap::is_process_tap_available() =>
+                        {
+                            tracing::warn!(
+                                "SCK System Audio capture failed ({}); falling back to CoreAudio Process Tap",
+                                e
+                            );
+                            super::process_tap::spawn_process_tap_capture(
+                                tx,
+                                is_running.clone(),
+                                is_disconnected.clone(),
+                            )?
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    Self::start_cpal_stream(
+                        &device,
+                        tx,
+                        stream_control_rx,
+                        &is_running,
+                        &is_disconnected,
+                        &stream_control_tx,
+                        windows_input_aec,
+                        macos_input_vpio,
+                    )
+                    .await?
+                }
             }
         };
 
