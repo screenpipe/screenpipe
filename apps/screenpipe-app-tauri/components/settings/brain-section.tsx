@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { CompactMarkdown } from "@/components/settings/compact-markdown";
+import { SafArtifactBody } from "@/components/settings/saf-sop-view";
 import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
 import { localFetch } from "@/lib/api";
 import {
@@ -1006,13 +1007,26 @@ export function BrainSection() {
                     }`}
                   />
                   <div className="flex-1 min-w-0">
-                    <CompactMarkdown
-                      data-testid={`brain-artifact-preview-${artTestId}`}
-                      expanded={isArtExpanded}
-                      onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
-                    >
-                      {rawContent}
-                    </CompactMarkdown>
+                    {artItem.saf_kind ? (
+                      // SAF artifact (shared envelope with cloud): typed
+                      // renderer instead of the plain markdown preview.
+                      <SafArtifactBody
+                        title={artItem.title}
+                        content={isArtExpanded ? (fullContent ?? null) : null}
+                        expanded={isArtExpanded}
+                        onToggleExpanded={() =>
+                          void toggleArtifactExpanded(artKey, artPath)
+                        }
+                      />
+                    ) : (
+                      <CompactMarkdown
+                        data-testid={`brain-artifact-preview-${artTestId}`}
+                        expanded={isArtExpanded}
+                        onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
+                      >
+                        {rawContent}
+                      </CompactMarkdown>
+                    )}
                     <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                       {artDate && (
                         <span className="text-xs text-muted-foreground">
@@ -1025,6 +1039,19 @@ export function BrainSection() {
                       <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
                         artifact
                       </span>
+                      {artItem.saf_kind && (
+                        <span
+                          data-testid={`brain-artifact-saf-kind-${artTestId}`}
+                          className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full border border-border font-mono text-foreground/80"
+                        >
+                          {artItem.saf_kind}
+                          {artItem.saf_version != null && (
+                            <span className="ml-1 text-muted-foreground/70">
+                              v{artItem.saf_version}
+                            </span>
+                          )}
+                        </span>
+                      )}
                       {artSize != null && (
                         <span className="text-[10px] text-muted-foreground/50">
                           {formatBytes(artSize)}

@@ -457,12 +457,24 @@ export function useEnterprisePolicy() {
         const streams = (data.syncStreams ?? {}) as Record<string, unknown>;
         const pickBool = (key: string): boolean =>
           typeof streams[key] === "boolean" ? (streams[key] as boolean) : true;
+        // frame_images is a NEW data class (screen pixels leave the device on
+        // request) — a 3-way MODE ("off" | "cited" | "all"), the org's explicit
+        // dashboard choice. Legacy boolean policies map true → "cited".
+        // Anything unrecognized is "off" — fail-closed.
+        const rawMode = streams.frame_images as unknown;
+        const frameImages =
+          rawMode === "off" || rawMode === "cited" || rawMode === "all"
+            ? rawMode
+            : rawMode === true
+            ? "cited"
+            : "off";
         await commands.setSyncStreams(
           pickBool("frames"),
           pickBool("audio"),
           pickBool("ui_events"),
           pickBool("memories"),
           pickBool("snapshots"),
+          frameImages,
         );
       } catch (e) {
         console.warn("[enterprise] failed to push sync streams to Rust:", e);

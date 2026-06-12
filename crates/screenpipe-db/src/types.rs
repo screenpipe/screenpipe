@@ -313,6 +313,15 @@ pub struct OutputRecord {
     pub size_bytes: i64,
     pub preview: Option<String>,
     pub metadata: Option<String>,
+    /// SAF envelope `kind` (e.g. "sop") when this output is a validated
+    /// SAF artifact; NULL for plain file outputs.
+    pub saf_kind: Option<String>,
+    /// SAF stable artifact id — survives across re-emits/versions.
+    pub artifact_id: Option<String>,
+    /// SAF artifact `version` number (monotonic per artifact_id). The column
+    /// name is prefixed to avoid clashing with the envelope's `saf_version`
+    /// format marker, which is always 1 and not stored.
+    pub saf_version: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }

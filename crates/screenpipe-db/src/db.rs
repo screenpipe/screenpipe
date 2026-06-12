@@ -10545,6 +10545,7 @@ LIMIT ? OFFSET ?
     // Outputs
     // ========================================================================
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_output(
         &self,
         source: &str,
@@ -10556,11 +10557,15 @@ LIMIT ? OFFSET ?
         size_bytes: i64,
         preview: Option<&str>,
         metadata: Option<&str>,
+        saf_kind: Option<&str>,
+        artifact_id: Option<&str>,
+        saf_version: Option<i64>,
     ) -> Result<i64, SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
         let id = sqlx::query(
             "INSERT INTO outputs (source, source_type, title, kind, original_path, output_path, \
-             size_bytes, preview, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(source)
         .bind(source_type)
@@ -10571,6 +10576,9 @@ LIMIT ? OFFSET ?
         .bind(size_bytes)
         .bind(preview)
         .bind(metadata.unwrap_or("{}"))
+        .bind(saf_kind)
+        .bind(artifact_id)
+        .bind(saf_version)
         .execute(&mut **tx.conn())
         .await?
         .last_insert_rowid();
@@ -10581,7 +10589,8 @@ LIMIT ? OFFSET ?
     pub async fn get_output_by_id(&self, id: i64) -> Result<crate::types::OutputRecord, SqlxError> {
         sqlx::query_as::<_, crate::types::OutputRecord>(
             "SELECT id, source, source_type, title, kind, original_path, output_path, \
-             size_bytes, preview, metadata, created_at, updated_at \
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
+             created_at, updated_at \
              FROM outputs WHERE id = ?1",
         )
         .bind(id)
@@ -10595,10 +10604,34 @@ LIMIT ? OFFSET ?
     ) -> Result<Option<crate::types::OutputRecord>, SqlxError> {
         sqlx::query_as::<_, crate::types::OutputRecord>(
             "SELECT id, source, source_type, title, kind, original_path, output_path, \
-             size_bytes, preview, metadata, created_at, updated_at \
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
+             created_at, updated_at \
              FROM outputs WHERE output_path = ?1",
         )
         .bind(output_path)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Look up a SAF artifact row by its stable identity. Artifact ids are
+    /// scoped per (source, source_type) so two pipes can reuse the same
+    /// artifact_id without colliding. Newest row wins if duplicates exist.
+    pub async fn get_output_by_artifact_id(
+        &self,
+        source: &str,
+        source_type: &str,
+        artifact_id: &str,
+    ) -> Result<Option<crate::types::OutputRecord>, SqlxError> {
+        sqlx::query_as::<_, crate::types::OutputRecord>(
+            "SELECT id, source, source_type, title, kind, original_path, output_path, \
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
+             created_at, updated_at \
+             FROM outputs WHERE source = ?1 AND source_type = ?2 AND artifact_id = ?3 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(source)
+        .bind(source_type)
+        .bind(artifact_id)
         .fetch_optional(&self.pool)
         .await
     }
@@ -10613,7 +10646,8 @@ LIMIT ? OFFSET ?
     ) -> Result<Vec<crate::types::OutputRecord>, SqlxError> {
         let mut sql = String::from(
             "SELECT id, source, source_type, title, kind, original_path, output_path, \
-             size_bytes, preview, metadata, created_at, updated_at \
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
+             created_at, updated_at \
              FROM outputs WHERE 1=1",
         );
         let mut binds: Vec<String> = Vec::new();
@@ -10671,6 +10705,7 @@ LIMIT ? OFFSET ?
         query.fetch_one(&self.pool).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_output(
         &self,
         id: i64,
@@ -10680,12 +10715,16 @@ LIMIT ? OFFSET ?
         size_bytes: i64,
         preview: Option<&str>,
         metadata: Option<&str>,
+        saf_kind: Option<&str>,
+        artifact_id: Option<&str>,
+        saf_version: Option<i64>,
     ) -> Result<(), SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query(
             "UPDATE outputs SET title = ?1, kind = ?2, original_path = ?3, size_bytes = ?4, \
-             preview = ?5, metadata = ?6, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
-             WHERE id = ?7",
+             preview = ?5, metadata = ?6, saf_kind = ?7, artifact_id = ?8, saf_version = ?9, \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+             WHERE id = ?10",
         )
         .bind(title)
         .bind(kind)
@@ -10693,6 +10732,27 @@ LIMIT ? OFFSET ?
         .bind(size_bytes)
         .bind(preview)
         .bind(metadata.unwrap_or("{}"))
+        .bind(saf_kind)
+        .bind(artifact_id)
+        .bind(saf_version)
+        .bind(id)
+        .execute(&mut **tx.conn())
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Repoint a registered output row at a new canonical file path.
+    /// Used when a SAF artifact is re-emitted under a different filename:
+    /// the row (matched by artifact_id) follows the latest file.
+    pub async fn update_output_path(&self, id: i64, output_path: &str) -> Result<(), SqlxError> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+        sqlx::query(
+            "UPDATE outputs SET output_path = ?1, \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+             WHERE id = ?2",
+        )
+        .bind(output_path)
         .bind(id)
         .execute(&mut **tx.conn())
         .await?;

@@ -81,7 +81,7 @@ import {
   CheckCircle2,
   XCircle,
   Circle,
-  Upload,
+  Download,
   Trash2,
   Search,
   ListTodo,
@@ -1295,7 +1295,7 @@ function TranscriptionDictionary({
               className="h-7 text-xs px-2 gap-1"
               onClick={() => setShowBulk(!showBulk)}
             >
-              <Upload className="h-3 w-3" />
+              <Download className="h-3 w-3" />
               bulk import
             </Button>
             {vocabularyWords.length > 0 && (
