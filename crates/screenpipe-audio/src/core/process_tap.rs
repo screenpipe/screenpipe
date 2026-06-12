@@ -464,6 +464,60 @@ extern "C" fn tap_io_proc(
 }
 
 // ---------------------------------------------------------------------------
+// Silence watchdog (shared tuning + decision logic)
+// ---------------------------------------------------------------------------
+
+/// If the tap delivers only near-silent buffers for this long *while audio is
+/// actually playing on the default output*, rebuild the aggregate once. This
+/// catches the "tap anchored to a device whose aggregate sub-device has gone
+/// mute" failure mode without firing on an idle machine. Module-scoped so
+/// [`silence_rebuild_decision`] and its tests share the value.
+const WATCHDOG_SILENCE_SECS: u64 = 45;
+
+/// After a rebuild, wait at least this long before considering another — avoids
+/// ping-ponging when the real cause is that nothing is playing.
+const REBUILD_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// True when the system's current default output device is actively being
+/// driven by some process right now (`kAudioDevicePropertyDeviceIsRunningSomewhere`).
+///
+/// This is the signal that separates a genuine capture stall (audio IS playing
+/// but our aggregate delivers zeros, so a rebuild may help) from legitimate
+/// idle silence (nothing is playing, so a rebuild is pointless and — left
+/// ungated — churns the tap every ~minute forever on a quiet machine).
+///
+/// Any error reading the property yields `false` (fail-safe: prefer a missed
+/// rebuild over an infinite rebuild loop — the device-switch and exclusion-
+/// drift paths still handle real reconfiguration).
+fn default_output_running_somewhere() -> bool {
+    ca::System::default_output_device()
+        .and_then(|d| d.bool_prop(&ca::PropSelector::DEVICE_IS_RUNNING_SOMEWHERE.global_addr()))
+        .unwrap_or(false)
+}
+
+/// Pure decision for the silence watchdog: rebuild only when we've been silent
+/// long enough, the rebuild cooldown has elapsed, AND audio is actually playing
+/// (so the silence is a capture failure, not an idle machine). `audio_playing`
+/// is evaluated lazily — only once the timing gates pass — so the CoreAudio
+/// query in [`default_output_running_somewhere`] never runs on a routine tick.
+///
+/// `cooldown` is supplied by the caller (rather than read from `REBUILD_COOLDOWN`
+/// directly) so the watchdog loop can grow it with the consecutive-silence
+/// backoff streak; see `SILENCE_BACKOFF_CAP`.
+fn silence_rebuild_decision(
+    silence_elapsed: Option<std::time::Duration>,
+    since_last_rebuild: Option<std::time::Duration>,
+    cooldown: std::time::Duration,
+    audio_playing: impl FnOnce() -> bool,
+) -> bool {
+    let silent_long_enough = silence_elapsed
+        .map(|d| d.as_secs() >= WATCHDOG_SILENCE_SECS)
+        .unwrap_or(false);
+    let cooldown_ok = since_last_rebuild.map(|d| d >= cooldown).unwrap_or(true);
+    silent_long_enough && cooldown_ok && audio_playing()
+}
+
+// ---------------------------------------------------------------------------
 // Capture lifecycle
 // ---------------------------------------------------------------------------
 
@@ -740,32 +794,27 @@ pub fn spawn_process_tap_capture(
         // enough that we don't hammer CoreAudio.
         const POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
-        // Silence watchdog — if the tap runs for this long with zero non-
-        // silent audio (AND the callback is firing, so it's not just that
-        // the IO proc stalled), rebuild the aggregate once. This catches
-        // the "tap anchored to BuiltInSpeaker while all app audio is
-        // routed to AirPods" failure mode reported on v2.4.46. The
-        // tap runs happily, the callback fires, but every buffer is
-        // zeros because the aggregate's sub-device has no signal and the
-        // global-tap → aggregate delivery path stays mute. See the
-        // pseudo-silent-for-a-whole-call reports around 2026-04-24.
-        const WATCHDOG_SILENCE_SECS: u64 = 45;
-        // Peak f32 amplitude below this counts as "silent enough to
-        // rebuild". Legit call audio peaks at ~0.05–0.5; this threshold
-        // only fires on truly zeroed buffers, not quiet speech.
+        // Silence watchdog — if the tap runs for WATCHDOG_SILENCE_SECS with
+        // zero non-silent audio (AND the callback is firing, AND audio is
+        // actually playing on the default output), rebuild the aggregate once.
+        // This catches the "tap anchored to a device whose aggregate sub-device
+        // has gone mute while audio plays" failure mode (pseudo-silent-for-a-
+        // whole-call reports around 2026-04-24) without churning on an idle
+        // machine. Tuning (WATCHDOG_SILENCE_SECS, REBUILD_COOLDOWN) and the
+        // decision live at module scope; see silence_rebuild_decision.
+        //
+        // Peak f32 amplitude below this counts as "silent enough to rebuild".
+        // Legit call audio peaks at ~0.05–0.5; this threshold only fires on
+        // truly zeroed buffers, not quiet speech.
         const SILENCE_AMP_EPS: f32 = 0.002;
-        // After a rebuild, give the tap this long to deliver real audio
-        // before we consider another rebuild. Avoids ping-pong when the
-        // actual cause is that nothing is playing (e.g. user isn't in a
-        // call) rather than a broken anchor.
-        const REBUILD_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
         // Exponential backoff for silence-driven rebuilds: if rebuilding doesn't
         // restore audio, the cause is usually "nothing is playing" rather than a
         // broken anchor, so doubling the cooldown each consecutive silence
         // rebuild stops the once-a-minute teardown/start churn (and the extra
         // CoreAudio teardown windows that go with it). Capped so the tap still
         // recovers within a few minutes once audio resumes. Reset on real audio
-        // or any non-silence rebuild (device switch / exclusion change).
+        // or any non-silence rebuild (device switch / exclusion change). The base
+        // REBUILD_COOLDOWN lives at module scope (shared with silence_rebuild_decision).
         const SILENCE_BACKOFF_CAP: u32 = 4; // 60s → 120 → 240 → 480 → 960s max
 
         let mut silence_started: Option<std::time::Instant> = None;
@@ -795,16 +844,22 @@ pub fn spawn_process_tap_capture(
             // device-change path already covers it, and rebuilding when
             // the device is genuinely asleep will just fail.
 
-            // Cooldown grows with the consecutive-silence-rebuild streak.
+            // Rebuild for silence only when the timing gates pass AND audio is
+            // ACTUALLY playing on the default output — otherwise the silence is
+            // legitimate (nothing is playing) and a rebuild would churn the tap
+            // on an idle machine. The cooldown grows with the consecutive-
+            // silence-rebuild streak (exponential backoff); the CoreAudio
+            // running-somewhere query is lazy, running only once the timing
+            // gates pass (see silence_rebuild_decision).
             let silence_cooldown = REBUILD_COOLDOWN
                 .checked_mul(1u32 << silence_rebuild_streak.min(SILENCE_BACKOFF_CAP))
                 .unwrap_or(REBUILD_COOLDOWN);
-            let should_rebuild_for_silence = silence_started
-                .map(|t| t.elapsed().as_secs() >= WATCHDOG_SILENCE_SECS)
-                .unwrap_or(false)
-                && last_rebuild
-                    .map(|t| t.elapsed() >= silence_cooldown)
-                    .unwrap_or(true);
+            let should_rebuild_for_silence = silence_rebuild_decision(
+                silence_started.map(|t| t.elapsed()),
+                last_rebuild.map(|t| t.elapsed()),
+                silence_cooldown,
+                default_output_running_somewhere,
+            );
 
             // Check the current default output device UID.
             let new_uid = match ca::System::default_output_device().and_then(|d| d.uid()) {
@@ -985,5 +1040,111 @@ mod tests {
         // Timed out, so the full deadline must have elapsed and the caller
         // (Drop) would leak the ctx instead of freeing it.
         assert!(start.elapsed() >= std::time::Duration::from_millis(50));
+    }
+
+    // --- silence watchdog decision ---------------------------------------
+    // These pin the regression fix: on an idle machine (audio not playing)
+    // the watchdog must NOT rebuild, no matter how long the silence runs.
+    // `cooldown` is passed explicitly so the same helper covers the
+    // exponential backoff the watchdog loop layers on top.
+
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    #[test]
+    fn silence_rebuild_skips_when_not_silent_long_enough() {
+        // Timing gate fails → audio_playing must not even be consulted.
+        let consulted = Cell::new(false);
+        let decision = silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS - 1)),
+            None,
+            REBUILD_COOLDOWN,
+            || {
+                consulted.set(true);
+                true
+            },
+        );
+        assert!(!decision);
+        assert!(!consulted.get(), "audio_playing must be evaluated lazily");
+    }
+
+    #[test]
+    fn silence_rebuild_skips_when_no_silence_window() {
+        // silence_started == None (we just saw real audio) → never rebuild.
+        assert!(!silence_rebuild_decision(
+            None,
+            None,
+            REBUILD_COOLDOWN,
+            || true
+        ));
+    }
+
+    #[test]
+    fn silence_rebuild_skips_during_cooldown() {
+        let decision = silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS)),
+            Some(REBUILD_COOLDOWN - Duration::from_secs(1)),
+            REBUILD_COOLDOWN,
+            || true,
+        );
+        assert!(!decision);
+    }
+
+    #[test]
+    fn silence_rebuild_skips_on_idle_machine() {
+        // THE regression: silent long enough, cooldown ok, but nothing is
+        // playing → must NOT rebuild (otherwise it churns the tap forever).
+        let decision = silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS + 10)),
+            None,
+            REBUILD_COOLDOWN,
+            || false,
+        );
+        assert!(!decision);
+    }
+
+    #[test]
+    fn silence_rebuild_fires_on_genuine_stall() {
+        // Silent long enough, no prior rebuild, audio IS playing → rebuild.
+        let decision = silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS)),
+            None,
+            REBUILD_COOLDOWN,
+            || true,
+        );
+        assert!(decision);
+    }
+
+    #[test]
+    fn silence_rebuild_fires_after_cooldown_elapsed() {
+        let decision = silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS)),
+            Some(REBUILD_COOLDOWN + Duration::from_secs(1)),
+            REBUILD_COOLDOWN,
+            || true,
+        );
+        assert!(decision);
+    }
+
+    #[test]
+    fn silence_rebuild_honors_backed_off_cooldown() {
+        // Layering check: with a backed-off cooldown (4× base), a gap that
+        // would clear the BASE cooldown must still be held off, even though
+        // audio is playing and we've been silent long enough.
+        let backed_off = REBUILD_COOLDOWN * 4;
+        let since_last = REBUILD_COOLDOWN * 2; // > base, < backed-off
+        assert!(!silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS)),
+            Some(since_last),
+            backed_off,
+            || true,
+        ));
+        // Once the backed-off interval elapses, it fires.
+        assert!(silence_rebuild_decision(
+            Some(Duration::from_secs(WATCHDOG_SILENCE_SECS)),
+            Some(backed_off + Duration::from_secs(1)),
+            backed_off,
+            || true,
+        ));
     }
 }
