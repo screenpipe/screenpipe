@@ -389,11 +389,8 @@ export function MeetingNotesSection({
       try {
         const body: Record<string, string> = {
           title: next.title,
-          meeting_start: meeting.meeting_start,
           attendees: next.attendees,
-          note: meeting.note ?? "",
         };
-        if (meeting.meeting_end) body.meeting_end = meeting.meeting_end;
         const res = await localFetch(`/meetings/${meeting.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

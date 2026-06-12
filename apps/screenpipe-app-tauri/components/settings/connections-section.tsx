@@ -3767,12 +3767,32 @@ export function ConnectionsSection({
       default:
         if (selectedIntegration) {
           if (selectedIntegration.is_oauth) {
-            return <OAuthPanel
-              integrationId={selectedIntegration.id}
-              integrationName={selectedIntegration.name}
-              onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
-              onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
-            />;
+            return (
+              <div className="space-y-3">
+                <OAuthPanel
+                  integrationId={selectedIntegration.id}
+                  integrationName={selectedIntegration.name}
+                  onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
+                  onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
+                />
+                {/* OAuth integrations with credential fields (HubSpot Private App
+                    token, Teams webhook URL) keep a manual fallback for users whose
+                    org bans OAuth apps — without this the fields are unreachable. */}
+                {selectedIntegration.fields.length > 0 && (
+                  <details>
+                    <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                      advanced: connect with a token instead
+                    </summary>
+                    <div className="pt-2">
+                      <ApiIntegrationPanel
+                        integration={selectedIntegration}
+                        onRefresh={fetchIntegrations}
+                      />
+                    </div>
+                  </details>
+                )}
+              </div>
+            );
           }
           return <ApiIntegrationPanel
             integration={selectedIntegration}

@@ -917,11 +917,11 @@ impl PiExecutor {
         std::fs::write(&models_tmp, serde_json::to_string_pretty(&models_config)?)?;
         std::fs::rename(&models_tmp, &models_path)?;
 
-        // -- auth.json: merge screenpipe token, preserve other providers --
-        // Only write screenpipe auth when screenpipe provider is actually being used
+        // -- auth.json: merge/remove screenpipe token, preserve other providers --
+        // Only manage screenpipe auth when screenpipe provider is actually being used.
         if should_add_screenpipe {
-            if let Some(token) = user_token {
-                let auth_path = config_dir.join("auth.json");
+            let auth_path = config_dir.join("auth.json");
+            if let Some(token) = user_token.filter(|token| !token.is_empty()) {
                 let mut auth: serde_json::Value = if auth_path.exists() {
                     let content = std::fs::read_to_string(&auth_path).unwrap_or_default();
                     serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
@@ -951,6 +951,8 @@ impl PiExecutor {
                     let perms = std::fs::Permissions::from_mode(0o600);
                     let _ = std::fs::set_permissions(&auth_path, perms);
                 }
+            } else {
+                remove_screenpipe_auth_from_path(&auth_path)?;
             }
         }
 
@@ -1792,6 +1794,43 @@ fn get_pi_config_dir() -> Result<PathBuf> {
     Ok(home.join(".pi").join("agent"))
 }
 
+fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<()> {
+    if !auth_path.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(auth_path)?;
+    let mut auth: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
+    let removed = auth
+        .as_object_mut()
+        .map(|obj| obj.remove("screenpipe").is_some())
+        .unwrap_or(false);
+
+    if !removed {
+        return Ok(());
+    }
+
+    let auth_tmp = auth_path.with_file_name(format!(
+        "auth.json.{}.{}.tmp",
+        std::process::id(),
+        format!("{:?}", std::thread::current().id())
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect::<String>()
+    ));
+    std::fs::write(&auth_tmp, serde_json::to_string_pretty(&auth)?)?;
+    std::fs::rename(&auth_tmp, auth_path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(auth_path, perms);
+    }
+
+    Ok(())
+}
+
 pub fn find_bun_executable() -> Option<String> {
     // Check next to our own executable (bundled bun)
     if let Ok(exe_path) = std::env::current_exe() {
@@ -2528,6 +2567,43 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_screenpipe_auth_preserves_other_provider_tokens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth_path = dir.path().join("auth.json");
+        std::fs::write(
+            &auth_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "screenpipe": "stale-jwt",
+                "openai": "sk-keep",
+                "anthropic": {"apiKey": "anthropic-keep"}
+            }))
+            .unwrap(),
+        )
+        .expect("write auth");
+
+        remove_screenpipe_auth_from_path(&auth_path).expect("clear screenpipe auth");
+
+        let auth: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&auth_path).unwrap()).unwrap();
+        assert!(auth.get("screenpipe").is_none());
+        assert_eq!(auth["openai"], serde_json::json!("sk-keep"));
+        assert_eq!(
+            auth["anthropic"]["apiKey"],
+            serde_json::json!("anthropic-keep")
+        );
+    }
+
+    #[test]
+    fn clear_screenpipe_auth_missing_file_is_noop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth_path = dir.path().join("missing-auth.json");
+
+        remove_screenpipe_auth_from_path(&auth_path).expect("missing auth is ok");
+
+        assert!(!auth_path.exists());
+    }
 
     /// `sync_user_skills_from` mirrors store skills into a session's
     /// `.pi/skills/`, leaves baseline/hand-authored skills alone, and removes

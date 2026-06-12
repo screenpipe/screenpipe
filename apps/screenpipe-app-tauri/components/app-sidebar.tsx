@@ -61,21 +61,21 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 // Visual shell only. Reads `isTranslucent` from context automatically —
 // no need to pass it as a prop from the page.
 //
-// Width tokens:
-//   expanded  → 15rem  (= 14rem content + 1rem left padding from pl-4)
-//   collapsed → 4.5rem (icon-only, home page only)
+// Width token:
+//   expanded → 15rem (= 14rem content + 1rem left padding from pl-4)
+//
+// There is no collapsed width — "collapsed" means the caller does not
+// render the sidebar at all (the floating top-left strip is the entire
+// collapsed chrome).
 
 export const SIDEBAR_WIDTH_EXPANDED = "w-[15rem]";
-export const SIDEBAR_WIDTH_COLLAPSED = "w-[4.5rem]";
 
 interface AppSidebarProps {
   children: React.ReactNode;
-  /** Whether the sidebar is collapsed to icon-only width (home page only) */
-  collapsed?: boolean;
   className?: string;
 }
 
-export function AppSidebar({ children, collapsed = false, className }: AppSidebarProps) {
+export function AppSidebar({ children, className }: AppSidebarProps) {
   const { isTranslucent } = useSidebarContext();
   // macOS hides the traffic-light buttons in fullscreen, so the 32px top
   // reservation we kept for them becomes awkward dead space at the corner.
@@ -86,7 +86,7 @@ export function AppSidebar({ children, collapsed = false, className }: AppSideba
 
   return (
     <div
-      style={collapsed ? undefined : { width }}
+      style={{ width }}
       className={cn(
         // `relative` so callers can absolutely-position items into the
         // top reservation area (e.g. the sidebar collapse icon next to
@@ -98,7 +98,6 @@ export function AppSidebar({ children, collapsed = false, className }: AppSideba
         fullscreen ? "pt-2" : "pt-8",
         isTranslucent ? "vibrant-sidebar" : "bg-background",
         isTranslucent ? "vibrant-sidebar-border" : "border-border",
-        collapsed && SIDEBAR_WIDTH_COLLAPSED,
         className,
       )}
     >
@@ -108,29 +107,27 @@ export function AppSidebar({ children, collapsed = false, className }: AppSideba
       <div className="flex flex-col min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         {children}
       </div>
-      {!collapsed && (
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        onPointerDown={beginResize}
+        className={cn(
+          // 6px hit area straddling the right border so it's easy to
+          // grab without leaving a visible band on the layout.
+          "absolute top-0 right-0 h-full w-1.5 -mr-[3px] z-20 cursor-col-resize",
+          "group/resize",
+        )}
+      >
         <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize sidebar"
-          onPointerDown={beginResize}
           className={cn(
-            // 6px hit area straddling the right border so it's easy to
-            // grab without leaving a visible band on the layout.
-            "absolute top-0 right-0 h-full w-1.5 -mr-[3px] z-20 cursor-col-resize",
-            "group/resize",
+            "absolute inset-y-0 right-[3px] w-px transition-colors",
+            isResizing
+              ? "bg-foreground/30"
+              : "bg-transparent group-hover/resize:bg-foreground/15",
           )}
-        >
-          <div
-            className={cn(
-              "absolute inset-y-0 right-[3px] w-px transition-colors",
-              isResizing
-                ? "bg-foreground/30"
-                : "bg-transparent group-hover/resize:bg-foreground/15",
-            )}
-          />
-        </div>
-      )}
+        />
+      </div>
     </div>
   );
 }

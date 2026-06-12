@@ -188,6 +188,25 @@ async function waitForBodyText(
   );
 }
 
+function hasLiveMeetingNoteState(bodyText: string): boolean {
+  const liveCaptureLabels = [
+    "recording",
+    "listening",
+    "transcribing",
+    "mic not capturing",
+    "audio disabled",
+    "microphone paused",
+    "audio stalled",
+    "recording only",
+  ];
+
+  return (
+    bodyText.includes("ongoing") &&
+    bodyText.includes("always get consent") &&
+    liveCaptureLabels.some((label) => bodyText.includes(label))
+  );
+}
+
 async function switchIsChecked(selector: string): Promise<boolean> {
   return (await browser.execute(
     (switchSelector: string) =>
@@ -458,10 +477,7 @@ describe("Windows user journey", function () {
       await clickFirstButtonWithText("new meeting", t(20_000));
 
       await waitForBodyText(
-        (bodyText) =>
-          bodyText.includes("recording") &&
-          bodyText.includes("ongoing") &&
-          bodyText.includes("always get consent"),
+        hasLiveMeetingNoteState,
         "Manual meeting did not enter the visible live recording note state",
       );
 

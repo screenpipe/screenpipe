@@ -7960,6 +7960,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-authentication-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee6d6f7dab884a28adaec1012eb3889257a49cc145724e35f93ece2d209f8b25"
+dependencies = [
+ "bitflags 2.11.0",
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-security",
+]
+
+[[package]]
 name = "objc2-av-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10935,6 +10950,7 @@ dependencies = [
  "axum 0.6.20",
  "base64 0.22.1",
  "block",
+ "block2 0.6.2",
  "cbc 0.1.2",
  "cc",
  "chrono",
@@ -10943,6 +10959,7 @@ dependencies = [
  "core-graphics-helmer-fork",
  "dark-light",
  "dirs 5.0.1",
+ "dispatch2",
  "eventkit-rs",
  "fix-path-env",
  "freedesktop-desktop-entry",
@@ -10961,6 +10978,9 @@ dependencies = [
  "notify",
  "objc",
  "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-authentication-services",
+ "objc2-foundation 0.3.2",
  "once_cell",
  "pbkdf2 0.12.2",
  "plist",

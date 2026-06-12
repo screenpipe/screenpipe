@@ -7,11 +7,10 @@ import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 import { captureException } from '@sentry/cloudflare';
 
-// Auto model waterfall — quality first, then fall back to open-weight Vertex
-// MaaS picks (free for users, near-zero GCP burn) and a cheap Gemini safety
-// net at the tail.
+// Auto model waterfall — open-weight Vertex MaaS picks ordered by quality
+// (free for users, low GCP burn) with a cheap Gemini safety net at the tail.
 const AUTO_WATERFALL = [
-  'gemini-3.5-flash', // new flagship flash — beats pro tier on agent benchmarks
+  'glm-5',            // closest Vertex match to gemini-3.5-flash (AA index 50 vs 55) at ~1/3 the output cost
   'kimi-k2.5',
   'deepseek-v3.2',
   'glm-4.7',

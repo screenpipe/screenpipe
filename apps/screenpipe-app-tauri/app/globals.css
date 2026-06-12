@@ -538,11 +538,67 @@
     transform-origin: bottom;
   }
 
+  /* Meeting "listening" waveform — each stick oscillates with its own
+     duration/negative delay (set inline) so the wave never synchronizes. */
+  @keyframes meeting-stick-dance {
+    0%,
+    100% {
+      transform: scaleY(0.3);
+    }
+    50% {
+      transform: scaleY(1);
+    }
+  }
+
+  .meeting-listening-stick {
+    animation-name: meeting-stick-dance;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    transform-origin: center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .meeting-listening-stick {
+      animation: none;
+      transform: scaleY(0.6);
+    }
+  }
+
   .animate-shimmer {
     animation: shimmer 1.5s infinite linear;
   }
 
 
+}
+
+/* GFM task lists in the meeting note editor (TipTap TaskList/TaskItem).
+   Only the note editor registers these nodes, so scoping to .ProseMirror is
+   safe for the other tiptap surfaces in the app. */
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.25rem;
+}
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  gap: 0.5rem;
+}
+.ProseMirror ul[data-type="taskList"] li > label {
+  flex: 0 0 auto;
+  margin-top: 0.35em;
+  user-select: none;
+}
+.ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
+  accent-color: hsl(var(--foreground));
+  cursor: pointer;
+}
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: hsl(var(--muted-foreground));
+  text-decoration: line-through;
+  text-decoration-color: hsl(var(--muted-foreground) / 0.5);
 }
 
 .pf-v6-c-text-input-group__text-input {

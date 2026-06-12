@@ -49,13 +49,16 @@ impl Integration for Todoist {
         _secret_store: Option<&SecretStore>,
     ) -> Result<String> {
         let token = require_str(creds, "api_token")?;
-        let resp = client
+        let resp: Value = client
             .get("https://api.todoist.com/api/v1/projects")
             .bearer_auth(token)
             .send()
             .await?
-            .error_for_status()?;
-        let projects: Vec<Value> = resp.json().await?;
-        Ok(format!("authenticated — {} projects found", projects.len()))
+            .error_for_status()?
+            .json()
+            .await?;
+        // unified v1 list endpoints are cursor-paginated: {"results": [...], "next_cursor": ...}
+        let count = resp["results"].as_array().map(|a| a.len()).unwrap_or(0);
+        Ok(format!("authenticated — {} projects found", count))
     }
 }

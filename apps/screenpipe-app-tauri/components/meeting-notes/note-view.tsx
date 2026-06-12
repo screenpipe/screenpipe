@@ -84,6 +84,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Receipts } from "./receipts";
 import { ReplayStrip } from "./replay-strip";
+import { ListeningSticks } from "./listening-sticks";
 import { NoteEditor, type NoteEditorHandle } from "./note-editor";
 import {
   imageBytesToDataUrl,
@@ -93,6 +94,11 @@ import {
 } from "./image-utils";
 import { TranscriptPanel } from "./transcript-panel";
 import { useSettings, type Settings } from "@/lib/hooks/use-settings";
+import {
+  MeetingNoteSaveQueue,
+  sameMeetingNoteDraft,
+  type MeetingNoteDraft,
+} from "./note-save-queue";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -170,6 +176,7 @@ export function NoteView({
   const [copying, setCopying] = useState(false);
   const [copied, setCopied] = useState(false);
   const [resumingCapture, setResumingCapture] = useState(false);
+  const [savingBeforeStop, setSavingBeforeStop] = useState(false);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
   const [transcriptOpen, setTranscriptOpenState] = useState(() =>
     initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
@@ -280,11 +287,65 @@ export function NoteView({
     };
   }, [meeting.id, toast]);
 
-  const lastSavedRef = useRef({
+  const lastSavedRef = useRef<MeetingNoteDraft>({
     title: meeting.title ?? "",
     attendees: meeting.attendees ?? "",
     note: meeting.note ?? "",
   });
+  const meetingRef = useRef(meeting);
+  const onSavedRef = useRef(onSaved);
+  useEffect(() => {
+    meetingRef.current = meeting;
+  }, [meeting]);
+  useEffect(() => {
+    onSavedRef.current = onSaved;
+  }, [onSaved]);
+  const saveQueueRef = useRef<MeetingNoteSaveQueue | null>(null);
+  if (!saveQueueRef.current) {
+    saveQueueRef.current = new MeetingNoteSaveQueue({
+      persist: async (next) => {
+        const currentMeeting = meetingRef.current;
+        const body: Record<string, string> = {
+          title: next.title,
+          meeting_start: currentMeeting.meeting_start,
+          attendees: next.attendees,
+          note: next.note,
+        };
+        if (currentMeeting.meeting_end) {
+          body.meeting_end = currentMeeting.meeting_end;
+        }
+
+        const res = await localFetch(`/meetings/${currentMeeting.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      },
+      onPersisted: (next, hasQueuedDraft) => {
+        lastSavedRef.current = { ...next };
+        if (hasQueuedDraft) {
+          setSaveState({ kind: "saving" });
+          return;
+        }
+        const currentMeeting = meetingRef.current;
+        setSaveState({ kind: "saved", at: Date.now() });
+        onSavedRef.current({
+          ...currentMeeting,
+          title: next.title || null,
+          attendees: next.attendees || null,
+          note: next.note || null,
+        });
+      },
+      onError: (err, _draft, hasQueuedDraft) => {
+        setSaveState(
+          hasQueuedDraft
+            ? { kind: "saving" }
+            : { kind: "error", reason: String(err) },
+        );
+      },
+    });
+  }
   const setTranscriptOpen = useCallback(
     (value: React.SetStateAction<boolean>) => {
       setTranscriptOpenState((current) => {
@@ -469,46 +530,24 @@ export function NoteView({
   }, [meeting.title, meeting.attendees, meeting.note]);
 
   const save = useCallback(
-    async (next: { title: string; attendees: string; note: string }) => {
+    async (
+      next: MeetingNoteDraft,
+      options: { throwOnError?: boolean } = {},
+    ) => {
       setSaveState({ kind: "saving" });
       try {
-        const body: Record<string, string> = {
-          title: next.title,
-          meeting_start: meeting.meeting_start,
-          attendees: next.attendees,
-          note: next.note,
-        };
-        if (meeting.meeting_end) body.meeting_end = meeting.meeting_end;
-
-        const res = await localFetch(`/meetings/${meeting.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        lastSavedRef.current = { ...next };
-        setSaveState({ kind: "saved", at: Date.now() });
-        onSaved({
-          ...meeting,
-          title: next.title || null,
-          attendees: next.attendees || null,
-          note: next.note || null,
-        });
+        await saveQueueRef.current!.enqueue(next);
       } catch (err) {
-        setSaveState({ kind: "error", reason: String(err) });
+        if (options.throwOnError) throw err;
       }
     },
-    [meeting, onSaved],
+    [],
   );
 
   // Debounced autosave
   useEffect(() => {
     const last = lastSavedRef.current;
-    if (
-      title === last.title &&
-      attendees === last.attendees &&
-      note === last.note
-    ) {
+    if (sameMeetingNoteDraft({ title, attendees, note }, last)) {
       return;
     }
     const handle = setTimeout(() => {
@@ -651,6 +690,27 @@ export function NoteView({
       });
     } finally {
       setRetranscribing(false);
+    }
+  };
+
+  const handleStopClick = async () => {
+    if (savingBeforeStop) return;
+    setSavingBeforeStop(true);
+    try {
+      const current = { title, attendees, note };
+      if (!sameMeetingNoteDraft(current, lastSavedRef.current)) {
+        await save(current, { throwOnError: true });
+      }
+      await onStop();
+    } catch (err) {
+      console.error("failed to save meeting note before stop", err);
+      toast({
+        title: "couldn't save notes",
+        description: "try again before stopping the meeting.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingBeforeStop(false);
     }
   };
 
@@ -1058,7 +1118,7 @@ export function NoteView({
             key={meeting.id}
             value={note}
             onChange={setNote}
-            placeholder="Write notes"
+            placeholder={'write notes, or type "/" for blocks'}
             className="mt-10 [&_.ProseMirror]:min-h-[50vh] [&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-7"
           />
 
@@ -1129,23 +1189,25 @@ export function NoteView({
                     : "bg-muted text-muted-foreground",
                 )}
               >
-                <Mic2 className="h-4 w-4" />
+                {isLive && captureState?.severity !== "warning" ? (
+                  // Live waveform driven by the polled device levels — motion
+                  // (not color) carries the "listening" state. A flat line
+                  // means armed but hearing nothing yet.
+                  <ListeningSticks
+                    active={captureState?.severity !== "waiting"}
+                    level={audioLevelToMeterValue(
+                      maxAudioDeviceLevel(audioStatusDevices),
+                    )}
+                  />
+                ) : (
+                  <Mic2 className="h-4 w-4" />
+                )}
               </span>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <span>
                     {isLive ? (captureState?.label ?? "Recording") : "Meeting saved"}
                   </span>
-                  {isLive && captureState?.severity !== "warning" && (
-                    <span
-                      className={cn(
-                        "h-1.5 w-1.5 rounded-full",
-                        captureState?.severity === "waiting"
-                          ? "bg-muted-foreground"
-                          : "bg-foreground animate-pulse",
-                      )}
-                    />
-                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                   <span>{dockDuration}</span>
@@ -1225,11 +1287,11 @@ export function NoteView({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void onStop()}
-                  disabled={stopping}
+                  onClick={() => void handleStopClick()}
+                  disabled={stopping || savingBeforeStop}
                   className="h-9 gap-2 rounded-none normal-case tracking-normal border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted disabled:opacity-100 disabled:bg-muted/40 disabled:text-muted-foreground disabled:border-border"
                 >
-                  {stopping ? (
+                  {stopping || savingBeforeStop ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Square className="h-3.5 w-3.5" />

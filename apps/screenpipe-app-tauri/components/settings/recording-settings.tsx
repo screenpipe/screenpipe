@@ -117,7 +117,16 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
-import { Language } from "@/lib/language";
+import {
+  Language,
+  areLanguageSelectionsEqual,
+  filterLanguagesForTranscriptionEngine,
+  getLanguageOptionsForTranscriptionEngine,
+  getTranscriptionEngineLanguageSupportKey,
+  hasLimitedLanguageSupport,
+  resolveLanguageSelectionForTranscriptionEngine,
+  transcriptionEngineUsesLanguageHints,
+} from "@/lib/language";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ToastAction } from "@/components/ui/toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -178,6 +187,7 @@ const TRANSCRIPTION_ENGINE_LABELS: Record<string, string> = {
   "openai-compatible": "OpenAI Compatible",
   "qwen3-asr": "Qwen3-ASR",
   parakeet: "Parakeet",
+  "parakeet-mlx": "Parakeet MLX",
   disabled: "Disabled (capture only)",
 };
 
@@ -192,10 +202,17 @@ type AudioEngineResolution = {
   fallbackReason: AudioEngineFallbackReason | null;
 };
 
+type AudioEngineResolutionSettings = Pick<
+  Settings,
+  "audioTranscriptionEngine" | "deepgramApiKey" | "user"
+>;
+
 const getTranscriptionEngineLabel = (engine: string) =>
   TRANSCRIPTION_ENGINE_LABELS[engine] ?? engine;
 
-const getAudioEngineResolution = (settings: Settings): AudioEngineResolution => {
+const getAudioEngineResolution = (
+  settings: AudioEngineResolutionSettings
+): AudioEngineResolution => {
   const requested = settings.audioTranscriptionEngine;
   const fallback = FALLBACK_TRANSCRIPTION_ENGINE;
   const hasCloudAuth = Boolean(settings.user?.token || settings.user?.id);
@@ -1878,6 +1895,37 @@ export function RecordingSettings() {
       settings.user?.token,
     ]
   );
+  const languageSupportEngine = audioEngineResolution.active;
+  const languageSupportKey =
+    getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
+  const languageSelectionsBySupportKeyRef = React.useRef<Record<string, string[]>>(
+    {}
+  );
+  const languageSelectionSnapshotRef = React.useRef<{
+    supportKey: string;
+    languages: string[];
+  }>({
+    supportKey: languageSupportKey,
+    languages: [...settings.languages],
+  });
+  const supportedLanguageOptions = useMemo(
+    () => getLanguageOptionsForTranscriptionEngine(languageSupportEngine),
+    [languageSupportEngine]
+  );
+  const languageSupportIsLimited = hasLimitedLanguageSupport(languageSupportEngine);
+  const languageSupportLabel = getTranscriptionEngineLabel(languageSupportEngine);
+  const languageSelectionUsesHints =
+    transcriptionEngineUsesLanguageHints(languageSupportEngine);
+  const languageSupportDescription =
+    settings.languages.length === 0
+      ? languageSupportIsLimited
+        ? `Auto-detects among ${supportedLanguageOptions.length} languages supported by ${languageSupportLabel}`
+        : "Automatically detects spoken language"
+      : !languageSelectionUsesHints
+        ? `${settings.languages.length} supported selected for ${languageSupportLabel}`
+        : languageSupportIsLimited
+          ? `Restricts transcription to selected languages supported by ${languageSupportLabel}`
+          : "Restricts transcription to selected";
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -1950,6 +1998,52 @@ export function RecordingSettings() {
     };
     checkPlatform();
   }, []);
+
+  useEffect(() => {
+    const previousSnapshot = languageSelectionSnapshotRef.current;
+    if (previousSnapshot.supportKey !== languageSupportKey) {
+      languageSelectionsBySupportKeyRef.current[previousSnapshot.supportKey] = [
+        ...previousSnapshot.languages,
+      ];
+    }
+
+    const preferredLanguages =
+      languageSelectionsBySupportKeyRef.current[languageSupportKey];
+    const resolvedLanguages = resolveLanguageSelectionForTranscriptionEngine(
+      settings.languages,
+      languageSupportEngine,
+      preferredLanguages
+    );
+
+    if (!areLanguageSelectionsEqual(settings.languages, resolvedLanguages)) {
+      languageSelectionSnapshotRef.current = {
+        supportKey: languageSupportKey,
+        languages: resolvedLanguages,
+      };
+      handleSettingsChange({ languages: resolvedLanguages }, false);
+      return;
+    }
+
+    const supportedLanguages = filterLanguagesForTranscriptionEngine(
+      settings.languages,
+      languageSupportEngine
+    );
+    if (areLanguageSelectionsEqual(settings.languages, supportedLanguages)) {
+      languageSelectionsBySupportKeyRef.current[languageSupportKey] = [
+        ...settings.languages,
+      ];
+    }
+
+    languageSelectionSnapshotRef.current = {
+      supportKey: languageSupportKey,
+      languages: [...settings.languages],
+    };
+  }, [
+    settings.languages,
+    languageSupportEngine,
+    languageSupportKey,
+    handleSettingsChange,
+  ]);
 
   // Listen for data-dir-fallback event (custom dir unavailable, fell back to default)
   useEffect(() => {
@@ -2220,10 +2314,38 @@ export function RecordingSettings() {
       return;
     }
 
-    // Only proceed with the change if all checks pass
-    const newSettings = realtime
-      ? { realtimeAudioTranscriptionEngine: value }
-      : { audioTranscriptionEngine: value };
+    let newSettings: Partial<Settings>;
+    if (realtime) {
+      newSettings = { realtimeAudioTranscriptionEngine: value };
+    } else {
+      languageSelectionsBySupportKeyRef.current[languageSupportKey] = [
+        ...settings.languages,
+      ];
+      languageSelectionSnapshotRef.current = {
+        supportKey: languageSupportKey,
+        languages: [...settings.languages],
+      };
+
+      const nextAudioEngineResolution = getAudioEngineResolution({
+        ...settings,
+        audioTranscriptionEngine: value,
+      });
+      const nextLanguageSupportEngine = nextAudioEngineResolution.active;
+      const nextLanguageSupportKey =
+        getTranscriptionEngineLanguageSupportKey(nextLanguageSupportEngine);
+      const preferredLanguages =
+        languageSelectionsBySupportKeyRef.current[nextLanguageSupportKey];
+
+      newSettings = {
+        audioTranscriptionEngine: value,
+        languages: resolveLanguageSelectionForTranscriptionEngine(
+          settings.languages,
+          nextLanguageSupportEngine,
+          preferredLanguages
+        ),
+      };
+    }
+
     handleSettingsChange(newSettings, true);
   };
 
@@ -3181,7 +3303,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Languages</h3>
-                  <p className="text-xs text-muted-foreground">{settings.languages.length === 0 ? "Automatically detects spoken language" : "Restricts transcription to selected"}</p>
+                  <p className="text-xs text-muted-foreground">{languageSupportDescription}</p>
                 </div>
               </div>
               <Popover open={openLanguages} onOpenChange={setOpenLanguages}>
@@ -3197,48 +3319,9 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <CommandList>
                       <CommandEmpty>No languages found.</CommandEmpty>
                       <CommandGroup>
-                        {[
-                          { code: "english", name: "English" }, { code: "spanish", name: "Spanish" },
-                          { code: "french", name: "French" }, { code: "german", name: "German" },
-                          { code: "italian", name: "Italian" }, { code: "portuguese", name: "Portuguese" },
-                          { code: "russian", name: "Russian" }, { code: "japanese", name: "Japanese" },
-                          { code: "korean", name: "Korean" }, { code: "chinese", name: "Chinese" },
-                          { code: "arabic", name: "Arabic" }, { code: "hindi", name: "Hindi" },
-                          { code: "dutch", name: "Dutch" }, { code: "swedish", name: "Swedish" },
-                          { code: "indonesian", name: "Indonesian" }, { code: "finnish", name: "Finnish" },
-                          { code: "hebrew", name: "Hebrew" }, { code: "ukrainian", name: "Ukrainian" },
-                          { code: "greek", name: "Greek" }, { code: "malay", name: "Malay" },
-                          { code: "czech", name: "Czech" }, { code: "romanian", name: "Romanian" },
-                          { code: "danish", name: "Danish" }, { code: "hungarian", name: "Hungarian" },
-                          { code: "norwegian", name: "Norwegian" }, { code: "thai", name: "Thai" },
-                          { code: "urdu", name: "Urdu" }, { code: "croatian", name: "Croatian" },
-                          { code: "bulgarian", name: "Bulgarian" }, { code: "lithuanian", name: "Lithuanian" },
-                          { code: "latin", name: "Latin" }, { code: "welsh", name: "Welsh" },
-                          { code: "slovak", name: "Slovak" }, { code: "persian", name: "Persian" },
-                          { code: "latvian", name: "Latvian" }, { code: "bengali", name: "Bengali" },
-                          { code: "serbian", name: "Serbian" }, { code: "azerbaijani", name: "Azerbaijani" },
-                          { code: "slovenian", name: "Slovenian" }, { code: "estonian", name: "Estonian" },
-                          { code: "macedonian", name: "Macedonian" }, { code: "nepali", name: "Nepali" },
-                          { code: "mongolian", name: "Mongolian" }, { code: "bosnian", name: "Bosnian" },
-                          { code: "kazakh", name: "Kazakh" }, { code: "albanian", name: "Albanian" },
-                          { code: "swahili", name: "Swahili" }, { code: "galician", name: "Galician" },
-                          { code: "marathi", name: "Marathi" }, { code: "punjabi", name: "Punjabi" },
-                          { code: "sinhala", name: "Sinhala" }, { code: "khmer", name: "Khmer" },
-                          { code: "afrikaans", name: "Afrikaans" }, { code: "belarusian", name: "Belarusian" },
-                          { code: "gujarati", name: "Gujarati" }, { code: "amharic", name: "Amharic" },
-                          { code: "yiddish", name: "Yiddish" }, { code: "lao", name: "Lao" },
-                          { code: "uzbek", name: "Uzbek" }, { code: "faroese", name: "Faroese" },
-                          { code: "pashto", name: "Pashto" }, { code: "maltese", name: "Maltese" },
-                          { code: "sanskrit", name: "Sanskrit" }, { code: "luxembourgish", name: "Luxembourgish" },
-                          { code: "myanmar", name: "Myanmar" }, { code: "tibetan", name: "Tibetan" },
-                          { code: "tagalog", name: "Tagalog" }, { code: "assamese", name: "Assamese" },
-                          { code: "tatar", name: "Tatar" }, { code: "hausa", name: "Hausa" },
-                          { code: "javanese", name: "Javanese" }, { code: "turkish", name: "Turkish" },
-                          { code: "polish", name: "Polish" }, { code: "catalan", name: "Catalan" },
-                          { code: "malayalam", name: "Malayalam" },
-                        ].map((language) => (
-                          <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code as Language)}>
-                            <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code as Language) ? "opacity-100" : "opacity-0")} />
+                        {supportedLanguageOptions.map((language) => (
+                          <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code)}>
+                            <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code) ? "opacity-100" : "opacity-0")} />
                             <span className="text-xs">{language.name}</span>
                           </CommandItem>
                         ))}

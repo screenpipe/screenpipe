@@ -107,6 +107,27 @@ async function finishOpenHomeWindow(): Promise<void> {
     }
   );
   await browser.pause(t(1500));
+
+  // The Home window persists across specs and `sidebarCollapsed` is in-memory
+  // React state — a prior spec may have collapsed the sidebar (e.g. via the
+  // focused-meeting auto-collapse) without navigating away, so the force-/home
+  // reload above never fires and the collapsed state survives. Since #4017
+  // ("declutter sidebar corner") a collapsed sidebar is hidden entirely — the
+  // whole <AppSidebar> and every nav-* item vanish — so any spec that clicks
+  // nav-pipes / nav-timeline / nav-settings would fail with "element still not
+  // existing". Re-expand here so each spec starts from a known-expanded state.
+  // The toggle is the only chrome left when collapsed; aria-label flips to
+  // "expand sidebar" in that state, so its presence is the collapse signal.
+  try {
+    const expandBtn = await $('[aria-label="expand sidebar"]');
+    if (await expandBtn.isExisting()) {
+      await expandBtn.click();
+      await browser.pause(t(500));
+    }
+  } catch {
+    // Best-effort — if the toggle can't be found/clicked, the spec's own
+    // waitForExist on the nav item still reports the real failure.
+  }
 }
 
 /**

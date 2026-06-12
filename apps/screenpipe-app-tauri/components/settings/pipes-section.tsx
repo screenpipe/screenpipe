@@ -86,11 +86,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { useToast } from "@/components/ui/use-toast";
@@ -328,6 +330,193 @@ interface AvailableConnection {
   icon: string;
   connected: boolean;
   instances?: { instanceKey: string; instanceLabel: string }[];
+}
+
+interface PipeConnectionOption {
+  key: string;
+  label: string;
+  connectionName: string;
+  instanceName: string | null;
+  connected: boolean;
+}
+
+function buildPipeConnectionOptions(
+  connections: AvailableConnection[],
+  selectedConnections: string[]
+): PipeConnectionOption[] {
+  const selected = new Set(selectedConnections);
+
+  return connections
+    .flatMap((connection) => {
+      if (connection.instances && connection.instances.length > 1) {
+        return connection.instances
+          .filter((instance) => !selected.has(instance.instanceKey))
+          .map((instance) => ({
+            key: instance.instanceKey,
+            label: instance.instanceLabel,
+            connectionName: connection.name,
+            instanceName: instance.instanceKey.includes(":")
+              ? instance.instanceKey.split(":").slice(1).join(":")
+              : null,
+            connected: connection.connected,
+          }));
+      }
+
+      if (selected.has(connection.id)) return [];
+
+      return [{
+        key: connection.id,
+        label: connection.name,
+        connectionName: connection.name,
+        instanceName: null,
+        connected: connection.connected,
+      }];
+    })
+    .sort((a, b) => {
+      if (a.connected !== b.connected) return a.connected ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+function PipeConnectionPicker({
+  availableConnections,
+  selectedConnections,
+  onAdd,
+  onOpenConnections,
+}: {
+  availableConnections: AvailableConnection[];
+  selectedConnections: string[];
+  onAdd: (connectionKey: string) => void;
+  onOpenConnections: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const options = React.useMemo(
+    () => buildPipeConnectionOptions(availableConnections, selectedConnections),
+    [availableConnections, selectedConnections]
+  );
+
+  const filteredOptions = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+
+    return options.filter((option) =>
+      [
+        option.label,
+        option.connectionName,
+        option.instanceName ?? "",
+        option.key,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [options, query]);
+
+  const emptyLabel =
+    availableConnections.length === 0
+      ? "no connections available"
+      : options.length === 0
+        ? "all connections added"
+        : "no matches";
+
+  const handleAdd = (connectionKey: string) => {
+    onAdd(connectionKey);
+    setOpen(false);
+    setQuery("");
+  };
+
+  const handleOpenConnections = () => {
+    setOpen(false);
+    setQuery("");
+    onOpenConnections();
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5"
+          aria-expanded={open}
+        >
+          <Plus className="h-3 w-3" />
+          add
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[360px] max-w-[calc(100vw-2rem)] rounded-none border-border p-0 shadow-none"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
+        <div className="border-b border-border p-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="search connections..."
+              className="h-8 rounded-none pl-8 text-xs"
+              spellCheck={false}
+            />
+          </div>
+        </div>
+
+        <div className="max-h-72 overflow-y-auto p-1">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => handleAdd(option.key)}
+                className="flex w-full items-center gap-2 border border-transparent px-2 py-2 text-left transition-colors duration-150 hover:border-border hover:bg-muted/50 focus-visible:border-foreground focus-visible:outline-none"
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center border border-border bg-background">
+                  <Link className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium">
+                    {option.label}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {option.instanceName ? option.connectionName : "connection"}
+                  </span>
+                </span>
+                <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5",
+                      option.connected ? "bg-foreground" : "bg-muted-foreground/30"
+                    )}
+                  />
+                  {option.connected ? "ready" : "setup"}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              {emptyLabel}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border p-1">
+          <button
+            type="button"
+            onClick={() => handleOpenConnections()}
+            className="flex w-full items-center gap-2 px-2 py-2 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            manage connections
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 interface PipeStatus {
@@ -2535,62 +2724,22 @@ export function PipesSection() {
                                 </div>
                               );
                             })}
-                            <DropdownMenu modal={false}>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5">
-                                  <Plus className="h-3 w-3" /> add
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="start" className="max-h-48 overflow-y-auto">
-                                {(() => {
-                                  const existing = pipe.config.connections || [];
-                                  const addConn = (key: string) => {
-                                    const updated = [...existing, key];
-                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, connections: updated } } : p));
-                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connections: updated }) }).then(() => fetchPipes());
-                                  };
-                                  // filter to connections not yet fully added
-                                  const available = availableConnections.filter((c) => {
-                                    if (c.instances && c.instances.length > 1) {
-                                      return c.instances.some((inst) => !existing.includes(inst.instanceKey));
-                                    }
-                                    return !existing.includes(c.id);
-                                  });
-                                  if (available.length === 0) {
-                                    return <DropdownMenuItem disabled><span className="text-xs text-muted-foreground">all connections added</span></DropdownMenuItem>;
-                                  }
-                                  return available.map((conn) => {
-                                    // multi-instance: show sub-menu to pick instance
-                                    if (conn.instances && conn.instances.length > 1) {
-                                      const remainingInstances = conn.instances.filter((inst) => !existing.includes(inst.instanceKey));
-                                      if (remainingInstances.length === 0) return null;
-                                      return (
-                                        <DropdownMenuSub key={conn.id}>
-                                          <DropdownMenuSubTrigger className="text-xs font-mono">
-                                            {conn.name}
-                                            <span className={cn("ml-auto w-1.5 h-1.5", conn.connected ? "bg-foreground" : "bg-muted-foreground/30")} />
-                                          </DropdownMenuSubTrigger>
-                                          <DropdownMenuSubContent>
-                                            {remainingInstances.map((inst) => (
-                                              <DropdownMenuItem key={inst.instanceKey} onClick={() => addConn(inst.instanceKey)}>
-                                                <span className="text-xs font-mono">{inst.instanceLabel}</span>
-                                              </DropdownMenuItem>
-                                            ))}
-                                          </DropdownMenuSubContent>
-                                        </DropdownMenuSub>
-                                      );
-                                    }
-                                    // single instance: direct click
-                                    return (
-                                      <DropdownMenuItem key={conn.id} onClick={() => addConn(conn.id)}>
-                                        <span className="text-xs font-mono">{conn.name}</span>
-                                        <span className={cn("ml-auto w-1.5 h-1.5", conn.connected ? "bg-foreground" : "bg-muted-foreground/30")} />
-                                      </DropdownMenuItem>
-                                    );
-                                  });
-                                })()}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                            <PipeConnectionPicker
+                              availableConnections={availableConnections}
+                              selectedConnections={pipe.config.connections || []}
+                              onAdd={(key) => {
+                                const existing = pipe.config.connections || [];
+                                if (existing.includes(key)) return;
+                                const updated = [...existing, key];
+                                setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, connections: updated } } : p));
+                                fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connections: updated }) }).then(() => fetchPipes());
+                              }}
+                              onOpenConnections={() => {
+                                window.dispatchEvent(new CustomEvent("open-settings", {
+                                  detail: { section: "connections" },
+                                }));
+                              }}
+                            />
                           </div>
                         </div>
 

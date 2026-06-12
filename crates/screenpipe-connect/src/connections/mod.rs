@@ -475,6 +475,16 @@ impl ConnectionManager {
         for i in &self.integrations {
             let def = i.def();
             let is_oauth = i.oauth_config().is_some();
+            let creds_connected = || async {
+                self.get_all_instances(def.id)
+                    .await
+                    .map(|instances| {
+                        instances
+                            .into_iter()
+                            .any(|(_, c)| c.enabled && !c.credentials.is_empty())
+                    })
+                    .unwrap_or(false)
+            };
             let connected = if is_oauth {
                 let instances = oauth::list_oauth_instances(ss, def.id).await;
                 let mut any_connected = false;
@@ -484,16 +494,17 @@ impl ConnectionManager {
                         break;
                     }
                 }
+                // OAuth integrations can also carry manual fallback credentials
+                // (HubSpot Private App token, Teams webhook URL). Users connected
+                // that way — including everyone who connected before the
+                // integration gained OAuth — must not see the tile flip to off;
+                // the proxy and test() still honor those credentials.
+                if !any_connected && !def.fields.is_empty() {
+                    any_connected = creds_connected().await;
+                }
                 any_connected
             } else {
-                self.get_all_instances(def.id)
-                    .await
-                    .map(|instances| {
-                        instances
-                            .into_iter()
-                            .any(|(_, c)| c.enabled && !c.credentials.is_empty())
-                    })
-                    .unwrap_or(false)
+                creds_connected().await
             };
             result.push(ConnectionInfo {
                 def,

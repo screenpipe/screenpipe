@@ -372,7 +372,9 @@ export class GeminiProvider implements AIProvider {
 	 * Execute a web search using Google Search grounding via Gemini API
 	 */
 	async executeWebSearch(query: string): Promise<{ content: string; sources: any[] }> {
-		const url = this.getEndpointUrl('gemini-2.0-flash', false);
+		// 'gemini-flash' → gemini-2.5-flash. Do not pin 2.0: Google withdrew
+		// gemini-2.0-flash from Vertex and every web search 404'd.
+		const url = this.getEndpointUrl('gemini-flash', false);
 
 		const requestBody = {
 			contents: [{

@@ -1132,12 +1132,24 @@ async fn gcal_status(
     let client = reqwest::Client::new();
     let instance = q.instance.as_deref();
 
-    let connected = oauth_store::is_oauth_instance_connected(
-        state.secret_store.as_deref(),
-        "google-calendar",
-        instance,
-    )
-    .await;
+    // With several accounts connected, the default-slot lookup is ambiguous
+    // and reports false even though every account is healthy — mirror the
+    // events endpoint and count any connected account.
+    let connected = if instance.is_none() {
+        !oauth_store::list_connected_oauth_instances(
+            state.secret_store.as_deref(),
+            "google-calendar",
+        )
+        .await
+        .is_empty()
+    } else {
+        oauth_store::is_oauth_instance_connected(
+            state.secret_store.as_deref(),
+            "google-calendar",
+            instance,
+        )
+        .await
+    };
     if !connected {
         return (
             StatusCode::OK,
@@ -1202,17 +1214,73 @@ async fn gcal_events_inner(
     params: GoogleCalendarEventsQuery,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<Vec<Value>> {
-    let token = gcal_token(client, params.instance.as_deref(), secret_store).await?;
     let hours_back = params.hours_back.unwrap_or(1);
     let hours_ahead = params.hours_ahead.unwrap_or(8);
 
+    // No explicit account while several are connected: merge every account's
+    // events instead of refusing. Callers that predate multi-account support
+    // (the app's 60s calendar poller, live meeting notes, pipes, chat tools)
+    // all pass no instance — refusing turned "user connected a 2nd Google
+    // account" into "calendar looks disconnected everywhere". A read-only
+    // merge matches what the meeting-notes UI already does client-side.
+    if params.instance.is_none() {
+        let connected =
+            oauth_store::list_connected_oauth_instances(secret_store.as_deref(), "google-calendar")
+                .await;
+        if connected.len() > 1 {
+            let mut lists = Vec::new();
+            let mut first_err: Option<anyhow::Error> = None;
+            for inst in &connected {
+                let label = inst.as_deref().unwrap_or("primary");
+                let events = match gcal_token(client, inst.as_deref(), secret_store).await {
+                    Ok(token) => {
+                        gcal_fetch_events(client, &token, label, hours_back, hours_ahead).await
+                    }
+                    Err(e) => Err(e),
+                };
+                match events {
+                    Ok(events) => lists.push(events),
+                    Err(e) => {
+                        // One broken account must not blank the calendar for
+                        // the healthy ones — keep going, report only if all fail.
+                        tracing::warn!("google-calendar: account '{label}' failed: {e:#}");
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
+                    }
+                }
+            }
+            if lists.is_empty() {
+                return Err(first_err.unwrap_or_else(|| {
+                    anyhow::anyhow!("no Google Calendar account could be queried")
+                }));
+            }
+            return Ok(merge_gcal_events(lists));
+        }
+    }
+
+    let token = gcal_token(client, params.instance.as_deref(), secret_store).await?;
+    let label = params.instance.as_deref().unwrap_or("primary");
+    gcal_fetch_events(client, &token, label, hours_back, hours_ahead).await
+}
+
+/// Fetch and normalize one account's events from the Google Calendar API.
+/// `calendar_label` lands in `calendarName` so multi-account callers can tell
+/// which account an event came from.
+async fn gcal_fetch_events(
+    client: &reqwest::Client,
+    token: &str,
+    calendar_label: &str,
+    hours_back: i64,
+    hours_ahead: i64,
+) -> anyhow::Result<Vec<Value>> {
     let now = chrono::Utc::now();
     let time_min = (now - chrono::Duration::hours(hours_back)).to_rfc3339();
     let time_max = (now + chrono::Duration::hours(hours_ahead)).to_rfc3339();
 
     let resp: Value = client
         .get("https://www.googleapis.com/calendar/v3/calendars/primary/events")
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .query(&[
             ("timeMin", time_min.as_str()),
             ("timeMax", time_max.as_str()),
@@ -1261,13 +1329,51 @@ async fn gcal_events_inner(
                 "attendees": attendees,
                 "location": item["location"].as_str(),
                 "meetingUrl": meeting_url,
-                "calendarName": "primary",
+                "calendarName": calendar_label,
                 "isAllDay": is_all_day,
             })
         })
         .collect();
 
     Ok(events)
+}
+
+/// Merge per-account Google Calendar event lists into one timeline. An invite
+/// visible in more than one connected account keeps its Google event id, so
+/// duplicates are dropped by id (first account wins). Sorted by start time;
+/// timestamps are compared as instants because each account's events carry
+/// that calendar's own UTC offset.
+fn merge_gcal_events(lists: Vec<Vec<Value>>) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut merged: Vec<Value> = Vec::new();
+    for list in lists {
+        for event in list {
+            let id = event["id"].as_str().unwrap_or("");
+            if !id.is_empty() && !seen.insert(id.to_string()) {
+                continue;
+            }
+            merged.push(event);
+        }
+    }
+    merged.sort_by_key(gcal_event_start_epoch);
+    merged
+}
+
+/// Start time as a unix timestamp: RFC3339 for timed events, midnight UTC for
+/// all-day `YYYY-MM-DD` dates, `i64::MAX` for anything unparseable (sorts last).
+fn gcal_event_start_epoch(event: &Value) -> i64 {
+    let Some(start) = event["start"].as_str() else {
+        return i64::MAX;
+    };
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(start) {
+        return dt.timestamp();
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d") {
+        if let Some(dt) = date.and_hms_opt(0, 0, 0) {
+            return dt.and_utc().timestamp();
+        }
+    }
+    i64::MAX
 }
 
 fn google_calendar_meeting_url(item: &Value) -> Option<String> {
@@ -2700,6 +2806,63 @@ where
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod gcal_merge_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ev(id: &str, start: &str) -> Value {
+        json!({ "id": id, "start": start, "title": id })
+    }
+
+    #[test]
+    fn dedupes_shared_invites_by_id_first_account_wins() {
+        let personal = vec![ev("shared", "2026-06-11T10:00:00-07:00")];
+        let work = vec![
+            ev("shared", "2026-06-11T10:00:00-07:00"),
+            ev("work-only", "2026-06-11T11:00:00-07:00"),
+        ];
+        let merged = merge_gcal_events(vec![personal, work]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0]["id"], "shared");
+        assert_eq!(merged[1]["id"], "work-only");
+    }
+
+    #[test]
+    fn sorts_as_instants_across_mixed_utc_offsets() {
+        // 10:00-07:00 is 17:00Z — a lexicographic sort would wrongly place it
+        // before 16:30Z.
+        let a = vec![ev("late", "2026-06-11T10:00:00-07:00")];
+        let b = vec![ev("early", "2026-06-11T16:30:00Z")];
+        let merged = merge_gcal_events(vec![a, b]);
+        assert_eq!(merged[0]["id"], "early");
+        assert_eq!(merged[1]["id"], "late");
+    }
+
+    #[test]
+    fn keeps_events_without_ids_and_sorts_all_day_by_date() {
+        let a = vec![ev("", "2026-06-12"), ev("", "2026-06-12")];
+        let b = vec![ev("timed", "2026-06-11T09:00:00Z")];
+        let merged = merge_gcal_events(vec![a, b]);
+        assert_eq!(
+            merged.len(),
+            3,
+            "empty ids must not dedupe against each other"
+        );
+        assert_eq!(merged[0]["id"], "timed");
+    }
+
+    #[test]
+    fn unparseable_start_sorts_last() {
+        let merged = merge_gcal_events(vec![vec![
+            ev("bad", "not-a-date"),
+            ev("good", "2026-06-11T09:00:00Z"),
+        ]]);
+        assert_eq!(merged[0]["id"], "good");
+        assert_eq!(merged[1]["id"], "bad");
+    }
+}
 
 #[cfg(test)]
 mod tests {

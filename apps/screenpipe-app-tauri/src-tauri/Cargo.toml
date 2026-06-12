@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.32"
+version = "2.5.34"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -188,6 +188,11 @@ base64 = "0.22.1"
 # (send_event, did_finish_launching) → panic_cannot_unwind → SIGABRT
 # See: https://github.com/tauri-apps/tao/issues/1171
 objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
+objc2-foundation = { version = "0.3", features = ["NSSet", "NSArray", "NSString", "NSURL", "NSError"] }
+objc2-authentication-services = { version = "0.3", features = ["ASWebAuthenticationSession", "block2"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWindow", "NSResponder", "NSRunningApplication"] }
+block2 = "0.6"
+dispatch2 = "0.3"
 # bunch of hack for permissions
 core-graphics-helmer-fork = "0.24.0"
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b" }

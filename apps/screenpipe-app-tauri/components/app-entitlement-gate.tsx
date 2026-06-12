@@ -19,6 +19,7 @@ import {
   PRICING_URL,
 } from "@/lib/app-entitlement";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { commands } from "@/lib/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -70,6 +71,12 @@ function EntitlementShell({
 
 export function AppEntitlementGate({ children }: { children: React.ReactNode }) {
   const { settings, updateSettings, loadUser, isSettingsLoaded } = useSettings();
+  const {
+    isEnterprise,
+    isSectionHidden,
+    needsLicenseKey,
+    policy: enterprisePolicy,
+  } = useEnterprisePolicy();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
@@ -83,6 +90,15 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   const devBypass = isDevBillingBypassEnabled();
   const isEntitled = hasAppEntitlement(user);
   const needsRefresh = needsAppEntitlementRefresh(user);
+  const enterpriseAccountPolicyLoaded = Boolean(enterprisePolicy.orgName);
+  const enterpriseRequiresLogin =
+    isEnterprise &&
+    enterpriseAccountPolicyLoaded &&
+    !needsLicenseKey &&
+    !isSectionHidden("account");
+  const shouldGateForEnterpriseLogin = enterpriseRequiresLogin && !user?.token;
+  const shouldGateForEntitlement = !devBypass && !isEntitled;
+  const shouldGate = shouldGateForEnterpriseLogin || shouldGateForEntitlement;
   const email = user?.email || "this account";
   const planLabel = useMemo(
     () => normalizePlanLabel(user?.subscription_plan),
@@ -90,16 +106,17 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   );
 
   useEffect(() => {
-    if (!isSettingsLoaded || devBypass || isEntitled) return;
+    if (!isSettingsLoaded || !shouldGate) return;
     posthog.capture("app_entitlement_gate_shown", {
       logged_in: Boolean(user?.token),
+      reason: shouldGateForEnterpriseLogin ? "enterprise_login_required" : "app_entitlement",
       plan: user?.subscription_plan ?? null,
       app_entitled: user?.app_entitled ?? null,
     });
-  }, [devBypass, isEntitled, isSettingsLoaded, user?.app_entitled, user?.subscription_plan, user?.token]);
+  }, [isSettingsLoaded, shouldGate, shouldGateForEnterpriseLogin, user?.app_entitled, user?.subscription_plan, user?.token]);
 
   useEffect(() => {
-    if (!isSettingsLoaded || devBypass || isEntitled) {
+    if (!isSettingsLoaded || !shouldGate) {
       stoppedForGateRef.current = false;
       return;
     }
@@ -108,7 +125,7 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     commands.stopScreenpipe().catch((err) => {
       console.warn("failed to stop screenpipe after entitlement gate:", err);
     });
-  }, [devBypass, isEntitled, isSettingsLoaded]);
+  }, [isSettingsLoaded, shouldGate]);
 
   const openPricing = useCallback(() => {
     posthog.capture("app_entitlement_choose_plan_clicked", {
@@ -259,8 +276,25 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     );
   }
 
-  if (devBypass || isEntitled) {
+  if (!shouldGate) {
     return <>{children}</>;
+  }
+
+  if (shouldGateForEnterpriseLogin) {
+    return (
+      <EntitlementShell
+        title="sign in required"
+        description="your workspace requires a screenpipe account before recording and AI start on this device."
+      >
+        <div className="flex flex-col gap-3">
+          <Button onClick={openLogin} className="w-full gap-2">
+            <LogIn className="h-4 w-4" />
+            sign in
+          </Button>
+        </div>
+        {devLoginBlock}
+      </EntitlementShell>
+    );
   }
 
   if (!user?.token) {

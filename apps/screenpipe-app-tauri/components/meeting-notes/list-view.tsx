@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ListeningSticks } from "./listening-sticks";
 import { formatDuration, type MeetingRecord } from "@/lib/utils/meeting-format";
 import type { LiveCaptureState } from "@/lib/utils/live-capture-state";
 import type { CalendarEvent, CalendarSource } from "@/lib/utils/calendar";
@@ -312,17 +313,18 @@ function RecordingStrip({
         degraded ? "border-amber-500/40" : "border-foreground/30",
       )}
     >
-      <span
-        className={cn(
-          "h-2 w-2 rounded-full shrink-0",
-          degraded
-            ? "bg-amber-500"
-            : waiting
-              ? "bg-muted-foreground"
-              : "bg-foreground animate-pulse",
-        )}
-        aria-label={statusLabel}
-      />
+      {degraded ? (
+        <span
+          className="h-2 w-2 rounded-full shrink-0 bg-amber-500"
+          aria-label={statusLabel}
+        />
+      ) : (
+        <ListeningSticks
+          active={!waiting}
+          height={12}
+          className="shrink-0 text-foreground"
+        />
+      )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[10px] uppercase tracking-[0.18em] text-foreground/80 shrink-0">

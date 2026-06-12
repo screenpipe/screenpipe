@@ -721,24 +721,34 @@ pub async fn list_oauth_instances(
 /// once-per-startup cleanup so users don't have to touch SQLite.
 ///
 /// Safe to call on every app launch: no-op when there's no shadowing.
-/// Returns the number of entries deleted.
+/// Returns the number of default-slot entries removed (whether deleted as
+/// stale or cleared after promoting their account to a named slot).
+///
+/// A default slot is only "shadowed" (safe to drop) when it is unrecoverable
+/// OR it duplicates an account that already owns a named slot. A *distinct,
+/// recoverable* account left in the default slot beside a named one is a REAL
+/// second account — promote it to its own named slot instead of deleting it,
+/// so multi-account users never lose the first account they connected.
 pub async fn sweep_shadowed_default_slots(store: &SecretStore) -> Result<usize> {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     let keys = store.list("oauth:").await?;
 
-    // Partition keys into "has default slot" vs "has at least one named
-    // instance" per integration id. A key like `oauth:gmail` has no colon
-    // after the prefix → default slot. `oauth:gmail:alice@x.com` → named.
+    // Per integration id: whether a default slot exists, and the set of named
+    // instance keys present. A key like `oauth:gmail` has no colon after the
+    // prefix → default slot. `oauth:gmail:alice@x.com` → named instance.
     let mut has_default: HashSet<String> = HashSet::new();
-    let mut has_named: HashSet<String> = HashSet::new();
+    let mut named: HashMap<String, HashSet<String>> = HashMap::new();
     for key in &keys {
         let Some(rest) = key.strip_prefix("oauth:") else {
             continue;
         };
         match rest.split_once(':') {
-            Some((id, _)) => {
-                has_named.insert(id.to_string());
+            Some((id, inst)) => {
+                named
+                    .entry(id.to_string())
+                    .or_default()
+                    .insert(inst.to_string());
             }
             None => {
                 has_default.insert(rest.to_string());
@@ -747,22 +757,122 @@ pub async fn sweep_shadowed_default_slots(store: &SecretStore) -> Result<usize> 
     }
 
     let mut deleted = 0usize;
-    for id in has_default.intersection(&has_named) {
+    for id in &has_default {
+        let Some(named_for_id) = named.get(id) else {
+            // Lonely default slot — the normal single-account happy path.
+            continue;
+        };
+
+        let default_val = load_oauth_json_exact(Some(store), id, None).await;
+        let default_email = default_val
+            .as_ref()
+            .and_then(|v| v["email"].as_str().map(String::from));
+        let is_distinct_recoverable = default_val.as_ref().is_some_and(oauth_json_is_recoverable)
+            && default_email
+                .as_ref()
+                .is_some_and(|e| !named_for_id.contains(e));
+
         let key = format!("oauth:{}", id);
-        match store.delete(&key).await {
-            Ok(()) => {
-                tracing::info!(
-                    "oauth: swept shadowed default-slot entry for {} (instance-suffixed entry still present)",
-                    id
+        if is_distinct_recoverable {
+            // A real, separate account sitting in the default slot — promote it
+            // to its own named slot before clearing the default key.
+            let email = default_email.expect("distinct_recoverable implies Some email");
+            if let Err(e) =
+                write_oauth_token_instance(Some(store), id, Some(&email), &default_val.unwrap())
+                    .await
+            {
+                // Promotion failed — leave the default slot intact rather than
+                // risk losing the account; we'll retry on the next launch.
+                tracing::warn!(
+                    "oauth: failed to promote default-slot account {} for {} during sweep, leaving default slot intact: {e:#}",
+                    email,
+                    id,
                 );
-                deleted += 1;
+                continue;
             }
-            Err(e) => {
-                tracing::warn!("oauth: failed to sweep default slot for {}: {e:#}", id);
+            match store.delete(&key).await {
+                Ok(()) => {
+                    tracing::info!(
+                        "oauth: promoted shadowed default-slot account {} to its own instance for {}",
+                        email,
+                        id,
+                    );
+                    deleted += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "oauth: promoted {} but failed to drop default slot for {}: {e:#}",
+                        email,
+                        id,
+                    );
+                }
+            }
+        } else {
+            match store.delete(&key).await {
+                Ok(()) => {
+                    tracing::info!(
+                        "oauth: swept shadowed default-slot entry for {} (instance-suffixed entry still present)",
+                        id,
+                    );
+                    deleted += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("oauth: failed to sweep default slot for {}: {e:#}", id);
+                }
             }
         }
     }
     Ok(deleted)
+}
+
+/// Reconcile the default slot (`oauth:{id}`) right after a new account was
+/// saved under an instance-suffixed key (`oauth:{id}:{new_instance}`).
+///
+/// Older single-account builds parked the *first* connected account in the
+/// default slot. When the user later connected a *second* account, the
+/// post-save cleanup used to blindly delete that default slot — silently
+/// wiping the first account ("adding a 2nd Gmail overwrote the 1st"). This
+/// keeps both:
+///
+/// - default slot is empty, unrecoverable, or the *same* account as the one
+///   just saved → delete it (stale-duplicate / zombie cleanup, the original
+///   intent — a stale default slot otherwise shadows every `instance=None`
+///   read).
+/// - default slot holds a *distinct, recoverable* account → promote it to its
+///   own named slot (`oauth:{id}:{email}`) first, so it survives alongside the
+///   account we just saved, then clear the default key.
+pub async fn reconcile_default_slot_after_instanced_save(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    new_instance: &str,
+) -> Result<()> {
+    let Some(default_val) = load_oauth_json_exact(store, integration_id, None).await else {
+        return Ok(());
+    };
+
+    let default_email = default_val["email"].as_str();
+    let is_distinct_recoverable =
+        oauth_json_is_recoverable(&default_val) && default_email.is_some_and(|e| e != new_instance);
+
+    if is_distinct_recoverable {
+        let email = default_email.expect("distinct_recoverable implies Some email");
+        // Don't clobber an existing named slot for the same account (e.g. the
+        // user just reconnected it under its own instance).
+        let already_named = list_oauth_instances(store, integration_id)
+            .await
+            .into_iter()
+            .any(|i| i.as_deref() == Some(email));
+        if !already_named {
+            write_oauth_token_instance(store, integration_id, Some(email), &default_val).await?;
+            tracing::info!(
+                "oauth: promoted default-slot account {} to its own instance for {} (multi-account)",
+                email,
+                integration_id,
+            );
+        }
+    }
+
+    delete_oauth_token_instance(store, integration_id, None).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,6 +1585,240 @@ mod tests {
     async fn sweep_empty_store_is_noop() {
         let store = mem_store().await;
         assert_eq!(sweep_shadowed_default_slots(&store).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn sweep_promotes_distinct_recoverable_default() {
+        // Defense-in-depth for the multi-account fix: if a distinct, recoverable
+        // account is left in the default slot beside a named one (e.g. a connect
+        // reconcile that didn't finish), the startup sweep must PROMOTE it to its
+        // own slot, not delete it. This is what used to silently drop the first
+        // Gmail account.
+        let store = mem_store().await;
+        let id = "_t_sweep_promote";
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "a", "refresh_token": "ra", "email": "alice@x.com"}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:bob@x.com", id),
+                &json!({"access_token": "b", "refresh_token": "rb", "email": "bob@x.com"}),
+            )
+            .await
+            .unwrap();
+
+        let n = sweep_shadowed_default_slots(&store).await.unwrap();
+        assert_eq!(n, 1);
+
+        // default slot gone, alice promoted to her own slot, bob untouched
+        assert!(store
+            .get_json::<Value>(&format!("oauth:{}", id))
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_json::<Value>(&format!("oauth:{}:alice@x.com", id))
+                .await
+                .unwrap()
+                .unwrap()["access_token"],
+            "a"
+        );
+        assert_eq!(
+            store
+                .get_json::<Value>(&format!("oauth:{}:bob@x.com", id))
+                .await
+                .unwrap()
+                .unwrap()["access_token"],
+            "b"
+        );
+
+        // Idempotent: no default slot left to sweep.
+        assert_eq!(sweep_shadowed_default_slots(&store).await.unwrap(), 0);
+    }
+
+    // ---- reconcile_default_slot_after_instanced_save ------------------
+    //
+    // The "connecting a 2nd Gmail wiped the 1st" bug: the first account used to
+    // live in the default slot, and saving a second account deleted it.
+
+    #[tokio::test]
+    async fn reconcile_promotes_distinct_default_account() {
+        // alice is parked in the default slot (old single-account layout). bob
+        // just connected under his own instance. alice must survive — promoted
+        // into her own named slot, not deleted.
+        let store = mem_store().await;
+        let id = "_t_recon_promote";
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "a", "refresh_token": "ra", "email": "alice@x.com"}),
+            )
+            .await
+            .unwrap();
+        // bob's slot — written by oauth_connect before reconcile runs
+        store
+            .set_json(
+                &format!("oauth:{}:bob@x.com", id),
+                &json!({"access_token": "b", "refresh_token": "rb", "email": "bob@x.com"}),
+            )
+            .await
+            .unwrap();
+
+        reconcile_default_slot_after_instanced_save(Some(&store), id, "bob@x.com")
+            .await
+            .unwrap();
+
+        // default slot cleared
+        assert!(store
+            .get_json::<Value>(&format!("oauth:{}", id))
+            .await
+            .unwrap()
+            .is_none());
+        // alice promoted, keeping her token + refresh token
+        let alice = store
+            .get_json::<Value>(&format!("oauth:{}:alice@x.com", id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(alice["access_token"], "a");
+        assert_eq!(alice["refresh_token"], "ra");
+        // bob untouched
+        assert_eq!(
+            store
+                .get_json::<Value>(&format!("oauth:{}:bob@x.com", id))
+                .await
+                .unwrap()
+                .unwrap()["access_token"],
+            "b"
+        );
+
+        // both accounts now enumerable
+        let mut names: Vec<String> = list_oauth_instances(Some(&store), id)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["alice@x.com".to_string(), "bob@x.com".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_drops_same_account_default() {
+        // Reconnecting the same account: the fresh token was written under the
+        // named slot; the stale default-slot copy of the SAME email is a
+        // duplicate and must be dropped so it can't shadow instance=None reads.
+        let store = mem_store().await;
+        let id = "_t_recon_same";
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "old", "refresh_token": "r", "email": "alice@x.com"}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:alice@x.com", id),
+                &json!({"access_token": "new", "refresh_token": "r", "email": "alice@x.com"}),
+            )
+            .await
+            .unwrap();
+
+        reconcile_default_slot_after_instanced_save(Some(&store), id, "alice@x.com")
+            .await
+            .unwrap();
+
+        assert!(store
+            .get_json::<Value>(&format!("oauth:{}", id))
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_json::<Value>(&format!("oauth:{}:alice@x.com", id))
+                .await
+                .unwrap()
+                .unwrap()["access_token"],
+            "new"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_drops_unrecoverable_default() {
+        // A zombie default slot (expired, no refresh token) must not survive to
+        // shadow instance=None reads — the original cleanup intent — and must
+        // NOT be promoted (it can't be recovered).
+        let store = mem_store().await;
+        let id = "_t_recon_zombie";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "dead", "expires_at": expired, "email": "ghost@x.com"}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:bob@x.com", id),
+                &json!({"access_token": "b", "refresh_token": "rb", "email": "bob@x.com"}),
+            )
+            .await
+            .unwrap();
+
+        reconcile_default_slot_after_instanced_save(Some(&store), id, "bob@x.com")
+            .await
+            .unwrap();
+
+        assert!(store
+            .get_json::<Value>(&format!("oauth:{}", id))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            store
+                .get_json::<Value>(&format!("oauth:{}:ghost@x.com", id))
+                .await
+                .unwrap()
+                .is_none(),
+            "unrecoverable default must not be promoted"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_noop_without_default_slot() {
+        // The common case after the first account: nothing in the default slot,
+        // so reconcile is a cheap no-op that leaves the new account alone.
+        let store = mem_store().await;
+        let id = "_t_recon_noop";
+        store
+            .set_json(
+                &format!("oauth:{}:bob@x.com", id),
+                &json!({"access_token": "b", "refresh_token": "rb", "email": "bob@x.com"}),
+            )
+            .await
+            .unwrap();
+
+        reconcile_default_slot_after_instanced_save(Some(&store), id, "bob@x.com")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store
+                .get_json::<Value>(&format!("oauth:{}:bob@x.com", id))
+                .await
+                .unwrap()
+                .unwrap()["access_token"],
+            "b"
+        );
     }
 
     // ---- merge_refresh_response --------------------------------------

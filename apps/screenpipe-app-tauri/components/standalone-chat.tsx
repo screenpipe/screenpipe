@@ -95,6 +95,10 @@ import {
   parseRateLimitWaitSeconds,
   PI_MAX_RATE_LIMIT_RETRIES,
 } from "@/lib/chat/quota-errors";
+import {
+  buildInvalidatedAuthTokenMessage,
+  isInvalidatedAuthTokenError,
+} from "@/lib/chat/auth-errors";
 import { buildSystemPrompt, buildConnectionsContext } from "@/lib/chat/system-prompt";
 import {
   classifyCurl,
@@ -2867,6 +2871,7 @@ export function StandaloneChat({
   // quota / credits_exhausted errors when agent_end arrives with no content and
   // no explicit stopReason=error on any message (some providers drop that flag).
   const piLastErrorRef = useRef<string | null>(null);
+  const invalidatedAuthHandledRef = useRef(false);
   const piStartInFlightRef = useRef(false);
   const sendDispatchInFlightRef = useRef(false);
   const forceQueueModeRef = useRef(false);
@@ -2880,6 +2885,45 @@ export function StandaloneChat({
   const piActiveStopRequestedRef = useRef(false);
 
   const normalizeTurnIntentText = (value: string) => value.replace(/\s+/g, " ").trim();
+
+  useEffect(() => {
+    if (settings.user?.token) {
+      invalidatedAuthHandledRef.current = false;
+    }
+  }, [settings.user?.token]);
+
+  const handleInvalidatedAuthToken = useCallback(async () => {
+    if (invalidatedAuthHandledRef.current) return;
+    invalidatedAuthHandledRef.current = true;
+    posthog.capture("session_expired", { source: "pi_stream", reason: "token_invalidated" });
+
+    await updateSettings({ user: null as any });
+    try {
+      await commands.setCloudToken(null);
+    } catch (e) {
+      console.warn("failed to clear cloud token after Pi auth error:", e);
+    }
+    try {
+      const result = await commands.piUpdateConfig(null, null);
+      if (result.status === "error") {
+        console.warn("failed to clear Pi auth config after token invalidation:", result.error);
+      }
+    } catch (e) {
+      console.warn("failed to clear Pi auth config after token invalidation:", e);
+    }
+
+    toast({
+      title: "sign in required",
+      description: buildInvalidatedAuthTokenMessage(),
+      variant: "destructive",
+    });
+
+    try {
+      await commands.openLoginWindow();
+    } catch (e) {
+      console.warn("failed to open login after Pi auth error:", e);
+    }
+  }, [updateSettings]);
 
   const turnIntentTextValuesMatch = (leftValue: string, rightValue: string) => {
     const left = normalizeTurnIntentText(leftValue);
@@ -5299,12 +5343,20 @@ export function StandaloneChat({
           console.error("[Pi] LLM error via", data.type, ":", errMsg);
           piLastErrorRef.current = errMsg;
           emitSessionActivity({ status: "error", lastError: errMsg });
+          const authTokenInvalidated = isInvalidatedAuthTokenError(errMsg);
+          if (authTokenInvalidated) {
+            void handleInvalidatedAuthToken();
+          }
 
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
             const quotaErrorType = classifyQuotaError(errMsg);
-            if (quotaErrorType === "daily") {
+            if (authTokenInvalidated) {
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
+              );
+            } else if (quotaErrorType === "daily") {
               try {
                 const resetsAtMatch = errMsg.match(/"resets_at":\s*"([^"]+)"/);
                 } catch {}
@@ -5361,7 +5413,10 @@ export function StandaloneChat({
             if (agentEndError && !content) {
               const errStr = agentEndError;
               const quotaErrorType = classifyQuotaError(errStr);
-              if (quotaErrorType === "daily") {
+              if (isInvalidatedAuthTokenError(errStr)) {
+                void handleInvalidatedAuthToken();
+                content = buildInvalidatedAuthTokenMessage();
+              } else if (quotaErrorType === "daily") {
                 try {
                   const resetsAtMatch = errStr.match(/"resets_at":\s*"([^"]+)"/);
                     } catch {}

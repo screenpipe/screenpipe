@@ -474,6 +474,43 @@ fn get_pi_config_dir() -> Result<PathBuf, String> {
     Ok(home_dir.join(".pi").join("agent"))
 }
 
+fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<(), String> {
+    if !auth_path.exists() {
+        return Ok(());
+    }
+
+    let content =
+        std::fs::read_to_string(auth_path).map_err(|e| format!("Failed to read pi auth: {}", e))?;
+    let mut auth: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
+
+    let removed = auth
+        .as_object_mut()
+        .map(|obj| obj.remove("screenpipe").is_some())
+        .unwrap_or(false);
+
+    if !removed {
+        return Ok(());
+    }
+
+    let auth_str = serde_json::to_string_pretty(&auth)
+        .map_err(|e| format!("Failed to serialize pi auth: {}", e))?;
+    std::fs::write(auth_path, auth_str).map_err(|e| format!("Failed to write pi auth: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(auth_path, perms);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn clear_screenpipe_auth_token_files() -> Result<(), String> {
+    let auth_path = get_pi_config_dir()?.join("auth.json");
+    remove_screenpipe_auth_from_path(&auth_path)
+}
+
 /// Parse the output of `where pi` on Windows, preferring .cmd files
 /// This is extracted for testability
 #[cfg(windows)]
@@ -1208,8 +1245,8 @@ async fn ensure_pi_config(
         .map_err(|e| format!("Failed to write pi models config: {}", e))?;
 
     // -- auth.json: merge screenpipe token, preserve other providers --
-    if let Some(token) = user_token {
-        let auth_path = config_dir.join("auth.json");
+    let auth_path = config_dir.join("auth.json");
+    if let Some(token) = user_token.filter(|token| !token.is_empty()) {
         let mut auth: serde_json::Value = if auth_path.exists() {
             let content = std::fs::read_to_string(&auth_path).unwrap_or_default();
             serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
@@ -1225,6 +1262,8 @@ async fn ensure_pi_config(
             .map_err(|e| format!("Failed to serialize auth: {}", e))?;
         std::fs::write(&auth_path, auth_str)
             .map_err(|e| format!("Failed to write pi auth: {}", e))?;
+    } else {
+        remove_screenpipe_auth_from_path(&auth_path)?;
     }
 
     info!("Pi config merged at {:?}", models_path);
@@ -2893,6 +2932,40 @@ mod tests {
         let dist = pi_dir.join("dist");
         std::fs::create_dir_all(&dist).expect("create dist");
         std::fs::write(dist.join("cli.js"), "console.log('pi')").expect("write cli");
+    }
+
+    #[test]
+    fn clear_screenpipe_auth_preserves_other_provider_tokens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth_path = dir.path().join("auth.json");
+        std::fs::write(
+            &auth_path,
+            serde_json::to_string_pretty(&json!({
+                "screenpipe": "stale-jwt",
+                "openai": "sk-keep",
+                "anthropic": {"apiKey": "anthropic-keep"}
+            }))
+            .unwrap(),
+        )
+        .expect("write auth");
+
+        super::remove_screenpipe_auth_from_path(&auth_path).expect("clear screenpipe auth");
+
+        let auth: Value =
+            serde_json::from_str(&std::fs::read_to_string(&auth_path).unwrap()).unwrap();
+        assert!(auth.get("screenpipe").is_none());
+        assert_eq!(auth["openai"], json!("sk-keep"));
+        assert_eq!(auth["anthropic"]["apiKey"], json!("anthropic-keep"));
+    }
+
+    #[test]
+    fn clear_screenpipe_auth_missing_file_is_noop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth_path = dir.path().join("missing-auth.json");
+
+        super::remove_screenpipe_auth_from_path(&auth_path).expect("missing auth is ok");
+
+        assert!(!auth_path.exists());
     }
 
     #[test]

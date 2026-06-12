@@ -653,7 +653,8 @@ export function BrainSection() {
   const isStale = staleDays >= 1;
 
   return (
-    <div data-testid="section-brain" className="space-y-4 h-full flex flex-col">
+    <div data-testid="section-brain" className="h-full overflow-hidden">
+    <div className="max-w-4xl mx-auto px-6 py-6 space-y-4 h-full flex flex-col">
       <p className="text-muted-foreground text-sm mb-4">
         what the AI has learned from your activity and what it has generated for you
       </p>
@@ -1297,6 +1298,7 @@ export function BrainSection() {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }

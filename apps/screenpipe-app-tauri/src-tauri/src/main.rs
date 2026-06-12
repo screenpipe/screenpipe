@@ -30,6 +30,7 @@ use updates::start_update_check;
 use window::ShowRewindWindow;
 
 mod analytics;
+mod auth_session;
 #[allow(deprecated)]
 mod icons;
 use crate::analytics::start_analytics;

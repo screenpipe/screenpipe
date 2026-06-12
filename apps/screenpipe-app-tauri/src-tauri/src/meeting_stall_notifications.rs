@@ -103,7 +103,7 @@ fn handle_transcript_stall(app: &AppHandle, event: StallEvent) {
 
     client::send_typed_with_actions(
         "live transcript not flowing",
-        format!("audio is being captured but no transcript has arrived in {elapsed}s — retrying in the background"),
+        format!("audio is still being captured, but the transcript is delayed by {elapsed}s — keep the meeting open while screenpipe retries"),
         "meeting",
         Some(30_000),
         Vec::new(),

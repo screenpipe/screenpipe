@@ -36,11 +36,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetMessageW,
-    GetWindowTextW, GetWindowThreadProcessId, PostThreadMessageW, SetTimer, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, HC_ACTION, HHOOK,
-    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
+    GetWindowTextW, GetWindowThreadProcessId, KillTimer, PostThreadMessageW, SetTimer,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, HC_ACTION,
+    HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
 };
 
 /// Lower the current thread's OS priority so user input threads (mouse/keyboard hook,
@@ -335,6 +336,8 @@ struct PendingClipboard {
 /// Coalescing preserves total scroll distance while cutting row count ~86x
 /// (measured: 1121 → 13 events in a 2-min session).
 const SCROLL_AGGREGATION_WINDOW_MS: u128 = 500;
+const HOOK_ACTIVE_FLUSH_TIMER_MS: u32 = 100;
+const HOOK_IDLE_FLUSH_TIMER_MS: u32 = 500;
 
 /// In-flight scroll aggregation state (None when not currently scrolling).
 struct ScrollAggregator {
@@ -367,6 +370,9 @@ struct HookState {
     last_input_at_ms: Arc<AtomicU64>,
     /// In-flight scroll aggregator (None = not currently scrolling).
     scroll_aggregator: Option<ScrollAggregator>,
+    /// Thread timer used to wake the hook message loop for deferred flush work.
+    flush_timer_id: Option<usize>,
+    flush_timer_interval_ms: Option<u32>,
 }
 
 /// Emit the accumulated scroll as a single `Scroll` event. `delta_y` is summed
@@ -436,6 +442,8 @@ fn run_native_hooks(
             pending_clipboard: Vec::new(),
             last_input_at_ms,
             scroll_aggregator: None,
+            flush_timer_id: None,
+            flush_timer_interval_ms: None,
         }));
     });
 
@@ -462,12 +470,13 @@ fn run_native_hooks(
             error!("Failed to install mouse hook");
         }
 
-        // Message loop (required for hooks to receive events)
-        // Install a timer so GetMessageW wakes periodically for text buffer flushing.
-        // Without this, typed text stays in the buffer until the next input event.
-        const TEXT_FLUSH_TIMER_ID: usize = 42;
-        SetTimer(HWND::default(), TEXT_FLUSH_TIMER_ID, 100, None);
+        HOOK_STATE.with(|state| {
+            if let Some(ref mut s) = *state.borrow_mut() {
+                set_hook_timer_interval(s, HOOK_IDLE_FLUSH_TIMER_MS);
+            }
+        });
 
+        // Message loop (required for hooks to receive events)
         let mut msg = MSG::default();
         while !stop.load(Ordering::Relaxed) {
             if GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
@@ -489,8 +498,7 @@ fn run_native_hooks(
 
                         // Idle-flush: emit any in-flight scroll aggregation once
                         // SCROLL_AGGREGATION_WINDOW_MS has elapsed without a new wheel
-                        // tick.  The 100ms SetTimer above bounds worst-case latency to
-                        // ~600ms.
+                        // tick. The active flush timer bounds worst-case latency to ~600ms.
                         let needs_idle_flush = s.scroll_aggregator.as_ref().is_some_and(|agg| {
                             agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS
                         });
@@ -535,6 +543,8 @@ fn run_native_hooks(
                                 let _ = s.tx.try_send(event);
                             }
                         }
+
+                        sync_hook_timer_interval(s);
                     }
                 }
             });
@@ -557,6 +567,7 @@ fn run_native_hooks(
         // so input buffered when recording stops isn't dropped.
         HOOK_STATE.with(|state| {
             if let Some(ref mut s) = *state.borrow_mut() {
+                stop_hook_timer(s);
                 flush_text_buffer(s);
                 if let Some(agg) = s.scroll_aggregator.take() {
                     emit_aggregated_scroll(&s.tx, agg);
@@ -566,6 +577,47 @@ fn run_native_hooks(
     }
 
     debug!("Native Windows hooks stopped");
+}
+
+fn hook_needs_active_flush_timer(state: &HookState) -> bool {
+    state.last_text_time.is_some()
+        || state.scroll_aggregator.is_some()
+        || !state.pending_clipboard.is_empty()
+}
+
+unsafe fn set_hook_timer_interval(state: &mut HookState, interval_ms: u32) {
+    if state.flush_timer_interval_ms == Some(interval_ms) {
+        return;
+    }
+
+    stop_hook_timer(state);
+    let timer_id = SetTimer(HWND::default(), 0, interval_ms, None);
+    if timer_id == 0 {
+        warn!(
+            "failed to install Windows hook flush timer at {}ms",
+            interval_ms
+        );
+        return;
+    }
+
+    state.flush_timer_id = Some(timer_id);
+    state.flush_timer_interval_ms = Some(interval_ms);
+}
+
+unsafe fn sync_hook_timer_interval(state: &mut HookState) {
+    let interval_ms = if hook_needs_active_flush_timer(state) {
+        HOOK_ACTIVE_FLUSH_TIMER_MS
+    } else {
+        HOOK_IDLE_FLUSH_TIMER_MS
+    };
+    set_hook_timer_interval(state, interval_ms);
+}
+
+unsafe fn stop_hook_timer(state: &mut HookState) {
+    if let Some(timer_id) = state.flush_timer_id.take() {
+        let _ = KillTimer(HWND::default(), timer_id);
+    }
+    state.flush_timer_interval_ms = None;
 }
 
 fn flush_text_buffer(state: &mut HookState) {
@@ -1787,6 +1839,8 @@ mod tests {
             pending_clipboard: Vec::new(),
             last_input_at_ms: Arc::new(AtomicU64::new(0)),
             scroll_aggregator: None,
+            flush_timer_id: None,
+            flush_timer_interval_ms: None,
         }
     }
 
@@ -1816,6 +1870,50 @@ mod tests {
 
         flush_text_buffer(&mut state);
         assert!(rx.try_recv().is_err()); // No event sent
+    }
+
+    #[test]
+    fn test_hook_needs_active_flush_timer_for_pending_text() {
+        let (tx, _rx) = crossbeam_channel::bounded(64);
+        let mut state = make_test_state(tx, "hello");
+
+        assert!(hook_needs_active_flush_timer(&state));
+        flush_text_buffer(&mut state);
+        assert!(!hook_needs_active_flush_timer(&state));
+    }
+
+    #[test]
+    fn test_hook_needs_active_flush_timer_for_pending_clipboard() {
+        let (tx, _rx) = crossbeam_channel::bounded(64);
+        let mut state = make_test_state(tx, "");
+
+        assert!(!hook_needs_active_flush_timer(&state));
+        state.pending_clipboard.push(PendingClipboard {
+            operation: 'c',
+            timestamp: Utc::now(),
+            relative_ms: 0,
+            app_name: None,
+            window_title: None,
+        });
+        assert!(hook_needs_active_flush_timer(&state));
+    }
+
+    #[test]
+    fn test_hook_needs_active_flush_timer_for_pending_scroll() {
+        let (tx, _rx) = crossbeam_channel::bounded(64);
+        let mut state = make_test_state(tx, "");
+
+        assert!(!hook_needs_active_flush_timer(&state));
+        state.scroll_aggregator = Some(ScrollAggregator {
+            last_scroll: Instant::now(),
+            accumulated_delta: 120,
+            coords: (10, 20),
+            app_name: None,
+            window_title: None,
+            start_timestamp: Utc::now(),
+            start_relative_ms: 0,
+        });
+        assert!(hook_needs_active_flush_timer(&state));
     }
 
     #[test]

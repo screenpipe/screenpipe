@@ -23,7 +23,10 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
+          # No explicit toolchain: the action reads rust-toolchain.toml, so fmt
+          # and clippy run the SAME version developers use locally. A floating
+          # `stable` here meant every new Rust release re-formatted unchanged
+          # files and turned main red until someone hand-fixed them.
           components: clippy, rustfmt
           rustflags: ""
 
