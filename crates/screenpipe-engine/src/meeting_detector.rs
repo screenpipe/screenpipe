@@ -1683,16 +1683,30 @@ const REENTRY_HYSTERESIS_SCANS: u8 = 2;
 ///
 /// `title_lower` must already be lowercased — hot path, called per window.
 fn browser_title_matches_pattern(title_lower: &str, pattern: &str) -> bool {
-    let p_lower = pattern.to_lowercase();
-    if p_lower.is_empty() {
+    if pattern.is_empty() {
         return false;
     }
+
+    if title_lower.is_ascii() && pattern.is_ascii() {
+        let pattern = pattern.as_bytes();
+        let title = title_lower.as_bytes();
+        if title.eq_ignore_ascii_case(pattern) {
+            return true;
+        }
+        if title.len() <= pattern.len() || !title[..pattern.len()].eq_ignore_ascii_case(pattern) {
+            return false;
+        }
+        return !title[pattern.len()].is_ascii_alphanumeric();
+    }
+
+    let p_lower = pattern.to_lowercase();
     if title_lower == p_lower {
         return true;
     }
     if title_lower.len() <= p_lower.len() || !title_lower.starts_with(&p_lower[..]) {
         return false;
     }
+
     // ASCII alnum check is sufficient: multi-byte separators (U+2014 em dash,
     // U+200B zero-width space) have non-ASCII leading bytes.
     !(title_lower.as_bytes()[p_lower.len()] as char).is_ascii_alphanumeric()
@@ -1700,9 +1714,10 @@ fn browser_title_matches_pattern(title_lower: &str, pattern: &str) -> bool {
 
 /// Check if an app name is a known browser.
 fn is_browser_app(app_name: &str) -> bool {
-    let lower = app_name.to_lowercase();
-    BROWSER_NAMES.iter().any(|b| lower.contains(b))
-        || lower.ends_with(".exe")
+    BROWSER_NAMES
+        .iter()
+        .any(|b| contains_case_insensitive(app_name, b))
+        || ends_with_ascii_case_insensitive(app_name, ".exe")
             && [
                 "chrome.exe",
                 "firefox.exe",
@@ -1711,7 +1726,7 @@ fn is_browser_app(app_name: &str) -> bool {
                 "opera.exe",
             ]
             .iter()
-            .any(|b| lower.contains(b))
+            .any(|b| contains_case_insensitive(app_name, b))
 }
 
 /// Advance the state machine based on scan results.
@@ -1991,31 +2006,84 @@ pub fn meeting_app_is_ignored(
     profile: &MeetingDetectionProfile,
     ignored: &[String],
 ) -> bool {
-    if ignored.is_empty() {
+    let ignored_terms = normalize_ignored_meeting_apps(ignored);
+    meeting_app_is_ignored_with_terms(app_name, profile, &ignored_terms)
+}
+
+fn normalize_ignored_meeting_apps(ignored: &[String]) -> Vec<String> {
+    ignored
+        .iter()
+        .map(|raw| raw.trim().to_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect()
+}
+
+fn contains_normalized_term(haystack: &str, term_lower: &str) -> bool {
+    if term_lower.is_empty() {
         return false;
     }
-    let app_name_lc = app_name.to_lowercase();
+
+    if haystack.is_ascii() && term_lower.is_ascii() {
+        let needle = term_lower.as_bytes();
+        return haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle));
+    }
+
+    haystack.to_lowercase().contains(term_lower)
+}
+
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+
+    if haystack.is_ascii() && needle.is_ascii() {
+        let needle = needle.as_bytes();
+        return haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle));
+    }
+
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+fn ends_with_ascii_case_insensitive(haystack: &str, suffix: &str) -> bool {
+    let haystack = haystack.as_bytes();
+    let suffix = suffix.as_bytes();
+    haystack.len() >= suffix.len()
+        && haystack[haystack.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
+fn meeting_app_is_ignored_with_terms(
+    app_name: &str,
+    profile: &MeetingDetectionProfile,
+    ignored_terms: &[String],
+) -> bool {
+    if ignored_terms.is_empty() {
+        return false;
+    }
     let ids = &profile.app_identifiers;
-    ignored.iter().any(|raw| {
-        let term = raw.trim().to_lowercase();
-        if term.is_empty() {
-            return false;
-        }
-        app_name_lc.contains(&term)
-            // macos_app_names are stored lowercase already.
-            || ids.macos_app_names.iter().any(|n| n.contains(&term))
+    ignored_terms.iter().any(|term| {
+        contains_normalized_term(app_name, term)
+            || ids
+                .macos_app_names
+                .iter()
+                .any(|n| contains_normalized_term(n, term))
             || ids
                 .windows_process_names
                 .iter()
-                .any(|n| n.to_lowercase().contains(&term))
+                .any(|n| contains_normalized_term(n, term))
             || ids
                 .browser_url_patterns
                 .iter()
-                .any(|n| n.to_lowercase().contains(&term))
+                .any(|n| contains_normalized_term(n, term))
             || ids
                 .browser_title_patterns
                 .iter()
-                .any(|n| n.to_lowercase().contains(&term))
+                .any(|n| contains_normalized_term(n, term))
     })
 }
 
@@ -2154,10 +2222,9 @@ fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
 
             // Primary: check AXDocument attribute (actual page URL, most reliable)
             if let Some(doc) = get_ax_string_attr(window, cidre::ax::attr::document()) {
-                let doc_lower = doc.to_lowercase();
                 if url_patterns
                     .iter()
-                    .any(|p| doc_lower.contains(&p.to_lowercase()))
+                    .any(|p| contains_case_insensitive(&doc, p))
                 {
                     return true;
                 }
@@ -2167,11 +2234,10 @@ fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
             // (containing a dot, e.g. "meet.google.com") to avoid matching
             // page content like "Join with Google Meet" on calendar pages.
             if let Some(title) = get_ax_string_attr(window, cidre::ax::attr::title()) {
-                let title_lower = title.to_lowercase();
                 if url_patterns
                     .iter()
                     .filter(|p| p.contains('.'))
-                    .any(|p| title_lower.contains(&p.to_lowercase()))
+                    .any(|p| contains_case_insensitive(&title, p))
                 {
                     return true;
                 }
@@ -2216,12 +2282,11 @@ pub fn find_running_meeting_apps(
     // Match native app processes + their child processes (e.g., Teams spawns msedgewebview2.exe)
     for (idx, profile) in profiles.iter().enumerate() {
         for proc in process_map.iter() {
-            let proc_name_lower = proc.name.to_lowercase();
             let matches_native = profile
                 .app_identifiers
                 .windows_process_names
                 .iter()
-                .any(|n| proc_name_lower == n.to_lowercase());
+                .any(|n| proc.name.eq_ignore_ascii_case(n));
 
             if matches_native && !seen_pids.contains(&(proc.pid as i32)) {
                 // Add the main process
@@ -2309,9 +2374,11 @@ pub fn find_running_meeting_apps(
         let browser_windows: Vec<_> = window_titles
             .iter()
             .filter(|(pid, _)| {
-                proc_name_of(*pid)
-                    .map(|n| n.to_lowercase())
-                    .is_some_and(|n| browser_process_names.iter().any(|b| n == *b))
+                proc_name_of(*pid).is_some_and(|n| {
+                    browser_process_names
+                        .iter()
+                        .any(|b| n.eq_ignore_ascii_case(b))
+                })
             })
             .collect();
         debug!(
@@ -2344,26 +2411,30 @@ pub fn find_running_meeting_apps(
             let proc_name = process_map
                 .iter()
                 .find(|p| p.pid == *pid as u32)
-                .map(|p| p.name.to_lowercase());
-            let is_browser = proc_name
-                .as_ref()
-                .map_or(false, |n| browser_process_names.iter().any(|b| n == *b));
+                .map(|p| p.name.as_str());
+            let is_browser = proc_name.as_ref().map_or(false, |n| {
+                browser_process_names
+                    .iter()
+                    .any(|b| n.eq_ignore_ascii_case(b))
+            });
             if !is_browser {
                 continue;
             }
 
-            let title_lower = title.to_lowercase();
             let url_match = profile
                 .app_identifiers
                 .browser_url_patterns
                 .iter()
-                .any(|p| title_lower.contains(&p.to_lowercase()));
+                .any(|p| contains_case_insensitive(title, p));
             // See `browser_title_matches_pattern` for the matching rules.
-            let title_match = profile
-                .app_identifiers
-                .browser_title_patterns
-                .iter()
-                .any(|p| browser_title_matches_pattern(&title_lower, p));
+            let title_match = !profile.app_identifiers.browser_title_patterns.is_empty() && {
+                let title_lower = title.to_lowercase();
+                profile
+                    .app_identifiers
+                    .browser_title_patterns
+                    .iter()
+                    .any(|p| browser_title_matches_pattern(&title_lower, p))
+            };
             if url_match || title_match {
                 // Confirms screenpipe saw the meeting window; pairs with the
                 // scanner's UIA scan line via pid + profile_idx. DEBUG, not
@@ -2380,7 +2451,7 @@ pub fn find_running_meeting_apps(
                 );
                 results.push(RunningMeetingApp {
                     pid: *pid,
-                    app_name: proc_name.unwrap_or_default(),
+                    app_name: proc_name.unwrap_or_default().to_string(),
                     profile_index: idx,
                     browser_url: Some(title.clone()),
                 });
@@ -2506,10 +2577,8 @@ async fn db_find_browser_meetings(
     .await?;
 
     for (app_name, window_name, browser_url) in &rows {
-        let window_lower = window_name.to_lowercase();
         #[cfg(target_os = "macos")]
         let app_lower = app_name.to_lowercase();
-        let url_lower = browser_url.as_deref().unwrap_or("").to_lowercase();
         for (idx, profile) in profiles.iter().enumerate() {
             let has_url_patterns = !profile.app_identifiers.browser_url_patterns.is_empty();
             let has_title_patterns = !profile.app_identifiers.browser_title_patterns.is_empty();
@@ -2523,16 +2592,20 @@ async fn db_find_browser_meetings(
                     .browser_url_patterns
                     .iter()
                     .any(|p| {
-                        let p_lower = p.to_lowercase();
-                        window_lower.contains(&p_lower) || url_lower.contains(&p_lower)
+                        contains_case_insensitive(window_name, p)
+                            || browser_url
+                                .as_deref()
+                                .is_some_and(|url| contains_case_insensitive(url, p))
                     });
             // See `browser_title_matches_pattern` for the matching rules.
-            let title_match = has_title_patterns
-                && profile
+            let title_match = has_title_patterns && {
+                let window_lower = window_name.to_lowercase();
+                profile
                     .app_identifiers
                     .browser_title_patterns
                     .iter()
-                    .any(|p| browser_title_matches_pattern(&window_lower, p));
+                    .any(|p| browser_title_matches_pattern(&window_lower, p))
+            };
             if url_match || title_match {
                 #[cfg(target_os = "macos")]
                 let pid = cidre::objc::ar_pool(|| -> i32 {
@@ -2590,6 +2663,7 @@ pub async fn run_meeting_detection_loop(
     let base_interval = scan_interval.unwrap_or(ACTIVE_SCAN_INTERVAL);
     let mut current_interval = base_interval;
     let mut idle_scan_count: u64 = 0;
+    let ignored_meeting_app_terms = normalize_ignored_meeting_apps(&ignored_meeting_apps);
 
     // Check if any profile uses browser URL or title patterns (to gate DB query)
     let has_browser_profiles = profiles.iter().any(|p| {
@@ -2842,12 +2916,14 @@ pub async fn run_meeting_detection_loop(
         // Drop apps the user excluded from detection (settings: ignoredMeetingApps).
         // Done before the AX scan so an ignored app costs nothing past enumeration,
         // and applied uniformly to native, browser, and DB-hint matches.
-        if !ignored_meeting_apps.is_empty() {
+        if !ignored_meeting_app_terms.is_empty() {
             let before = running_apps.len();
             running_apps.retain(|app| match profiles.get(app.profile_index) {
-                Some(profile) => {
-                    !meeting_app_is_ignored(&app.app_name, profile, &ignored_meeting_apps)
-                }
+                Some(profile) => !meeting_app_is_ignored_with_terms(
+                    &app.app_name,
+                    profile,
+                    &ignored_meeting_app_terms,
+                ),
                 None => true,
             });
             let removed = before - running_apps.len();
@@ -3559,7 +3635,30 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn ignored_meeting_apps_reuses_normalized_terms() {
+        let p = zoom_test_profile();
+        let terms =
+            normalize_ignored_meeting_apps(&["  ZOOM.US/J  ".to_string(), "   ".to_string()]);
+
+        assert_eq!(terms, vec!["zoom.us/j"]);
+        assert!(meeting_app_is_ignored_with_terms(
+            "Google Chrome",
+            &p,
+            &terms
+        ));
+    }
+
     // ── AttrNeeds tests ────────────────────────────────────────────────
+
+    #[test]
+    fn browser_app_detection_is_case_insensitive() {
+        assert!(is_browser_app("Google Chrome"));
+        assert!(is_browser_app("CHROME.EXE"));
+        assert!(is_browser_app("Microsoft Edge Helper"));
+        assert!(is_browser_app("brave.exe"));
+        assert!(!is_browser_app("Zoom.exe"));
+    }
 
     #[test]
     fn attr_needs_empty_signal_set_needs_nothing() {

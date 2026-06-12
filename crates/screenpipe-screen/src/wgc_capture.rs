@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use image::{DynamicImage, RgbaImage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tracing;
@@ -17,7 +17,7 @@ use xcap::Monitor as XcapMonitor;
 /// eliminating the orange border flash caused by per-frame session create/destroy.
 pub struct PersistentCapture {
     recorder: xcap::VideoRecorder,
-    latest_frame: Arc<Mutex<Option<Frame>>>,
+    latest_frame: Arc<(Mutex<Option<Frame>>, Condvar)>,
     consumer_handle: Option<JoinHandle<()>>,
     stop_flag: Arc<AtomicBool>,
     /// Set to false when consumer thread exits (channel disconnect, mutex poison, etc).
@@ -42,11 +42,13 @@ impl PersistentCapture {
             .start()
             .map_err(|e| anyhow!("failed to start video recorder: {}", e))?;
 
-        let latest_frame: Arc<Mutex<Option<Frame>>> = Arc::new(Mutex::new(None));
+        let latest_frame: Arc<(Mutex<Option<Frame>>, Condvar)> =
+            Arc::new((Mutex::new(None), Condvar::new()));
         let stop_flag = Arc::new(AtomicBool::new(false));
         let consumer_alive = Arc::new(AtomicBool::new(true));
 
         let frame_ref = latest_frame.clone();
+        let frame_notify = latest_frame.clone();
         let flag_ref = stop_flag.clone();
         let alive_ref = consumer_alive.clone();
 
@@ -55,6 +57,7 @@ impl PersistentCapture {
             .spawn(move || {
                 Self::consumer_loop(receiver, frame_ref, flag_ref);
                 alive_ref.store(false, Ordering::Release);
+                frame_notify.1.notify_all();
             })
             .map_err(|e| anyhow!("failed to spawn consumer thread: {}", e))?;
 
@@ -71,7 +74,7 @@ impl PersistentCapture {
 
     fn consumer_loop(
         receiver: Receiver<Frame>,
-        latest_frame: Arc<Mutex<Option<Frame>>>,
+        latest_frame: Arc<(Mutex<Option<Frame>>, Condvar)>,
         stop_flag: Arc<AtomicBool>,
     ) {
         loop {
@@ -79,8 +82,11 @@ impl PersistentCapture {
                 break;
             }
             match receiver.recv_timeout(Duration::from_millis(500)) {
-                Ok(frame) => match latest_frame.lock() {
-                    Ok(mut slot) => *slot = Some(frame),
+                Ok(frame) => match latest_frame.0.lock() {
+                    Ok(mut slot) => {
+                        *slot = Some(frame);
+                        latest_frame.1.notify_all();
+                    }
                     Err(_) => {
                         tracing::error!("WGC consumer: frame mutex poisoned, exiting");
                         break;
@@ -95,6 +101,7 @@ impl PersistentCapture {
                 }
             }
         }
+        latest_frame.1.notify_all();
     }
 
     /// Get the latest captured frame, converting BGRA raw bytes to a DynamicImage.
@@ -103,28 +110,35 @@ impl PersistentCapture {
     /// to trigger session reinit rather than returning stale frames forever.
     pub fn get_latest_image(&self, timeout: Duration) -> Result<DynamicImage> {
         let deadline = Instant::now() + timeout;
+        let (frame_lock, frame_ready) = &*self.latest_frame;
+        let mut slot = frame_lock
+            .lock()
+            .map_err(|e| anyhow!("frame mutex poisoned: {}", e))?;
 
         loop {
+            if let Some(frame) = slot.as_ref() {
+                return Self::frame_to_image(frame);
+            }
+
             // Check if consumer died (channel disconnect from sleep/wake/monitor removal)
             if !self.consumer_alive.load(Ordering::Acquire) {
                 return Err(anyhow!("WGC session dead (consumer exited)"));
             }
 
-            {
-                let slot = self
-                    .latest_frame
-                    .lock()
-                    .map_err(|e| anyhow!("frame mutex poisoned: {}", e))?;
-                if let Some(frame) = slot.as_ref() {
-                    return Self::frame_to_image(frame);
-                }
-            }
-
-            if Instant::now() >= deadline {
+            let now = Instant::now();
+            if now >= deadline {
                 return Err(anyhow!("no frame received within {:?}", timeout));
             }
 
-            std::thread::sleep(Duration::from_millis(10));
+            let remaining = deadline.saturating_duration_since(now);
+            let (next_slot, wait_result) = frame_ready
+                .wait_timeout(slot, remaining)
+                .map_err(|e| anyhow!("frame mutex poisoned while waiting: {}", e))?;
+            slot = next_slot;
+
+            if wait_result.timed_out() && slot.is_none() {
+                return Err(anyhow!("no frame received within {:?}", timeout));
+            }
         }
     }
 

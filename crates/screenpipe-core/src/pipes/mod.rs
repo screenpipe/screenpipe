@@ -418,6 +418,12 @@ fn select_newest_files(
     files
 }
 
+/// Returns `true` if the extension is user-facing for fallback artifact
+/// discovery. Pipes producing other types should declare them in `artifacts:`.
+fn is_user_facing_artifact_ext(ext: &str) -> bool {
+    matches!(ext, "md" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+}
+
 // ---------------------------------------------------------------------------
 // Tombstone tracking — prevents deleted pipes from being restored by
 // builtin installation or cloud sync.
@@ -1768,6 +1774,22 @@ impl PipeManager {
                     while let Ok(Some(entry)) = entries.next_entry().await {
                         let path = entry.path();
                         if !path.is_file() {
+                            continue;
+                        }
+                        // skip dotfiles (.DS_Store, .env, etc.)
+                        if path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map_or(false, |n| n.starts_with('.'))
+                        {
+                            continue;
+                        }
+                        // skip non-user-facing extensions
+                        if !path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map_or(false, is_user_facing_artifact_ext)
+                        {
                             continue;
                         }
                         let mtime = entry
@@ -4992,6 +5014,77 @@ mod tests {
         // cap larger than input keeps everything
         let files = vec![f("a.md", 100)];
         assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn test_is_user_facing_artifact_ext() {
+        // positive cases
+        assert!(is_user_facing_artifact_ext("md"));
+        assert!(is_user_facing_artifact_ext("png"));
+        assert!(is_user_facing_artifact_ext("jpg"));
+        assert!(is_user_facing_artifact_ext("jpeg"));
+        assert!(is_user_facing_artifact_ext("gif"));
+        assert!(is_user_facing_artifact_ext("webp"));
+        assert!(is_user_facing_artifact_ext("svg"));
+
+        // negative cases
+        assert!(!is_user_facing_artifact_ext("json"));
+        assert!(!is_user_facing_artifact_ext("ts"));
+        assert!(!is_user_facing_artifact_ext("log"));
+        assert!(!is_user_facing_artifact_ext("txt"));
+        assert!(!is_user_facing_artifact_ext("js"));
+        assert!(!is_user_facing_artifact_ext("csv"));
+        assert!(!is_user_facing_artifact_ext(""));
+    }
+
+    #[tokio::test]
+    async fn test_fallback_scan_filters_non_user_facing_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipes_dir = tmp.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        // Create a pipe directory with an output/ subdirectory
+        let pipe_name = "test-filter-pipe";
+        let pipe_dir = pipes_dir.join(pipe_name);
+        let output_dir = pipe_dir.join("output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        // Write a minimal pipe.md with no artifacts frontmatter
+        std::fs::write(
+            pipe_dir.join("pipe.md"),
+            "---\nschedule: manual\n---\ntest pipe\n",
+        )
+        .unwrap();
+
+        // Create mixed files in output/
+        let files = vec![
+            "report.md",
+            "screenshot.png",
+            "data.json",
+            "runner.ts",
+            ".DS_Store",
+            "debug.log",
+            "notes.txt",
+        ];
+        for f in &files {
+            std::fs::write(output_dir.join(f), "content").unwrap();
+        }
+
+        let pm = PipeManager::new(pipes_dir, HashMap::new(), None, 0);
+        pm.reload_pipes().await.unwrap();
+
+        let declarations = pm.list_artifact_declarations(50).await;
+        let pipe_decls = declarations.iter().find(|(name, _)| name == pipe_name);
+
+        let pipe_decls = pipe_decls.expect("pipe should appear in declarations");
+        let mut names: Vec<String> = pipe_decls
+            .1
+            .iter()
+            .map(|(decl, _)| decl.path.clone())
+            .collect();
+        names.sort();
+
+        assert_eq!(names, vec!["output/report.md", "output/screenshot.png"]);
     }
 
     #[tokio::test]

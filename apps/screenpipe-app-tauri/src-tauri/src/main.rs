@@ -68,6 +68,7 @@ mod permissions;
 mod pi;
 mod pi_command_queue;
 mod pipe_suggestions_scheduler;
+mod power_awake;
 mod recording;
 mod remote_sync_commands;
 mod secrets;

@@ -68,6 +68,14 @@ async function postNotification(id: string, title: string, body: string): Promis
   }
 }
 
+// The notification bell lives in the Pipes view tab bar (notifications
+// are pipe output), not the global window chrome — navigate there first.
+async function openPipesView(): Promise<void> {
+  const navPipes = await $('[data-testid="nav-pipes"]');
+  await navPipes.waitForDisplayed({ timeout: t(20_000) });
+  await navPipes.click();
+}
+
 async function clickFirstDisplayed(selector: string, timeoutMs = t(15_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
@@ -721,6 +729,7 @@ describe("Windows user journey", function () {
       const itemSelector = `[data-testid="notification-bell-item-${notificationId}"]`;
       const expandedSelector = `[data-testid="notification-bell-expanded-${notificationId}"]`;
 
+      await openPipesView();
       const bell = await $(bellSelector);
       await bell.waitForDisplayed({ timeout: t(20_000) });
       await bell.click();
@@ -801,6 +810,8 @@ describe("Windows user journey", function () {
       const homeSection = await $('[data-testid="section-home"]');
       await homeSection.waitForExist({ timeout: t(20_000) });
 
+      // "Back to app" lands on the chat view; the bell is in the Pipes view.
+      await openPipesView();
       const reopenedBell = await $(bellSelector);
       await reopenedBell.waitForDisplayed({ timeout: t(20_000) });
       await reopenedBell.click();

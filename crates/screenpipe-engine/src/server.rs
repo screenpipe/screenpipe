@@ -17,6 +17,7 @@ use crate::{
     hot_frame_cache::HotFrameCache,
     routes::{
         activity_summary::get_activity_summary,
+        artifacts::{delete_artifact_handler, list_artifacts_handler, register_artifact_handler},
         audio::{
             api_list_audio_devices, audio_device_status, start_audio, start_audio_device,
             stop_audio, stop_audio_device,
@@ -49,10 +50,6 @@ use crate::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
             list_memories_handler, list_memory_tags_handler, sync_external_memories_handler,
             update_memory_handler,
-        },
-        outputs::{
-            delete_output_handler, get_output_handler, list_artifacts_unified_handler,
-            list_outputs_handler, register_output_handler,
         },
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
@@ -683,11 +680,9 @@ impl SCServer {
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
-            .post("/outputs/register", register_output_handler)
-            .get("/artifacts", list_artifacts_unified_handler)
-            .get("/outputs", list_outputs_handler)
-            .get("/outputs/:id", get_output_handler)
-            .delete("/outputs/:id", delete_output_handler)
+            .post("/artifacts/register", register_artifact_handler)
+            .get("/artifacts", list_artifacts_handler)
+            .delete("/artifacts/:id", delete_artifact_handler)
             .post("/experimental/frames/merge", merge_frames_handler)
             .get("/experimental/validate/media", validate_media_handler)
             .post("/audio/start", start_audio)
@@ -820,12 +815,8 @@ impl SCServer {
                     "/install",
                     axum::routing::post(crate::pipes_api::install_pipe),
                 )
-                // Artifacts & favorites — register before `/:id` so axum
-                // doesn't match these as a pipe id.
-                .route(
-                    "/artifacts",
-                    axum::routing::get(crate::pipes_api::list_artifacts),
-                )
+                // Favorites — register before `/:id` so axum doesn't match
+                // it as a pipe id.
                 .route(
                     "/favorites",
                     axum::routing::get(crate::pipes_api::list_favorites),

@@ -376,8 +376,12 @@ describe('proxyToAnthropic', () => {
 
 		await proxyToAnthropic(request, 'sk-ant-test-key');
 
-		// System parameter should be passed through as-is
-		expect(capturedBody.system).toBe('You are a helpful assistant.');
+		// String system prompts are converted to block form with a cache_control
+		// marker (prompt caching — text content preserved verbatim). The old
+		// behavior only did this above 4096 chars; the gate lost cache hits.
+		expect(capturedBody.system).toEqual([
+			{ type: 'text', text: 'You are a helpful assistant.', cache_control: { type: 'ephemeral' } },
+		]);
 	});
 });
 

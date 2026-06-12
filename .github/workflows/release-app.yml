@@ -786,7 +786,27 @@ jobs:
             ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
             rm -rf squashfs-root
             echo "AppImage repacked successfully"
+
+            # Re-sign for the Tauri updater - the .sig from `tauri build` was made for
+            # the pre-repack bytes, so shipping it breaks auto-update on every Linux
+            # client ("The signature verification failed"). Same pattern as the macOS
+            # post-staple and Windows post-SSL.com re-signs. Reads the key from
+            # TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) env, like the Windows step.
+            rm -f "$APPIMAGE.sig"
+            bunx tauri signer sign "$APPIMAGE"
+            echo "Updater signature regenerated for repacked AppImage"
           ' _ {} \;
+
+          # find -exec does not propagate failures from the inner bash, so fail the
+          # build hard if any AppImage ends up without a signature newer than itself -
+          # a stale (pre-repack) .sig bricks auto-update for every Linux user.
+          for f in src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage; do
+            [ -f "$f" ] || continue
+            if [ ! -f "$f.sig" ] || [ "$f" -nt "$f.sig" ]; then
+              echo "❌ missing or stale updater signature for $f - auto-update would be broken"
+              exit 1
+            fi
+          done
 
       - name: Install CodeSignTool for SSL.com EV signing (Windows)
         if: matrix.os_type == 'windows'

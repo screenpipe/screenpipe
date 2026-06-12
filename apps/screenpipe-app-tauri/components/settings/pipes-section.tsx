@@ -223,7 +223,9 @@ function buildCreatePipeDisplayLabel(prompt: string): string {
 }
 
 function buildOptimizePrompt(pipeName: string): string {
-  const sessionDir = `~/.pi/agent/sessions/`;
+  // Screenpipe's isolated pi agent dir (legacy sessions before the isolation
+  // lived in ~/.pi/agent/sessions/ and were copied over on first run).
+  const sessionDir = `~/.screenpipe/pi-config/sessions/`;
   return `i need help optimizing my screenpipe pipe "${pipeName}".
 
 ## your task

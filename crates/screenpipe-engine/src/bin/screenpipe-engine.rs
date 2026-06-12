@@ -462,6 +462,10 @@ async fn main() -> anyhow::Result<()> {
         !config.analytics_enabled,
     )?);
 
+    if let Err(e) = screenpipe_engine::power::set_keep_awake(config.keep_computer_awake) {
+        warn!("failed to apply keep-awake setting: {}", e);
+    }
+
     // Non-blocking update check — runs in background, prints banner if outdated
     tokio::spawn(async {
         screenpipe_engine::cli_reminder::check_for_updates().await;

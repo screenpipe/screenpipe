@@ -67,8 +67,18 @@ export class AnthropicProvider implements AIProvider {
 
 	/**
 	 * Build the system prompt from system messages and response_format.
-	 * Returns an array of content blocks with cache_control on the last block
-	 * to enable Anthropic prompt caching (90% input cost reduction on cache hits).
+	 *
+	 * Caching layout (prefix caching — see Anthropic prompt-caching docs):
+	 * - One block per system message, so when a client sends a shared base
+	 *   prompt followed by per-user additions as separate system messages,
+	 *   the shared block can cache-hit across users.
+	 * - cache_control on the FIRST and LAST block. The last-block marker
+	 *   caches tools + the full system prompt; the first-block marker gives
+	 *   the shared base prompt its own cache entry.
+	 * - Markers are unconditional: below-minimum prefixes are a free no-op
+	 *   (the API silently skips caching), so a size gate only loses hits.
+	 *   The old 4096-char gate also assumed a 1024-token minimum — Opus 4.x
+	 *   and Haiku 4.5 actually require 4096 tokens, Sonnet 4.6 needs 2048.
 	 */
 	private buildSystemPrompt(body: RequestBody): Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined {
 		const parts: string[] = [];
@@ -96,16 +106,44 @@ export class AnthropicProvider implements AIProvider {
 
 		if (parts.length === 0) return undefined;
 
-		const combined = parts.join('\n\n');
-		// Only cache system prompts with enough tokens to benefit (Anthropic min: 1024 tokens for haiku, 2048 for sonnet/opus)
-		// Rough heuristic: 4 chars ≈ 1 token, so 4096 chars ≈ 1024 tokens
-		const shouldCache = combined.length >= 4096;
+		const blocks = parts.map(text => ({ type: 'text' as const, text }));
+		const withMarker = (b: { type: 'text'; text: string }) => ({
+			...b,
+			cache_control: { type: 'ephemeral' as const },
+		});
+		const first = 0;
+		const last = blocks.length - 1;
+		return blocks.map((b, i) => (i === first || i === last ? withMarker(b) : b));
+	}
 
-		return [{
-			type: 'text' as const,
-			text: combined,
-			...(shouldCache ? { cache_control: { type: 'ephemeral' as const } } : {}),
-		}];
+	/**
+	 * Place a cache_control breakpoint on the last cacheable content block of
+	 * the last message. This is what makes agentic loops cheap: each request
+	 * re-reads the entire prior conversation (system + history) from cache at
+	 * ~0.1x input price instead of reprocessing it at full price, and writes
+	 * only the new turn. Without this, a Pi loop with N tool calls pays for
+	 * the whole history N times.
+	 *
+	 * Returns a new array (input blocks are not mutated). Total breakpoints
+	 * stay ≤ 4: up to 2 on system + 1 here (this path never receives
+	 * client-set cache_control — OpenAI-format requests can't express it).
+	 */
+	private withMessageCacheBreakpoint(messages: MessageParam[]): MessageParam[] {
+		const CACHEABLE = new Set(['text', 'image', 'tool_use', 'tool_result', 'document']);
+		for (let m = messages.length - 1; m >= 0; m--) {
+			const content = messages[m].content;
+			if (!Array.isArray(content) || content.length === 0) continue;
+			for (let b = content.length - 1; b >= 0; b--) {
+				const block = content[b] as any;
+				if (!block || !CACHEABLE.has(block.type)) continue;
+				const newContent = [...content];
+				newContent[b] = { ...block, cache_control: { type: 'ephemeral' } };
+				const result = [...messages];
+				result[m] = { ...messages[m], content: newContent as any };
+				return result;
+			}
+		}
+		return messages;
 	}
 
 	/**
@@ -117,7 +155,7 @@ export class AnthropicProvider implements AIProvider {
 	}
 
 	async createCompletion(body: RequestBody): Promise<Response> {
-		const messages = this.formatMessages(body.messages);
+		const messages = this.withMessageCacheBreakpoint(this.formatMessages(body.messages));
 
 		const response = await this.client.messages.create({
 			messages,
@@ -135,7 +173,7 @@ export class AnthropicProvider implements AIProvider {
 
 	async createStreamingCompletion(body: RequestBody): Promise<ReadableStream> {
 		const stream = await this.client.messages.create({
-			messages: this.formatMessages(body.messages),
+			messages: this.withMessageCacheBreakpoint(this.formatMessages(body.messages)),
 			model: this.normalizeModel(body.model),
 			stream: true,
 			max_tokens: body.max_tokens || 4096,
@@ -151,12 +189,19 @@ export class AnthropicProvider implements AIProvider {
 					let toolCallIndex = 0;
 					let inputTokens = 0;
 					let outputTokens = 0;
+					let cacheReadTokens = 0;
+					let cacheCreationTokens = 0;
 					let finishReason: string | null = null;
 
 					for await (const chunk of stream) {
-						// Capture usage from message_start and message_delta events
+						// Capture usage from message_start and message_delta events.
+						// Anthropic's input_tokens EXCLUDES cached tokens — keep the
+						// cache subsets so the final usage chunk can report totals.
 						if (chunk.type === 'message_start' && (chunk as any).message?.usage) {
-							inputTokens = (chunk as any).message.usage.input_tokens || 0;
+							const u = (chunk as any).message.usage;
+							inputTokens = u.input_tokens || 0;
+							cacheReadTokens = u.cache_read_input_tokens || 0;
+							cacheCreationTokens = u.cache_creation_input_tokens || 0;
 						}
 						if (chunk.type === 'message_delta' && (chunk as any).usage) {
 							outputTokens = (chunk as any).usage.output_tokens || 0;
@@ -244,15 +289,22 @@ export class AnthropicProvider implements AIProvider {
 							})}\n\n`
 						)
 					);
-					// Emit usage data in OpenAI format before [DONE]
+					// Emit usage data in OpenAI format before [DONE].
+					// OpenAI convention: prompt_tokens is the TOTAL prompt size,
+					// with the cached subset in prompt_tokens_details.cached_tokens.
+					// cache_creation_input_tokens is our extension (Anthropic write
+					// premium) so cost tracking can price it at 1.25x.
+					const totalPromptTokens = inputTokens + cacheReadTokens + cacheCreationTokens;
 					controller.enqueue(
 						new TextEncoder().encode(
 							`data: ${JSON.stringify({
 								choices: [],
 								usage: {
-									prompt_tokens: inputTokens,
+									prompt_tokens: totalPromptTokens,
 									completion_tokens: outputTokens,
-									total_tokens: inputTokens + outputTokens,
+									total_tokens: totalPromptTokens + outputTokens,
+									prompt_tokens_details: { cached_tokens: cacheReadTokens },
+									cache_creation_input_tokens: cacheCreationTokens,
 								},
 							})}\n\n`
 						)
@@ -469,11 +521,24 @@ export class AnthropicProvider implements AIProvider {
 					},
 				},
 			],
-			usage: {
-				prompt_tokens: response.usage?.input_tokens ?? 0,
-				completion_tokens: response.usage?.output_tokens ?? 0,
-				total_tokens: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
-			},
+			usage: (() => {
+				// Anthropic's input_tokens EXCLUDES cached tokens. Report the
+				// OpenAI convention: prompt_tokens = total prompt size, cached
+				// subset in prompt_tokens_details, write subset in our extension
+				// field (priced at 1.25x by cost tracking).
+				const usage: any = response.usage ?? {};
+				const cacheRead = usage.cache_read_input_tokens ?? 0;
+				const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+				const promptTokens = (usage.input_tokens ?? 0) + cacheRead + cacheCreation;
+				const completionTokens = usage.output_tokens ?? 0;
+				return {
+					prompt_tokens: promptTokens,
+					completion_tokens: completionTokens,
+					total_tokens: promptTokens + completionTokens,
+					prompt_tokens_details: { cached_tokens: cacheRead },
+					cache_creation_input_tokens: cacheCreation,
+				};
+			})(),
 		};
 	}
 

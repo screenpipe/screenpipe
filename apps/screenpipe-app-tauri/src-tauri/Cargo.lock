@@ -10939,7 +10939,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.32"
+version = "2.5.35"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11071,7 +11071,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11146,7 +11146,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11158,7 +11158,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11197,7 +11197,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11248,7 +11248,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11273,7 +11273,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11338,11 +11338,12 @@ dependencies = [
  "url",
  "uuid",
  "windows 0.58.0",
+ "zbus",
 ]
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11358,7 +11359,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11389,7 +11390,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -11400,7 +11401,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11453,7 +11454,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11473,7 +11474,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "argon2",
  "chacha20poly1305",

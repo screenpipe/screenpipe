@@ -627,7 +627,7 @@ impl PiExecutor {
     }
 
     /// Install the register-artifact extension so pipes can register files
-    /// as artifacts mid-execution via the local /outputs/register API.
+    /// as artifacts mid-execution via the local /artifacts/register API.
     pub fn ensure_register_artifact_extension(project_dir: &Path) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         std::fs::create_dir_all(&ext_dir)?;
@@ -649,7 +649,7 @@ impl PiExecutor {
     }
 
     /// Install the MCP bridge extension. Registers two proxy tools
-    /// (`mcp_list_tools`, `mcp_call`) that the model uses to talk to
+    /// (`sp_mcp_list_tools`, `sp_mcp_call`) that the model uses to talk to
     /// user-registered MCP servers via the local `/mcp-servers/*` API.
     /// Always installed — does nothing harmful when zero servers are
     /// registered (the tools return a helpful "none registered" message).
@@ -714,8 +714,9 @@ impl PiExecutor {
     /// pi's existing config files.
     ///
     /// Unlike the old `write_pi_config`, this preserves any existing providers
-    /// and auth credentials the user set up via `pi /login` or by editing
-    /// `~/.pi/agent/auth.json` directly.
+    /// and auth credentials already present in the config dir (e.g. entries
+    /// seeded from the user's global `~/.pi/agent` on first run, or edits the
+    /// user made to the isolated `pi-config/` files directly).
     ///
     /// When a pipe uses a non-screenpipe provider (e.g. ollama, openai), pass
     /// the resolved `provider`, `model`, and optional `provider_url` so the
@@ -896,7 +897,7 @@ impl PiExecutor {
                     }
 
                     info!(
-                        "pi config: merged provider '{}' (model '{}') into ~/.pi/agent/models.json",
+                        "pi config: merged provider '{}' (model '{}') into pi-config/models.json",
                         pi_provider_name, mdl
                     );
                 }
@@ -1135,6 +1136,9 @@ impl PiExecutor {
     ) -> Result<AgentOutput> {
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
+        apply_pi_isolation_env(&mut |k, v| {
+            cmd.env(k, v);
+        });
         // Flags MUST come before -p on Windows (see spawn_pi_streaming comment)
         if continue_session {
             cmd.arg("--continue");
@@ -1258,6 +1262,9 @@ impl PiExecutor {
     ) -> Result<AgentOutput> {
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
+        apply_pi_isolation_env(&mut |k, v| {
+            cmd.env(k, v);
+        });
         // Flags MUST come before -p on Windows: cmd.exe /C passes everything
         // as a single string, and the long prompt text can break arg parsing
         // if flags come after it.
@@ -1789,9 +1796,231 @@ impl AgentExecutor for PiExecutor {
 // Helpers (extracted from apps/screenpipe-app-tauri/src-tauri/src/pi.rs)
 // ---------------------------------------------------------------------------
 
+/// Screenpipe's private pi agent dir (models.json, auth.json, sessions, …).
+///
+/// Isolated from the user's global `~/.pi/agent` so screenpipe never rewrites
+/// config a standalone pi install owns
+/// (https://github.com/screenpipe/screenpipe/issues/4002) and never loads the user's
+/// global pi packages — whose tools can collide with ours and abort the run —
+/// into pipe/chat runs (https://github.com/screenpipe/screenpipe/issues/3812).
+/// Every pi spawn must pass this dir via the
+/// `PI_CODING_AGENT_DIR` env var (see [`apply_pi_isolation_env`]).
+///
+/// Escape hatch: `SCREENPIPE_PI_AGENT_DIR` overrides the location; setting it
+/// to `~/.pi/agent` restores the old shared-config behavior.
+pub fn pi_config_dir() -> Result<PathBuf> {
+    let dir = match std::env::var("SCREENPIPE_PI_AGENT_DIR") {
+        Ok(v) if !v.trim().is_empty() => {
+            let v = v.trim();
+            if v == "~" || v.starts_with("~/") || v.starts_with("~\\") {
+                let home =
+                    dirs::home_dir().ok_or_else(|| anyhow!("could not find home directory"))?;
+                if v == "~" {
+                    home
+                } else {
+                    home.join(&v[2..])
+                }
+            } else {
+                PathBuf::from(v)
+            }
+        }
+        _ => crate::paths::default_screenpipe_data_dir().join("pi-config"),
+    };
+    seed_pi_config_from_global(&dir);
+    Ok(dir)
+}
+
 fn get_pi_config_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("could not find home directory"))?;
-    Ok(home.join(".pi").join("agent"))
+    pi_config_dir()
+}
+
+/// Set the env vars that scope a pi subprocess to screenpipe's private agent
+/// dir. Applied to every spawn (pipes, chat, title-gen); child processes that
+/// pi itself spawns (e.g. sub-agent runs) inherit them.
+pub fn apply_pi_isolation_env(apply: &mut dyn FnMut(&str, &str)) {
+    if let Ok(dir) = pi_config_dir() {
+        apply("PI_CODING_AGENT_DIR", &dir.to_string_lossy());
+    }
+    // We pin the pi version ourselves (ensure_installed); don't let the
+    // subprocess phone pi.dev for update checks on every run.
+    apply("PI_SKIP_VERSION_CHECK", "1");
+}
+
+/// Marker file recording that the one-time seed from `~/.pi/agent` ran.
+const PI_MIGRATION_MARKER: &str = ".migrated-from-global";
+
+/// One-time seed of the isolated pi dir from the user's global `~/.pi/agent`.
+///
+/// Earlier releases wrote screenpipe's provider/auth into the global config
+/// and stored chat sessions there, and some users deliberately configured
+/// BYOK providers (ollama/openai) there for their pipes. Copy that state once
+/// so the switch to an isolated dir is invisible:
+///
+/// - `models.json` / `auth.json` / `trust.json`: copied verbatim (auth 0600).
+/// - `settings.json`: copied with the `packages` key stripped — globally
+///   installed pi packages are exactly the conflict vector from
+///   https://github.com/screenpipe/screenpipe/issues/3812.
+/// - `sessions/<encoded-cwd>/`: copied only for cwds under the screenpipe
+///   data dir (pi-chat, pi-title, pipes/*) so `--continue` keeps history.
+///
+/// Never deletes or modifies anything under `~/.pi/agent`. Concurrent callers
+/// (parallel pipes, app + CLI) are serialized via an exclusive-create lock;
+/// losers proceed without waiting — `ensure_pi_config` rewrites models.json
+/// and auth.json before every spawn anyway, so a half-seeded dir self-heals.
+fn seed_pi_config_from_global(dest: &Path) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // Fast path: skip the fs checks after the first call in this process.
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(home) = dirs::home_dir() else { return };
+    let global = home.join(".pi").join("agent");
+    let data_dir = crate::paths::default_screenpipe_data_dir();
+    if seed_from_global(&global, dest, &data_dir) {
+        DONE.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Inner seed step (no process-wide statics so it's unit-testable).
+/// Returns `true` when the dest dir is fully seeded (marker present).
+fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
+    let marker = dest.join(PI_MIGRATION_MARKER);
+    if marker.exists() {
+        return true;
+    }
+
+    // Nothing to migrate, or the escape hatch points us *at* the global dir.
+    if !global.exists() || dest == global {
+        let _ = std::fs::create_dir_all(dest);
+        let _ = std::fs::write(&marker, "no global config to seed\n");
+        return true;
+    }
+
+    if std::fs::create_dir_all(dest).is_err() {
+        return false;
+    }
+    // Exclusive-create lock so concurrent first runs seed exactly once.
+    let lock = dest.join(".migration.lock");
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+    {
+        Ok(_) => {}
+        Err(_) => {
+            // A crashed earlier attempt leaves the lock behind with no
+            // marker; reclaim it once it's clearly stale so we don't stay
+            // unseeded forever. Otherwise someone is actively seeding —
+            // proceed without waiting (ensure_pi_config rewrites the files
+            // that matter before every spawn).
+            let stale = std::fs::metadata(&lock)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|age| age.as_secs() > 600)
+                .unwrap_or(false);
+            if !stale {
+                return false;
+            }
+            let _ = std::fs::remove_file(&lock);
+            if std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+                .is_err()
+            {
+                return false;
+            }
+        }
+    }
+
+    info!(
+        "seeding isolated pi config at {:?} from global {:?}",
+        dest, global
+    );
+
+    for name in ["models.json", "auth.json", "trust.json"] {
+        let src = global.join(name);
+        if src.exists() {
+            if let Err(e) = std::fs::copy(&src, dest.join(name)) {
+                warn!("pi config seed: failed to copy {}: {}", name, e);
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let auth = dest.join("auth.json");
+        if auth.exists() {
+            let _ = std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+
+    // settings.json: copy run-affecting settings (thinking level, budgets,
+    // compaction, …) so behavior matches pre-isolation, but drop:
+    // - `packages`: global pi packages are the conflict vector from
+    //   https://github.com/screenpipe/screenpipe/issues/3812;
+    // - `defaultProvider`/`defaultModel`: those are the *user's* personal pi
+    //   defaults. Screenpipe passes --provider/--model on every spawn, so
+    //   they'd never be read — except by a future flagless spawn, which must
+    //   not silently land on the user's BYOK provider. Pin screenpipe's own
+    //   safe fallback instead ("screenpipe"/"auto": the gateway picks a
+    //   model server-side; on a BYOK-only setup it fails loudly rather than
+    //   billing the user's personal key).
+    let settings_src = global.join("settings.json");
+    let mut settings: serde_json::Value = std::fs::read_to_string(&settings_src)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| json!({}));
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("packages");
+        obj.insert("defaultProvider".to_string(), json!("screenpipe"));
+        obj.insert("defaultModel".to_string(), json!("auto"));
+    }
+    match serde_json::to_string_pretty(&settings) {
+        Ok(pretty) => {
+            if let Err(e) = std::fs::write(dest.join("settings.json"), pretty) {
+                warn!("pi config seed: failed to write settings.json: {}", e);
+            }
+        }
+        Err(e) => warn!("pi config seed: failed to serialize settings.json: {}", e),
+    }
+
+    // Sessions for screenpipe-owned cwds. Pi encodes a session dir name as
+    // `--<cwd with leading separator stripped and [/\:] replaced by ->--`
+    // (see pi's session-manager); match dirs whose decoded cwd lives under
+    // the screenpipe data dir.
+    let encoded_data_dir = data_dir
+        .to_string_lossy()
+        .trim_start_matches(['/', '\\'])
+        .replace(['/', '\\', ':'], "-");
+    let sessions_src = global.join("sessions");
+    if let Ok(entries) = std::fs::read_dir(&sessions_src) {
+        let exact = format!("--{}--", encoded_data_dir);
+        let prefix = format!("--{}-", encoded_data_dir);
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !entry.path().is_dir() || !(name == exact || name.starts_with(&prefix)) {
+                continue;
+            }
+            let to = dest.join("sessions").join(&name);
+            if let Err(e) = crate::paths::copy_dir_all(&entry.path(), &to) {
+                warn!("pi config seed: failed to copy sessions {}: {}", name, e);
+            }
+        }
+    }
+
+    if let Err(e) = std::fs::write(
+        &marker,
+        format!("seeded from {}\n", global.to_string_lossy()),
+    ) {
+        warn!("pi config seed: failed to write marker: {}", e);
+        return false;
+    }
+    let _ = std::fs::remove_file(&lock);
+    info!("pi config seed complete at {:?}", dest);
+    true
 }
 
 fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<()> {
@@ -2699,6 +2928,123 @@ mod tests {
             "invalid bytes should become replacement chars"
         );
         assert_eq!(lines[1], "OK");
+    }
+
+    /// First-run seed copies config + screenpipe-owned sessions from the
+    /// global `~/.pi/agent`, strips `packages` from settings.json, and never
+    /// touches the global dir. A second call is a no-op via the marker.
+    #[test]
+    fn seed_from_global_copies_config_and_screenpipe_sessions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("global");
+        let dest = tmp.path().join("isolated");
+        let data_dir = tmp.path().join("home").join(".screenpipe");
+
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(
+            global.join("models.json"),
+            r#"{"providers":{"ollama":{"baseUrl":"http://homelab:11434/v1"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(global.join("auth.json"), r#"{"screenpipe":"tok"}"#).unwrap();
+        std::fs::write(
+            global.join("settings.json"),
+            // The user's personal pi defaults must NOT leak into screenpipe's
+            // config; run-affecting settings (theme, thinking, …) must.
+            r#"{"theme":"dark","packages":["npm:pi-web-access"],"defaultProvider":"anthropic","defaultModel":"claude-opus-4-8"}"#,
+        )
+        .unwrap();
+
+        // Session dirs: one for a screenpipe cwd (copied), one for an
+        // unrelated project (left behind). Encoding mirrors pi's
+        // session-manager: leading separator stripped, [/\:] → '-'.
+        let encoded = data_dir
+            .to_string_lossy()
+            .trim_start_matches(['/', '\\'])
+            .replace(['/', '\\', ':'], "-");
+        let ours = global
+            .join("sessions")
+            .join(format!("--{}-pi-chat--", encoded));
+        let theirs = global.join("sessions").join("--Users-x-other-project--");
+        std::fs::create_dir_all(&ours).unwrap();
+        std::fs::write(ours.join("s1.jsonl"), "{}").unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(theirs.join("s2.jsonl"), "{}").unwrap();
+
+        assert!(seed_from_global(&global, &dest, &data_dir));
+
+        // Config copied; settings stripped of `packages`.
+        let models = std::fs::read_to_string(dest.join("models.json")).unwrap();
+        assert!(models.contains("homelab"));
+        assert!(dest.join("auth.json").exists());
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dest.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(settings["theme"], "dark");
+        assert!(settings.get("packages").is_none());
+        // Personal defaults replaced by screenpipe's safe fallback: a future
+        // flagless spawn must never silently run on the user's BYOK provider.
+        assert_eq!(settings["defaultProvider"], "screenpipe");
+        assert_eq!(settings["defaultModel"], "auto");
+
+        // Only the screenpipe-owned session dir came over.
+        assert!(dest
+            .join("sessions")
+            .join(format!("--{}-pi-chat--", encoded))
+            .join("s1.jsonl")
+            .exists());
+        assert!(!dest
+            .join("sessions")
+            .join("--Users-x-other-project--")
+            .exists());
+
+        // Marker written; global untouched; rerun is a no-op even if the
+        // global gains new files afterwards.
+        assert!(dest.join(PI_MIGRATION_MARKER).exists());
+        assert!(global.join("settings.json").exists());
+        std::fs::write(global.join("trust.json"), "{}").unwrap();
+        assert!(seed_from_global(&global, &dest, &data_dir));
+        assert!(!dest.join("trust.json").exists());
+    }
+
+    /// No global pi install: the dest dir is created and marked seeded
+    /// without copying anything (fresh-user path). Pointing the escape
+    /// hatch at the global dir itself must never self-copy.
+    #[test]
+    fn seed_from_global_handles_missing_global_and_self_target() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("no-such-global");
+        let dest = tmp.path().join("isolated");
+        let data_dir = tmp.path().join(".screenpipe");
+
+        assert!(seed_from_global(&global, &dest, &data_dir));
+        assert!(dest.join(PI_MIGRATION_MARKER).exists());
+
+        // dest == global (SCREENPIPE_PI_AGENT_DIR=~/.pi/agent escape hatch):
+        // marked seeded, nothing else happens.
+        let shared = tmp.path().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("models.json"), "{}").unwrap();
+        assert!(seed_from_global(&shared, &shared, &data_dir));
+        assert!(shared.join(PI_MIGRATION_MARKER).exists());
+    }
+
+    /// A fresh (non-stale) lock from a concurrent seeder makes the call
+    /// back off without seeding; the marker stays absent so a later call
+    /// retries.
+    #[test]
+    fn seed_from_global_backs_off_on_active_lock() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global = tmp.path().join("global");
+        let dest = tmp.path().join("isolated");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("models.json"), "{}").unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join(".migration.lock"), "").unwrap();
+
+        assert!(!seed_from_global(&global, &dest, tmp.path()));
+        assert!(!dest.join("models.json").exists());
+        assert!(!dest.join(PI_MIGRATION_MARKER).exists());
     }
 
     #[test]
