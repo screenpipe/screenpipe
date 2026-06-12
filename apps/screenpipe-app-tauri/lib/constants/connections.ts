@@ -141,3 +141,140 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   "apple-intelligence": "System",
   "voice-memos": "System",
 };
+
+export interface ConnectionSuggestionTile {
+  id: string;
+  name: string;
+  icon?: string;
+  connected: boolean;
+  detected?: boolean;
+  category?: string;
+  description?: string;
+}
+
+export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
+  "claude": "Search your screen & audio from Claude Desktop via MCP",
+  "cursor": "Give Cursor AI access to your screen history via MCP",
+  "codex": "Give Codex access to your screen & audio via MCP",
+  "claude-code": "Add screen memory to the Claude Code CLI",
+  "warp": "Search screen history from Warp terminal via MCP",
+  "chatgpt": "Search your screen history from ChatGPT",
+  "browser-url": "Capture visited URLs from your browser in real time",
+  "voice-memos": "Sync Apple Voice Memos for AI-powered search",
+  "apple-intelligence": "Connect Apple Intelligence writing tools",
+  "input-monitoring": "Track keyboard & mouse for productivity insights",
+  "apple-calendar": "Search Apple Calendar events with AI",
+  "google-calendar": "Search Google Calendar events with AI",
+  "google-docs": "Read and search your Google Docs",
+  "google-sheets": "Read and search your Google Sheets",
+  "gmail": "Read and search your Gmail inbox",
+  "ics-calendar": "Subscribe to any ICS calendar feed",
+  "openclaw": "Browse the web with OpenClaw agents",
+  "hermes": "AI-powered messaging assistant",
+  "whatsapp": "Search your WhatsApp conversations",
+  "anythingllm": "Give AnythingLLM access to your screen",
+  "ollama": "Connect local Ollama models to screenpipe",
+  "lmstudio": "Connect LM Studio models to screenpipe",
+  "msty": "Connect Msty models to screenpipe",
+  "obsidian": "Sync screen memory to your Obsidian vault",
+  "notion": "Search Notion pages with your screen context",
+  "linear": "Search Linear issues from your screen context",
+  "perplexity": "Search the web with Perplexity AI",
+  "krisp": "Search Krisp meeting transcripts and notes",
+  "plaud": "Search Plaud recordings and transcripts",
+  "excalidraw": "Search and edit your Excalidraw+ whiteboards",
+  "custom-mcp": "Connect any MCP-compatible server",
+  "skills": "Import Claude Code skills for AI automations",
+};
+
+// High-activation defaults fill the suggested row when there are not enough
+// detected or already-connected apps on the device.
+export const FEATURED_CONNECTION_IDS = [
+  "custom-mcp",
+  "claude",
+  "cursor",
+  "codex",
+  "claude-code",
+  "chatgpt",
+  "slack",
+  "obsidian",
+  "notion",
+];
+
+export const DEVICE_CONNECTION_ORDER = [
+  "custom-mcp",
+  "claude",
+  "cursor",
+  "codex",
+  "claude-code",
+  "chatgpt",
+  "browser-url",
+  "input-monitoring",
+  "obsidian",
+  "notion",
+  "linear",
+  "slack",
+  "gmail",
+  "apple-calendar",
+  "google-calendar",
+  "google-docs",
+  "google-sheets",
+  "warp",
+  "ollama",
+  "lmstudio",
+  "msty",
+  "krisp",
+  "whatsapp",
+];
+
+export function normalizeConnectionCategory(category: string | null | undefined): string {
+  const value = (category || "Other").trim();
+  if (!value) return "Other";
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    // Preserve all-caps acronyms (AI, CRM) instead of mangling them to "Ai"/"Crm".
+    .map((part) =>
+      /^[A-Z0-9]{2,}$/.test(part)
+        ? part
+        : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()
+    )
+    .join(" ");
+}
+
+function connectionPriority(tile: ConnectionSuggestionTile): number {
+  if (tile.connected) return 0;
+  if (tile.detected) return 1;
+  if (FEATURED_CONNECTION_IDS.includes(tile.id)) return 2;
+  return 3;
+}
+
+function connectionOrder(tile: ConnectionSuggestionTile): number {
+  const index = DEVICE_CONNECTION_ORDER.indexOf(tile.id);
+  return index === -1 ? DEVICE_CONNECTION_ORDER.length : index;
+}
+
+export function compareConnectionTiles(
+  a: ConnectionSuggestionTile,
+  b: ConnectionSuggestionTile,
+): number {
+  const priority = connectionPriority(a) - connectionPriority(b);
+  if (priority !== 0) return priority;
+  const order = connectionOrder(a) - connectionOrder(b);
+  if (order !== 0) return order;
+  return a.name.localeCompare(b.name);
+}
+
+export function isSuggestedForThisDevice(tile: ConnectionSuggestionTile): boolean {
+  return tile.connected || !!tile.detected || FEATURED_CONNECTION_IDS.includes(tile.id);
+}
+
+export function getSuggestedConnectionsForDevice<T extends ConnectionSuggestionTile>(
+  tiles: T[],
+  limit = 8,
+): T[] {
+  return [...tiles]
+    .filter(isSuggestedForThisDevice)
+    .sort(compareConnectionTiles)
+    .slice(0, limit);
+}

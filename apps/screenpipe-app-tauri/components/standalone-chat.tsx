@@ -67,6 +67,7 @@ import { buildChipModelContent, buildChipDisplayContent, parseConnectionChip } f
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
@@ -119,6 +120,12 @@ import {
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
 import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
+import {
+  CONNECTION_CATEGORY_BY_ID,
+  CONNECTION_HARDCODED_DESCRIPTIONS,
+  getSuggestedConnectionsForDevice,
+  normalizeConnectionCategory,
+} from "@/lib/constants/connections";
 import {
   computeChatCitationPlan,
   formatSourceCitationsMarkdown,
@@ -2504,6 +2511,7 @@ export function StandaloneChat({
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
+  const hardcodedConnectionTiles = useHardcodedTiles();
   // Drop the macOS traffic-light reservation when the window is fullscreen
   // (the buttons hide). Only relevant in standalone mode (no parent
   // className) — the embedded variant is below the host's chrome anyway.
@@ -2526,6 +2534,30 @@ export function StandaloneChat({
     () => buildConnectionSetupSuggestions(allConnectionItems, appItems),
     [allConnectionItems, appItems]
   );
+  const suggestedConnectionTiles = React.useMemo(() => {
+    const apiById = new Map(allConnectionItems.map((connection) => [connection.id, connection]));
+    const hardcodedIds = new Set(hardcodedConnectionTiles.map((connection) => connection.id));
+    const hardcodedTiles = hardcodedConnectionTiles.map((connection) => {
+      const apiConnection = apiById.get(connection.id);
+      return {
+        ...connection,
+        icon: connection.icon || apiConnection?.icon || connection.id,
+        connected: apiConnection?.connected ?? connection.connected,
+        category: CONNECTION_CATEGORY_BY_ID[connection.id] ?? normalizeConnectionCategory(apiConnection?.category),
+        description: apiConnection?.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[connection.id],
+      };
+    });
+    const apiTiles = allConnectionItems
+      .filter((connection) => !hardcodedIds.has(connection.id) && connection.id !== "owned-default")
+      .map((connection) => ({
+        ...connection,
+        icon: connection.icon || connection.id,
+        category: CONNECTION_CATEGORY_BY_ID[connection.id] ?? normalizeConnectionCategory(connection.category),
+        description: connection.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[connection.id],
+      }));
+
+    return getSuggestedConnectionsForDevice([...hardcodedTiles, ...apiTiles], 8);
+  }, [allConnectionItems, hardcodedConnectionTiles]);
   const refreshConnectionState = React.useCallback(async () => {
     if (isPlatformLoading) return;
     try {
@@ -9582,9 +9614,7 @@ export function StandaloneChat({
                 Connect your apps to get better answers
               </button>
               <div className="flex items-center gap-1">
-                {connections
-                  .filter((c) => INTEGRATION_ICON_KEYS.has(c.icon || c.id))
-                  .slice(0, 8)
+                {suggestedConnectionTiles
                   .map((c) => (
                     <button
                       key={c.id}
