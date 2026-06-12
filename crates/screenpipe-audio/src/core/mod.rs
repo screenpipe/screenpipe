@@ -59,6 +59,23 @@ pub fn get_device_capture_time(device_name: &str) -> u64 {
         .unwrap_or_else(|| LAST_AUDIO_CAPTURE.load(Ordering::Relaxed))
 }
 
+/// True when the system's current default output device is being driven by some
+/// process right now (i.e. audio is actually playing). macOS-only signal via
+/// `kAudioDevicePropertyDeviceIsRunningSomewhere`; returns `false` on other
+/// platforms and on any CoreAudio error (fail-safe).
+///
+/// Used by the health endpoint to tell legitimate idle silence (nothing playing)
+/// apart from a genuine capture stall (audio playing but nothing captured).
+#[cfg(target_os = "macos")]
+pub fn default_output_is_running() -> bool {
+    process_tap::default_output_running_somewhere()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn default_output_is_running() -> bool {
+    false
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod e2e_ghost_word_silent_room;
 

@@ -489,7 +489,7 @@ const REBUILD_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60)
 /// Any error reading the property yields `false` (fail-safe: prefer a missed
 /// rebuild over an infinite rebuild loop — the device-switch and exclusion-
 /// drift paths still handle real reconfiguration).
-fn default_output_running_somewhere() -> bool {
+pub(crate) fn default_output_running_somewhere() -> bool {
     ca::System::default_output_device()
         .and_then(|d| d.bool_prop(&ca::PropSelector::DEVICE_IS_RUNNING_SOMEWHERE.global_addr()))
         .unwrap_or(false)
