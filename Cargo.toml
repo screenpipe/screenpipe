@@ -98,7 +98,12 @@ ort = { version = "=2.0.0-rc.10", default-features = false }
 # Platform
 dirs = "6"
 which = "7"
-zbus = { version = "5.5", default-features = false, features = ["blocking"] }
+# zbus 5.x has no `blocking` feature — the blocking API lives behind `blocking-api`
+# (the module) plus a runtime (`async-io`). These are in zbus's default set; #3815 set
+# `default-features = false` and listed `blocking` (the optional crate dep, not the API),
+# which only compiled on Linux because atspi backfilled `tokio`. macOS has no atspi, so
+# the blocking API failed under `--all-targets` (G-1008). Name the real features here.
+zbus = { version = "5.5", default-features = false, features = ["blocking-api", "async-io"] }
 windows = "0.58"
 xcap = "0.9"
 keyring = "3"
