@@ -5074,9 +5074,7 @@ mod tests {
         pm.reload_pipes().await.unwrap();
 
         let declarations = pm.list_artifact_declarations(50).await;
-        let pipe_decls = declarations
-            .iter()
-            .find(|(name, _)| name == pipe_name);
+        let pipe_decls = declarations.iter().find(|(name, _)| name == pipe_name);
 
         let pipe_decls = pipe_decls.expect("pipe should appear in declarations");
         let mut names: Vec<String> = pipe_decls
