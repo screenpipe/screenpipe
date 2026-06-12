@@ -97,7 +97,7 @@ export default function (pi: ExtensionAPI) {
       if (authKey) headers["Authorization"] = `Bearer ${authKey}`;
 
       try {
-        const res = await fetch(`${apiBase}/outputs/register`, {
+        const res = await fetch(`${apiBase}/artifacts/register`, {
           method: "POST",
           headers,
           body: JSON.stringify({

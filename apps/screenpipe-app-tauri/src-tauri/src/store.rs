@@ -1862,6 +1862,32 @@ mod tests {
     }
 
     #[test]
+    fn keep_computer_awake_defaults_to_disabled() {
+        assert!(!SettingsStore::default().recording.keep_computer_awake);
+    }
+
+    #[test]
+    fn missing_keep_computer_awake_deserializes_disabled() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+
+        assert!(!settings.recording.keep_computer_awake);
+    }
+
+    #[test]
+    fn explicit_keep_computer_awake_true_is_respected() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "keepComputerAwake": true
+        }))
+        .unwrap();
+
+        assert!(settings.recording.keep_computer_awake);
+    }
+
+    #[test]
     fn screenpipe_cloud_falls_back_when_not_logged_in() {
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();

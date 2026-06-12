@@ -64,6 +64,7 @@ import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
+import { NotificationBell } from "@/components/notification-bell";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 // --- Types ---
@@ -374,6 +375,12 @@ export function PipeStoreView() {
             {label}
           </button>
         ))}
+        {/* Notifications are pipe output, so the bell lives here rather
+            than in the global window chrome. mb-3 cancels the tabs'
+            pb-3 so the bell centers on the tab labels, not the row. */}
+        <div className="ml-auto mb-3">
+          <NotificationBell />
+        </div>
       </div>
 
       {/* Tab content */}

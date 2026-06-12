@@ -226,6 +226,7 @@ describe("source citations", () => {
     expect(citations[0].title).toBe("Local file: standalone-chat.tsx");
   });
 
+  // legacy name from sessions recorded before the sp_ rename
   it("extracts web links from web_search results and dedupes duplicates", () => {
     const citations = sourceCitationsFromMessage({
       contentBlocks: [
@@ -250,13 +251,13 @@ describe("source citations", () => {
     });
   });
 
-  it("uses structured web_search sources when available", () => {
+  it("uses structured sp_web_search sources when available", () => {
     const citations = sourceCitationsFromMessage({
       contentBlocks: [
         {
           type: "tool",
           toolCall: {
-            toolName: "web_search",
+            toolName: "sp_web_search",
             args: { query: "screenpipe docs" },
             result: {
               content: [{ type: "text", text: "See the docs." }],

@@ -9,7 +9,9 @@ import { captureException } from '@sentry/cloudflare';
 
 // Auto model waterfall — open-weight Vertex MaaS picks ordered by quality
 // (free for users, low GCP burn) with a cheap Gemini safety net at the tail.
-const AUTO_WATERFALL = [
+// Exported so tests can pin that every chain entry has a MODEL_PRICING match
+// (otherwise served-model cost rows fall into the unknown-model estimate).
+export const AUTO_WATERFALL = [
   'glm-5',            // closest Vertex match to gemini-3.5-flash (AA index 50 vs 55) at ~1/3 the output cost
   'kimi-k2.5',
   'deepseek-v3.2',
@@ -18,7 +20,7 @@ const AUTO_WATERFALL = [
 ];
 
 // Vision-capable models for requests containing images
-const AUTO_WATERFALL_VISION = [
+export const AUTO_WATERFALL_VISION = [
   'gemini-3.5-flash', // multimodal, leads on agent/vision benchmarks
   'llama-4-maverick', // free (Vertex MaaS), 400B MoE, strong vision + reasoning
   'gemini-3-flash',   // near-free, good vision
@@ -34,7 +36,7 @@ const AUTO_WATERFALL_VISION = [
 // Why this matters: Sentry shows ~4.7k 524 events/day on kimi-k2.5 alone
 // when users pick it explicitly. Without per-model cascade those all
 // failed user-visible. With cascade most recover transparently.
-const MODEL_FALLBACKS: Record<string, string[]> = {
+export const MODEL_FALLBACKS: Record<string, string[]> = {
   // Vertex MaaS text models
   'kimi-k2.5': ['deepseek-v3.2', 'glm-4.7', 'gemini-3-flash'],
   'glm-5': ['glm-4.7', 'deepseek-v3.2', 'gemini-3-flash'],

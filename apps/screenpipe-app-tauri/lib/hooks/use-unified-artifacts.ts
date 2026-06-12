@@ -118,7 +118,7 @@ export function useUnifiedArtifacts(
   }, [fetchArtifacts]);
 
   const deleteRegistered = useCallback(async (id: number) => {
-    const res = await localFetch(`/outputs/${id}`, { method: "DELETE" });
+    const res = await localFetch(`/artifacts/${id}`, { method: "DELETE" });
     if (!res.ok) {
       throw new Error(`DELETE failed: HTTP ${res.status}`);
     }

@@ -8,12 +8,14 @@ import { join, homeDir } from "@tauri-apps/api/path";
 import { platform } from "@tauri-apps/plugin-os";
 import { commands } from "@/lib/utils/tauri";
 import { getStore } from "@/lib/hooks/use-settings";
+import { localFetch } from "@/lib/api";
 
 export interface HardcodedTile {
   id: string;
   name: string;
   icon: string;
   connected: boolean;
+  detected?: boolean;
 }
 
 export async function getClaudeConfigPath(): Promise<string | null> {
@@ -81,6 +83,9 @@ export function useHardcodedTiles(): HardcodedTile[] {
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [codexInstalled, setCodexInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
+  const [customMcpConnected, setCustomMcpConnected] = useState(false);
+  const [customMcpDetected, setCustomMcpDetected] = useState(false);
+  const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [calendarConnected, setCalendarConnected] = useState(false);
 
   useEffect(() => {
@@ -95,6 +100,29 @@ export function useHardcodedTiles(): HardcodedTile[] {
       .then(res => setChatgptConnected(res.status === "ok" && res.data.logged_in))
       .catch(() => {});
 
+    localFetch("/mcp-servers")
+      .then(async (res) => {
+        if (!res.ok) {
+          setCustomMcpConnected(false);
+          setCustomMcpDetected(false);
+          return;
+        }
+        const body = await res.json();
+        const list = (body?.data ?? []) as { enabled: boolean }[];
+        setCustomMcpDetected(list.length > 0);
+        setCustomMcpConnected(list.some((server) => server.enabled));
+      })
+      .catch(() => {
+        setCustomMcpConnected(false);
+        setCustomMcpDetected(false);
+      });
+
+    if (typeof window !== "undefined" && platform() === "macos") {
+      commands.checkInputMonitoringPermissionCmd()
+        .then(r => setInputMonitoringGranted(r === "granted"))
+        .catch(() => setInputMonitoringGranted(false));
+    }
+
     getStore()
       .then(store => store.get<boolean>("calendarUserDisconnected"))
       .then(val => setCalendarConnected(!(val ?? false)))
@@ -108,11 +136,13 @@ export function useHardcodedTiles(): HardcodedTile[] {
     { id: "claude-code", name: "Claude Code", icon: "claude-code", connected: false },
     { id: "warp", name: "Warp", icon: "warp", connected: false },
     { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected },
+    { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: customMcpConnected, detected: customMcpDetected },
     ...(os === "macos" ? [
       { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: false },
       { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
     ] as HardcodedTile[] : []),
     ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false } as HardcodedTile] : []),
+    ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted } as HardcodedTile] : []),
     ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: calendarConnected } as HardcodedTile] : []),
   ];
 }

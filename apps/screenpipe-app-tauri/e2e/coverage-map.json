@@ -553,14 +553,14 @@
       "notes": "Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism)."
     },
     {
-      "spec": "outputs-api.spec.ts",
+      "spec": "artifacts-api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api"],
-      "features": ["local-api-auth", "outputs"],
+      "features": ["local-api-auth", "artifacts"],
       "criticality": "medium",
       "confidence": "strong",
       "ux": "api",
-      "notes": "CRUD coverage for output registration, validation, listing, fetch, upsert, and delete."
+      "notes": "CRUD coverage for artifact registration, validation, unified listing, upsert, and delete."
     },
     {
       "spec": "brain-section.spec.ts",

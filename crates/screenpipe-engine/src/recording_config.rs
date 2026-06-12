@@ -138,6 +138,9 @@ pub struct RecordingConfig {
     /// Restored from settings on startup so the user's choice survives app restarts.
     pub power_mode: Option<String>,
 
+    /// Keep the computer awake while screenpipe is running.
+    pub keep_computer_awake: bool,
+
     /// Database configuration (pool sizes, mmap, cache) derived from device tier.
     pub db_config: DbConfig,
 
@@ -319,6 +322,7 @@ impl RecordingConfig {
                 .collect(),
             batch_max_duration_secs: settings.batch_max_duration_secs.filter(|&v| v > 0),
             power_mode: settings.power_mode.clone(),
+            keep_computer_awake: settings.keep_computer_awake,
             db_config: settings
                 .device_tier
                 .as_deref()

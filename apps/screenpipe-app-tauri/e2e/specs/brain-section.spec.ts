@@ -182,7 +182,7 @@ describe("Brain section", function () {
     tempArtifactPath = join(tempDir, "test-artifact.md");
     writeFileSync(tempArtifactPath, ARTIFACT_CONTENT);
 
-    const outRes = await fetchJson(`${apiBase}/outputs/register`, {
+    const outRes = await fetchJson(`${apiBase}/artifacts/register`, {
       method: "POST",
       headers: hdrs,
       body: JSON.stringify({
@@ -211,7 +211,7 @@ describe("Brain section", function () {
     this.timeout(t(15_000));
     // Delete seeded data by known IDs
     if (seededOutputId != null) {
-      await fetchJson(`${apiBase}/outputs/${seededOutputId}`, {
+      await fetchJson(`${apiBase}/artifacts/${seededOutputId}`, {
         method: "DELETE",
         headers: hdrs,
       }).catch(() => {});
@@ -236,15 +236,16 @@ describe("Brain section", function () {
         }).catch(() => {});
       }
     } catch {}
-    // Cleanup test outputs
+    // Cleanup test artifacts
     try {
       const outs = await fetchJson(
-        `${apiBase}/outputs?source=${TEST_SOURCE}`,
+        `${apiBase}/artifacts?source=${TEST_SOURCE}`,
         { headers: hdrs },
       );
       const items = (outs.body as any)?.data ?? [];
       for (const o of items) {
-        await fetchJson(`${apiBase}/outputs/${o.id}`, {
+        if (!o.registered || o.id == null) continue;
+        await fetchJson(`${apiBase}/artifacts/${o.id}`, {
           method: "DELETE",
           headers: hdrs,
         }).catch(() => {});
@@ -336,7 +337,7 @@ describe("Brain section", function () {
     const deletePath = join(tempDir, "delete-test-artifact.md");
     writeFileSync(deletePath, "# Deletable artifact\nfor toast test");
 
-    const regRes = await fetchJson(`${apiBase}/outputs/register`, {
+    const regRes = await fetchJson(`${apiBase}/artifacts/register`, {
       method: "POST",
       headers: hdrs,
       body: JSON.stringify({
@@ -571,7 +572,7 @@ describe("Brain section", function () {
     const tempDir = join(E2E_DATA_DIR, "brain-test");
     const prunePath = join(tempDir, "prune-test-artifact.md");
     writeFileSync(prunePath, "# Prune test artifact");
-    const outB = await fetchJson(`${apiBase}/outputs/register`, {
+    const outB = await fetchJson(`${apiBase}/artifacts/register`, {
       method: "POST",
       headers: hdrs,
       body: JSON.stringify({

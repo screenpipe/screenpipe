@@ -298,13 +298,14 @@ pub async fn process_audio_input(
     };
 
     let is_output_device = audio.device.device_type == crate::core::device::DeviceType::Output;
+    let device_name = audio.device.to_string();
     let (mut segments, speech_ratio_ok, speech_ratio) = prepare_segments(
         &audio_data,
         vad_engine,
         segmentation_model_path.as_ref(),
         embedding_manager,
         embedding_extractor,
-        &audio.device.to_string(),
+        &device_name,
         is_output_device,
         filter_music,
     )
@@ -323,8 +324,7 @@ pub async fn process_audio_input(
         path
     } else {
         let capture_dt = chrono::DateTime::from_timestamp(timestamp as i64, 0);
-        let new_file_path =
-            get_new_file_path_with_timestamp(&audio.device.to_string(), output_path, capture_dt);
+        let new_file_path = get_new_file_path_with_timestamp(&device_name, output_path, capture_dt);
         if let Err(e) = write_audio_to_file(
             &audio.data.to_vec(),
             audio.sample_rate,
@@ -338,8 +338,15 @@ pub async fn process_audio_input(
 
     while let Some(segment) = segments.recv().await {
         let path = file_path.clone();
-        let transcription_result =
-            run_stt(segment, audio.device.clone(), path, timestamp, session).await?;
+        let transcription_result = run_stt(
+            segment,
+            audio.device.clone(),
+            &device_name,
+            path,
+            timestamp,
+            session,
+        )
+        .await?;
 
         if output_sender.send(transcription_result).is_err() {
             break;
@@ -352,6 +359,7 @@ pub async fn process_audio_input(
 pub async fn run_stt(
     segment: SpeechSegment,
     device: Arc<AudioDevice>,
+    device_name: &str,
     path: String,
     timestamp: u64,
     session: &mut TranscriptionSession,
@@ -359,7 +367,7 @@ pub async fn run_stt(
     let audio = segment.samples.clone();
     let sample_rate = segment.sample_rate;
     match session
-        .transcribe_detailed(&audio, sample_rate, &device.to_string())
+        .transcribe_detailed(&audio, sample_rate, device_name)
         .await
     {
         Ok(output) => {

@@ -1728,7 +1728,8 @@ pub async fn set_window_always_on_top_native(
                 if let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw() {
                     use objc::{msg_send, sel, sel_impl};
                     let ns_view = appkit_handle.ns_view.as_ptr() as *mut objc::runtime::Object;
-                    let ns_window: *mut objc::runtime::Object = unsafe { msg_send![ns_view, window] };
+                    let ns_window: *mut objc::runtime::Object =
+                        unsafe { msg_send![ns_view, window] };
                     if !ns_window.is_null() {
                         // NSNormalWindowLevel = 0. NSFloatingWindowLevel = 3.
                         // Floating keeps recovery/onboarding above normal app
@@ -2215,7 +2216,10 @@ fn shortcut_reminder_label(
     setting_key: &str,
     disabled_shortcuts: &[String],
 ) -> String {
-    if disabled_shortcuts.iter().any(|disabled| disabled == setting_key) {
+    if disabled_shortcuts
+        .iter()
+        .any(|disabled| disabled == setting_key)
+    {
         String::new()
     } else if value.trim().is_empty() {
         String::new()
@@ -3298,7 +3302,6 @@ pub struct CacheFile {
 #[specta::specta]
 pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let home_dir = dirs::home_dir().ok_or("no home directory")?;
     let mut files = Vec::new();
 
     // Pi agent node_modules (~/.screenpipe/pi-agent/)
@@ -3312,13 +3315,16 @@ pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
         });
     }
 
-    // Pi config (~/.pi/agent/)
-    let pi_config = home_dir.join(".pi").join("agent");
+    // Pi config (~/.screenpipe/pi-config/). Never list the user's global
+    // ~/.pi/agent here — that belongs to their standalone pi install and
+    // offering to delete it risked destroying the user's own setup
+    // (https://github.com/screenpipe/screenpipe/issues/4002).
+    let pi_config = data_dir.join("pi-config");
     if pi_config.exists() {
         let size = dir_size(&pi_config);
         files.push(CacheFile {
             path: pi_config.to_string_lossy().to_string(),
-            label: "AI agent config (.pi/agent)".to_string(),
+            label: "AI agent config (pi-config)".to_string(),
             size_bytes: size,
         });
     }

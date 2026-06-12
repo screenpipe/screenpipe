@@ -1995,7 +1995,7 @@ pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
 
     let base = format!("http://localhost:{}/mcp-servers", api_port);
     let mut out = String::from(
-        "\nUser-registered MCP servers — invoke their tools via the `mcp_call` and `mcp_list_tools` bridge tools.\n\
+        "\nUser-registered MCP servers — invoke their tools via the `sp_mcp_call` and `sp_mcp_list_tools` bridge tools.\n\
          These are HTTP MCP endpoints registered by the user; the bridge handles auth.\n",
     );
     for cfg in enabled {

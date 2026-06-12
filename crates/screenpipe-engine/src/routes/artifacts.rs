@@ -18,15 +18,23 @@ use tokio::io::AsyncReadExt;
 use super::content::PaginationInfo;
 use crate::server::AppState;
 
+// Artifacts API: registration, unified listing, and deletion of AI-produced
+// deliverables. The backing SQLite table keeps its historical `outputs` name
+// (see screenpipe-db OutputRecord); everything HTTP-facing says "artifacts".
+
 const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 const PREVIEW_BYTES: usize = 256;
+
+/// Fallback discovery cap: pipes without explicit `artifacts:` declarations
+/// contribute at most this many files (newest by mtime) to listings.
+pub const ARTIFACT_FALLBACK_CAP: usize = 50;
 
 // ---------------------------------------------------------------------------
 // Request / response types
 // ---------------------------------------------------------------------------
 
 #[derive(OaSchema, Deserialize)]
-pub(crate) struct RegisterOutputRequest {
+pub(crate) struct RegisterArtifactRequest {
     pub source: String,
     #[serde(default = "default_source_type")]
     pub source_type: String,
@@ -46,7 +54,7 @@ fn default_kind() -> String {
 }
 
 #[derive(OaSchema, Serialize)]
-pub(crate) struct OutputResponse {
+pub(crate) struct RegisterArtifactResponse {
     pub id: i64,
     pub source: String,
     pub source_type: String,
@@ -61,33 +69,12 @@ pub(crate) struct OutputResponse {
     pub updated_at: String,
 }
 
-#[derive(OaSchema, Deserialize)]
-pub(crate) struct ListOutputsQuery {
-    pub source: Option<String>,
-    pub source_type: Option<String>,
-    pub kind: Option<String>,
-    #[serde(default = "default_limit")]
-    pub limit: u32,
-    #[serde(default)]
-    pub offset: u32,
-}
-
-fn default_limit() -> u32 {
-    50
-}
-
-#[derive(OaSchema, Serialize)]
-pub(crate) struct OutputListResponse {
-    pub data: Vec<OutputResponse>,
-    pub pagination: PaginationInfo,
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn record_to_response(r: OutputRecord) -> OutputResponse {
-    OutputResponse {
+fn record_to_response(r: OutputRecord) -> RegisterArtifactResponse {
+    RegisterArtifactResponse {
         id: r.id,
         source: r.source,
         source_type: r.source_type,
@@ -158,11 +145,14 @@ async fn read_preview(path: &std::path::Path, kind: &str) -> Option<String> {
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// POST /artifacts/register — copy a file into the canonical outputs dir
+/// and upsert its registration row. Called by the chat `save_artifact`
+/// and pipe `register_artifact` agent tools.
 #[oasgen]
-pub(crate) async fn register_output_handler(
+pub(crate) async fn register_artifact_handler(
     State(state): State<Arc<AppState>>,
-    JsonResponse(payload): JsonResponse<RegisterOutputRequest>,
-) -> Result<JsonResponse<OutputResponse>, (StatusCode, JsonResponse<Value>)> {
+    JsonResponse(payload): JsonResponse<RegisterArtifactRequest>,
+) -> Result<JsonResponse<RegisterArtifactResponse>, (StatusCode, JsonResponse<Value>)> {
     // Validate
     if payload.source.trim().is_empty() {
         return Err((
@@ -303,74 +293,11 @@ pub(crate) async fn register_output_handler(
     Ok(JsonResponse(record_to_response(record)))
 }
 
+/// DELETE /artifacts/:id — remove a registered artifact row and its copied
+/// file under `~/.screenpipe/outputs/`. Filesystem-derived pipe artifacts
+/// have no row and cannot be deleted here.
 #[oasgen]
-pub(crate) async fn list_outputs_handler(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<ListOutputsQuery>,
-) -> Result<JsonResponse<OutputListResponse>, (StatusCode, JsonResponse<Value>)> {
-    let (outputs, total) = tokio::join!(
-        state.db.list_outputs(
-            query.source.as_deref(),
-            query.source_type.as_deref(),
-            query.kind.as_deref(),
-            query.limit,
-            query.offset,
-        ),
-        state.db.count_outputs(
-            query.source.as_deref(),
-            query.source_type.as_deref(),
-            query.kind.as_deref(),
-        ),
-    );
-
-    let outputs = outputs.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            JsonResponse(json!({"error": e.to_string()})),
-        )
-    })?;
-    let total = total.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            JsonResponse(json!({"error": e.to_string()})),
-        )
-    })?;
-
-    Ok(JsonResponse(OutputListResponse {
-        data: outputs.into_iter().map(record_to_response).collect(),
-        pagination: PaginationInfo {
-            limit: query.limit,
-            offset: query.offset,
-            total,
-        },
-    }))
-}
-
-#[oasgen]
-pub(crate) async fn get_output_handler(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Result<JsonResponse<OutputResponse>, (StatusCode, JsonResponse<Value>)> {
-    let record = match state.db.get_output_by_id(id).await {
-        Ok(r) => r,
-        Err(sqlx::Error::RowNotFound) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                JsonResponse(json!({"error": "output not found"})),
-            ));
-        }
-        Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": e.to_string()})),
-            ));
-        }
-    };
-    Ok(JsonResponse(record_to_response(record)))
-}
-
-#[oasgen]
-pub(crate) async fn delete_output_handler(
+pub(crate) async fn delete_artifact_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
@@ -406,7 +333,7 @@ fn default_artifacts_limit() -> u32 {
 }
 
 fn default_per_pipe_limit() -> u32 {
-    crate::pipes_api::ARTIFACT_FALLBACK_CAP as u32
+    ARTIFACT_FALLBACK_CAP as u32
 }
 
 #[derive(OaSchema, Deserialize)]
@@ -458,10 +385,9 @@ pub(crate) struct ArtifactListResponse {
 /// `~/.screenpipe/outputs/`) with artifacts derived from pipe directories
 /// at request time, deduped by path (the registered copy wins). Filtering
 /// and pagination happen server-side; `pagination.total` counts the
-/// filtered set. `/outputs` and `/pipes/artifacts` remain as the
-/// source-specific views.
+/// filtered set.
 #[oasgen]
-pub(crate) async fn list_artifacts_unified_handler(
+pub(crate) async fn list_artifacts_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListArtifactsQuery>,
 ) -> Result<JsonResponse<ArtifactListResponse>, (StatusCode, JsonResponse<Value>)> {
@@ -633,7 +559,7 @@ pub(crate) async fn list_artifacts_unified_handler(
 /// Takes pre-collected `(ArtifactDeclaration, PathBuf)` items so the caller
 /// can drop the `PipeManager` lock before calling this. Skips artifacts
 /// whose files don't exist on disk.
-pub async fn auto_register_pipe_outputs(
+pub async fn auto_register_pipe_artifacts(
     db: &screenpipe_db::DatabaseManager,
     items: Vec<(
         screenpipe_core::pipes::ArtifactDeclaration,

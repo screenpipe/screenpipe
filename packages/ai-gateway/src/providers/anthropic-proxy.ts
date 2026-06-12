@@ -19,6 +19,94 @@ import { sanitizeMessages } from './vertex';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 
+// Block types that accept a cache_control marker. Thinking blocks don't.
+const CACHEABLE_BLOCK_TYPES = new Set(['text', 'image', 'tool_use', 'tool_result', 'document']);
+
+/**
+ * Count cache_control breakpoints across the whole request. The API allows at
+ * most 4 per request — injecting a 5th turns a working client request into a
+ * 400, so every injection must check the budget first.
+ */
+export function countCacheBreakpoints(body: any): number {
+	let count = 0;
+	if (Array.isArray(body?.system)) {
+		for (const block of body.system) {
+			if (block?.cache_control) count++;
+		}
+	}
+	if (Array.isArray(body?.messages)) {
+		for (const msg of body.messages) {
+			if (!Array.isArray(msg?.content)) continue;
+			for (const block of msg.content) {
+				if (block?.cache_control) count++;
+			}
+		}
+	}
+	if (Array.isArray(body?.tools)) {
+		for (const tool of body.tools) {
+			if (tool?.cache_control) count++;
+		}
+	}
+	return count;
+}
+
+/**
+ * Inject prompt-caching breakpoints for clients that don't manage caching
+ * themselves (the Agent SDK sets its own markers — those pass through
+ * untouched). Two markers:
+ *
+ * 1. System prompt → caches tools + system across requests. Unconditional on
+ *    size: below-minimum prefixes are a free no-op, and the old 4096-char
+ *    gate undershot the real model minimums anyway (4096 TOKENS on Opus 4.x
+ *    and Haiku 4.5).
+ * 2. Last cacheable block of the last message → caches the whole conversation
+ *    prefix, so each turn of an agentic loop re-reads history at ~0.1x input
+ *    price instead of full price.
+ *
+ * Mutates `body` in place (it's our parsed copy of the request).
+ */
+export function injectCacheBreakpoints(body: any): void {
+	let breakpoints = countCacheBreakpoints(body);
+
+	// 1. System prompt marker
+	if (body.system && breakpoints < 4) {
+		if (typeof body.system === 'string' && body.system.length > 0) {
+			body.system = [{ type: 'text', text: body.system, cache_control: { type: 'ephemeral' } }];
+			breakpoints++;
+		} else if (Array.isArray(body.system) && body.system.length > 0) {
+			const hasSystemMarker = body.system.some((b: any) => b?.cache_control);
+			if (!hasSystemMarker) {
+				body.system[body.system.length - 1].cache_control = { type: 'ephemeral' };
+				breakpoints++;
+			}
+		}
+	}
+
+	// 2. Conversation-history marker — only when the client set none in
+	// messages (a client that places its own markers knows what it's doing).
+	if (!Array.isArray(body.messages) || breakpoints >= 4) return;
+	const hasMessageMarker = body.messages.some(
+		(m: any) => Array.isArray(m?.content) && m.content.some((b: any) => b?.cache_control),
+	);
+	if (hasMessageMarker) return;
+
+	for (let m = body.messages.length - 1; m >= 0; m--) {
+		const msg = body.messages[m];
+		if (typeof msg?.content === 'string' && msg.content.length > 0) {
+			msg.content = [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }];
+			return;
+		}
+		if (!Array.isArray(msg?.content)) continue;
+		for (let b = msg.content.length - 1; b >= 0; b--) {
+			const block = msg.content[b];
+			if (block && CACHEABLE_BLOCK_TYPES.has(block.type)) {
+				block.cache_control = { type: 'ephemeral' };
+				return;
+			}
+		}
+	}
+}
+
 /**
  * Proxy an Anthropic Messages API request directly to api.anthropic.com
  *
@@ -56,36 +144,30 @@ export async function proxyToAnthropic(
 			body.messages = sanitizeMessages(body.messages);
 		}
 
-		// Inject prompt caching on the system prompt if not already present.
-		// Anthropic caches the prefix up to the last cache_control breakpoint,
-		// reducing input costs by 90% on cache hits (5-min TTL).
-		if (body.system) {
-			if (typeof body.system === 'string') {
-				// Convert string to array format with cache_control
-				if (body.system.length >= 4096) {
-					body.system = [{ type: 'text', text: body.system, cache_control: { type: 'ephemeral' } }];
-				}
-			} else if (Array.isArray(body.system) && body.system.length > 0) {
-				// Array format — add cache_control to last block if not already present
-				const last = body.system[body.system.length - 1];
-				const totalLen = body.system.reduce((sum, b) => sum + (b.text?.length || 0), 0);
-				if (totalLen >= 4096 && !last.cache_control) {
-					last.cache_control = { type: 'ephemeral' };
-				}
-			}
-		}
+		// Inject prompt caching (system + conversation history) for clients
+		// that don't manage cache_control themselves. Respects the 4-breakpoint
+		// API limit and never touches client-set markers.
+		injectCacheBreakpoints(body);
 
 		const isStreaming = body.stream === true;
 
 		// Forward directly to Anthropic API
 		// Unlike Vertex, the model stays in the body and auth is via x-api-key header
+		const headers: Record<string, string> = {
+			'x-api-key': apiKey,
+			'anthropic-version': ANTHROPIC_VERSION,
+			'content-type': 'application/json',
+		};
+		// Forward beta opt-ins (context management, fine-grained streaming, …).
+		// Dropping them breaks clients whose request bodies reference
+		// beta-gated fields.
+		const anthropicBeta = request.headers.get('anthropic-beta');
+		if (anthropicBeta) {
+			headers['anthropic-beta'] = anthropicBeta;
+		}
 		const response = await fetch(`${ANTHROPIC_API_URL}/v1/messages`, {
 			method: 'POST',
-			headers: {
-				'x-api-key': apiKey,
-				'anthropic-version': ANTHROPIC_VERSION,
-				'content-type': 'application/json',
-			},
+			headers,
 			body: JSON.stringify(body),
 		});
 

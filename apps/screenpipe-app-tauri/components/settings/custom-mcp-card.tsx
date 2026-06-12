@@ -203,7 +203,7 @@ export function CustomMcpCard() {
               like Brave Search, Linear, Notion, or local stdio processes like{" "}
               <code className="text-xs bg-muted px-1 rounded">uvx mcp-server-brave</code>
               {" "}— so pipes and chat can call their tools via{" "}
-              <code className="text-xs bg-muted px-1 rounded">mcp_call</code>
+              <code className="text-xs bg-muted px-1 rounded">sp_mcp_call</code>
               .
             </p>
 

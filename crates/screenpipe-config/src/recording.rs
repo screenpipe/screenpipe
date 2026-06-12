@@ -447,6 +447,11 @@ pub struct RecordingSettings {
     #[serde(rename = "powerMode", default)]
     pub power_mode: Option<String>,
 
+    /// Keep the computer awake while screenpipe is running.
+    /// Default off so existing installs keep the OS sleep behavior they chose.
+    #[serde(rename = "keepComputerAwake", default)]
+    pub keep_computer_awake: bool,
+
     /// Use Chinese mirror for Hugging Face model downloads.
     #[serde(rename = "useChineseMirror")]
     pub use_chinese_mirror: bool,
@@ -593,6 +598,7 @@ impl Default for RecordingSettings {
             openai_compatible_raw_audio: false,
             port: 3030,
             power_mode: None,
+            keep_computer_awake: false,
             use_chinese_mirror: false,
             analytics_enabled: true,
             analytics_id: String::new(),

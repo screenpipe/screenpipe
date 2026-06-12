@@ -69,12 +69,18 @@ export class OpenAIProvider implements AIProvider {
 	// other sampling knobs). When upstream returns 400 "Unsupported value:
 	// 'temperature'" we drop the offending field and retry once instead of
 	// blowing up — much more robust than chasing the prefix allowlist as
-	// OpenAI ships new model names.
+	// OpenAI ships new model names. Also matches "Unknown parameter" /
+	// "Unrecognized request argument" so optional params like stream_options
+	// degrade gracefully on OpenAI-compatible servers that don't know them.
 	private isUnsupportedSamplingParamError(error: any): string | null {
 		if (error?.status !== 400) return null;
 		const msg = String(error?.message ?? error?.error?.message ?? '');
-		const match = msg.match(/Unsupported value: '(\w+)'/i);
-		return match?.[1] ?? null;
+		const match =
+			msg.match(/Unsupported value: '([\w.]+)'/i) ??
+			msg.match(/Unknown parameter: '([\w.]+)'/i) ??
+			msg.match(/Unrecognized request argument(?: supplied)?: ([\w.]+)/i);
+		// "stream_options.include_usage" → strip the top-level param
+		return match?.[1]?.split('.')[0] ?? null;
 	}
 
 	private async createWithUnsupportedParamRetry<T>(
@@ -133,6 +139,12 @@ export class OpenAIProvider implements AIProvider {
 			model: body.model,
 			messages: this.formatMessages(body.messages),
 			stream: true,
+			// Without include_usage OpenAI streams carry NO usage at all and the
+			// request is cost-logged as zero tokens. Cached tokens (automatic
+			// prompt caching, billed at a discount) ride along in
+			// usage.prompt_tokens_details. Stripped + retried automatically on
+			// OpenAI-compatible servers that reject unknown params.
+			stream_options: { include_usage: true },
 			response_format: this.formatResponseFormat(body.response_format),
 			tools: body.tools as ChatCompletionCreateParams['tools'],
 		};
@@ -153,7 +165,13 @@ export class OpenAIProvider implements AIProvider {
 			async start(controller) {
 				try {
 					let finishReason: string | null = null;
+					let usage: any = null;
 					for await (const chunk of stream) {
+						// include_usage delivers a final chunk with empty choices
+						// and the request's usage (incl. cached-token details)
+						if ((chunk as any).usage) {
+							usage = (chunk as any).usage;
+						}
 						const choice = chunk.choices[0];
 						if (choice?.finish_reason) {
 							finishReason = choice.finish_reason;
@@ -190,6 +208,25 @@ export class OpenAIProvider implements AIProvider {
 							})}\n\n`
 						)
 					);
+					// Emit usage before [DONE] so cost logging records real token
+					// counts (previously OpenAI streams logged zero tokens).
+					if (usage) {
+						controller.enqueue(
+							new TextEncoder().encode(
+								`data: ${JSON.stringify({
+									choices: [],
+									usage: {
+										prompt_tokens: usage.prompt_tokens || 0,
+										completion_tokens: usage.completion_tokens || 0,
+										total_tokens: usage.total_tokens || (usage.prompt_tokens || 0) + (usage.completion_tokens || 0),
+										prompt_tokens_details: {
+											cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0,
+										},
+									},
+								})}\n\n`
+							)
+						);
+					}
 					controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
 					controller.close();
 				} catch (error: any) {
@@ -327,6 +364,23 @@ export class OpenAIProvider implements AIProvider {
 					},
 				},
 			],
+			// Pass usage through (was dropped — non-streaming OpenAI requests
+			// were cost-logged with estimated token counts). cached_tokens =
+			// OpenAI automatic prompt caching, billed at a discount.
+			...(response.usage
+				? {
+						usage: {
+							prompt_tokens: response.usage.prompt_tokens ?? 0,
+							completion_tokens: response.usage.completion_tokens ?? 0,
+							total_tokens:
+								response.usage.total_tokens ??
+								(response.usage.prompt_tokens ?? 0) + (response.usage.completion_tokens ?? 0),
+							prompt_tokens_details: {
+								cached_tokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+							},
+						},
+				  }
+				: {}),
 		};
 	}
 

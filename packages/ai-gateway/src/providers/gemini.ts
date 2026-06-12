@@ -171,6 +171,7 @@ export class GeminiProvider implements AIProvider {
 		let toolCallIndex = 0;
 		let inputTokens = 0;
 		let outputTokens = 0;
+		let cachedTokens = 0;
 
 		return new ReadableStream({
 			async start(controller) {
@@ -178,7 +179,9 @@ export class GeminiProvider implements AIProvider {
 					while (true) {
 						const { done, value } = await reader.read();
 						if (done) {
-							// Emit usage data in OpenAI format before [DONE]
+							// Emit usage data in OpenAI format before [DONE].
+							// cached_tokens = Gemini implicit caching subset of
+							// promptTokenCount, billed at a discount.
 							if (inputTokens > 0 || outputTokens > 0) {
 								controller.enqueue(
 									new TextEncoder().encode(
@@ -188,6 +191,7 @@ export class GeminiProvider implements AIProvider {
 												prompt_tokens: inputTokens,
 												completion_tokens: outputTokens,
 												total_tokens: inputTokens + outputTokens,
+												prompt_tokens_details: { cached_tokens: cachedTokens },
 											},
 										})}\n\n`
 									)
@@ -212,6 +216,7 @@ export class GeminiProvider implements AIProvider {
 									if (data.usageMetadata) {
 										inputTokens = data.usageMetadata.promptTokenCount ?? inputTokens;
 										outputTokens = data.usageMetadata.candidatesTokenCount ?? outputTokens;
+										cachedTokens = data.usageMetadata.cachedContentTokenCount ?? cachedTokens;
 									}
 
 									const parts = data.candidates?.[0]?.content?.parts || [];
@@ -682,13 +687,17 @@ export class GeminiProvider implements AIProvider {
 			choices: [{ message }],
 		};
 
-		// Include usage from Gemini's usageMetadata
+		// Include usage from Gemini's usageMetadata. cachedContentTokenCount is
+		// the implicit-caching subset of promptTokenCount (billed at a discount).
 		const usageMetadata = response.usageMetadata;
 		if (usageMetadata) {
 			result.usage = {
 				prompt_tokens: usageMetadata.promptTokenCount ?? 0,
 				completion_tokens: usageMetadata.candidatesTokenCount ?? 0,
 				total_tokens: usageMetadata.totalTokenCount ?? 0,
+				prompt_tokens_details: {
+					cached_tokens: usageMetadata.cachedContentTokenCount ?? 0,
+				},
 			};
 		}
 
