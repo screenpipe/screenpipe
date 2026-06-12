@@ -4590,16 +4590,18 @@ fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
     // Schedules are evaluated against the user's local timezone (see
     // `cron_should_fire`), so encode the local hour directly — no UTC shift.
     // "day" → every day at that hour; "monday".. → specific weekday.
+    // The `cron` crate evaluates day-of-week via chrono's `number_from_sunday()`
+    // which is 1-indexed: Sun=1, Mon=2, Tue=3, Wed=4, Thu=5, Fri=6, Sat=7.
     let cron_str = match prefix {
         "day" => format!("0 0 {} * * * *", local_hour),
         "daily" => format!("0 0 {} * * * *", local_hour),
-        "monday" | "mon" => format!("0 0 {} * * 1 *", local_hour),
-        "tuesday" | "tue" => format!("0 0 {} * * 2 *", local_hour),
-        "wednesday" | "wed" => format!("0 0 {} * * 3 *", local_hour),
-        "thursday" | "thu" => format!("0 0 {} * * 4 *", local_hour),
-        "friday" | "fri" => format!("0 0 {} * * 5 *", local_hour),
-        "saturday" | "sat" => format!("0 0 {} * * 6 *", local_hour),
-        "sunday" | "sun" => format!("0 0 {} * * 0 *", local_hour),
+        "sunday" | "sun" => format!("0 0 {} * * 1 *", local_hour),
+        "monday" | "mon" => format!("0 0 {} * * 2 *", local_hour),
+        "tuesday" | "tue" => format!("0 0 {} * * 3 *", local_hour),
+        "wednesday" | "wed" => format!("0 0 {} * * 4 *", local_hour),
+        "thursday" | "thu" => format!("0 0 {} * * 5 *", local_hour),
+        "friday" | "fri" => format!("0 0 {} * * 6 *", local_hour),
+        "saturday" | "sat" => format!("0 0 {} * * 7 *", local_hour),
         _ => return None,
     };
 
@@ -5588,8 +5590,7 @@ mod tests {
     fn human_schedule_pm_hour_is_local() {
         use chrono::{TimeZone, Timelike};
         // "every monday at 6pm" must encode local hour 18 (no UTC shift baked into
-        // the cron expression) — issue #3851. (Weekday-number mapping is a separate
-        // concern tracked outside this fix.)
+        // the cron expression) — issue #3851.
         let cron = parse_human_schedule("every monday at 6pm").expect("should parse");
         let from = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
         let next = cron.after(&from).next().unwrap();
@@ -5598,6 +5599,44 @@ mod tests {
             18,
             "6pm must encode local hour 18, not a shifted hour"
         );
+    }
+
+    #[test]
+    fn human_schedule_weekday_fires_on_correct_day() {
+        use chrono::{Datelike, TimeZone, Weekday};
+        // The cron crate uses number_from_sunday() (Sun=1..Sat=7). Each weekday
+        // name must map to the right number so the schedule fires on the named day,
+        // not the day before. 2026-06-04 is a Thursday; search from just after
+        // midnight so the next slot for each day is unambiguous.
+        let cases: &[(&str, Weekday)] = &[
+            ("every sunday at 1pm", Weekday::Sun),
+            ("every monday at 1pm", Weekday::Mon),
+            ("every tuesday at 1pm", Weekday::Tue),
+            ("every wednesday at 1pm", Weekday::Wed),
+            ("every thursday at 1pm", Weekday::Thu),
+            ("every friday at 1pm", Weekday::Fri),
+            ("every saturday at 1pm", Weekday::Sat),
+        ];
+        // Start from Thursday 2026-06-04 00:01 UTC so every day except Thursday
+        // has a clear "next occurrence" this week or next.
+        let from = chrono::Utc.with_ymd_and_hms(2026, 6, 4, 0, 1, 0).unwrap();
+        for (schedule, expected_weekday) in cases {
+            let cron = parse_human_schedule(schedule)
+                .unwrap_or_else(|| panic!("failed to parse: {}", schedule));
+            let next = cron
+                .after(&from)
+                .next()
+                .unwrap_or_else(|| panic!("no next occurrence for: {}", schedule));
+            assert_eq!(
+                next.weekday(),
+                *expected_weekday,
+                "'{}' should fire on {:?} but fired on {:?} ({})",
+                schedule,
+                expected_weekday,
+                next.weekday(),
+                next
+            );
+        }
     }
 
     #[test]
