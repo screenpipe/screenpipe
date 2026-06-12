@@ -707,9 +707,16 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // Detect "active_no_data" condition: device appears active (was selected and in
     // the device list) but the zero-fill watchdog has fired, indicating the stream
     // was hijacked by another app or went silent (Issue #3144). The watchdog
-    // automatically triggers a reconnect after 30s of no real audio, so this metric
-    // captures recovery attempts.
-    let stream_hijacked = audio_snap.stream_timeouts > 0;
+    // automatically triggers a reconnect after 30s of no real audio.
+    //
+    // Use a RECENT timeout, not the cumulative count: `stream_timeouts` is sticky
+    // (monotonic for the whole run), so a single transient blip — e.g. a mic
+    // reconnect during a device-monitor restart — would otherwise pin the status
+    // to "active_no_data"/degraded forever even after capture fully recovered.
+    // Only treat the stream as currently hijacked if a timeout fired within the
+    // staleness threshold; an ongoing hijack keeps re-firing and stays flagged.
+    let stream_hijacked = audio_snap.last_stream_timeout_ts > 0
+        && now_ts.saturating_sub(audio_snap.last_stream_timeout_ts) < threshold_secs;
 
     let audio_status = if state.audio_disabled {
         "disabled".to_string()
@@ -1345,51 +1352,43 @@ mod tests {
         assert!(!audio_backlog_is_stalled(200, freshness, false));
     }
 
+    // Models the time-bounded `stream_hijacked` decision from the health check.
+    // A timeout is only a *current* hijack if it fired within `threshold_secs`.
+    fn stream_hijacked(now_ts: u64, last_stream_timeout_ts: u64, threshold_secs: u64) -> bool {
+        last_stream_timeout_ts > 0 && now_ts.saturating_sub(last_stream_timeout_ts) < threshold_secs
+    }
+
+    fn audio_status(now_ts: u64, last_stream_timeout_ts: u64, global_active: bool) -> &'static str {
+        let threshold_secs = 60u64;
+        if stream_hijacked(now_ts, last_stream_timeout_ts, threshold_secs) && global_active {
+            "active_no_data"
+        } else if global_active {
+            "ok"
+        } else {
+            "not_started"
+        }
+    }
+
     #[test]
-    fn audio_status_active_no_data_when_stream_timeouts_nonzero() {
-        // This test verifies the fix for Issue #3144: detect when audio device
-        // is "active but producing no data" (hijacked or silent Bluetooth device).
-        // The stream_timeouts metric indicates the zero-fill watchdog has activated,
-        // which is the signal for active_no_data status.
+    fn audio_status_active_no_data_on_recent_timeout() {
+        // Issue #3144: a recent zero-fill watchdog timeout on an active device
+        // surfaces as "active_no_data".
+        let now = 10_000u64;
+        assert_eq!(audio_status(now, now - 5, true), "active_no_data");
+    }
 
-        // Simulate the logic in the health check: when stream_timeouts > 0 and
-        // the device is globally active, we should report "active_no_data" status.
+    #[test]
+    fn audio_status_recovers_after_stale_timeout() {
+        // Regression: a single transient timeout must NOT pin the status to
+        // degraded forever. Once it ages past the threshold, status returns to
+        // "ok" even though the cumulative stream_timeouts count is still > 0.
+        let now = 10_000u64;
+        assert_eq!(audio_status(now, now - 120, true), "ok");
+    }
 
-        let stream_timeouts = 1; // Watchdog has fired — device hijacked or silent
-        let is_global_active = true;
-
-        let stream_hijacked = stream_timeouts > 0;
-
-        // Validate: with stream_hijacked=true and is_global_active=true,
-        // audio_status should be "active_no_data", not "ok".
-        let audio_status = if stream_hijacked && is_global_active {
-            "active_no_data".to_string()
-        } else if is_global_active {
-            "ok".to_string()
-        } else {
-            "not_started".to_string()
-        };
-
-        assert_eq!(
-            audio_status, "active_no_data",
-            "audio_status should be 'active_no_data' when stream_timeouts > 0 and device is active (Issue #3144)"
-        );
-
-        // Also verify the converse: if stream_timeouts == 0, should be "ok"
-        let no_hijack = 0;
-        let is_still_active = true;
-        let stream_hijacked_2 = no_hijack > 0;
-        let audio_status_2 = if stream_hijacked_2 && is_still_active {
-            "active_no_data".to_string()
-        } else if is_still_active {
-            "ok".to_string()
-        } else {
-            "not_started".to_string()
-        };
-
-        assert_eq!(
-            audio_status_2, "ok",
-            "audio_status should be 'ok' when stream_timeouts == 0 and device is active"
-        );
+    #[test]
+    fn audio_status_ok_when_never_timed_out() {
+        let now = 10_000u64;
+        assert_eq!(audio_status(now, 0, true), "ok");
     }
 }

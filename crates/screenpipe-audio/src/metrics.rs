@@ -18,6 +18,11 @@ pub struct AudioPipelineMetrics {
     pub chunks_channel_full: AtomicU64,
     /// Device stream timeouts (no audio data received for >30s)
     pub stream_timeouts: AtomicU64,
+    /// Unix timestamp (secs) of the most recent stream timeout. Lets the health
+    /// check treat a hijack as *current* only when a timeout fired recently,
+    /// rather than letting one transient blip pin the status to degraded for
+    /// the rest of the run (the cumulative `stream_timeouts` count is sticky).
+    pub last_stream_timeout_ts: AtomicU64,
 
     // --- VAD stage ---
     /// Chunks that passed VAD (speech_ratio > threshold)
@@ -83,6 +88,7 @@ impl AudioPipelineMetrics {
             chunks_sent: AtomicU64::new(0),
             chunks_channel_full: AtomicU64::new(0),
             stream_timeouts: AtomicU64::new(0),
+            last_stream_timeout_ts: AtomicU64::new(0),
             vad_passed: AtomicU64::new(0),
             vad_rejected: AtomicU64::new(0),
             speech_ratio_sum_x1000: AtomicU64::new(0),
@@ -119,6 +125,11 @@ impl AudioPipelineMetrics {
 
     pub fn record_stream_timeout(&self) {
         self.stream_timeouts.fetch_add(1, Ordering::Relaxed);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.last_stream_timeout_ts.store(now, Ordering::Relaxed);
     }
 
     // --- Consumer stage ---
@@ -264,6 +275,7 @@ impl AudioPipelineMetrics {
             chunks_sent,
             chunks_channel_full: self.chunks_channel_full.load(Ordering::Relaxed),
             stream_timeouts: self.stream_timeouts.load(Ordering::Relaxed),
+            last_stream_timeout_ts: self.last_stream_timeout_ts.load(Ordering::Relaxed),
             // Consumer
             chunks_received: self.chunks_received.load(Ordering::Relaxed),
             process_errors: self.process_errors.load(Ordering::Relaxed),
@@ -325,6 +337,8 @@ pub struct AudioMetricsSnapshot {
     pub chunks_sent: u64,
     pub chunks_channel_full: u64,
     pub stream_timeouts: u64,
+    /// Unix timestamp (secs) of the most recent stream timeout, or 0 if none.
+    pub last_stream_timeout_ts: u64,
 
     // Consumer stage
     pub chunks_received: u64,
