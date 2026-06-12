@@ -191,3 +191,53 @@ pub async fn finish_ffmpeg_process(child: Child, stdin: Option<ChildStdin>) {
         Err(e) => error!("Failed to wait for FFmpeg process: {}", e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crf_maps_known_and_falls_back() {
+        assert_eq!(video_quality_to_crf("low"), "32");
+        assert_eq!(video_quality_to_crf("high"), "18");
+        assert_eq!(video_quality_to_crf("max"), "14");
+        assert_eq!(video_quality_to_crf("balanced"), "23");
+        assert_eq!(video_quality_to_crf("nonsense"), "23"); // fallback arm
+    }
+
+    #[test]
+    fn preset_maps_known_and_falls_back() {
+        assert_eq!(video_quality_to_preset("high"), "fast");
+        assert_eq!(video_quality_to_preset("max"), "medium");
+        assert_eq!(video_quality_to_preset("low"), "ultrafast");
+        assert_eq!(video_quality_to_preset("balanced"), "ultrafast");
+        assert_eq!(video_quality_to_preset("nonsense"), "ultrafast");
+    }
+
+    #[test]
+    fn jpeg_q_maps_known_and_falls_back() {
+        assert_eq!(video_quality_to_jpeg_q("low"), "18");
+        assert_eq!(video_quality_to_jpeg_q("high"), "4");
+        assert_eq!(video_quality_to_jpeg_q("max"), "2");
+        assert_eq!(video_quality_to_jpeg_q("balanced"), "10");
+        assert_eq!(video_quality_to_jpeg_q("nonsense"), "10");
+    }
+
+    #[test]
+    fn max_snapshot_width_maps_known_and_falls_back() {
+        assert_eq!(video_quality_to_max_snapshot_width("low"), 1280);
+        assert_eq!(video_quality_to_max_snapshot_width("high"), 3840);
+        assert_eq!(video_quality_to_max_snapshot_width("max"), 0); // native
+        assert_eq!(video_quality_to_max_snapshot_width("balanced"), 1920);
+        assert_eq!(video_quality_to_max_snapshot_width("nonsense"), 1920);
+    }
+
+    #[test]
+    fn jpeg_quality_maps_known_and_falls_back() {
+        assert_eq!(video_quality_to_jpeg_quality("low"), 60);
+        assert_eq!(video_quality_to_jpeg_quality("high"), 85);
+        assert_eq!(video_quality_to_jpeg_quality("max"), 92);
+        assert_eq!(video_quality_to_jpeg_quality("balanced"), 80);
+        assert_eq!(video_quality_to_jpeg_quality("nonsense"), 80);
+    }
+}
