@@ -2500,6 +2500,7 @@ function ChatTitleMenu({
 export function StandaloneChat({
   className,
   hideInlineHistory,
+  sidebarCollapsed,
 }: {
   className?: string;
   /** When true, the in-panel History button + slide-in panel are hidden.
@@ -2508,6 +2509,9 @@ export function StandaloneChat({
    *  chat at `/chat` leaves it false so users still have a history
    *  affordance in the floating window — that window has no AppSidebar. */
   hideInlineHistory?: boolean;
+  /** When true, the app sidebar is collapsed — used to apply traffic-light
+   *  padding on the chat header since the sidebar no longer covers them. */
+  sidebarCollapsed?: boolean;
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
@@ -8227,9 +8231,11 @@ export function StandaloneChat({
       {/* Add left padding on macOS to avoid traffic light overlap (standalone only) */}
       <div
         className={cn(
-          "relative flex items-center gap-3 px-4 py-3 border-b border-border/50 bg-gradient-to-r from-background to-muted/30",
+          "relative flex items-center gap-3 px-4 py-3.5 border-b border-border/50 bg-gradient-to-r from-background to-muted/30",
           !className && "cursor-grab active:cursor-grabbing",
-          isMac && !className && !isFullscreen && "pl-[72px]"
+          conversationId && messages.length > 0 && "py-0.5",
+          sidebarCollapsed && conversationId && messages.length > 0 && "!pl-[58px]",
+          sidebarCollapsed && isMac && !isFullscreen && "!pl-[128px]"
         )}
         onMouseDown={async (e) => {
           if (className) return; // embedded — don't drag

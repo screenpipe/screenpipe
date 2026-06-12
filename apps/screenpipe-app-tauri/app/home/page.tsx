@@ -919,7 +919,7 @@ function HomeContent() {
               // top-0.5 + items-center puts each icon's center at y≈15px,
               // matching the vertical center of the macOS traffic lights
               // (which sit at y≈14).
-              "fixed top-0.5 z-20 flex items-center gap-1.5",
+              "fixed top-1 z-20 flex items-center gap-1.5",
               reserveTrafficLights ? "left-[78px]" : "left-2"
             )}
           >
@@ -1194,7 +1194,7 @@ function HomeContent() {
                 activeSection !== "home" && "hidden"
               )}
             >
-              <StandaloneChat className="h-full" hideInlineHistory />
+              <StandaloneChat className="h-full" hideInlineHistory sidebarCollapsed={sidebarCollapsed} />
             </div>
 
             {/* Non-chat sections render on top when active. */}
