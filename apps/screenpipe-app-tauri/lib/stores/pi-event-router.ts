@@ -528,6 +528,10 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
       isStreaming: true,
       isLoading: true,
     });
+    // Clear the draft flag so the chat appears in the sidebar.
+    // This is needed when a queued follow-up starts while the user
+    // has navigated away from the chat.
+    store.actions.patch(sid, { draft: false });
     return;
   }
 

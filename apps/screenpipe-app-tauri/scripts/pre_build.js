@@ -55,6 +55,11 @@ const config = {
 		],
 		tesseractUrl: 'https://github.com/DanielMYT/tesseract-static/releases/download/tesseract-5.5.0/tesseract',
 		tesseractName: 'tesseract',
+		// English language data for the bundled tesseract binary (tessdata_fast, ~4MB).
+		// Without it the AppImage's tesseract exits 1 on hosts that have no system
+		// tesseract install (eng.traineddata not found) and zero screen text gets indexed.
+		tessdataUrl: 'https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata',
+		tessdataDir: 'tessdata',
 		ffmpegName: 'ffmpeg-7.0.2-amd64-static',
 		ffmpegUrl: 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz',
 	},
@@ -534,6 +539,43 @@ if (platform == 'linux') {
 		}
 	} else {
 		console.log('TESSERACT already exists');
+	}
+
+	// Setup TESSDATA (language data for the bundled tesseract binary).
+	// The AppImage ships the tesseract binary but, without this, no language data:
+	// on hosts without a system tesseract install every OCR call exits 1.
+	// Bundled into the AppImage via tauri.linux.conf.json (appimage.files).
+	const tessdataFile = path.join(config.linux.tessdataDir, 'eng.traineddata');
+	if (!(await fs.exists(tessdataFile))) {
+		await fs.mkdir(config.linux.tessdataDir, { recursive: true });
+		let copiedTessdata = false;
+		if (inCI) {
+			// apt's tesseract-ocr already ships eng.traineddata; copy it instead of downloading
+			const aptTessdataRoot = '/usr/share/tesseract-ocr';
+			let aptVersions = [];
+			try {
+				aptVersions = await fs.readdir(aptTessdataRoot);
+			} catch {
+				// no apt tesseract install; fall through to download
+			}
+			const aptCandidates = [
+				...aptVersions.map((v) => path.join(aptTessdataRoot, v, 'tessdata', 'eng.traineddata')),
+				'/usr/share/tessdata/eng.traineddata',
+			];
+			for (const candidate of aptCandidates) {
+				if (await fs.exists(candidate)) {
+					await fs.copyFile(candidate, tessdataFile);
+					console.log(`using apt tessdata: ${candidate} -> ${tessdataFile}`);
+					copiedTessdata = true;
+					break;
+				}
+			}
+		}
+		if (!copiedTessdata) {
+			await $`wget --no-config -nc ${config.linux.tessdataUrl} -O ${tessdataFile}`
+		}
+	} else {
+		console.log('TESSDATA already exists');
 	}
 }
 

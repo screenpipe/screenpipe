@@ -734,6 +734,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           computedLastUserMessageAt ?? fromStore ?? existing?.lastUserMessageAt;
         return lastUserMessageAt ? { lastUserMessageAt } : {};
       })()),
+      // Persist the preset ID so the model selection survives app restart
+      // and is restored when switching between chats.
+      ...(selectedPreset?.id ? { presetId: selectedPreset.id } : existing?.presetId ? { presetId: existing.presetId } : {}),
     };
 
     // Mirror the final messages into the in-memory chat-store BEFORE
@@ -1256,6 +1259,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }
     } catch (e) {
       console.warn("Failed to update active conversation:", e);
+    }
+
+    // Emit the preset ID so the chat panel can restore the model selection.
+    // This ensures the model selector reflects the preset used in this chat.
+    const presetId = persisted?.presetId ?? (conv as ChatConversation).presetId;
+    if (presetId) {
+      try {
+        await emit("chat-preset-restore", { presetId });
+      } catch {
+        // ignore broadcast failures
+      }
     }
   };
 

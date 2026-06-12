@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { DiskUsageSection } from "./disk-usage-section";
 import { ArchiveSettings } from "./archive-settings";
 import { SyncSettings } from "./sync-settings";
+import { ApplyRestartBar } from "./apply-restart-bar";
 import { LockedSetting } from "@/components/enterprise-locked-setting";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,11 @@ export function StorageSection() {
   const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
   const [showCacheDialog, setShowCacheDialog] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  // Changing the data directory only takes effect once the engine restarts —
+  // it reads the dir at startup and otherwise keeps writing to the old one.
+  // Surface the shared restart prompt so the change actually applies.
+  const [dataDirChanged, setDataDirChanged] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
   const showCloudSync = useMemo(
     () => posthog?.isFeatureEnabled("cloud-sync") ?? false,
     [posthog]
@@ -90,6 +96,7 @@ export function StorageSection() {
         return;
       }
       updateSettings({ dataDir: selected });
+      setDataDirChanged(true);
     } catch (error) {
       console.error("failed to change data directory:", error);
       toast({
@@ -103,7 +110,35 @@ export function StorageSection() {
 
   const handleDataDirReset = useCallback(() => {
     updateSettings({ dataDir: "default" });
+    setDataDirChanged(true);
   }, [updateSettings]);
+
+  // Full engine restart so capture picks up the new data directory. Mirrors the
+  // SERVER_RESTART path in recording-settings (dataDir is a server-restart key).
+  const handleApplyRestart = useCallback(async () => {
+    setIsRestarting(true);
+    try {
+      await commands.stopScreenpipe();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await commands.spawnScreenpipe(null);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      setDataDirChanged(false);
+      toast({
+        title: "restarted",
+        description: "screenpipe restarted with the new data directory",
+      });
+    } catch (error) {
+      console.error("failed to restart screenpipe:", error);
+      toast({
+        title: "restart failed",
+        description: "please restart screenpipe manually for the change to apply",
+        variant: "destructive",
+        duration: 5000,
+      });
+    } finally {
+      setIsRestarting(false);
+    }
+  }, [toast]);
 
   return (
     <div className="space-y-5">
@@ -269,6 +304,13 @@ export function StorageSection() {
       {activeTab === "local" && <DiskUsageSection />}
       {activeTab === "archive" && <ArchiveSettings />}
       {activeTab === "sync" && showCloudSync && <SyncSettings />}
+
+      <ApplyRestartBar
+        visible={dataDirChanged}
+        onApply={handleApplyRestart}
+        isUpdating={isRestarting}
+        message="data directory changed. restart to apply."
+      />
     </div>
   );
 }

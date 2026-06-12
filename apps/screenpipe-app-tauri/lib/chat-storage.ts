@@ -193,6 +193,9 @@ export interface ConversationMeta {
    *  `chat-conversation-saved`) the same way `dedupeConversationMetas` does
    *  on disk. Undefined for pipe runs / chats with no user message yet. */
   dedupKey?: string;
+  /** The AI preset ID last used in this conversation. Used to restore
+   *  the model selection when switching between chats. */
+  presetId?: string;
 }
 
 interface ConversationEntry {
@@ -307,6 +310,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     pipeContext: conv.pipeContext,
     titleSource: conv.titleSource,
     dedupKey: conversationDedupKey(conv) ?? undefined,
+    presetId: typeof conv.presetId === "string" ? conv.presetId : undefined,
   };
 }
 

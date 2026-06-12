@@ -120,6 +120,10 @@ export interface SessionRecord {
    *  by clicking "New chat" repeatedly. Cleared on the first successful
    *  save (after the assistant replies). */
   draft?: boolean;
+  /** The AI preset ID last used in this conversation. Used to restore
+   *  the model selection when switching between chats. Persisted to disk
+   *  so the selection survives app restart. */
+  presetId?: string;
 
   // ── Live session content (Phase 3) ─────────────────────────────────
   // The chat panel reads these instead of holding its own per-render
@@ -641,6 +645,7 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     kind: m.kind,
     pipeContext: m.pipeContext,
     dedupKey: m.dedupKey,
+    presetId: m.presetId,
   };
 }
 
@@ -741,6 +746,24 @@ function sessionDedupKey(s: SessionRecord): string | null {
   return conversationDedupKey({ kind: s.kind, messages: s.messages }) ?? s.dedupKey ?? null;
 }
 
+/** Special dedup key for empty/draft sessions (no user message yet).
+ *  All empty drafts within the dedup window are considered duplicates
+ *  to prevent the sidebar from showing multiple "new chat" rows from
+ *  rapid clicks or race conditions. Returns a sentinel key for drafts,
+ *  null for non-drafts. */
+function emptyDraftDedupKey(s: SessionRecord): string | null {
+  // Pipe sessions are exempt from dedup
+  if (s.kind === "pipe-watch" || s.kind === "pipe-run") return null;
+  // Only apply to draft sessions (no user messages yet)
+  if (!s.draft) return null;
+  // Check if truly empty
+  const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
+  const hasUserMessage = msgs.some((m) => m?.role === "user");
+  if (hasUserMessage) return null;
+  // All empty drafts dedup to this sentinel key
+  return "__empty_draft__";
+}
+
 /** Which of two same-conversation rows to keep: the copy the user should see.
  *  Prefer a visible (non-archived) row, then pinned, then a row with a real
  *  (non-"Processing…") reply, then more messages, then most-recent activity.
@@ -766,7 +789,12 @@ export function dedupeSessionRecords(records: SessionRecord[]): SessionRecord[] 
   const kept: SessionRecord[] = [];
   const indicesByKey = new Map<string, number[]>();
   for (const rec of records) {
-    const key = sessionDedupKey(rec);
+    // First try the standard dedup key (from first user message)
+    let key = sessionDedupKey(rec);
+    // If no standard key, try the empty draft key
+    if (!key) {
+      key = emptyDraftDedupKey(rec);
+    }
     if (!key) {
       kept.push(rec);
       continue;
