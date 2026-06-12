@@ -87,6 +87,7 @@ describe("pipe-run-recorder: finalize on terminal event", () => {
     );
     expect(arg.title).toBe("my-pipe #42");
     expect(arg.lastContentAt).toBe(arg.updatedAt);
+    expect(arg.lastViewedAt).toBe(0);
     expect(arg.messages.some((m: any) => m.role === "assistant" && m.content?.includes("result"))).toBe(true);
   });
 

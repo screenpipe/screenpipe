@@ -31,9 +31,18 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
     if (!file) throw new Error(`missing ${path}`);
     return file.text;
   }),
-  writeTextFile: vi.fn(async () => undefined),
-  remove: vi.fn(async () => undefined),
-  rename: vi.fn(async () => undefined),
+  writeTextFile: vi.fn(async (path: string, text: string) => {
+    fsMock.files.set(path, { text, mtime: Date.now() });
+  }),
+  remove: vi.fn(async (path: string) => {
+    fsMock.files.delete(path);
+  }),
+  rename: vi.fn(async (from: string, to: string) => {
+    const file = fsMock.files.get(from);
+    if (!file) throw new Error(`missing ${from}`);
+    fsMock.files.set(to, file);
+    fsMock.files.delete(from);
+  }),
   stat: vi.fn(async (path: string) => {
     fsMock.stats.push(path);
     return {
@@ -50,6 +59,8 @@ import {
   conversationMetaFromJson,
   dedupeConversationMetas,
   listConversations,
+  loadConversationFile,
+  saveConversationFile,
   searchConversations,
   type ConversationDedupCandidate,
   type ConversationMeta,
@@ -69,6 +80,8 @@ function putConversation(
     titleSource?: "fallback" | "ai" | "user";
     /** When set, append an assistant message with this content. */
     assistantContent?: string;
+    lastContentAt?: number;
+    lastViewedAt?: number;
   }
 ) {
   const messages: Array<Record<string, unknown>> = [
@@ -96,6 +109,8 @@ function putConversation(
     updatedAt: opts.updatedAt,
     hidden: opts.hidden,
     kind: opts.kind,
+    lastContentAt: opts.lastContentAt,
+    lastViewedAt: opts.lastViewedAt,
   };
   fsMock.files.set(`${CHATS_DIR}/${id}.json`, {
     text: JSON.stringify(conv),
@@ -211,6 +226,43 @@ describe("chat-storage bounded history", () => {
     });
 
     expect(meta?.lastUserMessageAt).toBe(4_500);
+  });
+
+  it("round-trips lastViewedAt through save/load and derived metadata", async () => {
+    await saveConversationFile({
+      id: "roundtrip",
+      title: "roundtrip",
+      messages: [
+        { id: "u1", role: "user", content: "hi", timestamp: 100 },
+        { id: "a1", role: "assistant", content: "hello", timestamp: 200 },
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+      lastContentAt: 200,
+      lastViewedAt: 150,
+    });
+
+    const conv = await loadConversationFile("roundtrip");
+    const meta = conversationMetaFromJson(conv);
+
+    expect(conv?.lastViewedAt).toBe(150);
+    expect(meta?.lastViewedAt).toBe(150);
+    expect(meta?.lastContentAt).toBe(200);
+  });
+
+  it("leaves lastViewedAt undefined for legacy files that predate unread persistence", () => {
+    const meta = conversationMetaFromJson({
+      id: "legacy",
+      title: "legacy",
+      createdAt: 100,
+      updatedAt: 200,
+      lastContentAt: 200,
+      messages: [
+        { id: "u1", role: "user", content: "hello", timestamp: 100 },
+      ],
+    });
+
+    expect(meta?.lastViewedAt).toBeUndefined();
   });
 });
 

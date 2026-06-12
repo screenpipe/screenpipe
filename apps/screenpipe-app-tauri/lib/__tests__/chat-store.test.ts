@@ -15,6 +15,7 @@ import {
   selectRecentSwitcherSessions,
   getOrCreateEmptyChatId,
   dedupeSessionRecords,
+  sessionRecordFromMeta,
   type SessionRecord,
 } from "../stores/chat-store";
 
@@ -403,6 +404,62 @@ describe("chat-store: unread is computed from timestamps", () => {
     useChatStore.getState().actions.setCurrent("A");
     expect(useChatStore.getState().sessions.A.unread).toBe(false);
     expect(useChatStore.getState().sessions.A.lastViewedAt).toBeGreaterThanOrEqual(200);
+  });
+
+  it("hydrateFromDisk restores unread when persisted lastViewedAt lags content", () => {
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "A",
+        title: "A",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 2,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        lastViewedAt: 150,
+        kind: "chat",
+      }),
+    ]);
+
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+  });
+
+  it("hydrateFromDisk restores read when persisted lastViewedAt catches up", () => {
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "A",
+        title: "A",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 2,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        lastViewedAt: 200,
+        kind: "chat",
+      }),
+    ]);
+
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+  });
+
+  it("hydrateFromDisk keeps legacy rows read when lastViewedAt was never persisted", () => {
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "legacy",
+        title: "legacy",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 1,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        kind: "chat",
+      }),
+    ]);
+
+    expect(useChatStore.getState().sessions.legacy.unread).toBe(false);
   });
 });
 

@@ -305,6 +305,22 @@ function isUnread(s: SessionRecord): boolean {
   return content > (s.lastViewedAt ?? 0);
 }
 
+function restoreUnread(
+  existing: SessionRecord | undefined,
+  merged: SessionRecord,
+): boolean {
+  if (typeof merged.lastViewedAt === "number") return isUnread(merged);
+  return existing?.unread ?? false;
+}
+
+export function getPersistedViewedAt(
+  session: Pick<SessionRecord, "lastViewedAt" | "lastContentAt"> | undefined,
+): number | undefined {
+  if (!session) return undefined;
+  if (typeof session.lastViewedAt === "number") return session.lastViewedAt;
+  return typeof session.lastContentAt === "number" ? 0 : undefined;
+}
+
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
   diskHydrated: false,
@@ -320,19 +336,38 @@ export const useChatStore = create<ChatStore>((set) => ({
         const next: Record<string, SessionRecord> = { ...s.sessions };
         for (const r of records) {
           const existing = next[r.id];
-          next[r.id] = existing
-            ? {
-                ...existing,
-                title: r.title,
-                titleSource: r.titleSource ?? existing.titleSource,
-                preview: r.preview,
-                messageCount: r.messageCount,
-                pinned: existing.pinned || r.pinned,
-                hidden: existing.hidden ?? r.hidden ?? false,
-                // updatedAt: take the larger so memory doesn't get clobbered
-                updatedAt: Math.max(existing.updatedAt, r.updatedAt),
-              }
-            : r;
+          if (!existing) {
+            next[r.id] = r;
+            continue;
+          }
+          const merged: SessionRecord = {
+            ...existing,
+            title: r.title,
+            titleSource: r.titleSource ?? existing.titleSource,
+            preview: r.preview,
+            messageCount: r.messageCount,
+            pinned: existing.pinned || r.pinned,
+            hidden: existing.hidden ?? r.hidden ?? false,
+            // updatedAt: take the larger so memory doesn't get clobbered
+            updatedAt: Math.max(existing.updatedAt, r.updatedAt),
+            lastUserMessageAt: Math.max(
+              existing.lastUserMessageAt ?? 0,
+              r.lastUserMessageAt ?? 0,
+            ) || undefined,
+            lastContentAt: Math.max(
+              existing.lastContentAt ?? 0,
+              r.lastContentAt ?? 0,
+            ) || undefined,
+            lastViewedAt: Math.max(
+              existing.lastViewedAt ?? 0,
+              r.lastViewedAt ?? 0,
+            ) || undefined,
+            kind: existing.kind ?? r.kind,
+            pipeContext: existing.pipeContext ?? r.pipeContext,
+            dedupKey: existing.dedupKey ?? r.dedupKey,
+          };
+          merged.unread = restoreUnread(existing, merged);
+          next[r.id] = merged;
         }
         return { sessions: next, diskHydrated: true };
       }),
@@ -636,10 +671,10 @@ export const useChatActions = () => useChatStore((s) => s.actions);
 /** Build a fresh SessionRecord from on-disk metadata. Used by both the
  *  boot-time hydrate path and the pipe-run recorder so the sidebar sees
  *  identically-shaped rows whether they were loaded at startup or upserted
- *  the moment a pipe finishes. unread is false: persisted-from-disk rows
- *  aren't user-actionable in the inbox sense. */
+ *  the moment a pipe finishes. Legacy rows that predate `lastViewedAt`
+ *  restore as read because they have no persisted unread watermark. */
 export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
-  return {
+  const record: SessionRecord = {
     id: m.id,
     title: m.title || "untitled",
     titleSource: m.titleSource,
@@ -652,10 +687,15 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     unread: false,
     lastUserMessageAt: m.lastUserMessageAt,
     lastContentAt: m.lastContentAt,
+    lastViewedAt: m.lastViewedAt,
     kind: m.kind,
     pipeContext: m.pipeContext,
     dedupKey: m.dedupKey,
   };
+  if (typeof m.lastViewedAt === "number") {
+    record.unread = isUnread(record);
+  }
+  return record;
 }
 
 /**

@@ -203,6 +203,35 @@ describe("pi-event-router: browser state preservation", () => {
       }),
     );
   });
+
+  it("persists never-viewed background chats with a zero lastViewedAt watermark", async () => {
+    seed("A", {
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+      ],
+      messageCount: 1,
+      isLoading: true,
+      isStreaming: true,
+      lastContentAt: 2_000,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    handleTerminated({ sessionId: "A", exitCode: 0 } as any);
+    await flushPendingSaves();
+
+    expect(saveConversationFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "A",
+        lastContentAt: 2_000,
+        lastViewedAt: 0,
+      }),
+    );
+  });
 });
 
 describe("pi-event-router: background content accumulation (the parallel-chat repro)", () => {

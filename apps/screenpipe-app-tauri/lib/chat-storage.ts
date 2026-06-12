@@ -182,6 +182,9 @@ export interface ConversationMeta {
   /** ms since epoch of the most recent actual message append (user or
    *  assistant). Drives unread detection — immune to non-content writes. */
   lastContentAt?: number;
+  /** ms since epoch of the most recent time this chat was actually opened.
+   *  A value of `0` means "never viewed" for persisted unread restore. */
+  lastViewedAt?: number;
   /** Conversation kind — `chat` for chats, `pipe-watch` / `pipe-run` for
    *  pipe sessions. Sidebar uses this to split rows into separate
    *  sections. Older files default to `chat`. */
@@ -303,6 +306,8 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     typeof conv.lastContentAt === "number"
       ? conv.lastContentAt
       : lastUserMessageAt ?? undefined;
+  const lastViewedAt =
+    typeof conv.lastViewedAt === "number" ? conv.lastViewedAt : undefined;
 
   return {
     id: conv.id,
@@ -314,6 +319,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     hidden: conv.hidden === true,
     lastUserMessageAt,
     lastContentAt,
+    lastViewedAt,
     kind: conv.kind ?? "chat",
     pipeContext: conv.pipeContext,
     titleSource: conv.titleSource,
@@ -540,7 +546,7 @@ export async function searchConversations(
  */
 export async function updateConversationFlags(
   id: string,
-  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState">>
+  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState" | "lastViewedAt">>
 ): Promise<void> {
   const conv = await loadConversationFile(id);
   if (!conv) return;

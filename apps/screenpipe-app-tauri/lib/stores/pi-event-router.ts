@@ -71,6 +71,7 @@ import {
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
+  getPersistedViewedAt,
   useChatStore,
   isSessionForeground,
   sessionRecordFromMeta,
@@ -764,6 +765,13 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       const lastContentAt =
         storeSession?.lastContentAt ??
         existing?.lastContentAt;
+      const lastViewedAt =
+        getPersistedViewedAt(storeSession) ??
+        (typeof existing?.lastViewedAt === "number"
+          ? existing.lastViewedAt
+          : lastContentAt
+            ? 0
+            : undefined);
 
       const conv: ChatConversation = {
         id: sid,
@@ -771,6 +779,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         ...(existing?.titleSource ? { titleSource: existing.titleSource } : {}),
         ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
         ...(lastContentAt ? { lastContentAt } : {}),
+        ...(typeof lastViewedAt === "number" ? { lastViewedAt } : {}),
         // Full transcript — see comment in use-chat-conversations.ts
         // saveConversation. The slice(-100) here was silently truncating
         // long backgrounded chats on every agent_end save.

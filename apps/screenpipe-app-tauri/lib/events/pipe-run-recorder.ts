@@ -210,6 +210,7 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
     updatedAt: buf.lastEventAt,
     // Unwatched completed pipe runs should surface as unread until opened.
     lastContentAt: buf.lastEventAt,
+    lastViewedAt: 0,
     kind: "pipe-run",
     pipeContext: {
       pipeName: buf.pipeName,
