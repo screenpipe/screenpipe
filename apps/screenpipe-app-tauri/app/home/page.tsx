@@ -986,13 +986,13 @@ function HomeContent() {
               strip above (toggle + status dot) is the entire collapsed
               chrome, Claude-style. */}
           {!sidebarCollapsed && (
-          <AppSidebar className="pl-4">
+          <AppSidebar className="pl-1">
             {/* Navigation.
                 Outer flex column has no overflow — the chat-list section
                 inside owns its own scroll, otherwise the team promo +
                 bottom items would be pushed below the fold by long
                 conversation lists. */}
-            <div className="p-2 flex-1 flex flex-col min-h-0">
+            <div className="pt-2 pr-2 pb-2 flex-1 flex flex-col min-h-0">
               {/* Main sections */}
               <div className="space-y-0.5 shrink-0">
                 {mainSections.map((section) => {
