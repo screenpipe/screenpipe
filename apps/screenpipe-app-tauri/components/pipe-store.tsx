@@ -64,6 +64,7 @@ import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
+import { NotificationBell } from "@/components/notification-bell";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 // --- Types ---
@@ -374,6 +375,12 @@ export function PipeStoreView() {
             {label}
           </button>
         ))}
+        {/* Notifications are pipe output, so the bell lives here rather
+            than in the global window chrome. mb-3 cancels the tabs'
+            pb-3 so the bell centers on the tab labels, not the row. */}
+        <div className="ml-auto mb-3">
+          <NotificationBell />
+        </div>
       </div>
 
       {/* Tab content */}
@@ -1264,7 +1271,11 @@ here is the original pipe content (pipe.md):
 ${pipeSource}
 \`\`\`
 
-IMPORTANT: first read the screenpipe skill file to understand how pipes work, then ask the user how they want to customize/improve this pipe for their specific needs. do NOT auto-send or auto-create — have a conversation first to understand what they want to change.`,
+IMPORTANT: first read the screenpipe skill file to understand how pipes work, then ask the user how they want to customize/improve this pipe for their specific needs. do NOT auto-send or auto-create — have a conversation first to understand what they want to change.
+
+if the original or customized pipe creates a user-facing output file, make sure the forked pipe.md includes an \`artifacts:\` block in frontmatter declaring the output path under \`./output/\`, and instruct the prompt to write results to that exact path. if the pipe doesn't create files, omit \`artifacts:\`.
+
+if the pipe's final user-facing file lives outside the pipe's own \`./output/\` directory (e.g. it writes to a shared location, the user's Documents folder, or an Obsidian vault), the pipe prompt should call the \`register_artifact\` tool with the file's absolute path and a human-readable title after writing the file. this registers it in the Artifacts library without requiring it to be under \`./output/\`. do NOT use \`register_artifact\` for internal scratch files, caches, or intermediate state — only for finished deliverables.`,
                     prompt: `i want to fork the "${pipe.title}" pipe and adapt it to my needs. here is the original pipe.md:\n\n${pipeSource}`,
                     displayLabel: buildForkPipeDisplayLabel(pipe.title),
                     autoSend: true,

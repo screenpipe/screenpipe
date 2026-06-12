@@ -267,7 +267,7 @@ export const ShareLogsButton = ({
       const os_version = osVersion();
       const app_version = await getVersion();
 
-      await fetch(`${BASE_URL}/api/logs/confirm`, {
+      const confirmResponse = await fetch(`${BASE_URL}/api/logs/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -283,10 +283,20 @@ export const ShareLogsButton = ({
           screenpipe_id: settings.analyticsId,
         }),
       });
+      if (!confirmResponse.ok) {
+        throw new Error("failed to confirm log upload");
+      }
+      const confirmPayload = await confirmResponse.json().catch(() => null);
+      const supportId = confirmPayload?.data?.id;
+      const followUpChannel = confirmPayload?.data?.follow_up;
+      const reference = supportId ? ` #${supportId}` : "";
 
       toast({
         title: "feedback sent",
-        description: "thanks — we'll follow up by email or discord.",
+        description:
+          followUpChannel === "email"
+            ? `we emailed you a receipt${reference} and will reply there.`
+            : `we posted it to support${reference}; mention that ID in Discord if you need an update.`,
       });
       setFeedbackText("");
       setScreenshot(null);

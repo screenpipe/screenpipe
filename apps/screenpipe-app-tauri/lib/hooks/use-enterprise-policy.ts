@@ -47,8 +47,14 @@ const EMPTY_POLICY: EnterprisePolicy = {
   orgName: "",
 };
 
-// Sections always hidden in enterprise builds (regardless of policy)
-const ENTERPRISE_DEFAULT_HIDDEN = ["account", "referral"];
+// Sections always hidden in enterprise builds (regardless of policy).
+// "account" is deliberately NOT here: its visibility is admin-controlled via
+// the workspace policy's UI-visibility toggle (hidden_sections), because the
+// Account section carries the sign-in button — and team pipe sharing + role
+// detection need sign-in. Hardcoding it hidden made signing in impossible on
+// enterprise devices. "referral" stays hardcoded (consumer growth surface,
+// meaningless in a managed org).
+const ENTERPRISE_DEFAULT_HIDDEN = ["referral"];
 
 // Re-fetch policy every 5 minutes so admin changes propagate without app restart
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -425,12 +431,16 @@ export function useEnterprisePolicy() {
       // Fire-and-forget heartbeat
       sendHeartbeat(licenseKey);
 
-      // Sync managed pipes to local filesystem
-      if (result.managedPipes.length > 0) {
-        syncManagedPipes(result.managedPipes).catch((e) =>
-          console.warn("[enterprise] failed to sync managed pipes:", e)
-        );
-      }
+      // Sync managed pipes to local filesystem. Always runs (even with an
+      // empty list) so pipes removed from the policy get disabled on devices.
+      // Pruning is only allowed when the server actually returned the
+      // managedPipes field — an older backend that omits it must not
+      // mass-disable the fleet.
+      syncManagedPipes(result.managedPipes, {
+        pruneUnlisted: Array.isArray(data.managedPipes),
+      }).catch((e) =>
+        console.warn("[enterprise] failed to sync managed pipes:", e)
+      );
 
       // Push hidden sections to Rust so tray menu can use them
       try {

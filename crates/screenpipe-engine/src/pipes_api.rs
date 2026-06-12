@@ -177,11 +177,12 @@ pub async fn run_pipe_now(
             let ss = secret_store.as_ref().map(|e| e.0.as_ref());
             let mut missing = Vec::new();
             for conn_id in required {
-                let configured =
-                    screenpipe_connect::connections::load_connection(ss, &screenpipe_dir, conn_id)
-                        .await
-                        .map(|c| c.enabled && !c.credentials.is_empty())
-                        .unwrap_or(false);
+                let configured = screenpipe_connect::connections::is_connection_configured(
+                    ss,
+                    &screenpipe_dir,
+                    conn_id,
+                )
+                .await;
                 if !configured {
                     missing.push(conn_id.as_str());
                 }

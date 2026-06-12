@@ -24,6 +24,7 @@ import {
   formatDuration,
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
+import { ListeningSticks } from "./listening-sticks";
 
 const MEETING_DRAG_MIME = "application/x-screenpipe-meeting-id";
 
@@ -346,10 +347,15 @@ function PastMeetingRow({
       >
         <div className="h-7 w-7 shrink-0 border border-border flex items-center justify-center bg-background">
           {isActive ? (
-            <span
-              className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse"
-              aria-label="recording"
-            />
+            <>
+              <ListeningSticks
+                height={10}
+                stickWidth={1.5}
+                gap={1.5}
+                className="text-foreground"
+              />
+              <span className="sr-only">recording</span>
+            </>
           ) : (
             <Icon className="h-3 w-3 text-muted-foreground" />
           )}

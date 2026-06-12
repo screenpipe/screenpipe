@@ -61,6 +61,27 @@ pub struct TriggerConfig {
     pub custom: Vec<String>,
 }
 
+/// Declares a file that a pipe produces, surfaced in the Artifacts library.
+///
+/// Example frontmatter:
+/// ```yaml
+/// artifacts:
+///   - path: "output/profile.md"
+///     title: "Digital Clone Profile"
+///     kind: "markdown"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactDeclaration {
+    /// Path relative to the pipe directory (e.g. "output/profile.md").
+    pub path: String,
+    /// Human-readable title shown in the library (falls back to filename).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// File kind hint: "markdown", "json", "text", "image".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
 /// Parsed pipe configuration (from pipe.md front-matter).
 ///
 /// Only `schedule` and `enabled` are required in pipe.md.
@@ -96,8 +117,10 @@ pub struct PipeConfig {
     )]
     pub preset: Vec<String>,
 
-    /// Connections this pipe uses (e.g. `["obsidian", "slack"]`).
-    /// The AI can query `GET /connections/<id>` at runtime to get credentials.
+    /// Connections this pipe uses (e.g. `["obsidian", "slack", "github"]`).
+    /// Credential integrations: `GET /connections/<id>` returns saved fields.
+    /// OAuth/proxy integrations: call `POST /connections/<id>/proxy/<api-path>`
+    /// (the proxy injects auth; raw tokens are never exposed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<String>,
 
@@ -164,6 +187,19 @@ pub struct PipeConfig {
     /// redaction moved to the at-rest redact worker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub privacy_filter: bool,
+
+    /// Output files this pipe produces, surfaced in the Artifacts library.
+    ///
+    /// Paths are relative to the pipe directory (`~/.screenpipe/pipes/<name>/`).
+    /// Example:
+    /// ```yaml
+    /// artifacts:
+    ///   - path: "output/profile.md"
+    ///     title: "Digital Clone Profile"
+    ///     kind: "markdown"
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactDeclaration>,
 
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
@@ -352,6 +388,40 @@ fn simple_hash(content: &str) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{:016x}", hash)
+}
+
+/// Normalize a path by resolving `.` and `..` components without touching
+/// the filesystem (works even if the path doesn't exist yet). Used to
+/// prevent artifact path traversal escaping the pipe directory.
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Keep the newest `cap` files by mtime (ties broken by path, descending,
+/// so the result is deterministic on filesystems with coarse mtimes).
+fn select_newest_files(
+    mut files: Vec<(std::path::PathBuf, std::time::SystemTime)>,
+    cap: usize,
+) -> Vec<(std::path::PathBuf, std::time::SystemTime)> {
+    files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+    files.truncate(cap);
+    files
+}
+
+/// Returns `true` if the extension is user-facing for fallback artifact
+/// discovery. Pipes producing other types should declare them in `artifacts:`.
+fn is_user_facing_artifact_ext(ext: &str) -> bool {
+    matches!(ext, "md" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,6 +1257,9 @@ async fn setup_pipe_permissions(
     if let Err(e) = PiExecutor::ensure_subagent_extension(pipe_dir, config.subagent) {
         warn!("failed to install sub-agent extension: {}", e);
     }
+    if let Err(e) = PiExecutor::ensure_register_artifact_extension(pipe_dir) {
+        warn!("failed to install register-artifact extension: {}", e);
+    }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
     }
@@ -1652,6 +1725,104 @@ impl PipeManager {
                 status.consecutive_failures = state.consecutive_failures;
             }
             result.push(status);
+        }
+        result
+    }
+
+    /// Return all artifact declarations across pipes, with paths resolved to
+    /// absolute locations under `pipes_dir`. Paths that escape the pipe
+    /// directory (e.g. `../secret`) are silently dropped. Caller is
+    /// responsible for filesystem checks (existence, metadata).
+    ///
+    /// Two exclusive modes per pipe:
+    /// - If the pipe declares `artifacts:` in frontmatter, use only those.
+    /// - Otherwise, fall back to scanning `<pipe_dir>/output/` for files,
+    ///   keeping only the newest `fallback_cap` by mtime. Chatty pipes write
+    ///   hundreds of files there; without a cap a single pipe dominates the
+    ///   listing and the payload grows unbounded.
+    pub async fn list_artifact_declarations(
+        &self,
+        fallback_cap: usize,
+    ) -> Vec<(String, Vec<(ArtifactDeclaration, std::path::PathBuf)>)> {
+        let pipes = self.pipes.lock().await;
+        let mut result = Vec::new();
+        for (name, (config, _, _)) in pipes.iter() {
+            let pipe_dir = self.pipes_dir.join(name);
+            let mut resolved: Vec<(ArtifactDeclaration, std::path::PathBuf)> = Vec::new();
+
+            if !config.artifacts.is_empty() {
+                // Explicit frontmatter declarations — use only these
+                for a in &config.artifacts {
+                    let abs = pipe_dir.join(&a.path);
+                    let normalized = normalize_path(&abs);
+                    if !normalized.starts_with(&pipe_dir) {
+                        tracing::warn!(
+                            "pipe '{}': artifact path '{}' escapes pipe directory, skipping",
+                            name,
+                            a.path,
+                        );
+                        continue;
+                    }
+                    resolved.push((a.clone(), normalized));
+                }
+            } else {
+                // Fallback: no declarations → scan <pipe_dir>/output/, newest
+                // `fallback_cap` files by mtime.
+                let output_dir = pipe_dir.join("output");
+                let mut candidates: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+                if let Ok(mut entries) = tokio::fs::read_dir(&output_dir).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
+                        // skip dotfiles (.DS_Store, .env, etc.)
+                        if path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map_or(false, |n| n.starts_with('.'))
+                        {
+                            continue;
+                        }
+                        // skip non-user-facing extensions
+                        if !path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map_or(false, is_user_facing_artifact_ext)
+                        {
+                            continue;
+                        }
+                        let mtime = entry
+                            .metadata()
+                            .await
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::UNIX_EPOCH);
+                        candidates.push((path, mtime));
+                    }
+                }
+                for (path, _) in select_newest_files(candidates, fallback_cap) {
+                    let kind = match path.extension().and_then(|e| e.to_str()) {
+                        Some("md") => "markdown",
+                        Some("json") => "json",
+                        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
+                        _ => "text",
+                    };
+                    let file_name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let decl = ArtifactDeclaration {
+                        path: format!("output/{}", file_name),
+                        title: None,
+                        kind: Some(kind.to_string()),
+                    };
+                    resolved.push((decl, normalize_path(&path)));
+                }
+            }
+
+            if !resolved.is_empty() {
+                result.push((name.clone(), resolved));
+            }
         }
         result
     }
@@ -2320,11 +2491,15 @@ impl PipeManager {
                 run_api_key,
                 preset_prompt,
                 active_preset_id,
+                active_preset_idx,
             ) = if !config.preset.is_empty() {
-                // Pick the best available preset using circuit breaker
-                let (preset_id, _idx) = self
+                // Pick the best available preset using the circuit breaker, but
+                // start at `retry_depth` so an in-run fallback retry advances to
+                // the next preset even when the failed one's breaker never
+                // tripped (timeouts/crashes don't trip it) — see #3914.
+                let (preset_id, idx) = self
                     .fallback_registry
-                    .pick_preset(&config.preset)
+                    .pick_preset_with_floor(&config.preset, retry_depth)
                     .ok_or_else(|| anyhow!("pipe '{}': no presets configured", name))?;
 
                 match resolve_preset(&self.pipes_dir, preset_id) {
@@ -2335,8 +2510,8 @@ impl PipeManager {
                             preset_id,
                             resolved.model,
                             resolved.provider,
-                            if _idx > 0 {
-                                format!(" (fallback #{})", _idx)
+                            if idx > 0 {
+                                format!(" (fallback #{})", idx)
                             } else {
                                 String::new()
                             }
@@ -2348,6 +2523,7 @@ impl PipeManager {
                             resolved.api_key,
                             resolved.prompt,
                             Some(preset_id.to_string()),
+                            Some(idx),
                         )
                     }
                     None => {
@@ -2386,6 +2562,7 @@ impl PipeManager {
                             resolved.api_key,
                             resolved.prompt,
                             None,
+                            None,
                         )
                     }
                     None => {
@@ -2393,6 +2570,7 @@ impl PipeManager {
                         (
                             config.model.clone(),
                             config.provider.clone(),
+                            None,
                             None,
                             None,
                             None,
@@ -2687,29 +2865,36 @@ impl PipeManager {
                 cleanup_pipe_token(token, self.token_registry.as_ref());
             }
 
-            // Immediate fallback retry: if the pipe failed with a retryable error
-            // and there are fallback presets available, retry now instead of waiting
-            // for the next scheduled run.
-            if !log.success && config.preset.len() > 1 && retry_depth < config.preset.len() - 1 {
-                // Check if the circuit breaker picked a different preset for retry
-                if let Some((next_preset_id, _)) =
-                    self.fallback_registry.pick_preset(&config.preset)
-                {
-                    let should_retry = match &active_preset_id {
-                        Some(current_id) => next_preset_id != current_id.as_str(),
-                        None => false,
-                    };
-                    if should_retry {
+            // Immediate fallback retry: if the run failed and there is another
+            // fallback preset we haven't tried this run, retry now with the next
+            // one instead of waiting for the next scheduled run.
+            //
+            // Advancement is driven by the failed preset's position in the list
+            // (`active_preset_idx`), NOT by its circuit breaker tripping. The
+            // breaker only opens for a narrow set of text-matched provider errors
+            // (`record_failure_from_output`) and never for timeouts or executor
+            // crashes — so gating fallback on it meant the next model silently
+            // never ran when the main one timed out or errored (#3914).
+            let max_attempts = config.preset.len().min(preset_fallback::MAX_FALLBACK_DEPTH);
+            if let (false, Some(cur_idx)) = (log.success, active_preset_idx) {
+                let next_idx = cur_idx + 1;
+                if next_idx < max_attempts {
+                    if let Some(next_preset_id) = config.preset.get(next_idx) {
                         info!(
-                        "pipe '{}': primary preset failed, immediately retrying with fallback '{}'",
-                        name, next_preset_id
-                    );
-                        // Save log of the failed attempt
+                            "pipe '{}': preset '{}' failed, immediately retrying with fallback preset '{}' (attempt {}/{})",
+                            name,
+                            active_preset_id.as_deref().unwrap_or("?"),
+                            next_preset_id,
+                            next_idx + 1,
+                            max_attempts
+                        );
+                        // Save the log of the failed attempt before retrying.
                         self.append_log(name, &log).await;
                         let _ = self.write_log_to_disk(name, &log);
-                        // Retry with next preset
+                        // Re-enter with the selection floor advanced past the
+                        // preset that just failed.
                         return self
-                            .run_pipe_with_trigger_inner(name, trigger, retry_depth + 1)
+                            .run_pipe_with_trigger_inner(name, trigger, next_idx)
                             .await;
                     }
                 }
@@ -3382,7 +3567,7 @@ impl PipeManager {
                     }
 
                     // Setup-mode gate: pipes whose declared `connections` aren't
-                    // all configured (`enabled && credentials present`) must not
+                    // all configured (credentials or OAuth token present) must not
                     // run on schedule or event. Mirrors the manual-run gate in
                     // pipes_api::run_pipe_now. Placed after the schedule/queue
                     // checks so we only hit the SecretStore when the pipe would
@@ -4795,6 +4980,113 @@ mod tests {
         PipeManager::new(dir, HashMap::new(), None, 0)
     }
 
+    #[test]
+    fn test_select_newest_files_caps_by_mtime() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let f = |name: &str, secs: u64| {
+            (
+                std::path::PathBuf::from(name),
+                UNIX_EPOCH + Duration::from_secs(secs),
+            )
+        };
+        let files = vec![
+            f("a.md", 100),
+            f("b.md", 300),
+            f("c.md", 200),
+            f("d.md", 400),
+        ];
+        let kept = select_newest_files(files, 2);
+        let names: Vec<_> = kept
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["d.md", "b.md"]);
+
+        // ties broken deterministically by path desc
+        let files = vec![f("a.md", 100), f("b.md", 100), f("c.md", 100)];
+        let kept = select_newest_files(files, 2);
+        let names: Vec<_> = kept
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["c.md", "b.md"]);
+
+        // cap larger than input keeps everything
+        let files = vec![f("a.md", 100)];
+        assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn test_is_user_facing_artifact_ext() {
+        // positive cases
+        assert!(is_user_facing_artifact_ext("md"));
+        assert!(is_user_facing_artifact_ext("png"));
+        assert!(is_user_facing_artifact_ext("jpg"));
+        assert!(is_user_facing_artifact_ext("jpeg"));
+        assert!(is_user_facing_artifact_ext("gif"));
+        assert!(is_user_facing_artifact_ext("webp"));
+        assert!(is_user_facing_artifact_ext("svg"));
+
+        // negative cases
+        assert!(!is_user_facing_artifact_ext("json"));
+        assert!(!is_user_facing_artifact_ext("ts"));
+        assert!(!is_user_facing_artifact_ext("log"));
+        assert!(!is_user_facing_artifact_ext("txt"));
+        assert!(!is_user_facing_artifact_ext("js"));
+        assert!(!is_user_facing_artifact_ext("csv"));
+        assert!(!is_user_facing_artifact_ext(""));
+    }
+
+    #[tokio::test]
+    async fn test_fallback_scan_filters_non_user_facing_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipes_dir = tmp.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        // Create a pipe directory with an output/ subdirectory
+        let pipe_name = "test-filter-pipe";
+        let pipe_dir = pipes_dir.join(pipe_name);
+        let output_dir = pipe_dir.join("output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        // Write a minimal pipe.md with no artifacts frontmatter
+        std::fs::write(
+            pipe_dir.join("pipe.md"),
+            "---\nschedule: manual\n---\ntest pipe\n",
+        )
+        .unwrap();
+
+        // Create mixed files in output/
+        let files = vec![
+            "report.md",
+            "screenshot.png",
+            "data.json",
+            "runner.ts",
+            ".DS_Store",
+            "debug.log",
+            "notes.txt",
+        ];
+        for f in &files {
+            std::fs::write(output_dir.join(f), "content").unwrap();
+        }
+
+        let pm = PipeManager::new(pipes_dir, HashMap::new(), None, 0);
+        pm.reload_pipes().await.unwrap();
+
+        let declarations = pm.list_artifact_declarations(50).await;
+        let pipe_decls = declarations.iter().find(|(name, _)| name == pipe_name);
+
+        let pipe_decls = pipe_decls.expect("pipe should appear in declarations");
+        let mut names: Vec<String> = pipe_decls
+            .1
+            .iter()
+            .map(|(decl, _)| decl.path.clone())
+            .collect();
+        names.sort();
+
+        assert_eq!(names, vec!["output/report.md", "output/screenshot.png"]);
+    }
+
     #[tokio::test]
     async fn test_scheduler_starts_and_stops() {
         let mut pm = test_pipe_manager();
@@ -5046,6 +5338,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let body = "Do something useful";
@@ -5459,6 +5752,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
@@ -5491,6 +5785,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let sys = render_pipe_system_prompt("hello", 3030, None, None, None);
@@ -5516,6 +5811,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let sys = render_pipe_system_prompt(
@@ -5549,6 +5845,7 @@ mod tests {
             source_hash: None,
             subagent: false,
             privacy_filter: false,
+            artifacts: vec![],
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, None, None, None);
@@ -5651,6 +5948,7 @@ mod tests {
                 source_hash: None,
                 subagent: false,
                 privacy_filter: false,
+                artifacts: vec![],
                 trigger: None,
             },
             last_run: None,

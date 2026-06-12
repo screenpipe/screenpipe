@@ -7,11 +7,12 @@ import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 import { captureException } from '@sentry/cloudflare';
 
-// Auto model waterfall — quality first, then fall back to open-weight Vertex
-// MaaS picks (free for users, near-zero GCP burn) and a cheap Gemini safety
-// net at the tail.
-const AUTO_WATERFALL = [
-  'gemini-3.5-flash', // new flagship flash — beats pro tier on agent benchmarks
+// Auto model waterfall — open-weight Vertex MaaS picks ordered by quality
+// (free for users, low GCP burn) with a cheap Gemini safety net at the tail.
+// Exported so tests can pin that every chain entry has a MODEL_PRICING match
+// (otherwise served-model cost rows fall into the unknown-model estimate).
+export const AUTO_WATERFALL = [
+  'glm-5',            // closest Vertex match to gemini-3.5-flash (AA index 50 vs 55) at ~1/3 the output cost
   'kimi-k2.5',
   'deepseek-v3.2',
   'glm-4.7',
@@ -19,7 +20,7 @@ const AUTO_WATERFALL = [
 ];
 
 // Vision-capable models for requests containing images
-const AUTO_WATERFALL_VISION = [
+export const AUTO_WATERFALL_VISION = [
   'gemini-3.5-flash', // multimodal, leads on agent/vision benchmarks
   'llama-4-maverick', // free (Vertex MaaS), 400B MoE, strong vision + reasoning
   'gemini-3-flash',   // near-free, good vision
@@ -35,7 +36,7 @@ const AUTO_WATERFALL_VISION = [
 // Why this matters: Sentry shows ~4.7k 524 events/day on kimi-k2.5 alone
 // when users pick it explicitly. Without per-model cascade those all
 // failed user-visible. With cascade most recover transparently.
-const MODEL_FALLBACKS: Record<string, string[]> = {
+export const MODEL_FALLBACKS: Record<string, string[]> = {
   // Vertex MaaS text models
   'kimi-k2.5': ['deepseek-v3.2', 'glm-4.7', 'gemini-3-flash'],
   'glm-5': ['glm-4.7', 'deepseek-v3.2', 'gemini-3-flash'],
@@ -227,7 +228,7 @@ async function runChain(
 }
 
 /** User-friendly error message for a final cascade failure. */
-function friendlyError(model: string, status: number, fellThrough: boolean): string {
+export function friendlyError(model: string, status: number, fellThrough: boolean): string {
   if (status === 524 || status === 504 || status === 408) {
     return fellThrough
       ? `Upstream models are slow right now — please try again in a moment, or pick a different model.`
@@ -240,6 +241,18 @@ function friendlyError(model: string, status: number, fellThrough: boolean): str
   }
   if (status === 429) {
     return `Rate limit reached on ${model} (and fallbacks). Please try again in a minute.`;
+  }
+  if (status === 404 || status === 400) {
+    // A 404/400 from a provider almost always means the model id isn't enabled
+    // for this account or API key (not a transient outage), so retrying the same
+    // model won't help; point the user at the real fix instead of a bare
+    // "request failed (404)". (#3786)
+    return fellThrough
+      ? `No available model accepted the request. "${model}" and the fallbacks may not be enabled on your account or API key. Pick a different model, or check your provider access.`
+      : `"${model}" isn't available on your account or API key (${status}). Pick a different model, or check that your provider or key has access to it.`;
+  }
+  if (status === 401 || status === 403) {
+    return `Your provider rejected the request for "${model}" (${status}). Check that the API key in your AI preset is valid and has access to this model.`;
   }
   return fellThrough
     ? `All available models failed. Please try again or pick a different model.`

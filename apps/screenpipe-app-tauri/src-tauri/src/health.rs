@@ -173,6 +173,10 @@ pub enum RecordingStatus {
     Recording,
     /// Capture paused but server (HTTP/pipes/search) still alive.
     Paused,
+    /// Capture intentionally stopped by the user's work-hours schedule. Kept
+    /// distinct from `Paused` so the tray can say "outside work hours" rather
+    /// than implying a transient/manual pause the user can just click to resume.
+    ScheduledPause,
     Stopped,
     Error,
 }
@@ -346,6 +350,12 @@ struct HealthCheckResponse {
     /// DRM streaming content detected — capture should be fully stopped
     #[serde(default)]
     drm_content_paused: bool,
+    /// Recording intentionally paused by the user's work-hours schedule. The
+    /// engine reports this in /health; when true it has stopped capture on
+    /// purpose, so the tray must say "outside work hours" instead of letting a
+    /// stale start flag render a stuck "Starting…".
+    #[serde(default)]
+    schedule_paused: bool,
 }
 
 /// Decide recording status based on health check result and time since startup.
@@ -415,14 +425,57 @@ fn decide_status(
     }
 }
 
+/// Cap how long the `is_starting*` session flags may pin the tray on
+/// "Starting…" while the server is RESPONDING. The flags are AtomicBools
+/// cleared across many exit paths in recording.rs, and `capture_running`
+/// comes from a `try_lock` that can fail under contention — a leaked flag or
+/// permanently contended lock pinned a Windows enterprise machine on
+/// "Starting…" for hours while /health showed capture flowing (2026-06-11
+/// feedback log, device 40af21d0). A real server-up-but-capture-booting
+/// window is seconds; even a 100GB DB migration happens BEFORE the server
+/// responds. Past this ceiling we stop trusting the flag and let the
+/// health-derived status through. Generous on purpose.
+const START_PIN_CEILING: Duration = Duration::from_secs(300);
+
+/// Returns the start-in-progress flag, clamped: once it has been
+/// continuously true for longer than `ceiling` (tracked via `since`), it
+/// reads as false so a leaked flag can't pin the status forever. Resets the
+/// timer whenever the raw flag drops.
+fn clamp_start_in_progress(
+    raw: bool,
+    since: &mut Option<Instant>,
+    ceiling: Duration,
+) -> bool {
+    if !raw {
+        *since = None;
+        return false;
+    }
+    let started = since.get_or_insert_with(Instant::now);
+    if started.elapsed() > ceiling {
+        return false;
+    }
+    true
+}
+
 fn apply_capture_session_status(
     base_status: RecordingStatus,
     server_responding: bool,
     capture_running: Option<bool>,
     start_in_progress: bool,
+    schedule_paused: bool,
 ) -> RecordingStatus {
     if !server_responding {
         return base_status;
+    }
+
+    // The work-hours schedule intentionally parks capture outside the user's
+    // window. Honor it BEFORE the start-in-progress / capture-absent branches:
+    // when a boot lands outside work hours, capture never comes up (it's held
+    // off on purpose) and never errors, so the asserted start flag would
+    // otherwise pin the tray on a misleading "Starting…" forever — the exact
+    // bug a user with a work-hours schedule hit when booting before their window.
+    if schedule_paused {
+        return RecordingStatus::ScheduledPause;
     }
 
     if capture_running == Some(true) {
@@ -445,6 +498,9 @@ fn status_to_icon_key(status: RecordingStatus) -> &'static str {
         RecordingStatus::Starting => "starting",
         RecordingStatus::Recording => "healthy",
         RecordingStatus::Paused => "starting",
+        // Outside work hours is a neutral, intentional state — show the calm
+        // "starting"/amber icon, never the red error/unhealthy variant.
+        RecordingStatus::ScheduledPause => "starting",
         RecordingStatus::Stopped => "error",
         RecordingStatus::Error => "unhealthy",
     }
@@ -555,6 +611,11 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     let mut last_restart_triggered: Option<Instant> = None;
     // Track last known spawn epoch to detect user-initiated restarts
     let mut last_known_spawn_epoch: u64 = 0;
+    // How long the recording-session "start in progress" flags have been
+    // continuously true — feeds clamp_start_in_progress so a leaked flag
+    // can't pin the tray on "Starting…" forever (see START_PIN_CEILING).
+    let mut start_in_progress_since: Option<Instant> = None;
+    let mut start_pin_warned = false;
 
     tokio::spawn(async move {
         loop {
@@ -599,7 +660,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 current_status,
             );
 
-            let (capture_running, start_in_progress) = if let Some(recording_state) =
+            let (capture_running, start_in_progress_raw) = if let Some(recording_state) =
                 app.try_state::<crate::recording::RecordingState>()
             {
                 let start_in_progress = recording_state.is_starting.load(Ordering::SeqCst)
@@ -613,12 +674,38 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             } else {
                 (None, false)
             };
+            // Clamp the flag so a leaked atomic / contended capture lock can't
+            // pin the tray on "Starting…" forever while capture is actually
+            // flowing (see START_PIN_CEILING).
+            let start_in_progress = clamp_start_in_progress(
+                start_in_progress_raw,
+                &mut start_in_progress_since,
+                START_PIN_CEILING,
+            );
+            if start_in_progress_raw && !start_in_progress {
+                if !start_pin_warned {
+                    start_pin_warned = true;
+                    warn!(
+                        "start-in-progress flag stuck for >{}s while server responding — \
+                         ignoring it for tray status (capture_running={:?})",
+                        START_PIN_CEILING.as_secs(),
+                        capture_running
+                    );
+                }
+            } else if !start_in_progress_raw {
+                start_pin_warned = false;
+            }
 
+            // Engine intentionally pauses capture outside the work-hours
+            // schedule and reports it in /health; surface it as ScheduledPause
+            // so the tray doesn't show a stuck "Starting…".
+            let schedule_paused = matches!(&health_result, Ok(h) if h.schedule_paused);
             let status = apply_capture_session_status(
                 status,
                 health_result.is_ok(),
                 capture_running,
                 start_in_progress,
+                schedule_paused,
             );
 
             // NOTE: Runtime permission-loss detection has moved to
@@ -1052,6 +1139,7 @@ mod tests {
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
             drm_content_paused: false,
+            schedule_paused: false,
         })
     }
 
@@ -1073,6 +1161,7 @@ mod tests {
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
             drm_content_paused: false,
+            schedule_paused: false,
         })
     }
 
@@ -1305,36 +1394,90 @@ mod tests {
     #[test]
     fn test_capture_absent_with_live_server_is_paused() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), false);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), false, false);
         assert_eq!(status, RecordingStatus::Paused);
     }
 
     #[test]
     fn test_capture_absent_while_starting_stays_starting() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true, false);
         assert_eq!(status, RecordingStatus::Starting);
     }
 
     #[test]
     fn test_capture_status_does_not_mask_connection_error() {
         let status =
-            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false);
+            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false, false);
         assert_eq!(status, RecordingStatus::Stopped);
     }
 
     #[test]
     fn test_running_capture_keeps_recording_status() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false, false);
         assert_eq!(status, RecordingStatus::Recording);
     }
 
     #[test]
     fn test_running_capture_wins_over_stale_starting_flag() {
         let status =
-            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), true);
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), true, false);
         assert_eq!(status, RecordingStatus::Recording);
+    }
+
+    // ── Work-hours schedule pause ───────────────────────────────────────────
+    //
+    // Repro of a field report: a user with a work-hours schedule booted
+    // before their window, the engine started then immediately
+    // stopped capture ("outside work-hours schedule — stopping all capture"),
+    // and the tray sat on a stuck "Starting…". The inputs below are identical
+    // to `test_capture_absent_while_starting_stays_starting` (server up, no
+    // capture session, start flag still asserted) — only `schedule_paused` is
+    // true. Before the fix this returned Starting; now it must report the
+    // honest ScheduledPause so the tray can say "outside work hours".
+    #[test]
+    fn test_schedule_paused_overrides_stuck_starting() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true, true);
+        assert_eq!(status, RecordingStatus::ScheduledPause);
+    }
+
+    // A live capture session struct that the engine has schedule-stopped behind
+    // our back must NOT keep reading as Recording — that's the "overlay says
+    // recording but nothing is captured" footgun. schedule_paused wins.
+    #[test]
+    fn test_schedule_paused_overrides_recording() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false, true);
+        assert_eq!(status, RecordingStatus::ScheduledPause);
+    }
+
+    // Within the work-hours window (schedule_paused = false) nothing changes:
+    // the stale-start-flag path still yields Starting, exactly as before.
+    #[test]
+    fn test_within_schedule_leaves_starting_untouched() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true, false);
+        assert_eq!(status, RecordingStatus::Starting);
+    }
+
+    // schedule_paused only comes from a successful /health read, but guard the
+    // precedence anyway: a connection error must surface the real Stopped/boot
+    // state, never a stale "outside work hours".
+    #[test]
+    fn test_schedule_paused_ignored_when_server_down() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false, true);
+        assert_eq!(status, RecordingStatus::Stopped);
+    }
+
+    // Outside work hours is intentional, not a failure — calm icon, not red.
+    #[test]
+    fn test_scheduled_pause_shows_healthy_icon() {
+        assert!(!is_unhealthy_icon(status_to_icon_key(
+            RecordingStatus::ScheduledPause
+        )));
     }
 
     #[test]
@@ -1683,5 +1826,30 @@ mod tests {
         let result = wait_for_boot_ready(Duration::from_secs(5)).await;
         assert_eq!(result, BootReadiness::Ready);
         set_boot_phase("idle", None);
+    }
+
+    #[test]
+    fn clamp_start_in_progress_passes_within_ceiling_and_resets() {
+        let mut since: Option<Instant> = None;
+        // raw=false → false, no timer
+        assert!(!clamp_start_in_progress(false, &mut since, Duration::from_secs(60)));
+        assert!(since.is_none());
+        // raw=true within ceiling → true, timer starts
+        assert!(clamp_start_in_progress(true, &mut since, Duration::from_secs(60)));
+        assert!(since.is_some());
+        // raw drops → false + timer resets (a fresh start later gets a fresh window)
+        assert!(!clamp_start_in_progress(false, &mut since, Duration::from_secs(60)));
+        assert!(since.is_none());
+    }
+
+    #[test]
+    fn clamp_start_in_progress_stops_trusting_leaked_flag_past_ceiling() {
+        // Timer started in the past; with a ZERO ceiling any elapsed time
+        // exceeds it — models the leaked-flag case that pinned the Windows
+        // enterprise tray on "Starting…" for hours.
+        let mut since = Some(Instant::now() - Duration::from_secs(1));
+        assert!(!clamp_start_in_progress(true, &mut since, Duration::ZERO));
+        // Timer must NOT reset while raw stays true — the episode is one pin.
+        assert!(since.is_some());
     }
 }

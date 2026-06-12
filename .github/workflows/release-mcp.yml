@@ -45,6 +45,10 @@ jobs:
         working-directory: packages/screenpipe-mcp
         run: npm run build
 
+      - name: Bundle license
+        working-directory: packages/screenpipe-mcp
+        run: cp ../../LICENSE.md .
+
       - name: Publish to npm
         working-directory: packages/screenpipe-mcp
         run: |

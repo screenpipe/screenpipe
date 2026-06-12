@@ -801,7 +801,15 @@ pub async fn set_cloud_token(
     state: tauri::State<'_, crate::recording::RecordingState>,
 ) -> Result<(), String> {
     let normalized = token.filter(|t| !t.is_empty());
+    let should_clear_pi_auth = normalized.is_none();
     state.cloud_token.store(std::sync::Arc::new(normalized));
+
+    if should_clear_pi_auth {
+        if let Err(e) = crate::pi::clear_screenpipe_auth_token_files() {
+            warn!("failed to clear pi screenpipe auth token: {}", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -1467,11 +1475,12 @@ pub async fn get_disk_usage(
     }
 }
 
+const LOGIN_URL: &str = "https://screenpipe.com/login";
+
 /// Open the screenpi.pe login page.
-/// On Windows, opens in the system browser (WebView2 has issues with some auth
-/// providers; the registered deep-link scheme handles the redirect back).
-/// On macOS/Linux, uses an in-app WebView that intercepts the screenpipe://
-/// deep-link redirect (Safari blocks custom-scheme redirects).
+/// Windows: system browser + registered deep-link scheme handles the redirect.
+/// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
+/// Linux: in-app WebView that intercepts the screenpipe:// redirect.
 #[tauri::command]
 #[specta::specta]
 pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
@@ -1482,13 +1491,37 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         use tauri_plugin_opener::OpenerExt;
         app_handle
             .opener()
-            .open_url("https://screenpipe.com/login", None::<&str>)
+            .open_url(LOGIN_URL, None::<&str>)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
-    // macOS / Linux: in-app WebView to intercept the deep-link redirect
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let callback_url = match crate::auth_session::start_session(
+            LOGIN_URL.to_string(),
+            "screenpipe".to_string(),
+            false,
+        )
+        .await
+        {
+            Ok(url) => url,
+            Err(e) if e == "user_cancelled" => {
+                info!("login auth session cancelled");
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+
+        info!("login auth session completed, forwarding callback");
+        app_handle
+            .emit("deep-link-received", callback_url)
+            .map_err(|e| e.to_string())?;
+
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -1503,7 +1536,6 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
-        const LOGIN_URL: &str = "https://screenpipe.com/login";
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
@@ -1513,20 +1545,10 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         .inner_size(460.0, 700.0)
         .focused(true);
 
-        // Hide the title text on macOS — traffic lights stay, title bar
-        // stays opaque (no Overlay style), so the remote login page isn't
-        // covered by the bar. Same pattern used elsewhere in window/show.rs.
-        #[cfg(target_os = "macos")]
-        {
-            builder = builder.hidden_title(true);
-        }
-
         builder = builder.on_navigation(move |url| {
             if url.scheme() == "screenpipe" {
-                info!("login window intercepted deep link: {}", url);
+                info!("login window intercepted deep link callback");
                 let _ = app_for_nav.emit("deep-link-received", url.to_string());
-                // Close the login window after a short delay to avoid
-                // closing before the event is delivered
                 if let Some(w) = app_for_nav.get_webview_window("login-browser") {
                     let _ = w.close();
                 }
@@ -1669,6 +1691,58 @@ pub async fn show_window_activated(
             .map_err(|e| format!("failed to activate app: {}", e))?;
     }
     show_window(app_handle, window).await
+}
+
+/// Programmatically adjust a window's always-on-top level after creation.
+///
+/// Tauri's JS `setAlwaysOnTop` can be unreliable for macOS panel-style
+/// windows. For permission flows we need Screenpipe to stay normally
+/// always-on-top, but temporarily drop below System Settings while the user is
+/// granting permissions. On macOS this directly sets the underlying NSWindow
+/// level: floating when enabled, normal when disabled.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_window_always_on_top_native(
+    app_handle: tauri::AppHandle,
+    label: String,
+    always_on_top: bool,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    let window = app_handle
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("window not found: {}", label))?;
+
+    window
+        .set_always_on_top(always_on_top)
+        .map_err(|e| format!("failed to set always-on-top: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use crate::window::run_on_main_thread_safe;
+        use raw_window_handle::HasWindowHandle;
+
+        let window_clone = window.clone();
+        run_on_main_thread_safe(&app_handle, move || {
+            if let Ok(handle) = window_clone.window_handle() {
+                if let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw() {
+                    use objc::{msg_send, sel, sel_impl};
+                    let ns_view = appkit_handle.ns_view.as_ptr() as *mut objc::runtime::Object;
+                    let ns_window: *mut objc::runtime::Object =
+                        unsafe { msg_send![ns_view, window] };
+                    if !ns_window.is_null() {
+                        // NSNormalWindowLevel = 0. NSFloatingWindowLevel = 3.
+                        // Floating keeps recovery/onboarding above normal app
+                        // windows; normal lets System Settings sit above it.
+                        let level: i64 = if always_on_top { 3 } else { 0 };
+                        let _: () = unsafe { msg_send![ns_window, setLevel: level] };
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(())
 }
 
 /// Re-assert the WKWebView as first responder for the current key panel.
@@ -2142,7 +2216,10 @@ fn shortcut_reminder_label(
     setting_key: &str,
     disabled_shortcuts: &[String],
 ) -> String {
-    if disabled_shortcuts.iter().any(|disabled| disabled == setting_key) {
+    if disabled_shortcuts
+        .iter()
+        .any(|disabled| disabled == setting_key)
+    {
         String::new()
     } else if value.trim().is_empty() {
         String::new()
@@ -3225,7 +3302,6 @@ pub struct CacheFile {
 #[specta::specta]
 pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let home_dir = dirs::home_dir().ok_or("no home directory")?;
     let mut files = Vec::new();
 
     // Pi agent node_modules (~/.screenpipe/pi-agent/)
@@ -3239,13 +3315,16 @@ pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
         });
     }
 
-    // Pi config (~/.pi/agent/)
-    let pi_config = home_dir.join(".pi").join("agent");
+    // Pi config (~/.screenpipe/pi-config/). Never list the user's global
+    // ~/.pi/agent here — that belongs to their standalone pi install and
+    // offering to delete it risked destroying the user's own setup
+    // (https://github.com/screenpipe/screenpipe/issues/4002).
+    let pi_config = data_dir.join("pi-config");
     if pi_config.exists() {
         let size = dir_size(&pi_config);
         files.push(CacheFile {
             path: pi_config.to_string_lossy().to_string(),
-            label: "AI agent config (.pi/agent)".to_string(),
+            label: "AI agent config (pi-config)".to_string(),
             size_bytes: size,
         });
     }

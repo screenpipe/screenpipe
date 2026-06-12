@@ -497,6 +497,10 @@ pub struct RecordArgs {
     #[arg(long, default_value = "balanced")]
     pub video_quality: String,
 
+    /// Keep the computer awake while screenpipe is running.
+    #[arg(long, default_value_t = false)]
+    pub keep_computer_awake: bool,
+
     /// Mitsukeru fork: override the active PowerProfile's idle_capture_interval_ms.
     /// Forces this idle snapshot interval regardless of power mode. Useful for
     /// fixed desktop / long-running recording where AC-power Performance defaults
@@ -700,6 +704,7 @@ pub struct RecordArgSources {
     pub transcription_mode: bool,
     pub disable_telemetry: bool,
     pub video_quality: bool,
+    pub keep_computer_awake: bool,
     pub pause_on_drm_content: bool,
     pub disable_clipboard_capture: bool,
     pub disable_keyboard_capture: bool,
@@ -749,6 +754,7 @@ impl RecordArgSources {
             transcription_mode: from_command_line(record, "transcription_mode"),
             disable_telemetry: from_command_line(record, "disable_telemetry"),
             video_quality: from_command_line(record, "video_quality"),
+            keep_computer_awake: from_command_line(record, "keep_computer_awake"),
             pause_on_drm_content: from_command_line(record, "pause_on_drm_content"),
             disable_clipboard_capture: from_command_line(record, "disable_clipboard_capture"),
             disable_keyboard_capture: from_command_line(record, "disable_keyboard_capture"),
@@ -790,6 +796,7 @@ impl RecordArgSources {
             || self.transcription_mode
             || self.disable_telemetry
             || self.video_quality
+            || self.keep_computer_awake
             || self.pause_on_drm_content
             || self.disable_clipboard_capture
             || self.disable_keyboard_capture
@@ -957,6 +964,7 @@ impl RecordArgs {
             extraction_thread_priority: self.extraction_thread_priority.clone(),
             pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
             analytics_enabled: !self.disable_telemetry,
+            keep_computer_awake: self.keep_computer_awake,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
             disable_clipboard_capture: self.disable_clipboard_capture,
@@ -1226,6 +1234,9 @@ impl RecordArgs {
         }
         if sources.video_quality {
             settings.video_quality = self.video_quality.clone();
+        }
+        if sources.keep_computer_awake {
+            settings.keep_computer_awake = self.keep_computer_awake;
         }
         if sources.pause_on_drm_content {
             settings.pause_on_drm_content = self.pause_on_drm_content;
@@ -2003,6 +2014,32 @@ mod tests {
                 assert!(
                     !settings.pause_on_drm_content,
                     "absent flag should be false in settings"
+                );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_keep_computer_awake_default_false() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert!(!args.keep_computer_awake, "default should be false");
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_keep_computer_awake_flag_flows_to_recording_settings() {
+        let cli = Cli::try_parse_from(["screenpipe", "record", "--keep-computer-awake"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                let settings = args.to_recording_settings();
+                assert!(
+                    settings.keep_computer_awake,
+                    "flag should propagate to RecordingSettings"
                 );
             }
             _ => panic!("expected Record command"),

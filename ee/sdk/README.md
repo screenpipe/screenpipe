@@ -35,8 +35,8 @@ npm install @screenpipe/sdk
 bun add @screenpipe/sdk
 ```
 
-This package is source-available under the Screenpipe Enterprise License. It is
-not covered by the root repository MIT license. See [LICENSE.md](./LICENSE.md).
+This package is source-available under the Screenpipe Commercial License, the
+same license as the root repository. See [LICENSE.md](../../LICENSE.md) at the repository root (bundled into the npm package at publish time).
 
 ## Node Quick Start
 

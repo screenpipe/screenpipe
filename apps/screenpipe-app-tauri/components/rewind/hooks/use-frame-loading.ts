@@ -11,6 +11,16 @@ import { getApiBaseUrl } from "@/lib/api";
 const FRAME_LOAD_DEBOUNCE_MS = 80;
 const FRAME_LOAD_DEBOUNCE_ARROW_MS = 0;
 
+// HD smooth playback: a chunk reporting fps >= this is a high-fps stream we can
+// play natively. HD mode records 10/30fps; normal/compact chunks are <= 2fps,
+// so this cleanly selects only HD without touching ordinary playback.
+const HD_PLAYBACK_MIN_FPS = 5;
+// While playing an HD chunk we let the <video> run at its native framerate and
+// only re-seek it back to the master-clock position when it drifts more than
+// this many seconds. The index frames are ~1s apart, so this tolerance keeps
+// motion smooth while staying roughly in sync with the slider + audio.
+const HD_RESYNC_THRESHOLD_SECS = 0.75;
+
 // Track which chunks have failed with TTL — entries expire so finished chunks can be retried
 const FAILED_CHUNK_TTL_MS = 30_000;
 const failedChunks = new Map<string, number>();
@@ -41,6 +51,10 @@ export function useFrameLoading(opts: {
 	onFrameUnavailable?: () => void;
 	onFrameLoadError?: () => void;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
+	/** Timeline is playing — lets HD chunks play natively instead of seek-stepping */
+	isPlaying?: boolean;
+	/** Current playback speed, applied to the <video> during HD native playback */
+	playbackSpeed?: number;
 }) {
 	const {
 		currentFrame,
@@ -51,6 +65,8 @@ export function useFrameLoading(opts: {
 		onFrameUnavailable,
 		onFrameLoadError,
 		videoRef,
+		isPlaying,
+		playbackSpeed,
 	} = opts;
 
 	const [isLoading, setIsLoading] = useState(true);
@@ -261,6 +277,34 @@ export function useFrameLoading(opts: {
 				targetTime = Math.max(0, video.duration - 0.01);
 			}
 
+			// HD smooth playback: while the timeline is playing inside a high-fps
+			// chunk, let the <video> play at its native framerate instead of
+			// hard-seeking to each ~1/sec index frame. We only nudge currentTime
+			// back when it drifts from the master clock (which advances
+			// currentFrame), so motion stays smooth and roughly in sync. The
+			// slider + audio stay driven by the master clock in use-audio-playback;
+			// the <video> is muted so native autoplay is allowed.
+			if (isPlaying && serverFps >= HD_PLAYBACK_MIN_FPS) {
+				video.playbackRate = playbackSpeed ?? 1;
+				if (Math.abs(video.currentTime - targetTime) > HD_RESYNC_THRESHOLD_SECS) {
+					video.currentTime = targetTime; // resync drift — keep it live, don't await
+				}
+				if (video.paused) {
+					try { await video.play(); } catch { /* muted autoplay should be allowed */ }
+				}
+				if (gen !== seekGenRef.current) return;
+				setIsLoading(false);
+				setHasError(false);
+				setNaturalDimensions({ width: video.videoWidth, height: video.videoHeight });
+				return;
+			}
+
+			// Scrubbing / paused / non-HD: ensure the video is paused, then hard-seek
+			// to the exact frame so the still image matches currentFrame.
+			if (!video.paused) {
+				try { video.pause(); } catch { /* ignore */ }
+			}
+
 			if (Math.abs(video.currentTime - targetTime) > 0.001) {
 				video.currentTime = targetTime;
 				await new Promise<void>((resolve) => {
@@ -310,7 +354,25 @@ export function useFrameLoading(opts: {
 			loadedChunkRef.current = null;
 			setUseVideoMode(false);
 		});
-	}, [debouncedFrame, useVideoMode, getVideoUrl, resolveEffectiveFps, isSnapshotFrame, searchNavFrame]);
+	}, [debouncedFrame, useVideoMode, getVideoUrl, resolveEffectiveFps, isSnapshotFrame, searchNavFrame, isPlaying, playbackSpeed]);
+
+	// Safety net: the <video> must only ever be *playing* during HD native
+	// playback. Pause it in every other state (paused, scrubbing, normal
+	// playback, snapshot frames) so a previously-playing HD chunk can't keep
+	// running hidden behind a snapshot <img> after playback leaves the chunk.
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video) return;
+		const hdPlaying =
+			!!isPlaying &&
+			(debouncedFrame?.fps ?? 0) >= HD_PLAYBACK_MIN_FPS &&
+			useVideoMode &&
+			!isSnapshotFrame &&
+			!searchNavFrame;
+		if (!hdPlaying && !video.paused) {
+			try { video.pause(); } catch { /* ignore */ }
+		}
+	}, [isPlaying, debouncedFrame?.fps, useVideoMode, isSnapshotFrame, searchNavFrame, videoRef]);
 
 	// Snapshot frames: load directly via Tauri asset protocol (no HTTP/DB needed)
 	useEffect(() => {

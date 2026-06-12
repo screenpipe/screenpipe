@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Monitor, Mic, Keyboard, Globe, Check } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
@@ -103,7 +104,7 @@ export default function PermissionsStep({
       title: "Capture your screen",
       subtitle: "Lets Screenpipe index what's on your screen — windows, docs, chats, code",
       check: () => commands.checkScreenRecordingPermission(),
-      request: () => commands.requestPermission("screenRecording"),
+      request: () => requestPermissionWithFlow("screenRecording"),
     },
     {
       id: "mic",
@@ -119,7 +120,7 @@ export default function PermissionsStep({
       title: "Read on-screen text",
       subtitle: "Lets Screenpipe understand app content without OCR",
       check: () => commands.checkAccessibilityPermissionCmd(),
-      request: () => commands.requestPermission("accessibility"),
+      request: () => requestPermissionWithFlow("accessibility"),
       macOnly: true,
     },
     {

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Check, Lock, Settings, X } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import { commands, OSPermissionsCheck, OSPermissionStatus } from "@/lib/utils/tauri";
+import { openPermissionSettingsWithFlow, requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useSettings } from "@/lib/hooks/use-settings";
 import localforage from "localforage";
@@ -67,7 +68,11 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         await commands.closeWindow("Main");
       }
 
-      await commands.requestPermission(permissionType);
+      if (permissionType === "screenRecording") {
+        await requestPermissionWithFlow(permissionType);
+      } else {
+        await commands.requestPermission(permissionType);
+      }
 
       // Refresh permissions after request
       const perms = await commands.doPermissionsCheck(false);
@@ -107,7 +112,11 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         await commands.closeWindow("Main");
       }
 
-      await commands.openPermissionSettings(permissionType);
+      if (permissionType === "screenRecording") {
+        await openPermissionSettingsWithFlow(permissionType);
+      } else {
+        await commands.openPermissionSettings(permissionType);
+      }
     } catch (error) {
       console.error(`failed to open ${type} permission settings:`, error);
       toast({

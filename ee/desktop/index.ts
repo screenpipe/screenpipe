@@ -1,5 +1,5 @@
 // Screenpipe Enterprise Edition
-// Licensed under the Screenpipe Enterprise License (see ee/LICENSE)
+// Licensed under the Screenpipe Commercial License (see LICENSE.md)
 
 export { useEnterprise } from "./hooks/use-enterprise";
 export type { EnterpriseState } from "./hooks/use-enterprise";

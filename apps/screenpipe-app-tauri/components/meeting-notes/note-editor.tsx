@@ -13,9 +13,11 @@ import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Image from "@tiptap/extension-image";
+import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Markdown } from "tiptap-markdown";
 import { cn } from "@/lib/utils";
 import { imageFileToDataUrl, isNoteImageFile } from "./image-utils";
+import { FormatToolbar, SlashCommandMenu } from "./editor-menus";
 
 export interface NoteEditorProps {
   value: string;
@@ -158,6 +160,10 @@ function NoteEditor(
           class: "meeting-note-image",
         },
       }),
+      // GFM task lists ("- [ ]") — tiptap-markdown round-trips them, so the
+      // persisted markdown stays portable. Styled in globals.css.
+      TaskList,
+      TaskItem.configure({ nested: true }),
       Markdown.configure({
         html: false,
         tightLists: true,
@@ -254,6 +260,8 @@ function NoteEditor(
       onClick={handleShellClick}
     >
       <EditorContent editor={editor} />
+      <SlashCommandMenu editor={editor} />
+      <FormatToolbar editor={editor} />
     </div>
   );
 });

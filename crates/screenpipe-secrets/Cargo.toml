@@ -4,23 +4,23 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
-base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-anyhow = "1"
-tokio = { version = "1", features = ["full"] }
-chacha20poly1305 = "0.10"
-rand = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
+sqlx = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+chacha20poly1305 = { workspace = true }
+rand = { workspace = true }
+chrono = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
+keyring = { workspace = true, features = ["windows-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native-sync-persistent"] }
+keyring = { workspace = true, features = ["linux-native-sync-persistent"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
-tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }

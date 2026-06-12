@@ -33,6 +33,16 @@ interface AudioPipelineHealth {
   meeting_app?: string;
 }
 
+interface CaptureStatusHealth {
+  status: string;
+  severity: string;
+  reason: string;
+  audio_disabled: boolean;
+  active_audio_devices: number;
+  paused_audio_devices: number;
+  pending_transcription_segments?: number | null;
+}
+
 interface HealthCheckResponse {
   status: string;
   status_code: number;
@@ -45,6 +55,7 @@ interface HealthCheckResponse {
   message: string;
   verbose_instructions?: string | null;
   device_status_details?: string | null;
+  capture_status?: CaptureStatusHealth | null;
   audio_pipeline?: AudioPipelineHealth | null;
 }
 
@@ -63,6 +74,8 @@ function isHealthChanged(
     oldHealth.audio_status !== newHealth.audio_status ||
     oldHealth.ui_status !== newHealth.ui_status ||
     oldHealth.message !== newHealth.message ||
+    JSON.stringify(oldHealth.capture_status) !==
+      JSON.stringify(newHealth.capture_status) ||
     JSON.stringify(oldHealth.audio_pipeline) !==
       JSON.stringify(newHealth.audio_pipeline)
   );

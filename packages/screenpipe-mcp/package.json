@@ -28,7 +28,7 @@
     "audio-transcription"
   ],
   "author": "Screenpipe",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE.md",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1"
   },

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
+import { openPermissionSettingsWithFlow, requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { listen } from "@tauri-apps/api/event";
 
@@ -87,14 +88,14 @@ export function PermissionBanner() {
             // (e.g. mic prompt, accessibility prompt). If the permission was already
             // denied, it falls back to opening System Settings internally.
             try {
-              if (!permissions.screenOk) await commands.requestPermission("screenRecording");
+              if (!permissions.screenOk) await requestPermissionWithFlow("screenRecording");
               else if (!permissions.micOk) await commands.requestPermission("microphone");
-              else if (!permissions.accessibilityOk) await commands.requestPermission("accessibility");
+              else if (!permissions.accessibilityOk) await requestPermissionWithFlow("accessibility");
             } catch {
               // fallback to opening settings directly
-              if (!permissions.screenOk) await commands.openPermissionSettings("screenRecording");
+              if (!permissions.screenOk) await openPermissionSettingsWithFlow("screenRecording");
               else if (!permissions.micOk) await commands.openPermissionSettings("microphone");
-              else if (!permissions.accessibilityOk) await commands.openPermissionSettings("accessibility");
+              else if (!permissions.accessibilityOk) await openPermissionSettingsWithFlow("accessibility");
             }
           }}
         >

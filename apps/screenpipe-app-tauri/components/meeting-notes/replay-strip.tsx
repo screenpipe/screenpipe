@@ -129,10 +129,14 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
 
   // Frames across the meeting span.
   const [frames, setFrames] = useState<FrameSample[]>([]);
+  const [unavailableFrameIds, setUnavailableFrameIds] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [framesLoading, setFramesLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
     setFramesLoading(true);
+    setUnavailableFrameIds(new Set());
     void fetchFrameSamples(
       new Date(rangeStartMs).toISOString(),
       new Date(rangeEndMs).toISOString(),
@@ -147,15 +151,29 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
     };
   }, [rangeStartMs, rangeEndMs]);
 
+  const markFrameUnavailable = useCallback((frameId: number) => {
+    setUnavailableFrameIds((prev) => {
+      if (prev.has(frameId)) return prev;
+      const next = new Set(prev);
+      next.add(frameId);
+      return next;
+    });
+  }, []);
+
+  const renderableFrames = useMemo(
+    () => frames.filter((f) => !unavailableFrameIds.has(f.frameId)),
+    [frames, unavailableFrameIds],
+  );
+
   const thumbnails = useMemo<FrameSample[]>(() => {
-    if (frames.length === 0) return [];
+    if (renderableFrames.length === 0) return [];
     const out: FrameSample[] = [];
     const seenIds = new Set<number>();
     for (let i = 0; i < THUMB_COUNT; i++) {
       const target = rangeStartMs + (durationMs * (i + 0.5)) / THUMB_COUNT;
       let best: FrameSample | null = null;
       let bestDelta = Infinity;
-      for (const f of frames) {
+      for (const f of renderableFrames) {
         if (seenIds.has(f.frameId)) continue;
         const delta = Math.abs(new Date(f.timestamp).getTime() - target);
         if (delta < bestDelta) {
@@ -169,13 +187,13 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
       }
     }
     return out;
-  }, [frames, rangeStartMs, durationMs]);
+  }, [renderableFrames, rangeStartMs, durationMs]);
 
   const activeFrame = useMemo<FrameSample | null>(() => {
-    if (frames.length === 0) return null;
+    if (renderableFrames.length === 0) return null;
     let best: FrameSample | null = null;
     let bestDelta = Infinity;
-    for (const f of frames) {
+    for (const f of renderableFrames) {
       const delta = Math.abs(new Date(f.timestamp).getTime() - cursorMs);
       if (delta < bestDelta) {
         bestDelta = delta;
@@ -183,7 +201,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
       }
     }
     return best;
-  }, [frames, cursorMs]);
+  }, [renderableFrames, cursorMs]);
 
   const activeChunk = useMemo<MeetingAudioChunk | null>(() => {
     if (enrichedChunks.length === 0) return null;
@@ -308,10 +326,11 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
               src={appendAuthToken(`${getApiBaseUrl()}/frames/${activeFrame.frameId}`)}
               alt={`screen at ${formatClock(new Date(cursorMs).toISOString())}`}
               className="max-w-full max-h-full object-contain"
+              onError={() => markFrameUnavailable(activeFrame.frameId)}
             />
           ) : (
             <span className="text-[11px] text-muted-foreground p-6">
-              no frames captured during this meeting
+              no screen images available during this meeting
             </span>
           )}
         </div>
@@ -385,6 +404,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
                       alt=""
                       className="w-full h-full object-cover opacity-80"
                       draggable={false}
+                      onError={() => markFrameUnavailable(f.frameId)}
                     />
                   </div>
                 ))
@@ -423,7 +443,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
           <span>
             {chunksLoading
               ? "loading transcript…"
-              : `${enrichedChunks.length} segments · ${frames.length} frames · drag to scrub`}
+              : `${enrichedChunks.length} segments · ${renderableFrames.length} frames · drag to scrub`}
           </span>
           <span>{formatClock(new Date(rangeEndMs).toISOString())}</span>
         </div>

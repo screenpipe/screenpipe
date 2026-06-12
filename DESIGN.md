@@ -5,7 +5,7 @@
 
 **"Black & White Geometric Minimalism"**
 
-No color. Sharp corners. Clean typography. Escher-inspired mathematical abstractions.
+No color. Sharp corners. Clean typography. Escher-inspired mathematical abstractions. Unique animations and shapes.
 
 ---
 
@@ -159,6 +159,8 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 
 Do at least 10 iterations on your animations, at every turn criticise your own design and improve it until it matches the unique brand style
 
+Take screenshots of modern apps with great design you find on internet and use it as inspiration for the UX but apply screenpipe brand style to it.
+
 ---
 
 ## Brand Voice
@@ -166,7 +168,7 @@ Do at least 10 iterations on your animations, at every turn criticise your own d
 ### Tone
 
 - Lowercase, casual, direct
-- Technical and still very accessible
+- Minimal technical details but power users can go deep
 - No marketing fluff
 
 ---
@@ -185,6 +187,7 @@ When creating new UI components:
 - [ ] UPPERCASE for buttons, lowercase for titles
 - [ ] Hover state: color inversion
 - [ ] Focus ring: 1px solid with offset
+- [ ] Always send screenshot of the new UI in PR bodies or design suggestions in ASCII, if you have access to AI image generation you can also leverage it 
 
 ---
 

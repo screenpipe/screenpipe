@@ -6,9 +6,10 @@
 //!
 //! Subscribes to `EVENT_SYSTEM_FOREGROUND` via `SetWinEventHook` on a
 //! dedicated Windows message-loop thread. When the foreground window
-//! changes, we resolve the target `HWND` to an `HMONITOR` via
-//! `MonitorFromWindow` and map that to our internal monitor id by enumerating
-//! displays via `EnumDisplayMonitors` and matching by device name + bounds.
+//! changes, we resolve the target `HWND` to a cached monitor rectangle and map
+//! that to our internal monitor id. The monitor cache is refreshed by the 5s
+//! safety-net poll, keeping foreground-event callbacks cheap during app
+//! switching.
 //!
 //! Fallback: when `GetForegroundWindow` returns NULL (e.g. during Win+L, UAC
 //! prompts, or the brief no-foreground period after closing a window), we
@@ -55,12 +56,10 @@ fn pick_monitor(rects: &[MonitorRect], x: i32, y: i32) -> Option<MonitorIdentity
     })
 }
 
-fn monitor_for_point(
+fn monitor_rects_from_monitors(
     monitors: &[screenpipe_screen::monitor::SafeMonitor],
-    x: i32,
-    y: i32,
-) -> Option<MonitorIdentity> {
-    let rects: Vec<MonitorRect> = monitors
+) -> Vec<MonitorRect> {
+    monitors
         .iter()
         .map(|m| MonitorRect {
             identity: MonitorIdentity::from_monitor(m),
@@ -69,8 +68,7 @@ fn monitor_for_point(
             w: m.width(),
             h: m.height(),
         })
-        .collect();
-    pick_monitor(&rects, x, y)
+        .collect()
 }
 
 /// Read the current cursor position in virtual-desktop coordinates.
@@ -127,27 +125,50 @@ fn foreground_window_anchor() -> Option<(i32, i32)> {
 struct Inner {
     tx: broadcast::Sender<FocusEvent>,
     current: Mutex<Option<MonitorIdentity>>,
+    monitor_rects: Mutex<Vec<MonitorRect>>,
     stop_flag: AtomicBool,
     unknown_emitted: Mutex<bool>,
-    // Handle to the tokio runtime captured at start(). The WinEvent callback
-    // runs on the Win32 message-pump thread (no tokio context), so we drive
-    // async calls via this handle instead of `futures::executor::block_on`,
-    // which would panic on `tokio::task::spawn_blocking` inside list_monitors.
+    // Handle to the tokio runtime captured at start(). Normally foreground
+    // callbacks use cached monitor rects, but startup races may need one
+    // fallback refresh on the Win32 message-pump thread.
     runtime: tokio::runtime::Handle,
 }
 
 impl Inner {
+    fn set_monitor_rects(&self, rects: Vec<MonitorRect>) {
+        if let Ok(mut cached) = self.monitor_rects.lock() {
+            *cached = rects;
+        }
+    }
+
+    fn cached_monitor_rects(&self) -> Option<Vec<MonitorRect>> {
+        let cached = self.monitor_rects.lock().ok()?;
+        if cached.is_empty() {
+            None
+        } else {
+            Some(cached.clone())
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn refresh_monitor_rects_and_emit(&self) {
+        let monitors = screenpipe_screen::monitor::list_monitors().await;
+        let rects = monitor_rects_from_monitors(&monitors);
+        self.set_monitor_rects(rects.clone());
+        self.resolve_and_emit(&rects);
+    }
+
     /// Resolve focus: try the foreground-window anchor first; fall back to
     /// cursor position on failure.
     #[cfg(target_os = "windows")]
-    fn resolve_and_emit(&self, monitors: &[screenpipe_screen::monitor::SafeMonitor]) {
+    fn resolve_and_emit(&self, rects: &[MonitorRect]) {
         if self.stop_flag.load(Ordering::Relaxed) {
             return;
         }
 
         let resolved = foreground_window_anchor()
-            .and_then(|(x, y)| monitor_for_point(monitors, x, y))
-            .or_else(|| cursor_position().and_then(|(x, y)| monitor_for_point(monitors, x, y)));
+            .and_then(|(x, y)| pick_monitor(rects, x, y))
+            .or_else(|| cursor_position().and_then(|(x, y)| pick_monitor(rects, x, y)));
 
         match resolved {
             Some(identity) => {
@@ -235,6 +256,7 @@ impl WindowsFocusTracker {
         let inner = Arc::new(Inner {
             tx,
             current: Mutex::new(None),
+            monitor_rects: Mutex::new(Vec::new()),
             stop_flag: AtomicBool::new(false),
             unknown_emitted: Mutex::new(false),
             runtime: handle.clone(),
@@ -258,16 +280,14 @@ impl WindowsFocusTracker {
                     break;
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                let monitors = screenpipe_screen::monitor::list_monitors().await;
-                poll_inner.resolve_and_emit(&monitors);
+                poll_inner.refresh_monitor_rects_and_emit().await;
             }
         });
 
         // Seed initial state.
         let seed_inner = Arc::clone(&inner);
         handle.spawn(async move {
-            let monitors = screenpipe_screen::monitor::list_monitors().await;
-            seed_inner.resolve_and_emit(&monitors);
+            seed_inner.refresh_monitor_rects_and_emit().await;
         });
 
         Ok(Self {
@@ -311,6 +331,13 @@ fn run_win_event_observer() {
         if inner.stop_flag.load(Ordering::Relaxed) {
             return;
         }
+        if let Some(rects) = inner.cached_monitor_rects() {
+            inner.resolve_and_emit(&rects);
+            return;
+        }
+
+        // Startup race fallback only; steady-state foreground events use the
+        // cached monitor rectangles refreshed by the poll task.
         // `list_monitors()` is async and internally uses `tokio::task::spawn_blocking`,
         // so it MUST run on the tokio runtime captured at start(). This callback fires
         // on the Win32 message-pump thread, which has no tokio context — driving the
@@ -320,7 +347,9 @@ fn run_win_event_observer() {
         let monitors = inner
             .runtime
             .block_on(screenpipe_screen::monitor::list_monitors());
-        inner.resolve_and_emit(&monitors);
+        let rects = monitor_rects_from_monitors(&monitors);
+        inner.set_monitor_rects(rects.clone());
+        inner.resolve_and_emit(&rects);
     }
 
     // Safety: SetWinEventHook returns an HWINEVENTHOOK (0 on failure). We

@@ -548,6 +548,7 @@ async fn materialize_and_score(
             None,
             Some(device_name),
             None,
+            &[],
         )
         .await?;
 
@@ -581,6 +582,7 @@ async fn materialize_and_score(
             Some(label),
             Some(device_name),
             None,
+            &[],
         )
         .await?
         .len()

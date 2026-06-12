@@ -43,6 +43,7 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | `window_name` | string | No | Window title substring |
 | `speaker_name` | string | No | Filter audio by speaker (case-insensitive partial) |
 | `focused` | boolean | No | Only focused windows |
+| `tags` | string | No | Comma-separated; return only items carrying ALL of them (e.g. `person:ada,project:atlas`). Works for screen/audio and, with `content_type=memory`, memories. See Tags below. |
 | `max_content_length` | integer | No | Truncate each result's text (middle-truncation) |
 
 ### Progressive Disclosure
@@ -64,6 +65,16 @@ Decision tree:
 - "Which apps today?" → Step 1 (do NOT use frame counts or raw SQLite)
 - "What button did I click?" → Step 3 (`/elements` with role=AXButton)
 - "Show me what I saw" → Step 2 (find frame_id) → Step 4
+
+### Tags — linking people, projects, topics
+
+Tags are a shared label layer across screen, audio, and memories under one string namespace. Use namespaced tags: `person:ada`, `project:atlas`, `topic:pricing`. Two items sharing a tag are connected.
+
+- Add to a frame/audio: `POST /tags/vision/{frame_id}` or `POST /tags/audio/{chunk_id}` body `{"tags":["person:ada"]}`.
+- Add to a memory: include `tags` in `POST /memories` (or `PUT /memories/{id}`).
+- Retrieve by tag: `GET /search?tags=person:ada&start_time=30d%20ago` (screen+audio), or add `content_type=memory` for memories. Multiple tags AND together; matching is exact, not substring.
+
+Frames are pruned by retention, so for a durable link tag a memory (memories also carry `created_at` and a `frame_id` back to the moment). To pull everything about a person across time: one call for captures (`content_type=all&tags=person:ada`) plus one for facts (`content_type=memory&tags=person:ada`).
 
 ### Critical Rules
 
@@ -266,20 +277,41 @@ Common patterns: `GROUP BY date(timestamp)` (daily), `GROUP BY strftime('%H:00',
 ## 8. Connections — `GET /connections`
 
 ```bash
-# List all integrations (Telegram, Slack, Discord, Email, Todoist, Teams)
+# List all integrations (Telegram, Slack, Discord, Email, Todoist, Teams, 40+)
 curl http://localhost:3030/connections
 
-# Get credentials for a connected service
+# Get saved credentials for a webhook/token integration
 curl http://localhost:3030/connections/telegram
 ```
 
-Returns credentials to use with service APIs directly:
+**Credential integrations** — `GET /connections/<id>` returns saved fields to use with the service API directly:
 - **Telegram**: `bot_token` + `chat_id` → `POST https://api.telegram.org/bot{token}/sendMessage`
 - **Slack**: `webhook_url` → `POST {webhook_url}` with `{"text": "..."}`
 - **Discord**: `webhook_url` → `POST {webhook_url}` with `{"content": "..."}`
 - **Todoist**: `api_token` → `POST https://api.todoist.com/api/v1/tasks` with Bearer auth
 - **Teams**: `webhook_url` → `POST {webhook_url}` with `{"text": "..."}`
 - **Email**: `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `from_address`
+
+**OAuth/proxy integrations** — tokens are stored in SecretStore and are never exposed via `GET /connections/<id>`. Call the local proxy instead; it injects auth and forwards to the upstream API:
+
+```bash
+# GitHub — create an issue (repo owner/name from pipe settings)
+curl -X POST http://localhost:3030/connections/github/proxy/repos/OWNER/REPO/issues \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Found a bug","body":"Steps to reproduce..."}'
+
+# GitHub — comment on an issue
+curl -X POST http://localhost:3030/connections/github/proxy/repos/OWNER/REPO/issues/42/comments \
+  -H "Content-Type: application/json" \
+  -d '{"body":"Thanks for the report!"}'
+
+# Generic OAuth proxy pattern (Zoom, Vercel, Google Docs, Microsoft 365, etc.)
+curl -X POST http://localhost:3030/connections/<id>/proxy/<upstream-api-path> \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+Do **not** call `https://api.github.com/...` directly from a pipe — use `/connections/github/proxy/...` instead. There is no `/connections/<id>/token` endpoint.
 
 If not connected, tell user to set up in Settings > Connections.
 

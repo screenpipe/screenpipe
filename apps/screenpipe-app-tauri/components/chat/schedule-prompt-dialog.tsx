@@ -80,6 +80,26 @@ enable:  bun x screenpipe@latest pipe enable my-pipe
 
 the pipe.md file MUST start with --- on the very first line (YAML front-matter). no blank lines or comments before it.
 
+## artifacts
+
+if the pipe creates a user-facing output file (summary, profile, report, etc.), declare it in frontmatter so it appears in the Artifacts library:
+
+\`\`\`
+---
+schedule: every 1h
+artifacts:
+  - path: output/result.md
+    title: Result
+    kind: markdown
+---
+\`\`\`
+
+rules:
+- write the final output to the exact declared path (e.g. \`./output/result.md\`)
+- always create or update that file — do not write final artifacts anywhere else
+- use \`kind: markdown\` for .md, \`kind: json\` for .json, \`kind: image\` for images, \`kind: text\` otherwise
+- if the pipe only sends notifications, calls APIs, or patches app state without creating a file, omit \`artifacts:\`
+
 ## task
 
 create the pipe.md file, install it, and enable it. here is what the user wants:`;

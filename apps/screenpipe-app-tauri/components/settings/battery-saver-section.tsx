@@ -8,6 +8,16 @@ import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge, MicOff, PauseCi
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { localFetch } from "@/lib/api";
+import { Switch } from "@/components/ui/switch";
+import { useToast } from "@/components/ui/use-toast";
+import { commands } from "@/lib/utils/tauri";
+import type { SettingsField } from "./settings-search";
+
+/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
+export const searchIndex: SettingsField[] = [
+  { label: "Power mode", keywords: ["battery", "performance", "saver"] },
+  { label: "Keep computer awake", keywords: ["sleep", "awake", "power"] },
+];
 
 interface PowerState {
   battery_pct: number | null;
@@ -68,8 +78,10 @@ const UNKNOWN_PROFILE_INFO = {
 
 export function BatterySaverSection() {
   const { settings, updateSettings } = useSettings();
+  const { toast } = useToast();
   const [status, setStatus] = useState<PowerStatus | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [keepAwakeUpdating, setKeepAwakeUpdating] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -112,10 +124,34 @@ export function BatterySaverSection() {
     }
   };
 
+  const setKeepAwake = async (enabled: boolean) => {
+    if (keepAwakeUpdating) return;
+
+    const previous = settings.keepComputerAwake ?? false;
+    setKeepAwakeUpdating(true);
+
+    try {
+      await updateSettings({ keepComputerAwake: enabled });
+      const result = await commands.setKeepAwake(enabled);
+      if (result.status === "error") {
+        throw new Error(String(result.error));
+      }
+    } catch (error) {
+      await updateSettings({ keepComputerAwake: previous });
+      toast({
+        title: "couldn't update keep-awake",
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setKeepAwakeUpdating(false);
+    }
+  };
+
   // Live state from the engine — may be null if the server isn't responding.
   const state = status?.state ?? null;
   const active_profile = status?.active_profile ?? null;
   const user_pref: PowerMode = status?.user_pref ?? settings.powerMode ?? "auto";
+  const keepAwakeEnabled = settings.keepComputerAwake ?? false;
   const profileInfo = active_profile
     ? (PROFILE_INFO[active_profile] ?? UNKNOWN_PROFILE_INFO)
     : null;
@@ -175,6 +211,27 @@ export function BatterySaverSection() {
           <span className="text-muted-foreground">— {profileInfo.description}</span>
         </div>
       )}
+
+      <div className="flex items-center justify-between gap-3 px-3 py-2.5 border border-border bg-card rounded">
+        <div className="flex items-center gap-2.5">
+          <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <div>
+            <label htmlFor="keepComputerAwake" className="text-sm font-medium text-foreground">
+              keep computer awake
+            </label>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              prevent idle sleep while screenpipe is running
+            </p>
+          </div>
+        </div>
+        <Switch
+          id="keepComputerAwake"
+          checked={keepAwakeEnabled}
+          onCheckedChange={setKeepAwake}
+          disabled={keepAwakeUpdating}
+          aria-label="keep computer awake"
+        />
+      </div>
 
       {/* Mode selector */}
       <div className="grid grid-cols-3 gap-2">

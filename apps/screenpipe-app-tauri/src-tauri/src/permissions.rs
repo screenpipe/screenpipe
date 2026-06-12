@@ -309,7 +309,7 @@ pub fn check_microphone_permission() -> OSPermissionStatus {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn check_screen_recording_permission() -> OSPermissionStatus {
-    core_to_os_status(screenpipe_core::permissions::check_screen_recording())
+    core_to_os_status(screenpipe_core::permissions::check_screen_recording_tauri())
 }
 
 /// Check only accessibility permission

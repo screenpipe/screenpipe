@@ -118,10 +118,12 @@ fn dispatch(app: &AppHandle, text: &str) {
     let name = frame.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let data = frame.get("data").cloned().unwrap_or(serde_json::json!({}));
     match name {
-        "permission_lost" | "permission_restored" => permission::handle(app, name, &data),
-        "audio_device_fallback_engaged" | "audio_device_fallback_cleared" => {
-            audio_device::handle(app, name, &data)
+        "permission_lost" | "permission_restored" | "permission_needed" => {
+            permission::handle(app, name, &data)
         }
+        "audio_device_fallback_engaged"
+        | "audio_device_fallback_cleared"
+        | "audio_device_status_changed" => audio_device::handle(app, name, &data),
         "power_profile_changed" => power::handle(app, name, &data),
         _ => { /* unrelated event — ignore */ }
     }

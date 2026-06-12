@@ -241,12 +241,48 @@ mod imp {
     /// on initialization if the API fails (e.g. missing drivers, corrupted binary,
     /// ABI mismatch). This converts such panics into proper Err values.
     fn create_session_safe(model_path: &std::path::Path) -> Result<Session, RedactError> {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Session::builder()
-                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
-                .and_then(|b| b.with_intra_threads(num_cpus_physical()))
-                .and_then(|b| b.commit_from_file(model_path))
-        })) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || -> Result<Session, ort::Error> {
+                let builder = Session::builder()?
+                    .with_optimization_level(GraphOptimizationLevel::Level3)?
+                    // Background batch worker — never busy-spin between ops. With
+                    // CoreML active the graph is partitioned ANE/CPU and a spinning
+                    // full-width pool burned ~4 cores in WorkerLoop while the
+                    // redaction backlog drained (340% CPU regression after 3b9a1a105).
+                    .with_intra_op_spinning(false)?
+                    // With CoreML the CPU pool only runs CoreML-rejected fallback
+                    // ops; 2 threads is plenty. CPU-only builds keep the full pool.
+                    .with_intra_threads(if cfg!(feature = "onnx-coreml") {
+                        2
+                    } else {
+                        num_cpus_physical()
+                    })?;
+                // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
+                // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
+                // faster than the legacy default and keeps the work off the CPU/GPU.
+                #[cfg(feature = "onnx-coreml")]
+                let builder = builder.with_execution_providers([
+                    ort::execution_providers::CoreMLExecutionProvider::default()
+                        .with_model_format(
+                            ort::execution_providers::coreml::CoreMLModelFormat::MLProgram,
+                        )
+                        .with_compute_units(
+                            ort::execution_providers::coreml::CoreMLComputeUnits::All,
+                        )
+                        .with_subgraphs(true)
+                        .build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                ])?;
+                #[cfg(feature = "onnx-directml")]
+                let builder = builder.with_execution_providers([
+                    ort::execution_providers::DirectMLExecutionProvider::default()
+                        .with_device_id(0)
+                        .build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                ])?;
+                builder.commit_from_file(model_path)
+            },
+        )) {
             Ok(Ok(session)) => Ok(session),
             Ok(Err(e)) => Err(RedactError::Runtime(format!("ort session creation: {e}"))),
             Err(payload) => {

@@ -14,6 +14,7 @@ use base64::Engine;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tokio::io::AsyncReadExt;
 use tracing::{error, info};
 
 const VIEWER_LABEL_PREFIX: &str = "viewer-";
@@ -179,11 +180,16 @@ pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
     // the UI shows a polite "open in default app" prompt instead of
     // rendering garbled bytes.
     let cap = total_bytes.min(MAX_VIEWER_FILE_BYTES) as usize;
-    let raw = tokio::fs::read(p).await.map_err(|e| e.to_string())?;
-    let truncated = (raw.len() as u64) < total_bytes;
-    let slice = &raw[..raw.len().min(cap)];
+    let truncated = total_bytes > MAX_VIEWER_FILE_BYTES;
 
-    if looks_binary(slice) {
+    let mut file = tokio::fs::File::open(p).await.map_err(|e| e.to_string())?;
+    let mut raw = Vec::with_capacity(cap);
+    file.take(cap as u64)
+        .read_to_end(&mut raw)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if looks_binary(&raw) {
         return Ok(ViewerContent::Binary {
             name,
             path,
@@ -191,7 +197,7 @@ pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
         });
     }
 
-    let text = String::from_utf8_lossy(slice).into_owned();
+    let text = String::from_utf8_lossy(&raw).into_owned();
     Ok(ViewerContent::Text {
         text,
         name,

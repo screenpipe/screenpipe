@@ -462,6 +462,10 @@ async fn main() -> anyhow::Result<()> {
         !config.analytics_enabled,
     )?);
 
+    if let Err(e) = screenpipe_engine::power::set_keep_awake(config.keep_computer_awake) {
+        warn!("failed to apply keep-awake setting: {}", e);
+    }
+
     // Non-blocking update check — runs in background, prints banner if outdated
     tokio::spawn(async {
         screenpipe_engine::cli_reminder::check_for_updates().await;
@@ -1431,14 +1435,12 @@ async fn main() -> anyhow::Result<()> {
             Box::pin(async move {
                 let mut missing = Vec::new();
                 for conn_id in required {
-                    let configured = screenpipe_connect::connections::load_connection(
+                    let configured = screenpipe_connect::connections::is_connection_configured(
                         ss.as_deref(),
                         &dir,
                         &conn_id,
                     )
-                    .await
-                    .map(|c| c.enabled && !c.credentials.is_empty())
-                    .unwrap_or(false);
+                    .await;
                     if !configured {
                         missing.push(conn_id);
                     }
@@ -1756,6 +1758,7 @@ async fn main() -> anyhow::Result<()> {
                 capture_trigger_tx,
                 linker_tx,
                 config.ignored_windows.clone(),
+                true, // CLI: show native TCC dialogs for accessibility + input monitoring
             )
             .await
             {

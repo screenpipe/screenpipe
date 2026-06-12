@@ -1042,6 +1042,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					{currentFrame ? (
 						<CurrentFrameTimeline
 							currentFrame={currentFrame}
+							isPlaying={isPlaying}
+							playbackSpeed={playbackSpeed}
 							allDeviceIds={allDeviceIds}
 							embedded={embedded}
 							navBarRef={navBarRef}

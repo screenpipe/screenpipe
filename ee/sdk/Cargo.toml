@@ -18,6 +18,20 @@ members = ["recorder-core", "tauri/rust"]
 # tauri-build / signing configs; they keep their own workspace roots.
 exclude = ["examples"]
 
+[workspace.dependencies]
+# Shared across recorder-core + tauri/rust
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "rt", "sync", "macros", "time", "process"] }
+# Used in recorder-core deps + dev-deps
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+tracing = "0.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Used in tauri/rust
+base64 = "0.22"
+thiserror = "2"
+tempfile = "3"
+
 [lib]
 crate-type = ["cdylib"]
 
@@ -29,7 +43,7 @@ screenpipe-recorder = { path = "recorder-core" }
 
 napi = { version = "2", default-features = false, features = ["napi4", "async"] }
 napi-derive = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tokio = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"

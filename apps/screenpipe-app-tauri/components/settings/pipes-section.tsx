@@ -52,12 +52,31 @@ import { parsePipeSessionId } from "@/lib/events/types";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
-import { humanizeDow, humanizeSchedule } from "@/lib/utils/schedule-format";
+import { humanizeDow, humanizeSchedule, parseHumanSchedule } from "@/lib/utils/schedule-format";
 import {
   PipeActivityIndicator,
   formatPipeElapsed,
 } from "@/components/pipe-activity-indicator";
 import { getApiBaseUrl, localFetch } from "@/lib/api";
+import { useTeam } from "@/lib/hooks/use-team";
+import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { CloudPipesTab } from "./cloud-pipes-tab";
+import {
+  writeTextFile,
+  readTextFile,
+  mkdir,
+  exists,
+} from "@tauri-apps/plugin-fs";
+import { homeDir, join } from "@tauri-apps/api/path";
+import {
+  parseTeamVersion,
+  stripTeamMarker,
+  setEnabledFlag,
+  planTeamPipeSync,
+  nextShareVersion,
+  isSafePipeName,
+  type TeamPipePayload,
+} from "@/lib/team-pipes";
 import {
   isNotificationsDenied,
   toggleNotificationInContent,
@@ -67,11 +86,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { useToast } from "@/components/ui/use-toast";
@@ -161,6 +182,26 @@ test:    bun x screenpipe@latest pipe run my-pipe
 
 the pipe.md file MUST start with --- on the very first line (YAML front-matter). no blank lines or comments before it.
 
+## artifacts
+
+if the pipe creates a user-facing output file (summary, profile, report, etc.), declare it in frontmatter so it appears in the Artifacts library:
+
+\`\`\`
+---
+schedule: every 1h
+artifacts:
+  - path: output/result.md
+    title: Result
+    kind: markdown
+---
+\`\`\`
+
+rules:
+- write the final output to the exact declared path (e.g. \`./output/result.md\`)
+- always create or update that file — do not write final artifacts anywhere else
+- use \`kind: markdown\` for .md, \`kind: json\` for .json, \`kind: image\` for images, \`kind: text\` otherwise
+- if the pipe only sends notifications, calls APIs, or patches app state without creating a file, omit \`artifacts:\`
+
 ## task
 
 create the pipe.md file, install it, and enable it. here is what the user wants:`;
@@ -182,7 +223,9 @@ function buildCreatePipeDisplayLabel(prompt: string): string {
 }
 
 function buildOptimizePrompt(pipeName: string): string {
-  const sessionDir = `~/.pi/agent/sessions/`;
+  // Screenpipe's isolated pi agent dir (legacy sessions before the isolation
+  // lived in ~/.pi/agent/sessions/ and were copied over on first run).
+  const sessionDir = `~/.screenpipe/pi-config/sessions/`;
   return `i need help optimizing my screenpipe pipe "${pipeName}".
 
 ## your task
@@ -289,6 +332,193 @@ interface AvailableConnection {
   icon: string;
   connected: boolean;
   instances?: { instanceKey: string; instanceLabel: string }[];
+}
+
+interface PipeConnectionOption {
+  key: string;
+  label: string;
+  connectionName: string;
+  instanceName: string | null;
+  connected: boolean;
+}
+
+function buildPipeConnectionOptions(
+  connections: AvailableConnection[],
+  selectedConnections: string[]
+): PipeConnectionOption[] {
+  const selected = new Set(selectedConnections);
+
+  return connections
+    .flatMap((connection) => {
+      if (connection.instances && connection.instances.length > 1) {
+        return connection.instances
+          .filter((instance) => !selected.has(instance.instanceKey))
+          .map((instance) => ({
+            key: instance.instanceKey,
+            label: instance.instanceLabel,
+            connectionName: connection.name,
+            instanceName: instance.instanceKey.includes(":")
+              ? instance.instanceKey.split(":").slice(1).join(":")
+              : null,
+            connected: connection.connected,
+          }));
+      }
+
+      if (selected.has(connection.id)) return [];
+
+      return [{
+        key: connection.id,
+        label: connection.name,
+        connectionName: connection.name,
+        instanceName: null,
+        connected: connection.connected,
+      }];
+    })
+    .sort((a, b) => {
+      if (a.connected !== b.connected) return a.connected ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+function PipeConnectionPicker({
+  availableConnections,
+  selectedConnections,
+  onAdd,
+  onOpenConnections,
+}: {
+  availableConnections: AvailableConnection[];
+  selectedConnections: string[];
+  onAdd: (connectionKey: string) => void;
+  onOpenConnections: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const options = React.useMemo(
+    () => buildPipeConnectionOptions(availableConnections, selectedConnections),
+    [availableConnections, selectedConnections]
+  );
+
+  const filteredOptions = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+
+    return options.filter((option) =>
+      [
+        option.label,
+        option.connectionName,
+        option.instanceName ?? "",
+        option.key,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [options, query]);
+
+  const emptyLabel =
+    availableConnections.length === 0
+      ? "no connections available"
+      : options.length === 0
+        ? "all connections added"
+        : "no matches";
+
+  const handleAdd = (connectionKey: string) => {
+    onAdd(connectionKey);
+    setOpen(false);
+    setQuery("");
+  };
+
+  const handleOpenConnections = () => {
+    setOpen(false);
+    setQuery("");
+    onOpenConnections();
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5"
+          aria-expanded={open}
+        >
+          <Plus className="h-3 w-3" />
+          add
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[360px] max-w-[calc(100vw-2rem)] rounded-none border-border p-0 shadow-none"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
+        <div className="border-b border-border p-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="search connections..."
+              className="h-8 rounded-none pl-8 text-xs"
+              spellCheck={false}
+            />
+          </div>
+        </div>
+
+        <div className="max-h-72 overflow-y-auto p-1">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => handleAdd(option.key)}
+                className="flex w-full items-center gap-2 border border-transparent px-2 py-2 text-left transition-colors duration-150 hover:border-border hover:bg-muted/50 focus-visible:border-foreground focus-visible:outline-none"
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center border border-border bg-background">
+                  <Link className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium">
+                    {option.label}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {option.instanceName ? option.connectionName : "connection"}
+                  </span>
+                </span>
+                <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5",
+                      option.connected ? "bg-foreground" : "bg-muted-foreground/30"
+                    )}
+                  />
+                  {option.connected ? "ready" : "setup"}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              {emptyLabel}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border p-1">
+          <button
+            type="button"
+            onClick={() => handleOpenConnections()}
+            className="flex w-full items-center gap-2 px-2 py-2 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            manage connections
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 interface PipeStatus {
@@ -687,7 +917,9 @@ export function PipesSection() {
   const [sharingPublic, setSharingPublic] = useState<string | null>(null);
   const [publishPipeName, setPublishPipeName] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual">("scheduled");
+  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual" | "cloud">("scheduled");
+  // "cloud" (the org's cloud runner) is an enterprise-build-only surface
+  const isEnterpriseBuild = useIsEnterpriseBuild();
   // Favorites — per-machine preference persisted via /pipes/favorites.
   // `showOnly` toggles a filter that hides non-starred pipes.
   const pipeFavorites = usePipeFavorites();
@@ -925,6 +1157,249 @@ export function PipesSection() {
     });
     fetchPipes();
   };
+
+  // ── Team pipe sharing ─────────────────────────────────────────────────
+  // Driven from the desktop app: a team admin shares one of their own pipes
+  // through the team configs channel (PLAINTEXT envelope — no team key
+  // ceremony; pipes are prompts, not credentials; see team-pipes.ts).
+  // Teammates get a local copy marked `# team-shared:vN` — OFF by default
+  // and read-only (fork to edit). Re-sharing bumps the version and
+  // recipients' copies auto-update, preserving their own on/off choice;
+  // unsharing disables (never deletes) the copies. Sharing is admin-only for
+  // now because the backend gates team-scope config writes to admins.
+  const team = useTeam();
+  const myUserId = settings.user?.id ?? null;
+  const canShareToTeam = !!team.team && team.role === "admin";
+  const [sharingPipe, setSharingPipe] = useState<string | null>(null);
+
+  const teamPipeConfigs = React.useMemo(
+    () => team.configs.filter((c) => c.config_type === "pipe"),
+    [team.configs]
+  );
+  // Config keys are plaintext on the server row, so this set stays valid even
+  // when values can't be decrypted — it drives the unshare sweep.
+  const teamPipeKeys = React.useMemo(
+    () => new Set(teamPipeConfigs.map((c) => c.key)),
+    [teamPipeConfigs]
+  );
+  const sharedByMe = React.useMemo(
+    () =>
+      new Map(
+        teamPipeConfigs
+          .filter((c) => c.updated_by === myUserId)
+          .map((c) => [c.key, c])
+      ),
+    [teamPipeConfigs, myUserId]
+  );
+  const receivedConfigs = React.useMemo(
+    () => teamPipeConfigs.filter((c) => c.updated_by !== myUserId && !!c.value),
+    [teamPipeConfigs, myUserId]
+  );
+  // Managed = the local copy carries the team marker. Matching by name alone
+  // would wrongly lock a user's own pipe that happens to collide with a
+  // teammate's share.
+  const isReceivedTeamPipe = (pipe: PipeStatus) =>
+    parseTeamVersion(pipe.raw_content) !== null;
+  const isUnsharedLeftover = (pipe: PipeStatus) =>
+    isReceivedTeamPipe(pipe) &&
+    team.configsFetched &&
+    !teamPipeKeys.has(pipe.config.name);
+  const sharerNameForPipe = (name: string): string | null => {
+    const cfg = receivedConfigs.find((c) => c.key === name);
+    if (!cfg) return null;
+    const m = team.members.find((mm) => mm.user_id === cfg.updated_by);
+    return m?.name || m?.email || null;
+  };
+  const sharedContentDiffers = (pipe: PipeStatus) => {
+    const v = sharedByMe.get(pipe.config.name)?.value as
+      | Partial<TeamPipePayload>
+      | undefined;
+    if (!v?.raw_content) return false; // shared copy unreadable — don't offer
+    return v.raw_content !== stripTeamMarker(pipe.raw_content);
+  };
+
+  const sharePipeToTeam = async (pipe: PipeStatus) => {
+    const name = pipe.config.name;
+    setSharingPipe(name);
+    try {
+      const existing = sharedByMe.get(name);
+      const version = nextShareVersion(existing?.value);
+      // raw_content only — the parsed config object is never pushed (it can
+      // hold secrets, and shares are stored plaintext server-side); teammates
+      // bring their own connections and presets.
+      await team.pushConfigPlain("pipe", name, {
+        name,
+        raw_content: stripTeamMarker(pipe.raw_content),
+        version,
+        shared_at: new Date().toISOString(),
+      });
+      posthog.capture(
+        existing ? "team_pipe_update_pushed" : "team_pipe_shared",
+        { pipe: name, version }
+      );
+      toast({
+        title: existing ? `update pushed (v${version})` : "shared with team",
+        description: existing
+          ? "teammates' copies will update automatically"
+          : "teammates can turn it on from their pipes page",
+      });
+    } catch (err: any) {
+      toast({
+        title: "failed to share",
+        description: err?.message,
+        variant: "destructive",
+      });
+    } finally {
+      setSharingPipe(null);
+    }
+  };
+
+  const unsharePipeFromTeam = async (name: string) => {
+    const id = sharedByMe.get(name)?.id;
+    if (!id) return;
+    try {
+      await team.deleteConfig(id);
+      posthog.capture("team_pipe_unshared", { pipe: name });
+      toast({
+        title: "unshared from team",
+        description: "teammates' copies will be disabled",
+      });
+    } catch (err: any) {
+      toast({
+        title: "failed to unshare",
+        description: err?.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const forkTeamPipe = async (pipe: PipeStatus) => {
+    const base = pipe.config.name.replace(/-fork(-\d+)?$/, "");
+    let forkName = `${base}-fork`;
+    try {
+      const home = await homeDir();
+      const pipesDir = await join(home, ".screenpipe", "pipes");
+      let i = 1;
+      while (await exists(await join(pipesDir, forkName))) {
+        i += 1;
+        forkName = `${base}-fork-${i}`;
+      }
+      const dir = await join(pipesDir, forkName);
+      await mkdir(dir, { recursive: true });
+      // Drop the marker — the fork is the user's own pipe from here on and
+      // stops auto-updating.
+      let content = setEnabledFlag(stripTeamMarker(pipe.raw_content), false);
+      if (/^name:\s*/m.test(content)) {
+        content = content.replace(/^name:\s*.*$/m, `name: ${forkName}`);
+      }
+      await writeTextFile(await join(dir, "pipe.md"), content);
+      posthog.capture("team_pipe_forked", {
+        source: pipe.config.name,
+        fork: forkName,
+      });
+      toast({
+        title: `forked to "${forkName}"`,
+        description: "your editable copy — off by default",
+      });
+      fetchPipes();
+    } catch (err: any) {
+      toast({
+        title: "failed to fork",
+        description: err?.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Recipient sync: install new shares (OFF by default), apply version bumps
+  // (preserving each member's own on/off choice), and disable local copies
+  // whose share disappeared. Local machine only — never against a remote
+  // device. Gated on configsFetched so a failed /configs fetch can never look
+  // like "everything was unshared". No team key needed: pipe shares are
+  // plaintext rows, so members in key-limbo still receive them.
+  const teamSyncRunning = useRef(false);
+  useEffect(() => {
+    if (!team.team || !team.configsFetched || isRemote) return;
+    if (teamSyncRunning.current) return;
+    teamSyncRunning.current = true;
+    (async () => {
+      let changed = false;
+      const updatedPipes: string[] = [];
+      try {
+        const home = await homeDir();
+        const pipesDir = await join(home, ".screenpipe", "pipes");
+        for (const c of receivedConfigs) {
+          const v = c.value as Partial<TeamPipePayload> | undefined;
+          if (!c.key || !isSafePipeName(c.key)) continue;
+          try {
+            const dir = await join(pipesDir, c.key);
+            const md = await join(dir, "pipe.md");
+            const local = (await exists(md)) ? await readTextFile(md) : null;
+            const plan = planTeamPipeSync(
+              { name: c.key, raw_content: v?.raw_content, version: v?.version },
+              local
+            );
+            if (plan.action === "install" || plan.action === "update") {
+              if (local == null) await mkdir(dir, { recursive: true });
+              await writeTextFile(md, plan.content);
+              changed = true;
+              if (plan.action === "update") updatedPipes.push(c.key);
+              console.log(`[team-pipes] ${c.key}: ${plan.action} v${v?.version}`);
+            }
+          } catch (e) {
+            console.warn(`[team-pipes] failed to sync ${c.key}:`, e);
+          }
+        }
+        // Unshare sweep — only marked copies whose share key disappeared.
+        for (const p of pipes) {
+          if (!p.config.enabled) continue;
+          if (parseTeamVersion(p.raw_content) === null) continue;
+          if (teamPipeKeys.has(p.config.name)) continue;
+          try {
+            await localFetch(`/pipes/${p.config.name}/config`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ enabled: false }),
+            });
+            changed = true;
+            posthog.capture("team_pipe_disabled_unshared", {
+              pipe: p.config.name,
+            });
+            console.log(`[team-pipes] ${p.config.name}: disabled (unshared)`);
+          } catch (e) {
+            console.warn(`[team-pipes] failed to disable ${p.config.name}:`, e);
+          }
+        }
+      } finally {
+        teamSyncRunning.current = false;
+      }
+      if (updatedPipes.length > 0) {
+        posthog.capture("team_pipe_auto_updated", { pipes: updatedPipes });
+        toast({
+          title: "team pipes updated",
+          description: updatedPipes.join(", "),
+        });
+      }
+      if (changed) fetchPipes();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    team.team?.id,
+    team.missingKey,
+    team.configsFetched,
+    receivedConfigs,
+    pipes,
+    isRemote,
+  ]);
+
+  // Poll team configs so re-shares and unshares propagate while the app is
+  // open (the hook otherwise only fetches on mount).
+  useEffect(() => {
+    if (!team.team || isRemote) return;
+    const id = setInterval(() => team.fetchConfigs(), 5 * 60_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [team.team?.id, isRemote]);
 
   const trackedPipesView = useRef(false);
   const autoUpdateRan = useRef(false);
@@ -1348,19 +1823,26 @@ export function PipesSection() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
-              {pipeTypeFilter} ({tabCounts[pipeTypeFilter]})
+              {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts[pipeTypeFilter]})`}
               <ChevronDown className="h-3 w-3 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {(["scheduled", "triggered", "manual"] as const).map((tab) => (
+            {([
+              "scheduled",
+              "triggered",
+              "manual",
+              ...(isEnterpriseBuild ? (["cloud"] as const) : []),
+            ] as const).map((tab) => (
               <DropdownMenuItem
                 key={tab}
                 onClick={() => setPipeTypeFilter(tab)}
                 className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
               >
                 <span className="flex-1">{tab}</span>
-                <span className="text-muted-foreground text-xs">{tabCounts[tab]}</span>
+                {tab !== "cloud" && (
+                  <span className="text-muted-foreground text-xs">{tabCounts[tab]}</span>
+                )}
                 {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
               </DropdownMenuItem>
             ))}
@@ -1393,7 +1875,12 @@ export function PipesSection() {
         </Button>
       </div>
 
-      {loading ? (
+      {pipeTypeFilter === "cloud" ? (
+        // Cloud pipes: the team's shared pipes running on screenpipe-managed
+        // infra against centralized data — different data source from the
+        // local pipe list, so it renders its own component.
+        <CloudPipesTab active />
+      ) : loading ? (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
             <Card key={i}>
@@ -1581,6 +2068,40 @@ export function PipesSection() {
                   {pipe.config.name}
                 </button>
 
+                {/* Team sharing badges */}
+                {sharedByMe.has(pipe.config.name) && (
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] h-5 shrink-0 gap-1"
+                    title={`shared with your team (v${
+                      (sharedByMe.get(pipe.config.name)?.value as Partial<TeamPipePayload>)
+                        ?.version ?? "?"
+                    })`}
+                  >
+                    <Share2 className="h-2.5 w-2.5" /> shared
+                  </Badge>
+                )}
+                {isReceivedTeamPipe(pipe) && !isUnsharedLeftover(pipe) && (
+                  <Badge
+                    variant="secondary"
+                    className="text-[10px] h-5 shrink-0"
+                    title={`team pipe v${parseTeamVersion(pipe.raw_content)} — read-only, updates automatically when the author re-shares`}
+                  >
+                    {sharerNameForPipe(pipe.config.name)
+                      ? `team v${parseTeamVersion(pipe.raw_content)} · ${sharerNameForPipe(pipe.config.name)}`
+                      : `team v${parseTeamVersion(pipe.raw_content)}`}
+                  </Badge>
+                )}
+                {isUnsharedLeftover(pipe) && (
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] h-5 shrink-0 text-muted-foreground"
+                    title="no longer shared with the team — auto-run was disabled; fork to keep it or delete it"
+                  >
+                    no longer shared
+                  </Badge>
+                )}
+
                 {/* Update badge */}
                 {availableUpdates[pipe.config.name] && (
                   <Badge
@@ -1632,7 +2153,7 @@ export function PipesSection() {
                     pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
                       ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
                       : "",
-                    pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${pipe.config.schedule}` : "",
+                    pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${humanizeSchedule(pipe.config.schedule)}` : "",
                   ].filter(Boolean).join(" | ") || "manual"}
                 >
                   {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0
@@ -1705,16 +2226,19 @@ export function PipesSection() {
                     </Button>
                   )}
 
-                  {/* Publish button */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => setPublishPipeName(pipe.config.name)}
-                    title="publish to store"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                  </Button>
+                  {/* Publish button — not for received team pipes (someone
+                      else's work; fork first) */}
+                  {!isReceivedTeamPipe(pipe) && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setPublishPipeName(pipe.config.name)}
+                      title="publish to store"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
 
                   {/* Overflow menu */}
                   <DropdownMenu>
@@ -1724,30 +2248,83 @@ export function PipesSection() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onClick={() => {
-                          navigateHomeAndPrefill({
-                            context: "the user wants to optimize their pipe",
-                            prompt: buildOptimizePrompt(pipe.config.name),
-                            displayLabel: buildOptimizeDisplayLabel(pipe.config.name),
-                            autoSend: true,
-                          });
-                        }}
-                      >
-                        <Sparkles className="h-3.5 w-3.5 mr-2" />
-                        optimize with ai
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        disabled={sharingPublic === pipe.config.name}
-                        onClick={() => sharePipePublic(pipe)}
-                      >
-                        {sharingPublic === pipe.config.name ? (
-                          <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                      {!isReceivedTeamPipe(pipe) && (
+                        <DropdownMenuItem
+                          onClick={() => {
+                            navigateHomeAndPrefill({
+                              context: "the user wants to optimize their pipe",
+                              prompt: buildOptimizePrompt(pipe.config.name),
+                              displayLabel: buildOptimizeDisplayLabel(pipe.config.name),
+                              autoSend: true,
+                            });
+                          }}
+                        >
+                          <Sparkles className="h-3.5 w-3.5 mr-2" />
+                          optimize with ai
+                        </DropdownMenuItem>
+                      )}
+
+                      {/* Team sharing — own pipes can be shared, updated,
+                          unshared; received team pipes are read-only and can
+                          be forked instead. */}
+                      {canShareToTeam && !isReceivedTeamPipe(pipe) && (
+                        sharedByMe.has(pipe.config.name) ? (
+                          <>
+                            {sharedContentDiffers(pipe) && (
+                              <DropdownMenuItem
+                                disabled={sharingPipe === pipe.config.name}
+                                onClick={() => sharePipeToTeam(pipe)}
+                              >
+                                {sharingPipe === pipe.config.name ? (
+                                  <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                                ) : (
+                                  <ArrowUpCircle className="h-3.5 w-3.5 mr-2" />
+                                )}
+                                push update to team (v
+                                {nextShareVersion(sharedByMe.get(pipe.config.name)?.value)})
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem
+                              onClick={() => unsharePipeFromTeam(pipe.config.name)}
+                            >
+                              <Share2 className="h-3.5 w-3.5 mr-2" />
+                              unshare from team
+                            </DropdownMenuItem>
+                          </>
                         ) : (
-                          <Link className="h-3.5 w-3.5 mr-2" />
-                        )}
-                        copy share link
-                      </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={sharingPipe === pipe.config.name}
+                            onClick={() => sharePipeToTeam(pipe)}
+                          >
+                            {sharingPipe === pipe.config.name ? (
+                              <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                            ) : (
+                              <Share2 className="h-3.5 w-3.5 mr-2" />
+                            )}
+                            share with team
+                          </DropdownMenuItem>
+                        )
+                      )}
+                      {isReceivedTeamPipe(pipe) && (
+                        <DropdownMenuItem onClick={() => forkTeamPipe(pipe)}>
+                          <Copy className="h-3.5 w-3.5 mr-2" />
+                          fork to edit
+                        </DropdownMenuItem>
+                      )}
+
+                      {!isReceivedTeamPipe(pipe) && (
+                        <DropdownMenuItem
+                          disabled={sharingPublic === pipe.config.name}
+                          onClick={() => sharePipePublic(pipe)}
+                        >
+                          {sharingPublic === pipe.config.name ? (
+                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                          ) : (
+                            <Link className="h-3.5 w-3.5 mr-2" />
+                          )}
+                          copy share link
+                        </DropdownMenuItem>
+                      )}
                       {(pipe.source_slug || (pipe.config as any).config?.source_slug) && (
                         <DropdownMenuItem
                           onClick={() => {
@@ -1759,20 +2336,28 @@ export function PipesSection() {
                           check for updates
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuItem
-                        onClick={() => setPublishPipeName(pipe.config.name)}
-                      >
-                        <Upload className="h-3.5 w-3.5 mr-2" />
-                        publish to store
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={() => deletePipe(pipe.config.name)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 mr-2" />
-                        delete
-                      </DropdownMenuItem>
+                      {!isReceivedTeamPipe(pipe) && (
+                        <DropdownMenuItem
+                          onClick={() => setPublishPipeName(pipe.config.name)}
+                        >
+                          <Upload className="h-3.5 w-3.5 mr-2" />
+                          publish to store
+                        </DropdownMenuItem>
+                      )}
+                      {/* Delete is hidden while a team share is active (the
+                          sync would reinstall it) but allowed once unshared. */}
+                      {(!isReceivedTeamPipe(pipe) || isUnsharedLeftover(pipe)) && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => deletePipe(pipe.config.name)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            delete
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -1902,7 +2487,7 @@ export function PipesSection() {
                             return (
                               <>
                                 {isCustom && (
-                                  <SelectItem value={current}>{current} (custom)</SelectItem>
+                                  <SelectItem value={current}>{humanizeSchedule(current)} (custom)</SelectItem>
                                 )}
                                 {presets.map((p) => (
                                   <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
@@ -1918,8 +2503,17 @@ export function PipesSection() {
                             const schedule = pipe.config.schedule;
                             const cronParts = schedule.trim().split(/\s+/);
                             const isCron = cronParts.length === 5;
-                            // Extract current day-of-week from cron (field 5, 0=Sun, 1=Mon..6=Sat)
-                            const currentDow = isCron ? cronParts[4] : "*";
+
+                            // Parse human-readable "every <day> at <time>" schedules
+                            const humanParsed = parseHumanSchedule(schedule);
+                            const humanHour = humanParsed?.hour ?? null;
+
+                            // Extract current day-of-week from cron or human-readable schedule
+                            const currentDow = isCron
+                              ? cronParts[4]
+                              : humanParsed
+                                ? humanParsed.dow
+                                : "*";
                             const allDays = currentDow === "*";
                             // Parse active days into a Set
                             const activeDays = new Set<number>();
@@ -1959,19 +2553,24 @@ export function PipesSection() {
                                 // For "every Xm" format, convert to cron first
                                 let newSchedule: string;
                                 if (!isCron) {
-                                  // Can't add days to simple "every 30m" — keep as is
-                                  if (next.size === 7) return; // already all days
-                                  const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
-                                  if (everyMatch) {
-                                    const n = parseInt(everyMatch[1]);
-                                    const unit = everyMatch[2].toLowerCase();
-                                    if (unit === "m") {
-                                      newSchedule = `*/${n} * * * *`;
-                                    } else {
-                                      newSchedule = `0 */${n} * * *`;
-                                    }
+                                  if (humanHour !== null) {
+                                    // "every day/monday at Xam/pm" → cron with all days
+                                    newSchedule = `0 ${humanHour} * * *`;
                                   } else {
-                                    return;
+                                    // Can't add days to simple "every 30m" — keep as is
+                                    if (next.size === 7) return; // already all days
+                                    const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
+                                    if (everyMatch) {
+                                      const n = parseInt(everyMatch[1]);
+                                      const unit = everyMatch[2].toLowerCase();
+                                      if (unit === "m") {
+                                        newSchedule = `*/${n} * * * *`;
+                                      } else {
+                                        newSchedule = `0 */${n} * * *`;
+                                      }
+                                    } else {
+                                      return;
+                                    }
                                   }
                                 } else {
                                   newSchedule = [...baseParts, "*"].join(" ");
@@ -2010,6 +2609,9 @@ export function PipesSection() {
                               let baseParts: string[];
                               if (isCron) {
                                 baseParts = cronParts.slice(0, 4);
+                              } else if (humanHour !== null) {
+                                // "every day/monday at Xam/pm" → cron base
+                                baseParts = ["0", String(humanHour), "*", "*"];
                               } else {
                                 // Convert "every Xm/h" to cron base
                                 const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
@@ -2124,62 +2726,22 @@ export function PipesSection() {
                                 </div>
                               );
                             })}
-                            <DropdownMenu modal={false}>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5">
-                                  <Plus className="h-3 w-3" /> add
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="start" className="max-h-48 overflow-y-auto">
-                                {(() => {
-                                  const existing = pipe.config.connections || [];
-                                  const addConn = (key: string) => {
-                                    const updated = [...existing, key];
-                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, connections: updated } } : p));
-                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connections: updated }) }).then(() => fetchPipes());
-                                  };
-                                  // filter to connections not yet fully added
-                                  const available = availableConnections.filter((c) => {
-                                    if (c.instances && c.instances.length > 1) {
-                                      return c.instances.some((inst) => !existing.includes(inst.instanceKey));
-                                    }
-                                    return !existing.includes(c.id);
-                                  });
-                                  if (available.length === 0) {
-                                    return <DropdownMenuItem disabled><span className="text-xs text-muted-foreground">all connections added</span></DropdownMenuItem>;
-                                  }
-                                  return available.map((conn) => {
-                                    // multi-instance: show sub-menu to pick instance
-                                    if (conn.instances && conn.instances.length > 1) {
-                                      const remainingInstances = conn.instances.filter((inst) => !existing.includes(inst.instanceKey));
-                                      if (remainingInstances.length === 0) return null;
-                                      return (
-                                        <DropdownMenuSub key={conn.id}>
-                                          <DropdownMenuSubTrigger className="text-xs font-mono">
-                                            {conn.name}
-                                            <span className={cn("ml-auto w-1.5 h-1.5", conn.connected ? "bg-foreground" : "bg-muted-foreground/30")} />
-                                          </DropdownMenuSubTrigger>
-                                          <DropdownMenuSubContent>
-                                            {remainingInstances.map((inst) => (
-                                              <DropdownMenuItem key={inst.instanceKey} onClick={() => addConn(inst.instanceKey)}>
-                                                <span className="text-xs font-mono">{inst.instanceLabel}</span>
-                                              </DropdownMenuItem>
-                                            ))}
-                                          </DropdownMenuSubContent>
-                                        </DropdownMenuSub>
-                                      );
-                                    }
-                                    // single instance: direct click
-                                    return (
-                                      <DropdownMenuItem key={conn.id} onClick={() => addConn(conn.id)}>
-                                        <span className="text-xs font-mono">{conn.name}</span>
-                                        <span className={cn("ml-auto w-1.5 h-1.5", conn.connected ? "bg-foreground" : "bg-muted-foreground/30")} />
-                                      </DropdownMenuItem>
-                                    );
-                                  });
-                                })()}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                            <PipeConnectionPicker
+                              availableConnections={availableConnections}
+                              selectedConnections={pipe.config.connections || []}
+                              onAdd={(key) => {
+                                const existing = pipe.config.connections || [];
+                                if (existing.includes(key)) return;
+                                const updated = [...existing, key];
+                                setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, connections: updated } } : p));
+                                fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connections: updated }) }).then(() => fetchPipes());
+                              }}
+                              onOpenConnections={() => {
+                                window.dispatchEvent(new CustomEvent("open-settings", {
+                                  detail: { section: "connections" },
+                                }));
+                              }}
+                            />
                           </div>
                         </div>
 
@@ -2464,10 +3026,19 @@ export function PipesSection() {
                           <span className="text-[11px] text-muted-foreground">unsaved</span>
                         )}
                       </div>
+                      {isReceivedTeamPipe(pipe) && (
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          shared by your team (read-only, updates automatically) — fork it to make an editable copy
+                        </p>
+                      )}
                       <Textarea
                         value={promptDrafts[pipe.config.name] ?? pipe.raw_content}
                         onChange={(e) => handlePipeEdit(pipe.config.name, e.target.value)}
-                        className="text-xs font-mono h-64 mt-1"
+                        readOnly={isReceivedTeamPipe(pipe)}
+                        className={cn(
+                          "text-xs font-mono h-64 mt-1",
+                          isReceivedTeamPipe(pipe) && "opacity-70 cursor-not-allowed"
+                        )}
                         autoCorrect="off"
                         autoCapitalize="off"
                         spellCheck={false}

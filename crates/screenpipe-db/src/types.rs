@@ -300,6 +300,23 @@ pub struct MemoryRecord {
     pub updated_at: String,
 }
 
+/// A registered output file: produced by a pipe, chat, or agent.
+#[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct OutputRecord {
+    pub id: i64,
+    pub source: String,
+    pub source_type: String,
+    pub title: String,
+    pub kind: String,
+    pub original_path: Option<String>,
+    pub output_path: String,
+    pub size_bytes: i64,
+    pub preview: Option<String>,
+    pub metadata: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// A memory row + the columns the cross-device sync layer needs.
 /// Used only by [`DatabaseManager::list_memories_for_sync`] — the
 /// HTTP/UI surface keeps using [`MemoryRecord`] to avoid leaking

@@ -206,6 +206,14 @@ impl VisionManager {
         *self.status.read().await
     }
 
+    /// Shared capture-pipeline metrics. The monitor watcher's silent-wedge
+    /// watchdog reads this to tell a real stall (attempts firing but nothing
+    /// persisted) apart from a healthy static screen (which still ticks
+    /// `last_db_write_ts` via dedup-skip). Mirrors what /health reports.
+    pub fn vision_metrics(&self) -> &Arc<PipelineMetrics> {
+        &self.config.vision_metrics
+    }
+
     /// Check whether a monitor is allowed by the user's monitor filter settings.
     /// Uses prefix matching (name + resolution) so that position changes after
     /// reconnect don't break the filter.

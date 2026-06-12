@@ -24,7 +24,9 @@ static DEF: IntegrationDef = IntegrationDef {
     icon: "github",
     category: Category::Productivity,
     description:
-        "Create GitHub issues and comments. Connected via OAuth, with repository selection handled by pipe-level settings.",
+        "Create GitHub issues and comments via OAuth proxy. Repository selection is handled by pipe-level settings. \
+        POST /connections/github/proxy/repos/{owner}/{repo}/issues with {\"title\":\"...\",\"body\":\"...\"} to create an issue. \
+        POST /connections/github/proxy/repos/{owner}/{repo}/issues/{issue_number}/comments with {\"body\":\"...\"} to comment.",
     fields: &[],
 };
 

@@ -4,3 +4,6 @@
 
 # Commit the Cargo.lock file
 !Cargo.lock
+
+# Swift SPM resource bundle copied by build.rs for Tauri bundling
+/PermissionFlow_PermissionFlow.bundle/

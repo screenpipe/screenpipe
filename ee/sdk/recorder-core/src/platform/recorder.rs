@@ -785,6 +785,7 @@ fn evaluate_focus(filter: &FilterState) -> Option<(bool, Option<String>)> {
                 SkipReason::ExcludedApp => "excluded_app",
                 SkipReason::UserIgnored => "ignored_window",
                 SkipReason::NotInIncludeList => "included_window_mismatch",
+                SkipReason::BlockedUrl => "blocked_url",
             };
             Some((true, Some(tag.to_string())))
         }

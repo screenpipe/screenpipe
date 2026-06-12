@@ -16,6 +16,7 @@ import {
   Check,
   Copy,
   Loader2,
+  Play,
   Search,
   User,
   X,
@@ -23,13 +24,17 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { MediaComponent } from "@/components/rewind/media";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import type { LiveCaptureState } from "@/lib/utils/live-capture-state";
 import {
   fetchMeetingAudio,
   type MeetingAudioChunk,
 } from "@/lib/utils/meeting-context";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
+import { ListeningSticks } from "./listening-sticks";
+import { splitForHighlight } from "./transcript-highlight";
 
 interface TranscriptPanelProps {
   meeting: MeetingRecord;
@@ -40,6 +45,7 @@ interface TranscriptPanelProps {
   /** Incremented by the parent after a meeting-level retranscribe finishes. */
   refreshKey?: number;
   headerActions?: React.ReactNode;
+  captureState?: LiveCaptureState;
 }
 
 const AUTO_FOLLOW_THRESHOLD_PX = 48;
@@ -253,6 +259,7 @@ export function TranscriptPanel({
   isLive,
   refreshKey = 0,
   headerActions,
+  captureState,
 }: TranscriptPanelProps) {
   const [chunks, setChunks] = useState<MeetingAudioChunk[]>([]);
   const [loading, setLoading] = useState(false);
@@ -579,6 +586,24 @@ export function TranscriptPanel({
     }
   }, [isOpen]);
 
+  // ⌘F / ctrl+F focuses transcript search while the panel is open — the
+  // webview has no native find bar, so the shortcut is unclaimed.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) {
+        return;
+      }
+      if (event.key.toLowerCase() !== "f") return;
+      event.preventDefault();
+      setSearchOpen(true);
+      // Covers the already-open case; the searchOpen effect covers the rest.
+      requestAnimationFrame(() => searchInputRef.current?.focus());
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen || !isLive || query.trim()) return;
     if (!isFollowingLive) {
@@ -605,9 +630,11 @@ export function TranscriptPanel({
       return `${liveErrorSummary(liveError)}. Background recording is still running.`;
     }
     if (chunks.length === 0 && visibleLiveBlocks.length === 0) {
-      return isLive
-        ? "no transcript captured yet — speak into your mic or wait a moment"
-        : "no transcript was captured for this meeting";
+      if (!isLive) return "no transcript was captured for this meeting";
+      return (
+        captureState?.transcriptEmptyCopy ??
+        "no transcript yet — audio can take a minute to appear; keep the meeting open"
+      );
     }
     if (filteredBlocks.length === 0 && query.trim()) {
       return `no matches for "${query.trim()}"`;
@@ -622,6 +649,7 @@ export function TranscriptPanel({
     loaded,
     isLive,
     liveError,
+    captureState,
   ]);
   const compactEmptyState =
     Boolean(emptyCopy) && !loading && !hasTranscriptContent;
@@ -678,6 +706,14 @@ export function TranscriptPanel({
           ) : (
             <div className="flex-1" />
           )}
+          {query.trim() && (
+            <span
+              className="shrink-0 text-[10px] tabular-nums text-muted-foreground"
+              title="matching segments"
+            >
+              {filteredBlocks.length}/{displayBlocks.length}
+            </span>
+          )}
           <div className="flex items-center gap-1 shrink-0">
             {headerActions}
             {showSearch && (
@@ -695,7 +731,7 @@ export function TranscriptPanel({
                   "h-7 w-7 p-0",
                   searchOpen && "bg-accent text-accent-foreground",
                 )}
-                title={searchOpen ? "hide search" : "search transcript"}
+                title={searchOpen ? "hide search" : "search transcript (⌘F)"}
                 aria-pressed={searchOpen}
               >
                 <Search className="h-3.5 w-3.5" />
@@ -751,12 +787,21 @@ export function TranscriptPanel({
             {emptyCopy && (
               <div
                 className={cn(
-                  "flex items-center px-4 text-xs text-muted-foreground",
+                  "flex items-center gap-3 px-4 text-xs text-muted-foreground",
                   compactEmptyState
                     ? "min-h-14 justify-start text-left"
                     : "min-h-full justify-center py-8 text-center",
                 )}
               >
+                {isLive &&
+                  !liveError &&
+                  chunks.length === 0 &&
+                  visibleLiveBlocks.length === 0 && (
+                    <ListeningSticks
+                      height={12}
+                      className="shrink-0 text-muted-foreground"
+                    />
+                  )}
                 <span>{emptyCopy}</span>
               </div>
             )}
@@ -767,6 +812,7 @@ export function TranscriptPanel({
                   <SpeakerParagraph
                     key={b.key}
                     block={b}
+                    query={query}
                     onSpeakerAssigned={refetch}
                   />
                 ))}
@@ -796,14 +842,17 @@ export function TranscriptPanel({
 
 function SpeakerParagraph({
   block,
+  query,
   onSpeakerAssigned,
 }: {
   block: SpeakerBlock;
+  query: string;
   onSpeakerAssigned: () => void;
 }) {
+  const [showPlayer, setShowPlayer] = useState(false);
   return (
     <li
-      className="px-4 py-2.5 hover:bg-muted/30 transition-colors"
+      className="group px-4 py-2.5 hover:bg-muted/30 transition-colors"
       style={{ contain: "layout paint" }}
     >
       <div className="flex items-baseline gap-2 mb-1">
@@ -833,10 +882,63 @@ function SpeakerParagraph({
             {block.speakerName}
           </span>
         )}
+        <span
+          className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60"
+          title={new Date(block.startMs).toLocaleString()}
+        >
+          {formatClock(block.startMs)}
+        </span>
+        {block.firstAudioFilePath && (
+          <button
+            type="button"
+            onClick={() => setShowPlayer((value) => !value)}
+            className={cn(
+              "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center self-center transition-opacity",
+              "text-muted-foreground hover:text-foreground",
+              showPlayer
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+            title={showPlayer ? "hide audio" : "play this segment's audio"}
+            aria-label={showPlayer ? "hide audio" : "play this segment's audio"}
+            aria-expanded={showPlayer}
+          >
+            {showPlayer ? (
+              <X className="h-3 w-3" />
+            ) : (
+              <Play className="h-3 w-3" />
+            )}
+          </button>
+        )}
       </div>
       <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
-        {block.text}
+        <HighlightedText text={block.text} query={query} />
       </p>
+      {showPlayer && block.firstAudioFilePath && (
+        <div className="mt-2">
+          <MediaComponent filePath={block.firstAudioFilePath} />
+        </div>
+      )}
     </li>
+  );
+}
+
+/** Body text with case-insensitive `<mark>` runs over search matches. */
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  const runs = useMemo(() => splitForHighlight(text, query), [text, query]);
+  if (runs.length === 1 && !runs[0].match) return <>{runs[0].text}</>;
+  return (
+    <>
+      {runs.map((run, index) =>
+        run.match ? (
+          // Grayscale inversion, not yellow — per the design system.
+          <mark key={index} className="bg-foreground text-background">
+            {run.text}
+          </mark>
+        ) : (
+          <React.Fragment key={index}>{run.text}</React.Fragment>
+        ),
+      )}
+    </>
   );
 }

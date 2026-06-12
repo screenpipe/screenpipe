@@ -13,11 +13,14 @@
  * session (see harness note below) — and that handle never re-enumerates, so
  * `openHomeWindow()` can't recover it. If any spec ran after this one it would
  * fail its `before` hook with "Could not get home window handle" and cascade.
- * The `zz-` prefix sorts it after every other spec (incl. `windows-*`) so
- * nothing depends on `home` afterwards. Do NOT rename it back / un-prefix it.
- * (An earlier revision filed this as macOS-only "Windows is also fine"; in CI
- * it poisoned the session on BOTH macOS and Windows — Linux only escaped
- * because it skips the spec entirely.)
+ * The `zz-` prefix sorts it after the normal app-window specs so nothing that
+ * still depends on `home` runs afterwards. The one intentional exception is
+ * the later `zzz-browser-state-chat-switch` spec, which is search-driven and
+ * does not need a recoverable `home` handle. Inside THIS file, keep the
+ * destructive attach-to-`home` block last for the same reason. Do NOT rename
+ * it back / un-prefix it. (An earlier revision filed this as macOS-only
+ * "Windows is also fine"; in CI it poisoned the session on BOTH macOS and
+ * Windows — Linux only escaped because it skips the spec entirely.)
  *
  * Bug: the owned browser is a native child Webview parented to the `home`
  * window, behind the chat sidebar. The meeting-notes section lives in the SAME
@@ -43,7 +46,13 @@
  * fallout to the end of the run.
  */
 
-import { existsSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -92,6 +101,11 @@ const OWN_CHAT = "33333333-cccc-cccc-cccc-cccccccccccc";
 const FOREIGN_OWNER = "pipe:e2e-background-poster";
 const CHATS_DIR = join(homedir(), ".screenpipe", "chats");
 const FOREIGN_URL = "https://example.com/e2e-foreign-pipe";
+const BROWSER_CHAT_A = "44444444-dddd-dddd-dddd-dddddddddddd";
+const BROWSER_CHAT_B = "55555555-eeee-eeee-eeee-eeeeeeeeeeee";
+const PLAIN_CHAT = "66666666-ffff-ffff-ffff-ffffffffffff";
+const BROWSER_URL_A = "https://example.com/e2e-browser-chat-a";
+const BROWSER_URL_B = "https://example.com/e2e-browser-chat-b";
 
 function removeChatFile(id: string): void {
   try {
@@ -100,6 +114,73 @@ function removeChatFile(id: string): void {
   } catch {
     /* ignore */
   }
+}
+
+function writeSeedChatFile(
+  id: string,
+  userText: string,
+  browserState?: { url: string; collapsed?: boolean; width?: number },
+): void {
+  if (!existsSync(CHATS_DIR)) mkdirSync(CHATS_DIR, { recursive: true });
+  const now = Date.now();
+  writeFileSync(
+    join(CHATS_DIR, `${id}.json`),
+    JSON.stringify({
+      id,
+      title: "e2e",
+      messages: [
+        {
+          id: `e2e-seed-${id.slice(0, 12)}`,
+          role: "user",
+          content: userText,
+          timestamp: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+      ...(browserState
+        ? {
+            browserState: {
+              url: browserState.url,
+              updatedAt: now,
+              ...(typeof browserState.width === "number"
+                ? { width: browserState.width }
+                : {}),
+              ...(browserState.collapsed === true ? { collapsed: true } : {}),
+            },
+          }
+        : {}),
+    }),
+  );
+}
+
+function loadChatFile(
+  id: string,
+): { id: string; messages: any[]; browserState?: { url?: string } } | null {
+  const p = join(CHATS_DIR, `${id}.json`);
+  if (!existsSync(p)) return null;
+  return JSON.parse(readFileSync(p, "utf-8"));
+}
+
+async function clearBrowserStateCache(chatId: string): Promise<void> {
+  await browser.execute((key: string) => {
+    window.localStorage.removeItem(key);
+  }, `screenpipe:browser-state:${chatId}`);
+}
+
+async function readBrowserStateCacheUrl(
+  chatId: string,
+): Promise<string | null> {
+  return (await browser.execute((key: string) => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed?.url ?? null;
+    } catch {
+      return null;
+    }
+  }, `screenpipe:browser-state:${chatId}`)) as string | null;
 }
 
 async function waitForChatSeedHook(): Promise<void> {
@@ -316,6 +397,105 @@ describe("Owned browser — per-chat navigation ownership", function () {
       expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
         false,
       );
+    },
+  );
+});
+
+describe("Owned browser — fast chat switching keeps pipe state out of other chats", function () {
+  this.timeout(180_000);
+
+  before(async () => {
+    await waitForAppReady();
+    await openHomeWindow();
+    await showWindow({ Search: { query: null } });
+    await waitForWindowHandle("search", t(10_000));
+    await browser.switchToWindow("search");
+    await browser.pause(t(800));
+
+    for (const id of [BROWSER_CHAT_A, BROWSER_CHAT_B, PLAIN_CHAT]) {
+      removeChatFile(id);
+      await clearBrowserStateCache(id);
+    }
+  });
+
+  after(async () => {
+    await invoke("owned_browser_hide").catch(() => {});
+    for (const id of [BROWSER_CHAT_A, BROWSER_CHAT_B, PLAIN_CHAT]) {
+      removeChatFile(id);
+      await clearBrowserStateCache(id);
+    }
+  });
+
+  (canDriveOwnedBrowser ? it : it.skip)(
+    "does not persist a pipe-driven browser URL into another browser chat or a plain chat during fast switching",
+    async () => {
+      await installSessionCapture();
+      writeSeedChatFile(
+        BROWSER_CHAT_A,
+        "(e2e) browser chat A",
+        { url: BROWSER_URL_A, collapsed: true, width: 420 },
+      );
+      writeSeedChatFile(
+        BROWSER_CHAT_B,
+        "(e2e) browser chat B",
+        { url: BROWSER_URL_B, collapsed: true, width: 420 },
+      );
+      writeSeedChatFile(PLAIN_CHAT, "(e2e) plain chat");
+
+      await loadChatIntoHome(BROWSER_CHAT_A);
+      await waitForActiveConversation(BROWSER_CHAT_A);
+      await browser.pause(t(800));
+      await invokeOrThrow("owned_browser_hide");
+      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        false,
+      );
+
+      const { port, key } = await getLocalApiConfig();
+
+      await loadChatIntoHome(PLAIN_CHAT);
+      await waitForActiveConversation(PLAIN_CHAT);
+      const navigateStatus = await postNavigateAs(
+        port,
+        key,
+        FOREIGN_URL,
+        FOREIGN_OWNER,
+      );
+      expect(navigateStatus).toBe(200);
+      await browser.pause(t(1_200));
+      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        false,
+      );
+
+      await loadChatIntoHome(BROWSER_CHAT_B);
+      await waitForActiveConversation(BROWSER_CHAT_B);
+      await loadChatIntoHome(PLAIN_CHAT);
+      await waitForActiveConversation(PLAIN_CHAT);
+      await postEvalWithUrlAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
+      await browser.pause(t(1_200));
+      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        false,
+      );
+      await loadChatIntoHome(BROWSER_CHAT_A);
+      await waitForActiveConversation(BROWSER_CHAT_A);
+      await loadChatIntoHome(BROWSER_CHAT_B);
+      await waitForActiveConversation(BROWSER_CHAT_B);
+      await browser.pause(t(1_000));
+
+      const chatA = loadChatFile(BROWSER_CHAT_A);
+      const chatB = loadChatFile(BROWSER_CHAT_B);
+      const plain = loadChatFile(PLAIN_CHAT);
+
+      if (!chatA || !chatB || !plain) {
+        throw new Error("expected all seeded chat files to exist");
+      }
+
+      expect(chatA.browserState?.url).toBe(BROWSER_URL_A);
+      expect(chatB.browserState?.url).toBe(BROWSER_URL_B);
+      expect(plain.browserState).toBeUndefined();
+
+      expect(await readBrowserStateCacheUrl(BROWSER_CHAT_A)).toBe(BROWSER_URL_A);
+      expect(await readBrowserStateCacheUrl(BROWSER_CHAT_B)).toBe(BROWSER_URL_B);
+      expect(await readBrowserStateCacheUrl(PLAIN_CHAT)).toBeNull();
     },
   );
 });

@@ -20,7 +20,7 @@ use crate::{
         MeetingAudioFrame, MeetingStreamingConfig,
     },
     transcription::engine::{TranscriptionEngine, TranscriptionSession},
-    utils::audio::resample,
+    utils::audio::{resample_stream_frame, StreamResampler},
 };
 
 const LIVE_SAMPLE_RATE: u32 = 16_000;
@@ -74,6 +74,7 @@ async fn run_stream(
     let mut session = selected_engine_session(&engine_ref).await?;
     let model = selected_engine_model(&session);
     let mut buffer = LiveChunkBuffer::default();
+    let mut resampler: Option<StreamResampler> = None;
     let mut flush_tick = interval(FLUSH_TICK);
     let mut sequence: u64 = 0;
 
@@ -81,11 +82,16 @@ async fn run_stream(
         tokio::select! {
             maybe_frame = rx.recv() => {
                 let Some(frame) = maybe_frame else {
+                    if let Some(tail) = resampler.as_mut().and_then(|rs| rs.flush().ok()) {
+                        if !tail.is_empty() {
+                            buffer.push(tail, Utc::now().timestamp_millis() as u64);
+                        }
+                    }
                     flush_buffer(&mut buffer, &mut session, &config, meeting_id, &device_name, &device_type, model.clone(), &mut sequence).await?;
                     break;
                 };
 
-                let samples = normalize_frame(&frame)
+                let samples = normalize_frame(&frame, &mut resampler)
                     .context("failed to normalize selected-engine live audio")?;
                 if samples.is_empty() {
                     continue;
@@ -261,13 +267,15 @@ struct LiveChunk {
     captured_at_unix_ms: u64,
 }
 
-fn normalize_frame(frame: &MeetingAudioFrame) -> Result<Vec<f32>> {
+fn normalize_frame(
+    frame: &MeetingAudioFrame,
+    resampler: &mut Option<StreamResampler>,
+) -> Result<Vec<f32>> {
     let mono = downmix_to_mono(&frame.samples, frame.channels);
-    if frame.sample_rate == LIVE_SAMPLE_RATE {
-        Ok(mono)
-    } else {
-        resample(&mono, frame.sample_rate, LIVE_SAMPLE_RATE)
-    }
+    // One resampler per stream, rebuilt only on a mid-meeting device rate
+    // change; constructing one per frame recomputes a 65k-tap sinc bank each
+    // call and burned more than a core during meetings.
+    resample_stream_frame(resampler, mono, frame.sample_rate, LIVE_SAMPLE_RATE)
 }
 
 fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {

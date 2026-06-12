@@ -26,6 +26,7 @@ use screenpipe_engine::{
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
     RecordingConfig,
 };
+use screenpipe_events::{send_event, PermissionEvent, PermissionKind};
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
@@ -75,7 +76,30 @@ impl CaptureSession {
         let mut vision_task = None;
 
         // --- Vision ---
-        if !config.disable_vision {
+        // Gate on screen recording permission before calling any ScreenCaptureKit API.
+        // On macOS 15+ SCShareableContent::current() (called by list_monitors inside
+        // VisionManager::start) shows Apple's native TCC padlock dialog if the app has
+        // not been granted Screen Recording access yet — even before onboarding runs.
+        // check_screen_recording_tauri() skips capture_probe on macOS 15+ (avoids the
+        // native TCC dialog CGWindowListCreateImage triggers). Skip vision entirely when not granted;
+        // spawn_screenpipe is called again from onboarding after the user grants access.
+        #[cfg(target_os = "macos")]
+        let screen_recording_permitted =
+            screenpipe_core::permissions::check_screen_recording_tauri().is_granted();
+        #[cfg(not(target_os = "macos"))]
+        let screen_recording_permitted = true;
+
+        if !config.disable_vision && !screen_recording_permitted {
+            warn!("Screen recording permission not yet granted — skipping VisionManager to avoid native TCC dialog; will start on next spawn_screenpipe after onboarding grants access");
+            crate::health::set_recording_status(crate::health::RecordingStatus::Starting);
+            // Emit permission_needed event so frontend can trigger onboarding/permission flow
+            let _ = send_event(
+                PermissionEvent::needed(PermissionKind::ScreenRecording).event_name(),
+                PermissionEvent::needed(PermissionKind::ScreenRecording),
+            );
+        }
+
+        if !config.disable_vision && screen_recording_permitted {
             let db_clone = server.db.clone();
             let output_path = server.data_path.to_string_lossy().into_owned();
             let vision_config =
@@ -158,7 +182,26 @@ impl CaptureSession {
         }
 
         // --- UI event recording ---
-        let ui_recorder_handle = {
+        // Gate on accessibility permission before calling start_ui_recording.
+        // Internally it calls recorder.request_permissions() →
+        // AXIsProcessTrustedWithOptions(prompt: true) which shows Apple's
+        // native accessibility TCC dialog for users who haven't granted it yet.
+        // AXIsProcessTrusted() (used by check_accessibility) is silent.
+        #[cfg(target_os = "macos")]
+        let accessibility_permitted =
+            screenpipe_core::permissions::check_accessibility().is_granted();
+        #[cfg(not(target_os = "macos"))]
+        let accessibility_permitted = true;
+
+        let ui_recorder_handle = if !accessibility_permitted {
+            warn!("Accessibility permission not yet granted — skipping UI event recording to avoid native TCC dialog; will start on next spawn_screenpipe after onboarding grants access");
+            // Emit permission_needed event so frontend can trigger onboarding/permission flow
+            let _ = send_event(
+                PermissionEvent::needed(PermissionKind::Accessibility).event_name(),
+                PermissionEvent::needed(PermissionKind::Accessibility),
+            );
+            None
+        } else {
             let ui_config = config.to_ui_recorder_config();
             let db_clone = server.db.clone();
             match start_ui_recording(
@@ -167,6 +210,7 @@ impl CaptureSession {
                 capture_trigger_tx,
                 linker_tx,
                 config.ignored_windows.clone(),
+                cfg!(debug_assertions), // debug: dragflow unavailable, fall back to native dialog; release: dragflow handles it
             )
             .await
             {

@@ -7,7 +7,7 @@
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -20,6 +20,66 @@ use crate::drm_detector;
 use crate::permission_monitor;
 
 static MONITOR_WATCHER: Lazy<Mutex<Option<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
+
+// ── Silent-wedge watchdog (#3939) ───────────────────────────────────────────
+//
+// Symptom: VisionManager status stays `Running` and the tray shows "Recording",
+// but the capture loop has stopped persisting frames — for ~1h in the original
+// report — with no auto-recovery. The existing recovery paths all miss it: the
+// monitor watcher only restarts when status != Running, and the /health stall
+// flag only colors the response, nothing acts on it.
+//
+// Detection: a healthy pipeline ticks `last_db_write_ts` on every DB write AND
+// on every dedup-skip (a static screen: idle user, slide deck, video call). So
+// "capture attempts still fresh while `last_db_write_ts` has been frozen for a
+// long time" cannot happen on a healthy idle screen — it only happens when
+// captures are erroring/timing out (DB write pool saturated after a disk-I/O
+// stall: "writes fail with PoolTimedOut forever until restart"). That makes it
+// a low-false-positive trigger for a recovery restart.
+//
+// Scope: this covers the "still attempting" wedge only. The "gone silent" wedge
+// (loop blocked inside a non-cancellable sync SQLite call) also stops ticking
+// `last_capture_attempt_ts`, and a restart can't preempt sync FFI; that needs
+// cancellable DB I/O and is tracked separately.
+
+/// The capture loop must still be issuing attempts this recently for the wedge
+/// to be the restartable "still-attempting" kind.
+const WEDGE_ATTEMPT_FRESH_SECS: u64 = 60;
+/// No frame persisted (write or dedup-skip) for at least this long while
+/// attempts stay fresh → wedged. Deliberately looser than the /health stall
+/// threshold (60s) because the action here (a capture restart) is disruptive.
+const WEDGE_DB_STALE_SECS: u64 = 120;
+/// Ignore the warm-up window so a pipeline that hasn't written its first frame
+/// yet is never mistaken for a stall.
+const WEDGE_MIN_UPTIME_SECS: f64 = 120.0;
+/// Never restart more than once per this window, so a wedge a restart can't fix
+/// (e.g. a disk still stalled) can't turn into a restart storm.
+const WEDGE_RESTART_COOLDOWN: Duration = Duration::from_secs(300);
+
+fn now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Pure decision: is vision capture in the restartable "still-attempting" wedge?
+/// Kept free of clocks and I/O so it can be unit-tested with synthetic inputs.
+fn vision_capture_wedged(
+    uptime_secs: f64,
+    last_capture_attempt_ts: u64,
+    last_db_write_ts: u64,
+    now_ts: u64,
+) -> bool {
+    uptime_secs > WEDGE_MIN_UPTIME_SECS
+        // loop is alive and still issuing capture attempts (heartbeat fresh)
+        && last_capture_attempt_ts > 0
+        && now_ts.saturating_sub(last_capture_attempt_ts) < WEDGE_ATTEMPT_FRESH_SECS
+        // ...but nothing has persisted (write or dedup-skip) for a long while.
+        // last_db_write_ts == 0 means "never written yet" (warming up), not a stall.
+        && last_db_write_ts > 0
+        && now_ts.saturating_sub(last_db_write_ts) > WEDGE_DB_STALE_SECS
+}
 
 /// Start the monitor watcher that polls for monitor changes.
 /// When `audio_manager` is provided, SCK-based (output) audio devices are also
@@ -56,6 +116,8 @@ pub async fn start_monitor_watcher(
         let mut suppress_next_topology_event = false;
         // Warn once per recovery episode, then keep repeated retries quiet.
         let mut recovery_retry_warned = false;
+        // Last time the silent-wedge watchdog restarted capture (cooldown gate).
+        let mut last_vision_restart: Option<Instant> = None;
 
         // Initialize with current monitors
         match list_monitors_detailed().await {
@@ -222,6 +284,63 @@ pub async fn start_monitor_watcher(
                     }
                 }
                 continue;
+            }
+
+            // ── Silent-wedge watchdog (#3939) ───────────────────────────────
+            // status == Running, but is the loop actually persisting frames? If
+            // it has been attempting while writing nothing for a sustained
+            // window, the write path is wedged — restart capture to recover
+            // (cooldown-gated so a still-stalled disk can't cause a restart
+            // storm). See the module-level comment for why this won't fire on a
+            // healthy static screen.
+            {
+                let now_ts = now_epoch_secs();
+                let snap = vision_manager.vision_metrics().snapshot();
+                let wedged = vision_capture_wedged(
+                    snap.uptime_secs,
+                    snap.last_capture_attempt_ts,
+                    snap.last_db_write_ts,
+                    now_ts,
+                );
+                let cooldown_ok = last_vision_restart
+                    .map(|t| t.elapsed() >= WEDGE_RESTART_COOLDOWN)
+                    .unwrap_or(true);
+                if wedged && cooldown_ok {
+                    let db_stale = now_ts.saturating_sub(snap.last_db_write_ts);
+                    let attempt_age = now_ts.saturating_sub(snap.last_capture_attempt_ts);
+                    warn!(
+                        "vision capture wedged: status=Running, attempts fresh ({}s ago) but \
+                         no frame persisted for {}s — restarting VisionManager (#3939)",
+                        attempt_age, db_stale
+                    );
+                    let _ = screenpipe_events::send_event(
+                        "vision_capture_wedge_restart",
+                        serde_json::json!({
+                            "db_stale_secs": db_stale,
+                            "attempt_age_secs": attempt_age,
+                            "uptime_secs": snap.uptime_secs,
+                        }),
+                    );
+                    if let Err(e) = vision_manager.stop().await {
+                        warn!("wedge watchdog: vision stop failed: {:?}", e);
+                    }
+                    match vision_manager.start().await {
+                        Ok(()) => {
+                            info!("wedge watchdog: VisionManager restarted after silent wedge")
+                        }
+                        Err(e) => warn!("wedge watchdog: vision restart failed: {:?}", e),
+                    }
+                    last_vision_restart = Some(Instant::now());
+                    // Re-populate known_monitors after the restart, then re-loop.
+                    if let Ok(monitors) = list_monitors_detailed().await {
+                        known_monitors = monitors
+                            .iter()
+                            .map(|m| (m.id(), m.name().to_string()))
+                            .collect();
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
             }
 
             // Get currently connected monitors with detailed error info
@@ -399,4 +518,59 @@ pub async fn stop_monitor_watcher() -> anyhow::Result<()> {
         handle.abort();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fixed "now" so deltas are exact and the tests never depend on wall clock.
+    const NOW: u64 = 2_000_000_000;
+
+    #[test]
+    fn healthy_recent_write_is_not_wedged() {
+        // Wrote 1s ago, attempting 1s ago → clearly healthy.
+        assert!(!vision_capture_wedged(600.0, NOW - 1, NOW - 1, NOW));
+    }
+
+    #[test]
+    fn static_screen_is_not_wedged() {
+        // A static screen (idle user, slide deck, video call) still ticks
+        // last_db_write_ts via dedup-skip, so even after an hour of uptime it is
+        // never flagged: attempts fresh AND write fresh (via dedup).
+        assert!(!vision_capture_wedged(3600.0, NOW - 2, NOW - 3, NOW));
+    }
+
+    #[test]
+    fn warming_up_is_not_wedged() {
+        // Below the warm-up uptime floor.
+        assert!(!vision_capture_wedged(30.0, NOW - 1, NOW - 1, NOW));
+        // Never written a frame yet (last_db_write_ts == 0) is "warming up",
+        // not "writes stopped".
+        assert!(!vision_capture_wedged(600.0, NOW - 1, 0, NOW));
+    }
+
+    #[test]
+    fn gone_silent_or_idle_is_not_restartable_here() {
+        // Attempts stale (loop idle, or blocked in sync FFI) → NOT the
+        // still-attempting wedge a restart can fix; handled separately.
+        assert!(!vision_capture_wedged(600.0, NOW - 300, NOW - 300, NOW));
+    }
+
+    #[test]
+    fn still_attempting_wedge_is_detected() {
+        // Uptime fine, attempting 3s ago, but nothing persisted for 200s. This
+        // is the #3939 wedge: the loop is alive but every capture is failing.
+        assert!(vision_capture_wedged(600.0, NOW - 3, NOW - 200, NOW));
+    }
+
+    #[test]
+    fn thresholds_are_respected() {
+        // db stale 119s (< 120s) → hold off a little longer.
+        assert!(!vision_capture_wedged(600.0, NOW - 3, NOW - 119, NOW));
+        // db stale 121s (> 120s) → trip.
+        assert!(vision_capture_wedged(600.0, NOW - 3, NOW - 121, NOW));
+        // attempt 60s ago is not "< 60s fresh" → treat as not actively attempting.
+        assert!(!vision_capture_wedged(600.0, NOW - 60, NOW - 200, NOW));
+    }
 }

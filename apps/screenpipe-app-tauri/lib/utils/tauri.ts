@@ -970,10 +970,9 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
 },
 /**
  * Open the screenpi.pe login page.
- * On Windows, opens in the system browser (WebView2 has issues with some auth
- * providers; the registered deep-link scheme handles the redirect back).
- * On macOS/Linux, uses an in-app WebView that intercepts the screenpipe://
- * deep-link redirect (Safari blocks custom-scheme redirects).
+ * Windows: system browser + registered deep-link scheme handles the redirect.
+ * macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
+ * Linux: in-app WebView that intercepts the screenpipe:// redirect.
  */
 async openLoginWindow() : Promise<Result<null, string>> {
     try {
@@ -1059,14 +1058,17 @@ async ownedBrowserHide() : Promise<Result<null, string>> {
 }
 },
 /**
- * Navigate the embedded webview to `url`. Used by the sidebar when restoring
- * per-chat state or on user reload — i.e. always an action of the chat that's
- * on screen, so it carries no owner (`None`) and the frontend always honors
- * it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
+ * Navigate the embedded webview to `url`.
+ *
+ * Frontend restore/reload calls pass the foreground conversation id as
+ * `owner`, so the entire browser lifecycle stays scoped to that chat. Retry
+ * paths that are continuing a pipe/chat-owned navigation (for example after an
+ * extension or cookie-consent flow) can pass the original `owner` through so
+ * the follow-up navigate does not look like a fresh restore in every chat.
  */
-async ownedBrowserNavigate(url: string) : Promise<Result<null, string>> {
+async ownedBrowserNavigate(url: string, owner: string | null, reveal: boolean | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url }) };
+    return { status: "ok", data: await TAURI_INVOKE("owned_browser_navigate", { url, owner, reveal }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1581,6 +1583,21 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Banner-click restart. plugin-process `relaunch()` fires
+ * `ExitRequested` which `main.rs` blocks unless `QUIT_REQUESTED` is set —
+ * banner never set it, so the exit was silently cancelled and the button
+ * hung on "restarting…". Mirror the auto-update path: gate, stop server,
+ * set `QUIT_REQUESTED`, then `app.restart()`. See 2026-06-10 report.
+ */
+async restartForUpdate(timeoutSecs: number | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("restart_for_update", { timeoutSecs }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async resumeGlobalShortcuts() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("resume_global_shortcuts") };
@@ -1785,6 +1802,14 @@ async setEnhancedAiSuggestions(enabled: boolean, token: string) : Promise<Result
 async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
     await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
 },
+async setKeepAwake(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_keep_awake", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setNativeTheme(theme: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_native_theme", { theme }) };
@@ -1825,6 +1850,23 @@ async setTrayHealthIcon() : Promise<void> {
 },
 async setTrayUnhealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_unhealth_icon");
+},
+/**
+ * Programmatically adjust a window's always-on-top level after creation.
+ *
+ * Tauri's JS `setAlwaysOnTop` can be unreliable for macOS panel-style
+ * windows. For permission flows we need Screenpipe to stay normally
+ * always-on-top, but temporarily drop below System Settings while the user is
+ * granting permissions. On macOS this directly sets the underlying NSWindow
+ * level: floating when enabled, normal when disabled.
+ */
+async setWindowAlwaysOnTopNative(label: string, alwaysOnTop: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_window_always_on_top_native", { label, alwaysOnTop }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async setWindowSize(window: ShowRewindWindow, width: number, height: number) : Promise<Result<null, string>> {
     try {
@@ -2715,6 +2757,11 @@ port: number;
  * Previously stored in SettingsStore.extra["powerMode"].
  */
 powerMode?: string | null;
+/**
+ * Keep the computer awake while screenpipe is running.
+ * Default off so existing installs keep the OS sleep behavior they chose.
+ */
+keepComputerAwake?: boolean;
 /**
  * Use Chinese mirror for Hugging Face model downloads.
  */

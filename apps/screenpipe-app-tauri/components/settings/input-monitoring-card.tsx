@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 
 /**
  * macOS-only Input Monitoring panel, rendered inside the Connections
@@ -67,7 +68,8 @@ export function InputMonitoringPanel({
     setRequesting(true);
     setGrantedThisSession(true);
     try {
-      const result = await commands.requestInputMonitoringPermission();
+      await requestPermissionWithFlow("inputMonitoring");
+      const result = await commands.checkInputMonitoringPermissionCmd();
       const granted = result === "granted";
       setStatus(granted ? "granted" : "notgranted");
       setSuspectedGhost(!granted);

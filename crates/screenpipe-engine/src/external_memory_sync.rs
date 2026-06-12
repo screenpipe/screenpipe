@@ -814,6 +814,7 @@ async fn load_memory_entries(db: &DatabaseManager) -> Result<Vec<MemoryEntry>> {
             0,
             Some("importance"),
             Some("desc"),
+            &[],
         )
         .await?;
 

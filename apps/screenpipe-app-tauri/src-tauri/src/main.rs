@@ -30,6 +30,7 @@ use updates::start_update_check;
 use window::ShowRewindWindow;
 
 mod analytics;
+mod auth_session;
 #[allow(deprecated)]
 mod icons;
 use crate::analytics::start_analytics;
@@ -67,6 +68,7 @@ mod permissions;
 mod pi;
 mod pi_command_queue;
 mod pipe_suggestions_scheduler;
+mod power_awake;
 mod recording;
 mod remote_sync_commands;
 mod secrets;
@@ -863,6 +865,7 @@ async fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_permission_flow::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,

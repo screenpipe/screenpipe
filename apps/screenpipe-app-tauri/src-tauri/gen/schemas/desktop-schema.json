@@ -6897,6 +6897,72 @@
           "markdownDescription": "Denies the version command without any pre-configured scope."
         },
         {
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create`\n- `allow-suggested-host-app-path`\n- `allow-authorization-state`\n- `allow-start-flow`\n- `allow-stop-current-flow`",
+          "type": "string",
+          "const": "permission-flow:default",
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create`\n- `allow-suggested-host-app-path`\n- `allow-authorization-state`\n- `allow-start-flow`\n- `allow-stop-current-flow`"
+        },
+        {
+          "description": "Enables the authorization_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:allow-authorization-state",
+          "markdownDescription": "Enables the authorization_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:allow-create",
+          "markdownDescription": "Enables the create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_flow command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:allow-start-flow",
+          "markdownDescription": "Enables the start_flow command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_current_flow command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:allow-stop-current-flow",
+          "markdownDescription": "Enables the stop_current_flow command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the suggested_host_app_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:allow-suggested-host-app-path",
+          "markdownDescription": "Enables the suggested_host_app_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the authorization_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:deny-authorization-state",
+          "markdownDescription": "Denies the authorization_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:deny-create",
+          "markdownDescription": "Denies the create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_flow command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:deny-start-flow",
+          "markdownDescription": "Denies the start_flow command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_current_flow command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:deny-stop-current-flow",
+          "markdownDescription": "Denies the stop_current_flow command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the suggested_host_app_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "permission-flow:deny-suggested-host-app-path",
+          "markdownDescription": "Denies the suggested_host_app_path command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures which\nprocess features are by default exposed.\n\n#### Granted Permissions\n\nThis enables to quit via `allow-exit` and restart via `allow-restart`\nthe application.\n\n#### This default permission set includes:\n\n- `allow-exit`\n- `allow-restart`",
           "type": "string",
           "const": "process:default",

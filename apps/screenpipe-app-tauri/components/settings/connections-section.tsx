@@ -20,7 +20,14 @@ import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
-import { CONNECTION_CATEGORY_BY_ID } from "@/lib/constants/connections";
+import {
+  CONNECTION_CATEGORY_BY_ID,
+  CONNECTION_HARDCODED_DESCRIPTIONS,
+  compareConnectionTiles,
+  getSuggestedConnectionsForDevice,
+  normalizeConnectionCategory,
+  type ConnectionSuggestionTile,
+} from "@/lib/constants/connections";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -607,6 +614,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     linear: <img src="/images/linear.svg" alt="Linear" className="w-5 h-5" />,
     krisp: <img src="/images/krisp.svg" alt="Krisp" className="w-5 h-5 dark:invert" />,
     plaud: <img src="/images/plaud.png" alt="Plaud" className="w-5 h-5 dark:invert" />,
+    excalidraw: <img src="/images/excalidraw.svg" alt="Excalidraw" className="w-5 h-5" />,
     odoo: <img src="/images/odoo.svg" alt="Odoo" className="w-5 h-5" />,
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     posthog: <img src="/images/posthog.svg" alt="PostHog" className="w-5 h-5" />,
@@ -782,49 +790,7 @@ export function IntegrationIcon({
 // Connection tile (compact grid item)
 // ---------------------------------------------------------------------------
 
-interface ConnectionTile {
-  id: string;
-  name: string;
-  icon: string;
-  connected: boolean;
-  detected?: boolean;
-  category?: string;
-  description?: string;
-}
-
-const HARDCODED_DESCRIPTIONS: Record<string, string> = {
-  "claude": "Search your screen & audio from Claude Desktop via MCP",
-  "cursor": "Give Cursor AI access to your screen history via MCP",
-  "codex": "Give Codex access to your screen & audio via MCP",
-  "claude-code": "Add screen memory to the Claude Code CLI",
-  "warp": "Search screen history from Warp terminal via MCP",
-  "chatgpt": "Search your screen history from ChatGPT",
-  "browser-url": "Capture visited URLs from your browser in real time",
-  "voice-memos": "Sync Apple Voice Memos for AI-powered search",
-  "apple-intelligence": "Connect Apple Intelligence writing tools",
-  "input-monitoring": "Track keyboard & mouse for productivity insights",
-  "apple-calendar": "Search Apple Calendar events with AI",
-  "google-calendar": "Search Google Calendar events with AI",
-  "google-docs": "Read and search your Google Docs",
-  "google-sheets": "Read and search your Google Sheets",
-  "gmail": "Read and search your Gmail inbox",
-  "ics-calendar": "Subscribe to any ICS calendar feed",
-  "openclaw": "Browse the web with OpenClaw agents",
-  "hermes": "AI-powered messaging assistant",
-  "whatsapp": "Search your WhatsApp conversations",
-  "anythingllm": "Give AnythingLLM access to your screen",
-  "ollama": "Connect local Ollama models to screenpipe",
-  "lmstudio": "Connect LM Studio models to screenpipe",
-  "msty": "Connect Msty models to screenpipe",
-  "obsidian": "Sync screen memory to your Obsidian vault",
-  "notion": "Search Notion pages with your screen context",
-  "linear": "Search Linear issues from your screen context",
-  "perplexity": "Search the web with Perplexity AI",
-  "krisp": "Search Krisp meeting transcripts and notes",
-  "plaud": "Search Plaud recordings and transcripts",
-  "custom-mcp": "Connect any MCP-compatible server",
-  "skills": "Import Claude Code skills for AI automations",
-};
+type ConnectionTile = ConnectionSuggestionTile & { icon: string };
 
 type ConnectionSort = "suggested" | "alphabetical";
 
@@ -852,78 +818,6 @@ function honchoExploreUrl(creds: Record<string, string>): string | null {
   return `https://app.honcho.dev/explore?${qs.toString()}`;
 }
 
-// High-activation defaults fill the suggested row when there are not enough
-// detected or already-connected apps on the device.
-const FEATURED_CONNECTION_IDS = [
-  "custom-mcp",
-  "claude",
-  "cursor",
-  "codex",
-  "claude-code",
-  "chatgpt",
-  "slack",
-  "obsidian",
-  "notion",
-];
-
-
-const DEVICE_CONNECTION_ORDER = [
-  "custom-mcp",
-  "claude",
-  "cursor",
-  "codex",
-  "claude-code",
-  "chatgpt",
-  "browser-url",
-  "input-monitoring",
-  "obsidian",
-  "notion",
-  "linear",
-  "slack",
-  "gmail",
-  "apple-calendar",
-  "google-calendar",
-  "google-docs",
-  "google-sheets",
-  "warp",
-  "ollama",
-  "lmstudio",
-  "msty",
-  "krisp",
-  "whatsapp",
-];
-
-function normalizeConnectionCategory(category: string | null | undefined): string {
-  const value = (category || "Other").trim();
-  if (!value) return "Other";
-  return value
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function connectionPriority(tile: ConnectionTile): number {
-  if (tile.connected) return 0;
-  if (tile.detected) return 1;
-  if (FEATURED_CONNECTION_IDS.includes(tile.id)) return 2;
-  return 3;
-}
-
-function connectionOrder(tile: ConnectionTile): number {
-  const index = DEVICE_CONNECTION_ORDER.indexOf(tile.id);
-  return index === -1 ? DEVICE_CONNECTION_ORDER.length : index;
-}
-
-function compareConnectionTiles(a: ConnectionTile, b: ConnectionTile): number {
-  const priority = connectionPriority(a) - connectionPriority(b);
-  if (priority !== 0) return priority;
-  const order = connectionOrder(a) - connectionOrder(b);
-  if (order !== 0) return order;
-  return a.name.localeCompare(b.name);
-}
-
-
 // Per-connection quickstart prompts shown when "Try in Chat" is clicked.
 export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   gmail: "Show me important emails from the last week",
@@ -942,6 +836,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   granola: "Show notes from my recent meetings",
   zoom: "Summarize my recent Zoom calls",
   krisp: "Search my meeting transcripts for action items",
+  excalidraw: "What's on my recent Excalidraw boards?",
   whatsapp: "What were the latest messages in my WhatsApp?",
   discord: "What was discussed in my Discord servers recently?",
   teams: "Show me recent Microsoft Teams messages",
@@ -3036,6 +2931,10 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
 const KRISP_MCP_URL = "https://mcp.krisp.ai/mcp";
 const PLAUD_MCP_URL = "https://mcp.plaud.ai/mcp";
+// Excalidraw+ exposes the workspace (scenes, collections, search) over a
+// remote MCP gated by a static API key, not OAuth (no discovery metadata on
+// the host), so it uses the ApiKeyMcpPanel below instead of OAuthMcpPanel.
+const EXCALIDRAW_MCP_URL = "https://api.excalidraw.com/api/v1/mcp";
 
 function mcpRandomId(): string {
   const bytes = new Uint8Array(8);
@@ -3260,6 +3159,199 @@ function OAuthMcpPanel({
   );
 }
 
+// Featured API-key MCP cards (Excalidraw+): same one-click idea as the OAuth
+// cards above, but for providers whose remote MCP is gated by a static bearer
+// key instead of OAuth. The key is validated with an ad-hoc probe first and
+// only then persisted (value lands in the secret store via the generic
+// /mcp-servers machinery), so, like the OAuth cards, a server config existing
+// for the provider URL means the connection works.
+
+function ApiKeyMcpPanel({
+  name,
+  mcpUrl,
+  description,
+  keyPlaceholder,
+  createKeyUrl,
+  createKeyLabel,
+  onConnected,
+  onDisconnected,
+}: {
+  name: string;
+  mcpUrl: string;
+  description: React.ReactNode;
+  keyPlaceholder: string;
+  createKeyUrl: string;
+  createKeyLabel: string;
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
+  const [serverId, setServerId] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  // Reflect reality on open: find this provider's MCP server from a prior
+  // connect (matched by URL, same as the tile dot in refreshStatus).
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await localFetch("/mcp-servers");
+      if (!r.ok) return;
+      const body = await r.json();
+      const list = (body?.data ?? []) as { id: string; url?: string; enabled?: boolean }[];
+      const existing = list.find(
+        (s) => (s.url ?? "").replace(/\/+$/, "") === mcpUrl
+      );
+      setServerId(existing?.id ?? null);
+      setConnected(!!existing?.enabled);
+    } catch {}
+  }, [mcpUrl]);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
+  const handleConnect = async () => {
+    const key = apiKey.trim();
+    if (!key || busy) return;
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      const headers = [{ name: "Authorization", value: `Bearer ${key}` }];
+      // Validate the key against the provider before persisting anything.
+      const probe = await localFetch("/mcp-servers/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: mcpUrl, headers }),
+      });
+      if (!probe.ok) {
+        const pb = await probe.json().catch(() => ({}));
+        setStatusMsg(pb?.error ?? `${name} rejected the key (HTTP ${probe.status})`);
+        return;
+      }
+      const targetId = serverId ?? mcpRandomId();
+      const res = await localFetch(
+        `/mcp-servers/${encodeURIComponent(targetId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, url: mcpUrl, headers, enabled: true }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setStatusMsg(body?.error ?? `Save failed (HTTP ${res.status})`);
+        return;
+      }
+      setServerId(targetId);
+      setConnected(true);
+      setApiKey("");
+      notifyConnectionsUpdated();
+      onConnected?.();
+    } catch (e: any) {
+      setStatusMsg(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!serverId) return;
+    setBusy(true);
+    try {
+      // Deleting the server also wipes the stored key from the secret store.
+      await localFetch(`/mcp-servers/${encodeURIComponent(serverId)}`, {
+        method: "DELETE",
+      });
+      setServerId(null);
+      setConnected(false);
+      setStatusMsg(null);
+      notifyConnectionsUpdated();
+      onDisconnected?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-3 text-sm">
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        {description}
+      </p>
+      {connected ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
+            <Check className="h-3.5 w-3.5" /> Connected
+          </span>
+          <Button
+            onClick={handleDisconnect}
+            disabled={busy}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal ml-auto"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <LogOut className="h-3 w-3" />
+            )}
+            Disconnect
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleConnect();
+                }}
+                placeholder={keyPlaceholder}
+                className="h-7 text-xs pr-8"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={showKey ? "Hide key" : "Show key"}
+              >
+                {showKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </button>
+            </div>
+            <Button
+              onClick={handleConnect}
+              disabled={busy || !apiKey.trim()}
+              size="sm"
+              className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+            >
+              {busy ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <LogIn className="h-3 w-3" />
+              )}
+              Connect
+            </Button>
+          </div>
+          <button
+            type="button"
+            onClick={() => openUrl(createKeyUrl)}
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+          >
+            <ExternalLink className="h-3 w-3" /> {createKeyLabel}
+          </button>
+        </div>
+      )}
+      {statusMsg && !connected && (
+        <p className="text-xs text-muted-foreground">{statusMsg}</p>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main connections section
 // ---------------------------------------------------------------------------
@@ -3323,6 +3415,7 @@ export function ConnectionsSection({
   const [customMcpEnabledCount, setCustomMcpEnabledCount] = useState(0);
   const [krispConnected, setKrispConnected] = useState(false);
   const [plaudConnected, setPlaudConnected] = useState(false);
+  const [excalidrawConnected, setExcalidrawConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
 
@@ -3371,6 +3464,7 @@ export function ConnectionsSection({
         setCustomMcpEnabledCount(0);
         setKrispConnected(false);
         setPlaudConnected(false);
+        setExcalidrawConnected(false);
         return;
       }
       const body = await r.json();
@@ -3381,12 +3475,14 @@ export function ConnectionsSection({
       setCustomMcpConnected(enabled.length > 0);
       setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
       setPlaudConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === PLAUD_MCP_URL));
+      setExcalidrawConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === EXCALIDRAW_MCP_URL));
     }).catch(() => {
       setCustomMcpConnected(false);
       setCustomMcpServerCount(0);
       setCustomMcpEnabledCount(0);
       setKrispConnected(false);
       setPlaudConnected(false);
+      setExcalidrawConnected(false);
     });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
@@ -3492,6 +3588,7 @@ export function ConnectionsSection({
       { id: "perplexity", name: "Perplexity", icon: "perplexity", connected: false, detected: detectedConnectionIds.has("perplexity") },
       { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected, detected: detectedConnectionIds.has("krisp") },
       { id: "plaud", name: "Plaud", icon: "plaud", connected: plaudConnected },
+      { id: "excalidraw", name: "Excalidraw", icon: "excalidraw", connected: excalidrawConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false, detected: customMcpServerCount > 0 },
       { id: "skills", name: "Skills", icon: "skills", connected: importedSkillsCount > 0, category: "Agent" },
     ];
@@ -3534,22 +3631,15 @@ export function ConnectionsSection({
       ...tile,
       // Our explicit map overrides the API's category so known tools always land in the right group
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
-      description: tile.description ?? HARDCODED_DESCRIPTIONS[tile.id],
+      description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
   const suggested = useMemo(() => {
     if (!isDefaultView) return [];
-    return [...allTiles]
-      .filter((tile) => (
-        tile.connected ||
-        tile.detected ||
-        FEATURED_CONNECTION_IDS.includes(tile.id)
-      ))
-      .sort(compareConnectionTiles)
-      .slice(0, 8);
+    return getSuggestedConnectionsForDevice(allTiles, 8);
   }, [allTiles, isDefaultView]);
 
   // Flat search results (used when search is active or category is programmatically focused)
@@ -3565,8 +3655,10 @@ export function ConnectionsSection({
     return [...tiles].sort(compareConnectionTiles);
   }, [allTiles, categoryFilter, search]);
 
-  // Category order for grouped view
-  const CATEGORY_ORDER = ["Desktop", "AI", "Productivity", "Project Management", "Communication", "Calendar", "Documents", "Knowledge", "Meetings", "System", "Web", "Research", "Notification", "Agent", "Other"];
+  // Category order for grouped view. Keep in sync with the labels in
+  // CONNECTION_CATEGORY_BY_ID (lib/constants/connections.ts). Unknown
+  // categories sort after these, alphabetically.
+  const CATEGORY_ORDER = ["Desktop", "AI", "Agent", "Automation", "Meetings", "Calendar", "Communication", "Notes", "Documents", "Project Management", "CRM", "Support", "Finance", "Developer", "Wearables", "Notifications", "System", "Other"];
 
   // Grouped tiles by category (default view — excludes suggested items)
   const groupedTiles = useMemo(() => {
@@ -3645,6 +3737,16 @@ export function ConnectionsSection({
         onConnected={() => setPlaudConnected(true)}
         onDisconnected={() => setPlaudConnected(false)}
       />;
+      case "excalidraw": return <ApiKeyMcpPanel
+        name="Excalidraw"
+        mcpUrl={EXCALIDRAW_MCP_URL}
+        description={<>Connect Excalidraw+ so your AI can search, read, and edit the whiteboard scenes in your workspace. Excalidraw doesn&apos;t offer OAuth here, so paste an API key from your Excalidraw+ workspace settings instead. The key is stored securely on this device and only ever sent to Excalidraw.</>}
+        keyPlaceholder="Excalidraw+ API key"
+        createKeyUrl="https://plus.excalidraw.com/docs/mcp/getting-started"
+        createKeyLabel="How to create an API key"
+        onConnected={() => setExcalidrawConnected(true)}
+        onDisconnected={() => setExcalidrawConnected(false)}
+      />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
@@ -3662,12 +3764,32 @@ export function ConnectionsSection({
       default:
         if (selectedIntegration) {
           if (selectedIntegration.is_oauth) {
-            return <OAuthPanel
-              integrationId={selectedIntegration.id}
-              integrationName={selectedIntegration.name}
-              onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
-              onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
-            />;
+            return (
+              <div className="space-y-3">
+                <OAuthPanel
+                  integrationId={selectedIntegration.id}
+                  integrationName={selectedIntegration.name}
+                  onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
+                  onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
+                />
+                {/* OAuth integrations with credential fields (HubSpot Private App
+                    token, Teams webhook URL) keep a manual fallback for users whose
+                    org bans OAuth apps — without this the fields are unreachable. */}
+                {selectedIntegration.fields.length > 0 && (
+                  <details>
+                    <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                      advanced: connect with a token instead
+                    </summary>
+                    <div className="pt-2">
+                      <ApiIntegrationPanel
+                        integration={selectedIntegration}
+                        onRefresh={fetchIntegrations}
+                      />
+                    </div>
+                  </details>
+                )}
+              </div>
+            );
           }
           return <ApiIntegrationPanel
             integration={selectedIntegration}

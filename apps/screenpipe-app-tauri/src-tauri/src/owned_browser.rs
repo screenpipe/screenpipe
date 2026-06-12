@@ -47,6 +47,8 @@ use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+const RECENT_NAVIGATION_CONTEXT_LIMIT: usize = 16;
+
 /// Embedded webview label — also used by the frontend Tauri commands.
 pub const WEBVIEW_LABEL: &str = "owned-browser";
 
@@ -128,22 +130,26 @@ struct OwnedBrowserStateEvent {
     url: Option<String>,
     title: Option<String>,
     loading: Option<bool>,
+    navigation_id: Option<String>,
     /// Conversation/session that issued the navigation currently in flight.
-    /// See [`OwnedBrowserNavigateEvent::owner`]. `None` for the sidebar's own
-    /// restore/reload; the frontend always honors those.
+    /// See [`OwnedBrowserNavigateEvent::owner`]. `None` means stale/legacy;
+    /// supported restore/reload paths now send the foreground conversation id.
     owner: Option<String>,
 }
 
 /// Payload of [`NAVIGATE_EVENT`]. `owner` is the chat/session id that drove the
 /// navigation — `sid` for a chat agent (equals the frontend `conversationId`),
-/// `pipe:<name>` for a background pipe, `None` for the sidebar's own
-/// restore/reload. The owned browser is a singleton broadcast to every window,
-/// so the frontend uses `owner` to ignore navigations that belong to a chat
-/// other than the one on screen.
+/// `pipe:<name>` for a background pipe. `None` means stale/legacy; supported
+/// restore/reload paths now send the foreground conversation id. The owned
+/// browser is a singleton broadcast to every window, so the frontend uses
+/// `owner` to ignore navigations that belong to a chat other than the one on
+/// screen.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OwnedBrowserNavigateEvent {
     url: String,
+    navigation_id: String,
+    reveal: bool,
     owner: Option<String>,
 }
 
@@ -160,6 +166,7 @@ struct BrowserSessionAccessRequestPayload {
     url: String,
     host: String,
     already_granted: bool,
+    navigation_id: Option<String>,
     /// Owner of the navigation that triggered this prompt — see
     /// [`OwnedBrowserNavigateEvent::owner`].
     owner: Option<String>,
@@ -177,6 +184,7 @@ struct V20CookieBlockPayload {
     /// "v20" = app-bound encryption blocked decrypt; "locked" = browser running, DB inaccessible
     #[serde(default)]
     reason: String,
+    navigation_id: Option<String>,
     /// Owner of the navigation that triggered this block — see
     /// [`OwnedBrowserNavigateEvent::owner`].
     owner: Option<String>,
@@ -304,9 +312,18 @@ struct OwnedBrowserInner {
     visible: bool,
 }
 
+#[derive(Clone)]
+struct NavigationContext {
+    navigation_id: String,
+    owner: Option<String>,
+    requested_url: String,
+}
+
 struct OwnedBrowserState {
     inner: Mutex<OwnedBrowserInner>,
     last_title: StdMutex<String>,
+    recent_navigations: StdMutex<Vec<NavigationContext>>,
+    pending_navigation_id: StdMutex<Option<String>>,
     /// Owner (chat/session id) of the most recent navigation. Set by
     /// `prepare_navigation` and read by the native page-state / cookie event
     /// emitters, which fire from sync callbacks that don't carry the owner.
@@ -323,8 +340,87 @@ impl OwnedBrowserState {
         Self {
             inner: Mutex::new(OwnedBrowserInner::default()),
             last_title: StdMutex::new(String::new()),
+            recent_navigations: StdMutex::new(Vec::new()),
+            pending_navigation_id: StdMutex::new(None),
             pending_owner: StdMutex::new(None),
         }
+    }
+
+    fn remember_navigation(
+        &self,
+        requested_url: String,
+        owner: Option<String>,
+    ) -> NavigationContext {
+        let context = NavigationContext {
+            navigation_id: Uuid::new_v4().to_string(),
+            owner,
+            requested_url,
+        };
+        if let Ok(mut guard) = self.recent_navigations.lock() {
+            guard.push(context.clone());
+            if guard.len() > RECENT_NAVIGATION_CONTEXT_LIMIT {
+                let drop_count = guard.len() - RECENT_NAVIGATION_CONTEXT_LIMIT;
+                guard.drain(0..drop_count);
+            }
+        }
+        context
+    }
+
+    fn context_for_url(&self, url: &str) -> Option<NavigationContext> {
+        self.recent_navigations
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .iter()
+                    .rev()
+                    .find(|ctx| ctx.requested_url == url)
+                    .cloned()
+            })
+    }
+
+    fn remember_committed_url_for_context(&self, url: &str, context: &NavigationContext) {
+        if let Ok(mut guard) = self.recent_navigations.lock() {
+            if guard
+                .iter()
+                .rev()
+                .any(|ctx| ctx.navigation_id == context.navigation_id && ctx.requested_url == url)
+            {
+                return;
+            }
+            guard.push(NavigationContext {
+                navigation_id: context.navigation_id.clone(),
+                owner: context.owner.clone(),
+                requested_url: url.to_string(),
+            });
+            if guard.len() > RECENT_NAVIGATION_CONTEXT_LIMIT {
+                let drop_count = guard.len() - RECENT_NAVIGATION_CONTEXT_LIMIT;
+                guard.drain(0..drop_count);
+            }
+        }
+    }
+
+    fn current_context(&self) -> Option<NavigationContext> {
+        let navigation_id = self.pending_navigation_id();
+        let owner = self.pending_owner();
+        navigation_id.map(|navigation_id| NavigationContext {
+            navigation_id,
+            owner,
+            requested_url: String::new(),
+        })
+    }
+
+    fn set_pending_navigation_id(&self, navigation_id: Option<String>) {
+        if let Ok(mut guard) = self.pending_navigation_id.lock() {
+            *guard = navigation_id;
+        }
+    }
+
+    fn pending_navigation_id(&self) -> Option<String> {
+        self.pending_navigation_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     fn set_pending_owner(&self, owner: Option<String>) {
@@ -388,14 +484,31 @@ fn emit_state_event(
     title: Option<String>,
     loading: Option<bool>,
 ) {
+    let state = browser_state();
+    let context = if let Some(ref current_url) = url {
+        if let Some(context) = state.context_for_url(current_url) {
+            Some(context)
+        } else {
+            let fallback = state.current_context();
+            if let Some(ref context) = fallback {
+                // Redirects commit a different main-document URL than the one
+                // we originally requested. Bind that committed URL onto the
+                // same navigation context so later title/state events resolve
+                // by exact URL instead of depending on the mutable pending
+                // fallback.
+                state.remember_committed_url_for_context(current_url, context);
+            }
+            fallback
+        }
+    } else {
+        state.current_context()
+    };
     let payload = OwnedBrowserStateEvent {
         url,
         title,
         loading,
-        // Native page-load/title callbacks don't know which navigation they
-        // belong to; tag with the owner of the most recent navigate so the
-        // frontend can drop state for a chat other than the one on screen.
-        owner: browser_state().pending_owner(),
+        navigation_id: context.as_ref().map(|ctx| ctx.navigation_id.clone()),
+        owner: context.and_then(|ctx| ctx.owner),
     };
     if let Err(e) = app.emit(STATE_EVENT, payload) {
         debug!("owned-browser: failed to emit state event: {e}");
@@ -534,7 +647,7 @@ impl TauriOwnedHandle {
             // is `None` for the plain `eval` entry point (snapshot, code-only
             // eval), which is fine — those don't pass a url, so this branch and
             // its navigate event don't fire.
-            prepare_navigation(&self.app, &self.state, parsed, owner).await;
+            prepare_navigation(&self.app, &self.state, parsed, owner, true).await;
         }
 
         let active = match self.state.active().await {
@@ -732,7 +845,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // hook the agent always lands on the logged-out version of the
         // site even though the Tauri-command-driven sidebar restore
         // path was injecting correctly.
-        prepare_navigation(&self.app, &self.state, &parsed, owner).await;
+        prepare_navigation(&self.app, &self.state, &parsed, owner, true).await;
         inject_cookies_for_url(&self.app, &parsed).await;
 
         if let Some(active) = self.state.active().await {
@@ -905,24 +1018,32 @@ async fn prepare_navigation(
     state: &OwnedBrowserState,
     parsed: &url::Url,
     owner: Option<&str>,
+    reveal: bool,
 ) {
+    let context = state.remember_navigation(
+        parsed.as_str().to_string(),
+        owner.map(|s| s.to_string()),
+    );
     // Record the owner before emitting anything so the provisional state event
     // below — and the native page-load/title callbacks that follow — carry the
     // same tag. `owner` is the chat/session that issued this navigation; the
     // frontend uses it to keep a background pipe's page out of whatever chat is
     // on screen.
-    state.set_pending_owner(owner.map(|s| s.to_string()));
-    // Provisional omnibox URL while a top-level navigation is in flight
-    // (agent or sidebar initiated). Committed URL comes from `webview.url()`
-    // on main-document load finish / title change.
-    emit_state_event(app, Some(parsed.as_str().to_string()), None, Some(true));
+    state.set_pending_navigation_id(Some(context.navigation_id.clone()));
+    state.set_pending_owner(context.owner.clone());
     let _ = app.emit(
         NAVIGATE_EVENT,
         OwnedBrowserNavigateEvent {
             url: parsed.as_str().to_string(),
-            owner: owner.map(|s| s.to_string()),
+            navigation_id: context.navigation_id,
+            reveal,
+            owner: context.owner,
         },
     );
+    // Provisional omnibox URL while a top-level navigation is in flight
+    // (agent or sidebar initiated). Committed URL comes from `webview.url()`
+    // on main-document load finish / title change.
+    emit_state_event(app, Some(parsed.as_str().to_string()), None, Some(true));
     state.store_pending_url(parsed.clone()).await;
 }
 
@@ -1018,7 +1139,7 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
 
 #[cfg(test)]
 mod normalize_url_tests {
-    use super::{normalize_url, title_after_eval_marker};
+    use super::{normalize_url, title_after_eval_marker, OwnedBrowserState};
 
     #[test]
     fn keeps_fully_qualified() {
@@ -1087,19 +1208,65 @@ mod normalize_url_tests {
             "Example Domain"
         );
     }
+
+    #[test]
+    fn redirect_committed_url_keeps_same_navigation_context() {
+        let state = OwnedBrowserState::new();
+        let context =
+            state.remember_navigation("http://example.com".to_string(), Some("conv-1".to_string()));
+
+        assert_eq!(
+            state
+                .context_for_url("http://example.com")
+                .as_ref()
+                .map(|ctx| ctx.navigation_id.as_str()),
+            Some(context.navigation_id.as_str())
+        );
+        assert!(state.context_for_url("https://www.example.com").is_none());
+
+        state.remember_committed_url_for_context("https://www.example.com", &context);
+
+        let redirected = state
+            .context_for_url("https://www.example.com")
+            .expect("redirect target should resolve to the original navigation context");
+        assert_eq!(redirected.navigation_id, context.navigation_id);
+        assert_eq!(redirected.owner, context.owner);
+        assert_eq!(
+            state
+                .context_for_url("http://example.com")
+                .as_ref()
+                .map(|ctx| ctx.navigation_id.as_str()),
+            Some(context.navigation_id.as_str())
+        );
+    }
 }
 
-/// Navigate the embedded webview to `url`. Used by the sidebar when restoring
-/// per-chat state or on user reload — i.e. always an action of the chat that's
-/// on screen, so it carries no owner (`None`) and the frontend always honors
-/// it. The agent/pipe path is the connect-trait `navigate` (owner-tagged).
+/// Navigate the embedded webview to `url`.
+///
+/// Frontend restore/reload calls pass the foreground conversation id as
+/// `owner`, so the entire browser lifecycle stays scoped to that chat. Retry
+/// paths that are continuing a pipe/chat-owned navigation (for example after an
+/// extension or cookie-consent flow) can pass the original `owner` through so
+/// the follow-up navigate does not look like a fresh restore in every chat.
 #[specta::specta]
 #[tauri::command]
-pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn owned_browser_navigate(
+    app: AppHandle,
+    url: String,
+    owner: Option<String>,
+    reveal: Option<bool>,
+) -> Result<(), String> {
     let state = browser_state();
     let parsed: url::Url = normalize_url(&url)?;
 
-    prepare_navigation(&app, &state, &parsed, None).await;
+    prepare_navigation(
+        &app,
+        &state,
+        &parsed,
+        owner.as_deref(),
+        reveal.unwrap_or(true),
+    )
+    .await;
     inject_cookies_for_url(&app, &parsed).await;
     if let Some(active) = state.active().await {
         // Visibility is owned by the frontend sidebar — never force-show here
@@ -1219,6 +1386,7 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
                     }
                 }
                 if cookies.is_empty() {
+                    let context = browser_state().context_for_url(url.as_str());
                     // Extension couldn't supply cookies — show the v20 card.
                     let payload = V20CookieBlockPayload {
                         url: url.as_str().to_string(),
@@ -1227,7 +1395,8 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
                         v20_count: block.v20_count,
                         sources: block.sources,
                         reason: "v20".to_string(),
-                        owner: browser_state().pending_owner(),
+                        navigation_id: context.as_ref().map(|ctx| ctx.navigation_id.clone()),
+                        owner: context.and_then(|ctx| ctx.owner),
                     };
                     if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
                         warn!("owned-browser cookies: failed to emit v20 block event: {e}");
@@ -1439,6 +1608,7 @@ async fn browser_session_decision_for_url(
                 );
                 return BrowserSessionDecision::UseBrowserSession;
             }
+            let context = browser_state().context_for_url(url.as_str());
             let payload = V20CookieBlockPayload {
                 url: url.as_str().to_string(),
                 host: block.host,
@@ -1446,7 +1616,8 @@ async fn browser_session_decision_for_url(
                 v20_count: 0,
                 sources: block.sources,
                 reason: "locked".to_string(),
-                owner: browser_state().pending_owner(),
+                navigation_id: context.as_ref().map(|ctx| ctx.navigation_id.clone()),
+                owner: context.and_then(|ctx| ctx.owner),
             };
             if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
                 warn!("owned-browser: failed to emit locked-browser event: {e}");
@@ -1546,12 +1717,14 @@ async fn browser_session_decision_for_url(
         .await
         .insert(request_id.clone(), tx);
 
+    let context = browser_state().context_for_url(url.as_str());
     let payload = BrowserSessionAccessRequestPayload {
         request_id: request_id.clone(),
         url: url.as_str().to_string(),
         host: host_key.clone(),
         already_granted,
-        owner: browser_state().pending_owner(),
+        navigation_id: context.as_ref().map(|ctx| ctx.navigation_id.clone()),
+        owner: context.and_then(|ctx| ctx.owner),
     };
 
     if let Err(e) = app.emit(SESSION_ACCESS_REQUEST_EVENT, payload) {

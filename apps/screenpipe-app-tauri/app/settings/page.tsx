@@ -37,6 +37,7 @@ import { StorageSection, searchIndex as storageSearchIndex } from "@/components/
 import { NotificationsSettings, searchIndex as notificationsSearchIndex } from "@/components/settings/notifications-settings";
 import { UsageSection, searchIndex as usageSearchIndex } from "@/components/settings/usage-section";
 import { SpeakersSection, searchIndex as speakersSearchIndex } from "@/components/settings/speakers-section";
+import { searchIndex as powerSearchIndex } from "@/components/settings/battery-saver-section";
 import { SettingsSearchInput, SettingsSearchPopover, searchSettingsNav, scrollToSettingsField, type IndexedSettingsField, type SettingsField } from "@/components/settings/settings-search";
 
 // Settings search index for the inline ReferralSection defined further down in
@@ -63,6 +64,7 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...generalSearchIndex.map((f) => ({ ...f, section: "general" })),
   ...aiSearchIndex.map((f) => ({ ...f, section: "ai" })),
   ...recordingSearchIndex.map((f) => ({ ...f, section: "recording" })),
+  ...powerSearchIndex.map((f) => ({ ...f, section: "recording" })),
   ...shortcutsSearchIndex.map((f) => ({ ...f, section: "shortcuts" })),
   ...notificationsSearchIndex.map((f) => ({ ...f, section: "notifications" })),
   ...usageSearchIndex.map((f) => ({ ...f, section: "usage" })),

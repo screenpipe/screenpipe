@@ -260,6 +260,43 @@ pub async fn await_safe_restart(timeout_secs: Option<u64>) -> String {
         .to_string()
 }
 
+/// Banner-click restart. plugin-process `relaunch()` fires
+/// `ExitRequested` which `main.rs` blocks unless `QUIT_REQUESTED` is set —
+/// banner never set it, so the exit was silently cancelled and the button
+/// hung on "restarting…". Mirror the auto-update path: gate, stop server,
+/// set `QUIT_REQUESTED`, then `app.restart()`. See 2026-06-10 report.
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_for_update(
+    app: tauri::AppHandle,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    let cap = Duration::from_secs(timeout_secs.unwrap_or(BANNER_GATE_TIMEOUT_SECS));
+    let gate = await_restart_gate(cap, "banner-triggered restart").await;
+    if !gate.proceed() {
+        return Ok(gate.as_str().to_string());
+    }
+
+    info!("banner restart: gate passed, shutting down for update");
+
+    // Non-fatal: server.rs retries port bind if the next boot races teardown.
+    if let Err(err) = stop_screenpipe(app.state::<RecordingState>(), app.clone()).await {
+        warn!("banner restart: stop_screenpipe failed (continuing): {}", err);
+    }
+
+    QUIT_REQUESTED.store(true, Ordering::SeqCst);
+
+    // Off-thread so the IPC reply flushes before runtime teardown; also
+    // `app.restart()` from a non-main thread blocks forever once it succeeds.
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        app_clone.restart();
+    });
+
+    Ok("proceed".to_string())
+}
+
 fn auto_update_enabled_from_settings(settings: Result<Option<SettingsStore>, String>) -> bool {
     settings
         .ok()
@@ -1055,5 +1092,57 @@ mod tests {
         assert!(!auto_update_enabled_from_settings(Err(
             "store unavailable".to_string()
         )));
+    }
+
+    // Banner-restart gate contract (2026-06-10 report). Full end-to-end isn't
+    // unit-testable (`app.restart()` needs a real AppHandle); we lock down the
+    // gate's return values so the frontend string-match path can't drift.
+    use crate::health::{set_boot_error, set_boot_phase};
+
+    #[tokio::test]
+    async fn await_safe_restart_returns_proceed_when_boot_ready() {
+        set_boot_phase("ready", None);
+        let result = await_safe_restart(Some(1)).await;
+        set_boot_phase("idle", None);
+        assert_eq!(
+            result, "proceed",
+            "banner gate must return proceed when boot phase is ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_safe_restart_returns_errored_on_boot_error() {
+        set_boot_error("simulated boot failure for banner-gate test");
+        let result = await_safe_restart(Some(1)).await;
+        set_boot_phase("idle", None);
+        assert_eq!(
+            result, "errored",
+            "banner gate must surface errored so frontend toasts instead of restarting"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_safe_restart_returns_pending_on_timeout() {
+        set_boot_phase("starting", None);
+        let result = await_safe_restart(Some(1)).await;
+        set_boot_phase("idle", None);
+        assert_eq!(result, "pending");
+    }
+
+    #[test]
+    fn restart_gate_proceed_is_the_only_truthy_variant() {
+        // Guards against a new variant accidentally mapping to true and
+        // shipping a process::exit race.
+        assert!(RestartGate::Proceed.proceed());
+        assert!(!RestartGate::Errored.proceed());
+        assert!(!RestartGate::DeferPending.proceed());
+    }
+
+    #[test]
+    fn restart_gate_as_str_matches_frontend_contract() {
+        // update-banner.tsx string-matches these exact values.
+        assert_eq!(RestartGate::Proceed.as_str(), "proceed");
+        assert_eq!(RestartGate::Errored.as_str(), "errored");
+        assert_eq!(RestartGate::DeferPending.as_str(), "pending");
     }
 }

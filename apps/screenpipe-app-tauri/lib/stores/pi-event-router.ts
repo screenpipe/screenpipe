@@ -748,7 +748,16 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       // Background saves use fallback titles; AI titles generated in foreground
       const title = existing?.title || derivedTitle;
 
+      let computedLastUserMessageAt: number | undefined;
+      for (const message of messages as any[]) {
+        if (message?.role !== "user" || typeof message.timestamp !== "number") continue;
+        if (computedLastUserMessageAt == null || message.timestamp > computedLastUserMessageAt) {
+          computedLastUserMessageAt = message.timestamp;
+        }
+      }
+
       const lastUserMessageAt =
+        computedLastUserMessageAt ??
         useChatStore.getState().sessions[sid]?.lastUserMessageAt ??
         existing?.lastUserMessageAt;
 

@@ -17,6 +17,7 @@ use crate::{
     hot_frame_cache::HotFrameCache,
     routes::{
         activity_summary::get_activity_summary,
+        artifacts::{delete_artifact_handler, list_artifacts_handler, register_artifact_handler},
         audio::{
             api_list_audio_devices, audio_device_status, start_audio, start_audio_device,
             stop_audio, stop_audio_device,
@@ -259,6 +260,14 @@ pub struct SCServer {
     /// warming the hot frame cache from the DB at startup (the cache is only
     /// read by the timeline streaming endpoint). Set before `start()`.
     pub timeline_disabled: bool,
+    /// Advertise this instance over mDNS. Disabled for loopback-only binds
+    /// because LAN clients cannot reach those addresses and Windows may show a
+    /// firewall prompt for an otherwise local-only CLI run.
+    pub advertise_mdns: bool,
+}
+
+fn should_advertise_mdns(addr: SocketAddr) -> bool {
+    !addr.ip().is_loopback()
 }
 
 impl SCServer {
@@ -300,6 +309,7 @@ impl SCServer {
             external_memory_sync: None,
             high_fps_controller: None,
             timeline_disabled: false,
+            advertise_mdns: should_advertise_mdns(addr),
         }
     }
 
@@ -354,9 +364,13 @@ impl SCServer {
         let listener = bind_listener(self.addr).await?;
         info!("Server listening on {}", self.addr);
 
-        // Advertise via mDNS
-        if let Err(e) = screenpipe_connect::mdns::advertise(self.addr.port()) {
-            tracing::warn!("mdns advertisement failed (non-fatal): {}", e);
+        // Advertise via mDNS only when this server is reachable off-machine.
+        if self.advertise_mdns {
+            if let Err(e) = screenpipe_connect::mdns::advertise(self.addr.port()) {
+                tracing::warn!("mdns advertisement failed (non-fatal): {}", e);
+            }
+        } else {
+            debug!("mdns advertisement skipped for loopback-only server");
         }
 
         // Start serving
@@ -666,6 +680,9 @@ impl SCServer {
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
+            .post("/artifacts/register", register_artifact_handler)
+            .get("/artifacts", list_artifacts_handler)
+            .delete("/artifacts/:id", delete_artifact_handler)
             .post("/experimental/frames/merge", merge_frames_handler)
             .get("/experimental/validate/media", validate_media_handler)
             .post("/audio/start", start_audio)
@@ -799,7 +816,7 @@ impl SCServer {
                     axum::routing::post(crate::pipes_api::install_pipe),
                 )
                 // Favorites — register before `/:id` so axum doesn't match
-                // "favorites" as a pipe id.
+                // it as a pipe id.
                 .route(
                     "/favorites",
                     axum::routing::get(crate::pipes_api::list_favorites),
@@ -1136,5 +1153,35 @@ impl SCServer {
             })
             .layer(cors)
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_advertise_mdns;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn mdns_advertising_skips_loopback_binds() {
+        assert!(!should_advertise_mdns(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            3030,
+        )));
+        assert!(!should_advertise_mdns(SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            3030,
+        )));
+    }
+
+    #[test]
+    fn mdns_advertising_runs_for_lan_binds() {
+        assert!(should_advertise_mdns(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            3030,
+        )));
+        assert!(should_advertise_mdns(SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            3030,
+        )));
     }
 }

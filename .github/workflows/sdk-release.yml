@@ -210,6 +210,10 @@ jobs:
               exit 1
             fi
           done
+      - name: Bundle license into packages
+        run: |
+          cp ../../LICENSE.md .
+          for d in npm/*/; do cp ../../LICENSE.md "$d"; done
       # `napi prepublish` updates the main package.json so each
       # optionalDependency line matches the current version. By default
       # it ALSO publishes every platform tarball to npm AND creates a

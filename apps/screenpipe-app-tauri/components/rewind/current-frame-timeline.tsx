@@ -50,6 +50,10 @@ interface CurrentFrameTimelineProps {
 	navBarRef?: React.RefObject<HTMLDivElement | null>;
 	/** Named guard refs for Live Text click guards (e.g. filters, scrubber) */
 	guardRefs?: Record<string, React.RefObject<HTMLDivElement | null>>;
+	/** Whether the timeline is playing — enables native smooth HD video playback */
+	isPlaying?: boolean;
+	/** Current playback speed, forwarded to the <video> during HD playback */
+	playbackSpeed?: number;
 }
 
 
@@ -86,6 +90,8 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	embedded,
 	navBarRef,
 	guardRefs,
+	isPlaying,
+	playbackSpeed,
 }) => {
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
@@ -122,6 +128,8 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		onFrameUnavailable,
 		onFrameLoadError,
 		videoRef,
+		isPlaying,
+		playbackSpeed,
 	});
 
 	// Clear text selection when frame changes (avoid stale selection from previous frame)

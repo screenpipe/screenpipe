@@ -646,6 +646,7 @@ jobs:
       - name: Update package versions
         run: |
           for pkg in screenpipe screenpipe-darwin-arm64 screenpipe-darwin-x64 screenpipe-linux-x64 screenpipe-win32-x64; do
+            cp LICENSE.md packages/cli/$pkg/LICENSE.md
             cd packages/cli/$pkg
             npm version ${{ env.VERSION }} --no-git-tag-version --allow-same-version 2>/dev/null || true
             cd ../../..

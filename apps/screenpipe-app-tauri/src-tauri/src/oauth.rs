@@ -362,37 +362,38 @@ pub async fn oauth_connect(
 
     let store = open_secret_store().await;
 
-    // Auto-derive instance name from email/identity in token response
+    // Auto-derive the instance name (the account's own identity, e.g. its
+    // email) from the token response. Storing every account under its own
+    // `oauth:{id}:{email}` slot is what lets multiple accounts of the same
+    // provider coexist — connecting a second Gmail must not clobber the first.
+    // We only fall back to the default slot (None) when the provider hands us
+    // no identity to key on (e.g. Notion/QuickBooks/Jira, which key on
+    // workspace metadata instead and stay single-account here).
     let effective_instance = instance.or_else(|| token_data["email"].as_str().map(String::from));
-
-    // If no instance was explicitly provided and we couldn't derive one from the
-    // token, always store as the default instance (None) to avoid creating
-    // orphaned "default" named instances that oauthStatus can't find.
-    let existing = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
-    let store_instance = if existing.is_empty() || effective_instance.is_none() {
-        None
-    } else {
-        effective_instance.as_deref()
-    };
+    let store_instance = effective_instance.as_deref();
 
     oauth::write_oauth_token_instance(store.as_ref(), &integration_id, store_instance, &token_data)
         .await
         .map_err(|e| format!("failed to save token: {}", e))?;
 
-    // When we've just written to an instance-suffixed slot, proactively nuke
-    // the same integration's default slot. Why: `list_oauth_instances()` at
-    // connect time picks an instance-suffixed key for the new save whenever
-    // *any* existing entry is present. A stale default-slot entry (e.g. a
-    // pre-v2.4.52 partial save without refresh_token) would then linger and
-    // shadow every `instance=None` read path — which is exactly the zombie-
-    // token bug customers hit. Cleaning here means the read side only ever
-    // sees one entry per integration+identity.
-    if store_instance.is_some() {
-        if let Err(e) =
-            oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, None).await
+    // We just saved under an instance-suffixed slot. Reconcile any pre-existing
+    // default-slot (`oauth:{id}`) entry. An older single-account build parked
+    // the *first* account in the default slot, and the previous cleanup here
+    // blindly deleted that slot after every instanced save — which is exactly
+    // how "connecting a 2nd Gmail wiped the 1st" happened. Reconciliation still
+    // drops a stale/duplicate or unrecoverable default slot (the zombie-token
+    // cleanup we need), but promotes a *distinct, still-valid* account into its
+    // own named slot first so it survives alongside the account we just saved.
+    if let Some(new_instance) = store_instance {
+        if let Err(e) = oauth::reconcile_default_slot_after_instanced_save(
+            store.as_ref(),
+            &integration_id,
+            new_instance,
+        )
+        .await
         {
             tracing::warn!(
-                "oauth: failed to clean stale default slot after instanced save for {}: {e:#}",
+                "oauth: failed to reconcile default slot after instanced save for {}: {e:#}",
                 integration_id
             );
         }

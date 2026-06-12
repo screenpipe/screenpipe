@@ -37,6 +37,7 @@
         "@tauri-apps/plugin-store": "~2.4.2",
         "@tauri-apps/plugin-updater": "~2.10.0",
         "@tiptap/extension-image": "3.22.5",
+        "@tiptap/extension-list": "^3.22.5",
         "@tiptap/extension-placeholder": "^3.22.5",
         "@tiptap/pm": "^3.22.5",
         "@tiptap/react": "^3.22.5",

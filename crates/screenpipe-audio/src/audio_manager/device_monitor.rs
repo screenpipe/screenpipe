@@ -1165,6 +1165,10 @@ pub async fn start_device_monitor(
                             continue;
                         }
 
+                        if is_device_actively_streaming(&device_manager, &device) {
+                            continue;
+                        }
+
                         match audio_manager.start_device(&device).await {
                             Ok(()) => {
                                 //

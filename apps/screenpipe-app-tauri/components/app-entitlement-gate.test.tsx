@@ -18,6 +18,12 @@ const mocks = vi.hoisted(() => ({
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   state: { isSettingsLoaded: true, user: null as any },
+  enterprise: {
+    isEnterprise: false,
+    hiddenSections: [] as string[],
+    needsLicenseKey: false,
+    orgName: "",
+  },
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -36,6 +42,15 @@ vi.mock("@/lib/utils/tauri", () => ({
     openLoginWindow: mocks.openLoginWindow,
     setCloudToken: mocks.setCloudToken,
   },
+}));
+
+vi.mock("@/lib/hooks/use-enterprise-policy", () => ({
+  useEnterprisePolicy: () => ({
+    isEnterprise: mocks.enterprise.isEnterprise,
+    isSectionHidden: (sectionId: string) => mocks.enterprise.hiddenSections.includes(sectionId),
+    needsLicenseKey: mocks.enterprise.needsLicenseKey,
+    policy: { orgName: mocks.enterprise.orgName },
+  }),
 }));
 
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
@@ -77,6 +92,12 @@ describe("AppEntitlementGate", () => {
     vi.stubEnv("TAURI_ENV_DEBUG", "false");
     vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS", "false");
     mocks.state = { isSettingsLoaded: true, user: null };
+    mocks.enterprise = {
+      isEnterprise: false,
+      hiddenSections: [],
+      needsLicenseKey: false,
+      orgName: "",
+    };
   });
 
   afterEach(() => {
@@ -93,6 +114,42 @@ describe("AppEntitlementGate", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
     expect(mocks.openLoginWindow).toHaveBeenCalled();
+  });
+
+  it("forces enterprise sign-in when the account section is visible even if billing is bypassed", async () => {
+    vi.stubEnv("TAURI_ENV_DEBUG", "true");
+    mocks.enterprise = {
+      isEnterprise: true,
+      hiddenSections: ["referral"],
+      needsLicenseKey: false,
+      orgName: "Our Future Foundation",
+    };
+    mocks.state.user = null;
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByText(/your workspace requires/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+
+    await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
+    expect(mocks.openLoginWindow).toHaveBeenCalled();
+  });
+
+  it("does not force enterprise sign-in when the account section is hidden by policy", () => {
+    vi.stubEnv("TAURI_ENV_DEBUG", "true");
+    mocks.enterprise = {
+      isEnterprise: true,
+      hiddenSections: ["account", "referral"],
+      needsLicenseKey: false,
+      orgName: "Locked Workspace",
+    };
+    mocks.state.user = null;
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
 
   it("blocks an unentitled account and pauses the engine", async () => {

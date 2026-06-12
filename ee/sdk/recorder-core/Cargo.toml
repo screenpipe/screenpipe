@@ -14,14 +14,14 @@ screenpipe-capture = { path = "../../../crates/screenpipe-capture" }
 screenpipe-db      = { path = "../../../crates/screenpipe-db" }
 screenpipe-config  = { path = "../../../crates/screenpipe-config" }
 
-anyhow = "1"
-chrono = { version = "0.4", features = ["serde"] }
+anyhow = { workspace = true }
+chrono = { workspace = true }
 crossbeam-channel = "0.5"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
-tracing = "0.1"
+image = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "01b68e60c80a59bbc1cac3629e725cf3bb2e4901" }
 
 [dev-dependencies]
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }

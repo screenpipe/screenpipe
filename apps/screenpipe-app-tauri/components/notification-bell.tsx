@@ -175,15 +175,18 @@ export function NotificationBell() {
     >
       <PopoverTrigger asChild>
         <button
-          aria-label="notifications"
+          aria-label={unreadCount > 0 ? `notifications, ${unreadCount} unread` : "notifications"}
           data-testid="notification-bell-trigger"
           className="relative p-1.5 rounded-md hover:bg-muted/60 transition-colors"
         >
           <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+          {/* Quiet unread marker — a dot, not a count. Chrome only
+              signals "something new"; detail lives in the popover. */}
           {unreadCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-foreground text-background text-[9px] font-medium px-1">
-              {unreadCount > 9 ? "9+" : unreadCount}
-            </span>
+            <span
+              data-testid="notification-bell-unread-dot"
+              className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-foreground"
+            />
           )}
         </button>
       </PopoverTrigger>
