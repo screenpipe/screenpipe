@@ -337,96 +337,123 @@ export interface SpendSummary {
   } | null;
 }
 
-/**
- * Best-effort cache savings rollup. Returns null when the cache columns
- * don't exist yet (migration 0004 not applied).
- */
-async function getCacheSavings(env: Env, sinceStr: string): Promise<SpendSummary['cache']> {
-  try {
-    const rows = await env.DB.prepare(
-      `SELECT model,
-              COALESCE(SUM(cache_read_tokens), 0) as read_tokens,
-              COALESCE(SUM(cache_creation_tokens), 0) as creation_tokens
-       FROM cost_log WHERE timestamp >= ?
-       GROUP BY model`
-    ).bind(sinceStr).all<{ model: string; read_tokens: number; creation_tokens: number }>();
+// One row per (date × model × provider × tier) group — a few hundred rows
+// for a 30-day window, cheap to re-aggregate in JS.
+interface SpendGroupRow {
+  date: string;
+  model: string;
+  provider: string;
+  tier: string;
+  cost_usd: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+}
 
-    let readTokens = 0;
-    let creationTokens = 0;
-    let savings = 0;
-    for (const row of rows.results ?? []) {
-      readTokens += row.read_tokens;
-      creationTokens += row.creation_tokens;
-      const pricing = findPricing(row.model);
-      if (!pricing) continue;
-      const inputRate = pricing.input / 1_000_000;
-      savings += row.read_tokens * inputRate * (1 - (pricing.cacheRead ?? 1));
-      savings -= row.creation_tokens * inputRate * ((pricing.cacheWrite ?? 1) - 1);
-    }
-    return {
-      read_tokens: readTokens,
-      creation_tokens: creationTokens,
-      estimated_net_savings_usd: savings,
-    };
-  } catch {
-    return null;
-  }
+function spendGroupQuery(withCache: boolean): string {
+  return `SELECT date(timestamp) as date, model, provider, tier,
+       COALESCE(SUM(estimated_cost_usd), 0) as cost_usd,
+       COUNT(*) as requests,
+       COALESCE(SUM(input_tokens), 0) as input_tokens,
+       COALESCE(SUM(output_tokens), 0) as output_tokens${withCache ? `,
+       COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+       COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens` : ''}
+     FROM cost_log WHERE timestamp >= ?
+     GROUP BY date(timestamp), model, provider, tier`;
 }
 
 /**
  * Query aggregated spend data for the admin endpoint.
+ *
+ * Runs ONE grouped scan over the window and derives the per-dimension views
+ * in JS. The previous shape fired six parallel full-range scans (total +
+ * daily + model + provider + tier + cache); under load those tipped D1 over
+ * its CPU limit and reset the database, failing unrelated in-flight queries
+ * (SCREENPIPE-AI-PROXY-1T / -1X / -1E).
  */
 export async function getSpendSummary(env: Env, days: number): Promise<SpendSummary> {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
   const sinceStr = since.toISOString().replace('T', ' ').slice(0, 19);
 
-  const [totalRow, dailyRows, modelRows, providerRows, tierRows, cache] = await Promise.all([
-    env.DB.prepare(
-      `SELECT COALESCE(SUM(estimated_cost_usd), 0) as total_cost, COUNT(*) as total_requests
-       FROM cost_log WHERE timestamp >= ?`
-    ).bind(sinceStr).first<{ total_cost: number; total_requests: number }>(),
+  let rows: SpendGroupRow[];
+  let hasCacheColumns = true;
+  try {
+    rows = (await env.DB.prepare(spendGroupQuery(true)).bind(sinceStr).all<SpendGroupRow>()).results ?? [];
+  } catch {
+    // Cache columns from migration 0004 not applied yet — fall back to the
+    // legacy column set, mirroring logCost's write-side fallback.
+    hasCacheColumns = false;
+    rows = (await env.DB.prepare(spendGroupQuery(false)).bind(sinceStr).all<SpendGroupRow>()).results ?? [];
+  }
 
-    env.DB.prepare(
-      `SELECT date(timestamp) as date, COALESCE(SUM(estimated_cost_usd), 0) as cost_usd, COUNT(*) as requests
-       FROM cost_log WHERE timestamp >= ?
-       GROUP BY date(timestamp) ORDER BY date`
-    ).bind(sinceStr).all<{ date: string; cost_usd: number; requests: number }>(),
+  let totalCost = 0;
+  let totalRequests = 0;
+  const daily = new Map<string, { date: string; cost_usd: number; requests: number }>();
+  const byModel = new Map<string, { model: string; cost_usd: number; requests: number; input_tokens: number; output_tokens: number }>();
+  const byProvider = new Map<string, { provider: string; cost_usd: number; requests: number }>();
+  const byTier = new Map<string, { tier: string; cost_usd: number; requests: number }>();
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let cacheSavings = 0;
 
-    env.DB.prepare(
-      `SELECT model, COALESCE(SUM(estimated_cost_usd), 0) as cost_usd, COUNT(*) as requests,
-              COALESCE(SUM(input_tokens), 0) as input_tokens, COALESCE(SUM(output_tokens), 0) as output_tokens
-       FROM cost_log WHERE timestamp >= ?
-       GROUP BY model ORDER BY cost_usd DESC`
-    ).bind(sinceStr).all<{ model: string; cost_usd: number; requests: number; input_tokens: number; output_tokens: number }>(),
+  for (const row of rows) {
+    totalCost += row.cost_usd;
+    totalRequests += row.requests;
 
-    env.DB.prepare(
-      `SELECT provider, COALESCE(SUM(estimated_cost_usd), 0) as cost_usd, COUNT(*) as requests
-       FROM cost_log WHERE timestamp >= ?
-       GROUP BY provider ORDER BY cost_usd DESC`
-    ).bind(sinceStr).all<{ provider: string; cost_usd: number; requests: number }>(),
+    const day = daily.get(row.date) ?? { date: row.date, cost_usd: 0, requests: 0 };
+    day.cost_usd += row.cost_usd;
+    day.requests += row.requests;
+    daily.set(row.date, day);
 
-    env.DB.prepare(
-      `SELECT tier, COALESCE(SUM(estimated_cost_usd), 0) as cost_usd, COUNT(*) as requests
-       FROM cost_log WHERE timestamp >= ?
-       GROUP BY tier ORDER BY cost_usd DESC`
-    ).bind(sinceStr).all<{ tier: string; cost_usd: number; requests: number }>(),
+    const model = byModel.get(row.model) ?? { model: row.model, cost_usd: 0, requests: 0, input_tokens: 0, output_tokens: 0 };
+    model.cost_usd += row.cost_usd;
+    model.requests += row.requests;
+    model.input_tokens += row.input_tokens;
+    model.output_tokens += row.output_tokens;
+    byModel.set(row.model, model);
 
-    getCacheSavings(env, sinceStr),
-  ]);
+    const provider = byProvider.get(row.provider) ?? { provider: row.provider, cost_usd: 0, requests: 0 };
+    provider.cost_usd += row.cost_usd;
+    provider.requests += row.requests;
+    byProvider.set(row.provider, provider);
 
-  const totalCost = totalRow?.total_cost ?? 0;
-  const totalRequests = totalRow?.total_requests ?? 0;
+    const tier = byTier.get(row.tier) ?? { tier: row.tier, cost_usd: 0, requests: 0 };
+    tier.cost_usd += row.cost_usd;
+    tier.requests += row.requests;
+    byTier.set(row.tier, tier);
+
+    if (hasCacheColumns) {
+      const readTokens = row.cache_read_tokens ?? 0;
+      const creationTokens = row.cache_creation_tokens ?? 0;
+      cacheReadTokens += readTokens;
+      cacheCreationTokens += creationTokens;
+      const pricing = findPricing(row.model);
+      if (pricing) {
+        const inputRate = pricing.input / 1_000_000;
+        cacheSavings += readTokens * inputRate * (1 - (pricing.cacheRead ?? 1));
+        cacheSavings -= creationTokens * inputRate * ((pricing.cacheWrite ?? 1) - 1);
+      }
+    }
+  }
 
   return {
     range_days: days,
     total_cost_usd: totalCost,
     total_requests: totalRequests,
     avg_cost_per_request: totalRequests > 0 ? totalCost / totalRequests : 0,
-    daily: dailyRows.results ?? [],
-    by_model: modelRows.results ?? [],
-    by_provider: providerRows.results ?? [],
-    by_tier: tierRows.results ?? [],
-    cache,
+    daily: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    by_model: [...byModel.values()].sort((a, b) => b.cost_usd - a.cost_usd),
+    by_provider: [...byProvider.values()].sort((a, b) => b.cost_usd - a.cost_usd),
+    by_tier: [...byTier.values()].sort((a, b) => b.cost_usd - a.cost_usd),
+    cache: hasCacheColumns
+      ? {
+          read_tokens: cacheReadTokens,
+          creation_tokens: cacheCreationTokens,
+          estimated_net_savings_usd: cacheSavings,
+        }
+      : null,
   };
 }

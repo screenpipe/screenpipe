@@ -49,6 +49,13 @@ export const MODEL_FALLBACKS: Record<string, string[]> = {
   // Vertex MaaS vision models
   'llama-4-maverick': ['llama-4-scout', 'gemini-3-flash'],
   'llama-4-scout': ['llama-4-maverick', 'gemini-3-flash'],
+  // Gemini family — upstream 500s ("error code: 500", SCREENPIPE-AI-PROXY-V)
+  // are Google-side transient failures; cascade within the family so an
+  // explicit pick recovers instead of failing user-visible. Flash-tier only,
+  // so a fallback never serves a pricier model than the user chose.
+  'gemini-3.5-flash': ['gemini-3-flash', 'gemini-2.5-flash'],
+  'gemini-3-flash': ['gemini-2.5-flash'],
+  'gemini-2.5-flash': ['gemini-3-flash'],
 };
 
 // HTTP statuses we consider upstream/transient — eligible for cascade.
@@ -78,7 +85,43 @@ const USER_INPUT_TOO_LARGE_PATTERNS = [
   /maximum context length/i,
   /context length.*exceeded/i,
   /request payload size exceeds/i,
+  // Vertex MaaS (glm-5 etc): "The input (325052 tokens) is longer than the
+  // model's context length (202752 tokens)" — SCREENPIPE-AI-PROXY-C, 28 users.
+  /longer than the model'?s context length/i,
+  // Gemini: "The input token count (N) exceeds the maximum number of tokens allowed (N)"
+  /input token count.*exceeds the maximum/i,
 ];
+
+// Upstream 4xx caused by a malformed CLIENT payload, not a worker bug —
+// retrying re-sends the same broken payload, and a Sentry alert per request
+// is unactionable. Return the mapped message as a clean 400 instead.
+// SCREENPIPE-AI-PROXY-1A (corrupt image), SCREENPIPE-AI-PROXY-1V (system-only
+// message list — Anthropic hoists system out and rejects the empty remainder).
+const CLIENT_PAYLOAD_PATTERNS: Array<{ re: RegExp; message: string }> = [
+  {
+    re: /failed to decode image|image is not valid|invalid image data/i,
+    message: 'One of the attached images could not be decoded. Re-attach the image and try again.',
+  },
+  {
+    re: /at least one message is required/i,
+    message: 'The request must include at least one user or assistant message.',
+  },
+];
+
+export function clientPayloadMessage(status: number, msg: string): string | null {
+  if (status !== 400 && status !== 422) return null;
+  return CLIENT_PAYLOAD_PATTERNS.find((p) => p.re.test(msg))?.message ?? null;
+}
+
+// OpenAI refuses service in some countries/regions based on the egress IP.
+// Nothing the worker or the user's API key can fix — surface which models DO
+// work there instead of the misleading "check your API key" advice, and keep
+// it out of Sentry (SCREENPIPE-AI-PROXY-1C, 14 users). Other 403s stay loud.
+const GEO_BLOCK_PATTERN = /country,? region,? or territory not supported/i;
+
+export function isGeoBlocked(status: number, msg: string): boolean {
+  return status === 403 && GEO_BLOCK_PATTERN.test(msg);
+}
 
 export function isUserInputTooLarge(status: number, msg: string): boolean {
   if (status !== 400 && status !== 413) return false;
@@ -154,6 +197,7 @@ async function tryModel(
     // Prefer error.status (UpstreamError, etc); fall back to parsing the
     // message for providers that throw plain Error("... 524 ..."). Defaults
     // to 500 — i.e. retriable — to preserve historical cascade behavior.
+    const hadExplicitStatus = typeof error?.status === 'number' && error.status > 0;
     let status: number = error?.status ?? 0;
     if (!status) {
       const m = String(error?.message || '').match(/\b(4\d\d|5\d\d)\b/);
@@ -168,9 +212,33 @@ async function tryModel(
     // Upstream Anthropic returns 400; Sentry was treating it as a server
     // bug (SCREENPIPE-AI-PROXY-D — 83 users, 194 events) when it's really
     // the client over-stuffing the context window. Skip Sentry entirely.
+    // Marked transient so chains cascade: the Gemini tail entries hold 1M
+    // tokens and absorb prompts the ~200k Vertex MaaS models reject
+    // (SCREENPIPE-AI-PROXY-C), turning a hard failure into an answer.
     if (isUserInputTooLarge(status, msg)) {
       error.status = 413;
-      console.warn(`${ctx}: ${model} rejected oversized prompt (413)`);
+      error.transient = true;
+      console.warn(`${ctx}: ${model} rejected oversized prompt (413), cascading`);
+      logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
+      throw error;
+    }
+
+    // Provider geo-blocks (OpenAI 403 by region) — expected per-region
+    // condition; tell the user what will work, keep Sentry quiet.
+    if (isGeoBlocked(status, msg)) {
+      error.userMessage = `${model} isn't available in your country or region (the provider rejected the request). Pick a different model — "auto", Gemini, or GLM models work from your region.`;
+      console.warn(`${ctx}: ${model} geo-blocked by provider (403)`);
+      logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
+      throw error;
+    }
+
+    // Malformed client payload (corrupt image, system-only message list) —
+    // every model would reject the same bytes, so don't cascade or alert.
+    const payloadMessage = clientPayloadMessage(status, msg);
+    if (payloadMessage) {
+      error.transient = false;
+      error.userMessage = payloadMessage;
+      console.warn(`${ctx}: ${model} rejected client payload (${status}): ${msg.slice(0, 160)}`);
       logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
       throw error;
     }
@@ -179,7 +247,13 @@ async function tryModel(
       console.warn(`${ctx}: ${model} failed (${status}), cascading`);
       const outcome = status === 429 ? 'rate_limited' : status === 408 ? 'timeout' : 'error';
       logModelOutcome(env, { model, outcome }).catch(() => {});
-      if (!SENTRY_SKIP_STATUSES.has(status)) {
+      // A 500 the provider actually returned (explicit .status, or "500" in
+      // its message — e.g. Gemini "error code: 500", SCREENPIPE-AI-PROXY-V)
+      // is upstream gateway noise like 502/503: cascaded around, tracked by
+      // model-health. A 500 we synthesized for an unparseable error stays
+      // loud — that shape is how worker-side TypeErrors surface here.
+      const upstream500 = status === 500 && (hadExplicitStatus || /\b500\b/.test(msg));
+      if (!SENTRY_SKIP_STATUSES.has(status) && !upstream500) {
         try {
           captureException(error, {
             tags: { model, error_path: `${ctx}_cascade`, status: String(status) },
@@ -229,6 +303,11 @@ async function runChain(
 
 /** User-friendly error message for a final cascade failure. */
 export function friendlyError(model: string, status: number, fellThrough: boolean): string {
+  if (status === 413) {
+    return fellThrough
+      ? `Your conversation is too long for the available models' context windows. Start a new conversation or trim the attached context.`
+      : `Your conversation is too long for ${model}'s context window. Start a new conversation, trim the attached context, or pick a model with a larger context window.`;
+  }
   if (status === 524 || status === 504 || status === 408) {
     return fellThrough
       ? `Upstream models are slow right now — please try again in a moment, or pick a different model.`
@@ -312,6 +391,14 @@ function errorResponse(body: RequestBody, status: number, message: string): Resp
  * already in SENTRY_SKIP_STATUSES (524/503/etc gateway noise).
  */
 export async function handleChatCompletions(body: RequestBody, env: Env): Promise<Response> {
+  // A request with no messages at all can never complete: OpenAI would
+  // answer the injected system hint below, and Anthropic 400s outright once
+  // the system message is hoisted out (SCREENPIPE-AI-PROXY-1V). Reject it
+  // before the hint injection masks the emptiness. No Sentry — client bug.
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return errorResponse(body, 400, 'The request must include at least one message.');
+  }
+
   body = ensureScreenpipeHint(body);
 
   // Auto model: smart waterfall through curated chain.
@@ -322,7 +409,7 @@ export async function handleChatCompletions(body: RequestBody, env: Env): Promis
       return addCorsHeaders(addModelHeader(result.response, result.model));
     }
     const status = result.error?.status || 503;
-    const message = friendlyError(result.lastModel, status, true);
+    const message = result.error?.userMessage || friendlyError(result.lastModel, status, true);
     console.error('auto: all models exhausted', result.error?.message);
     return errorResponse(body, status, message);
   }
@@ -339,7 +426,7 @@ export async function handleChatCompletions(body: RequestBody, env: Env): Promis
     }
     const status = result.error?.status || 500;
     const fellThrough = result.lastModel !== body.model;
-    const message = friendlyError(body.model, status, fellThrough);
+    const message = result.error?.userMessage || friendlyError(body.model, status, fellThrough);
     console.error(`fallback: ${body.model} chain exhausted (last=${result.lastModel})`, result.error?.message);
     return errorResponse(body, status, message);
   }
@@ -353,9 +440,10 @@ export async function handleChatCompletions(body: RequestBody, env: Env): Promis
     return addCorsHeaders(addModelHeader(response, body.model));
   } catch (error: any) {
     const status = error?.status || 500;
-    const message = SENTRY_SKIP_STATUSES.has(status)
-      ? friendlyError(body.model, status, false)
-      : error?.message || 'An error occurred';
+    const message = error?.userMessage
+      || (SENTRY_SKIP_STATUSES.has(status) || status === 413
+        ? friendlyError(body.model, status, false)
+        : error?.message || 'An error occurred');
     console.error('explicit: model failed', body.model, status, error?.message);
     return errorResponse(body, status, message);
   }

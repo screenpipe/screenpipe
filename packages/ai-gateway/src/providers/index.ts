@@ -9,12 +9,18 @@ import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpip
 import { AIProvider } from './base';
 import { Env } from '../types';
 
-// Remap legacy OpenRouter model IDs → Vertex MaaS equivalents (GCP infra, no China data risk)
+// Remap legacy model IDs → canonical equivalents. Most route OpenRouter ids
+// to Vertex MaaS (GCP infra, no China data risk); the qwen3.5 entries pin
+// un-dated ids to the dated snapshots OpenRouter actually serves — the bare
+// ids 400 with "not a valid model ID" (SCREENPIPE-AI-PROXY-1P) but still sit
+// in tier allow-lists and older client presets.
 const MODEL_REMAPS: Record<string, string> = {
 	'deepseek/deepseek-chat': 'deepseek-v3.2',
 	'meta-llama/llama-4-scout': 'llama-4-scout',
 	'meta-llama/llama-4-maverick': 'llama-4-maverick',
 	'qwen/qwen3-coder:free': 'qwen3-coder',
+	'qwen/qwen3.5-flash': 'qwen/qwen3.5-flash-02-23',
+	'qwen/qwen3.5-397b': 'qwen/qwen3.5-397b-a17b',
 };
 
 /**
@@ -26,7 +32,7 @@ const MODEL_REMAPS: Record<string, string> = {
 export function resolveModelAlias(model: string): string {
 	const remapped = MODEL_REMAPS[model];
 	if (remapped) {
-		console.log(`[router] remapping ${model} → ${remapped} (Vertex MaaS)`);
+		console.log(`[router] remapping ${model} → ${remapped}`);
 		return remapped;
 	}
 	return model;
