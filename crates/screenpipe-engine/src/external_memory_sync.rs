@@ -1445,7 +1445,12 @@ mod tests {
             .map(|i| {
                 entry_at(
                     &format!("fact {i}"),
-                    &format!("2026-01-01T{:02}:{:02}:{:02}Z", i / 3600, (i / 60) % 60, i % 60),
+                    &format!(
+                        "2026-01-01T{:02}:{:02}:{:02}Z",
+                        i / 3600,
+                        (i / 60) % 60,
+                        i % 60
+                    ),
                 )
             })
             .collect();
@@ -1470,7 +1475,12 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(batches.len(), 3, "expected 3 chunked POSTs, got {:?}", batches);
+        assert_eq!(
+            batches.len(),
+            3,
+            "expected 3 chunked POSTs, got {:?}",
+            batches
+        );
         assert!(
             batches.iter().all(|&n| n <= HONCHO_MAX_BATCH),
             "every batch must respect Honcho's 100-message cap: {:?}",
