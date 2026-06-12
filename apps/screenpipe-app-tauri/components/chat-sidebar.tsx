@@ -253,6 +253,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             pinned: meta.pinned,
             hidden: meta.hidden,
             lastUserMessageAt: meta.lastUserMessageAt,
+            lastContentAt: meta.lastContentAt,
             updatedAt: Math.max(existing.updatedAt, meta.updatedAt),
             kind: meta.kind,
             pipeContext: meta.pipeContext,

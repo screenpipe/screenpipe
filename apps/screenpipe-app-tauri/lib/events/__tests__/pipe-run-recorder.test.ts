@@ -86,6 +86,7 @@ describe("pipe-run-recorder: finalize on terminal event", () => {
       expect.objectContaining({ pipeName: "my-pipe", executionId: 42 }),
     );
     expect(arg.title).toBe("my-pipe #42");
+    expect(arg.lastContentAt).toBe(arg.updatedAt);
     expect(arg.messages.some((m: any) => m.role === "assistant" && m.content?.includes("result"))).toBe(true);
   });
 
