@@ -731,10 +731,10 @@ this FAQ is organized around the questions people ask support most often: what t
   contact [louis@screenpi.pe](mailto:louis@screenpi.pe) with your IdP and we will set up your tenant.
 </Expandable>
 
-<Expandable title="can I store screenpipe team data in my own Azure Blob, S3, or GCS bucket?">
-  yes. enterprise deployments can point cloud archive at your own Azure Blob Storage container, AWS S3 bucket, or Google Cloud Storage bucket so recordings never leave your cloud account.
+<Expandable title="can I store screenpipe team data in my own Azure Blob or S3 bucket?">
+  yes. enterprise deployments can point team data at your own Azure Blob Storage container (one-click OAuth) or your own Amazon S3 bucket — including any S3-compatible store such as MinIO, Cloudflare R2, or Wasabi via a custom endpoint. devices upload directly to your storage with short-lived signed URLs; screenpipe cloud only sees upload manifests, not the data bodies. Google Cloud Storage is coming soon.
 
-  configure the storage connection in **settings → storage → connection**, paste the container URL or bucket name and credentials, then verify with a test upload. if the connection silently fails on Windows, restart screenpipe so the new credentials are picked up — see [troubleshooting](/troubleshooting).
+  configure it on the web dashboard: **screenpi.pe → account → workspace → storage**, pick the backend, and follow the setup (Azure: connect OAuth and choose a container; S3: paste bucket, region, and access keys — a write-only IAM policy is supported). activation runs a test upload through the exact path devices will use before turning anything on.
 </Expandable>
 
 ## common errors

@@ -5,10 +5,13 @@
 //! Enterprise direct-upload data plane.
 //!
 //! Hosted ingest sends plaintext JSONL to Screenpipe over TLS. Direct upload
-//! requests a control-plane ticket, PUTs the batch directly into the customer's
-//! Azure Blob container, then completes the manifest. Encrypted mode stores
-//! ciphertext; readable mode stores JSONL. In both cases Screenpipe Cloud sees
-//! checksums and cursors, not the telemetry body.
+//! requests a control-plane ticket, PUTs the batch directly into the
+//! customer's storage (Azure Blob via SAS URLs, or an S3 bucket / any
+//! S3-compatible endpoint via SigV4 presigned URLs — the ticket's
+//! `upload_url` + `headers` are replayed verbatim either way), then
+//! completes the manifest. Encrypted mode stores ciphertext; readable mode
+//! stores JSONL. In both cases Screenpipe Cloud sees checksums and cursors,
+//! not the telemetry body.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::header::HeaderMap;
