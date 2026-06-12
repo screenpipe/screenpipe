@@ -749,7 +749,16 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     } else if now.timestamp() as u64 - last_audio_ts < threshold_secs {
         "ok".to_string()
     } else {
-        "stale".to_string()
+        // No real audio captured recently. This is the normal state of a quiet
+        // machine (content only ticks the capture clock on non-silent buffers),
+        // so only treat it as a fault ("stale") when the output device is
+        // actively playing yet we captured nothing. Otherwise it's "idle".
+        classify_silent_audio(
+            screenpipe_audio::core::default_output_is_running(),
+            crate::sleep_monitor::screen_is_locked(),
+            crate::sleep_monitor::recently_woke_from_sleep(),
+        )
+        .to_string()
     };
 
     let transcription_paused = if !state.audio_disabled {
@@ -868,7 +877,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     let (overall_status, message, verbose_instructions, status_code) = if (frame_status == "ok"
         || frame_status == "disabled")
-        && (audio_status == "ok" || audio_status == "disabled")
+        && (audio_status == "ok" || audio_status == "disabled" || audio_status == "idle")
         && !vision_degraded
         && !audio_degraded
     {
@@ -886,7 +895,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
             unhealthy_systems.push("vision");
         }
-        if audio_status != "ok" && audio_status != "disabled" {
+        if audio_status != "ok" && audio_status != "disabled" && audio_status != "idle" {
             // active_no_data is a degraded state (device hijacked but watchdog recovering)
             unhealthy_systems.push("audio");
         }
@@ -1437,5 +1446,27 @@ mod tests {
     fn silent_audio_is_idle_just_after_wake() {
         // Recently woke from sleep — capture re-initializing, grace period.
         assert_eq!(super::classify_silent_audio(true, false, true), "idle");
+    }
+
+    // Models the audio clause of the overall-status rollup: which audio_status
+    // values keep the endpoint healthy (200) vs. degraded (503).
+    fn audio_status_is_healthy(audio_status: &str) -> bool {
+        audio_status == "ok" || audio_status == "disabled" || audio_status == "idle"
+    }
+
+    #[test]
+    fn idle_audio_is_healthy() {
+        // "idle" (quiet machine, nothing playing) must NOT degrade the endpoint.
+        assert!(audio_status_is_healthy(super::classify_silent_audio(
+            false, false, false
+        )));
+    }
+
+    #[test]
+    fn stale_audio_is_degraded() {
+        // "stale" (output playing but capture silent) MUST degrade the endpoint.
+        assert!(!audio_status_is_healthy(super::classify_silent_audio(
+            true, false, false
+        )));
     }
 }
