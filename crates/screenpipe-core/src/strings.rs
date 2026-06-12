@@ -96,4 +96,13 @@ mod tests {
         // Emoji count as one char each — must not split.
         assert_eq!(truncate_string("a🎉b🎉c", 3), "a🎉b…");
     }
+
+    #[test]
+    fn safe_byte_prefix_exact_fit_and_empty() {
+        // Exact byte length returns the whole string (the `<=` boundary).
+        assert_eq!(safe_byte_prefix("abc", 3), "abc");
+        // Empty input is always returned as-is, even when max_bytes is 0.
+        assert_eq!(safe_byte_prefix("", 0), "");
+        assert_eq!(safe_byte_prefix("", 5), "");
+    }
 }
