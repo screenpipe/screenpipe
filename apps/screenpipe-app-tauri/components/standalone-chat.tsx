@@ -3964,6 +3964,26 @@ export function StandaloneChat({
     };
   }, []);
 
+  // Listen for preset restore events when switching chats.
+  // This ensures the model selector reflects the preset used in the
+  // conversation being loaded, preventing model bleed across chats.
+  useEffect(() => {
+    const unlisten = listen<{ presetId: string }>(
+      "chat-preset-restore",
+      (event) => {
+        const { presetId } = event.payload;
+        if (!presetId || !settings?.aiPresets) return;
+        const match = settings.aiPresets.find((p: any) => p.id === presetId);
+        if (match) {
+          setActivePreset(match);
+        }
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [settings?.aiPresets]);
+
   // Component-lifetime guard for bus handlers that fire across the
   // longer-lived useEffects (terminated, foreground registrations).
   // Useful because the panel's per-effect `mounted` flags are scoped
@@ -5512,6 +5532,15 @@ export function StandaloneChat({
           // When watching a pipe, agent_end fires before pipe_done — don't
           // clear pipe refs here, let pipe_done handle cleanup instead.
           const isPipeWatch = piMessageIdRef.current?.startsWith("pipe-");
+          
+          // Always clear loading/streaming state on agent_end, even if piMessageIdRef is null
+          // This fixes the "stuck loading" bug when the ref was cleared prematurely
+          if (!isPipeWatch) {
+            setIsLoading(false);
+            setIsStreaming(false);
+            emitSessionActivity({ status: "idle" });
+          }
+          
           if (piMessageIdRef.current && !isPipeWatch) {
             const msgId = piMessageIdRef.current;
             // Use streamed text if available, otherwise extract from agent_end messages
@@ -6705,6 +6734,10 @@ export function StandaloneChat({
       // activity (text_delta, agent_end) does NOT bump this; the
       // sidebar order is otherwise stable.
       storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
+      // Clear the draft flag so the chat appears in the sidebar immediately.
+      // Without this, navigating away before the assistant responds leaves
+      // the session hidden (draft:true) even though there's a user message.
+      storeState.actions.patch(sidNow, { draft: false });
     }
 
     posthog.capture("chat_message_sent", {

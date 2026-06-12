@@ -145,6 +145,8 @@ function useVisibleChatSections(): {
     for (const s of sessions) {
       const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
       if (isPipeKind && liveScheduledSids.has(s.id)) continue;
+      // Hide drafts (no user message sent yet)
+      // Once a message is sent, draft is cleared and the chat becomes visible
       if (s.draft) continue;
       if (s.hidden) {
         archived.push(s);

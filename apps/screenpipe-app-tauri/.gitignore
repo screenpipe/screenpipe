@@ -49,6 +49,7 @@ ffmpeg*
 ffprobe*
 *src-tauri/screenpipe*
 *src-tauri/tesseract*
+*src-tauri/tessdata*
 *src-tauri/deno*
 *src-tauri/ollama*
 *src-tauri/bun*

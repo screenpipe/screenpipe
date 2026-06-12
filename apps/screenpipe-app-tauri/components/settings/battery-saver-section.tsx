@@ -220,7 +220,7 @@ export function BatterySaverSection() {
               keep computer awake
             </label>
             <p className="text-xs text-muted-foreground mt-0.5">
-              prevent idle sleep while screenpipe is running
+              keeps recording and scheduled pipes running when you step away. without it, idle sleep pauses capture.
             </p>
           </div>
         </div>

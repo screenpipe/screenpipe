@@ -18,6 +18,7 @@
             "appimage": {
                 "files": {
                     "/usr/bin/tesseract": "./tesseract",
+                    "/usr/share/tessdata/eng.traineddata": "./tessdata/eng.traineddata",
                     "/usr/bin/ffmpeg": "./ffmpeg/ffmpeg",
                     "/usr/bin/ffprobe": "./ffmpeg/ffprobe",
                     "/usr/bin/qt-faststart": "./ffmpeg/qt-faststart"
