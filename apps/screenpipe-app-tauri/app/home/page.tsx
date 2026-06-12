@@ -913,7 +913,8 @@ function HomeContent() {
     activeSection === "home" ||
     activeSection === "timeline" ||
     activeSection === "meetings" ||
-    activeSection === "history";
+    activeSection === "history" ||
+    activeSection === "brain";
 
   return (
     <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
