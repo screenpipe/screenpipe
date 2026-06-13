@@ -104,6 +104,7 @@
       "label": "Engine config, health, sleep, and power lifecycle",
       "crate": "screenpipe-engine",
       "files": [
+        "src/crash_log.rs",
         "src/recording_config.rs",
         "src/schedule_monitor.rs",
         "src/sleep_monitor.rs",
@@ -111,6 +112,7 @@
         "src/power/profile.rs",
         "src/power/manager.rs",
         "src/power/monitor.rs",
+        "src/telemetry_context.rs",
         "tests/consumer_sleep_test.rs",
         "tests/health_debounce_test.rs"
       ],
@@ -137,6 +139,7 @@
         "src/snapshot_compaction.rs",
         "src/video_utils.rs",
         "src/vision_manager/manager.rs",
+        "src/vision_manager/monitor_watcher.rs",
         "tests/audio_vision_integration_test.rs",
         "tests/first_frames_test.rs",
         "tests/frame_extraction_test.rs",
@@ -160,6 +163,7 @@
       "crate": "screenpipe-engine",
       "files": [
         "src/routes/activity_summary.rs",
+        "src/routes/artifacts.rs",
         "src/routes/health.rs",
         "src/routes/meetings.rs",
         "src/routes/memories.rs",
@@ -168,6 +172,7 @@
         "src/routes/streaming.rs",
         "src/routes/time.rs",
         "src/routes/timezone.rs",
+        "src/server.rs",
         "tests/tags_test.rs",
         "tests/transcribe_test.rs",
         "tests/websockets_test.rs"
@@ -258,7 +263,9 @@
         "tests/keyword_search_accessibility_test.rs",
         "tests/keyword_search_order_test.rs",
         "tests/query_plan_test.rs",
-        "tests/search_ocr_snapshot_test.rs"
+        "tests/search_ocr_snapshot_test.rs",
+        "tests/tag_autocomplete_query_test.rs",
+        "tests/tag_filter_bench.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
       "layers": ["db-search", "ocr", "accessibility", "performance"],
@@ -274,11 +281,14 @@
       "crate": "screenpipe-db",
       "files": [
         "src/db.rs",
+        "src/failpoint_vfs.rs",
+        "src/sqlite_error.rs",
         "src/types.rs",
         "src/write_queue.rs",
         "tests/db.rs",
         "tests/frame_offset_sync_test.rs",
         "tests/live_coverage_marker_test.rs",
+        "tests/outputs_saf_test.rs",
         "tests/suggestions_frames_table_test.rs",
         "tests/timeline_performance_test.rs"
       ],
@@ -364,16 +374,22 @@
       "files": [
         "src/audio_manager/device_monitor.rs",
         "src/audio_manager/manager.rs",
+        "src/core/audio_exclusions.rs",
         "src/core/device.rs",
         "src/core/device_detection.rs",
         "src/core/e2e_ghost_word_silent_room.rs",
         "src/core/process_tap.rs",
         "src/core/source_buffer.rs",
         "src/core/stream.rs",
+        "src/core/windows_process_loopback/capture.rs",
+        "src/core/windows_process_loopback/mix.rs",
+        "src/core/windows_process_loopback/mod.rs",
         "src/idle_detector.rs",
         "src/lib.rs",
+        "src/utils/audio/resample.rs",
         "tests/bluetooth_gap_hallucination_test.rs",
-        "tests/channel_lag_test.rs"
+        "tests/channel_lag_test.rs",
+        "tests/windows_process_loopback.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
       "layers": ["audio-device", "audio", "performance"],
@@ -463,6 +479,7 @@
         "src/browser_utils/mod.rs",
         "src/capture_screenshot_by_window.rs",
         "src/frame_comparison.rs",
+        "src/microsoft.rs",
         "src/monitor.rs",
         "src/ocr_cache.rs",
         "src/snapshot_writer.rs",
@@ -558,7 +575,8 @@
         "src/tree/cache.rs",
         "src/tree/electron_docs.rs",
         "src/tree/enhanced_mode_cache.rs",
-        "src/tree/mod.rs"
+        "src/tree/mod.rs",
+        "src/url_filter.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
       "layers": ["accessibility", "ui-events", "privacy", "performance"],

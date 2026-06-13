@@ -63,6 +63,12 @@
       "layers": ["audio-device"]
     },
     {
+      "id": "audio-exclusion",
+      "label": "Per-app audio exclusion",
+      "platforms": ["windows"],
+      "layers": ["settings", "audio-device", "real-ui-e2e"]
+    },
+    {
       "id": "window-lifecycle",
       "label": "Window lifecycle, focus, and dedupe",
       "platforms": ["windows", "macos", "linux"],
@@ -491,6 +497,16 @@
       "confidence": "strong",
       "ux": "mixed",
       "notes": "Home, Search, and onboarding window routing."
+    },
+    {
+      "spec": "windows-audio-exclusion.spec.ts",
+      "platforms": ["windows"],
+      "layers": ["settings", "audio-device", "real-ui-e2e"],
+      "features": ["audio-exclusion", "settings-recording"],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Windows per-app audio exclusion picker and Tauri round-trip through audio-exclusions.json."
     },
     {
       "spec": "windows-core-recording.spec.ts",

@@ -48,7 +48,7 @@ pub struct ExclusionEntry {
 }
 
 /// Snapshot of exclusion state used by capture rebuild loops to detect drift.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub entries: Vec<ExclusionEntry>,
     pub mtime: Option<SystemTime>,
@@ -56,19 +56,6 @@ pub struct Snapshot {
     pub resolved_audio_object_ids: Vec<u32>,
     #[cfg(target_os = "windows")]
     pub resolved_pids: Vec<u32>,
-}
-
-impl Default for Snapshot {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            mtime: None,
-            #[cfg(target_os = "macos")]
-            resolved_audio_object_ids: Vec::new(),
-            #[cfg(target_os = "windows")]
-            resolved_pids: Vec::new(),
-        }
-    }
 }
 
 /// True when the config lists at least one Windows `exe_name` / `exe_path` entry.
@@ -397,7 +384,7 @@ pub fn describe_resolved_pids(entries: &[ExclusionEntry], pids: &[u32]) -> Vec<S
                 .iter()
                 .filter(|e| e.exe_name.is_some() || e.exe_path.is_some())
                 .find(|entry| {
-                    sys.process(pid).map_or(false, |process| {
+                    sys.process(pid).is_some_and(|process| {
                         let process_exe = process.exe();
                         let process_exe_opt = if process_exe.as_os_str().is_empty() {
                             None
@@ -590,7 +577,7 @@ mod tests {
         assert!(!should_use_windows_process_loopback(true, &[]));
         assert!(!should_use_windows_process_loopback(
             false,
-            &[windows_entry.clone()]
+            std::slice::from_ref(&windows_entry)
         ));
         assert!(!should_use_windows_process_loopback(true, &[macos_only]));
         assert!(should_use_windows_process_loopback(true, &[windows_entry]));
