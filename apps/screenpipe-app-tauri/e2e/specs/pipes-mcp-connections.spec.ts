@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { waitForAppReady, openHomeWindow, t } from '../helpers/test-utils.js';
 import { saveScreenshot } from '../helpers/screenshot-utils.js';
+import { authHeaders, getLocalApiConfig, waitForLocalApi } from '../helpers/api-utils.js';
 
-const API_BASE = 'http://localhost:3030';
 const PIPE_NAME = 'e2e-mcp-picker-pipe';
 const MCP_ID = 'e2e-mcp-pipe';
 const MCP_NAME = 'E2E MCP Pipe Server';
@@ -23,39 +23,19 @@ type ApiResult = {
 };
 
 let pipeTempDir = '';
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForApi(timeoutMs = 30_000): Promise<void> {
-  const start = Date.now();
-  let lastError = '';
-
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${API_BASE}/health`);
-      if (res.ok) return;
-      lastError = `HTTP ${res.status}`;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    await sleep(500);
-  }
-
-  throw new Error(`local API did not become ready: ${lastError}`);
-}
+let apiBase = 'http://127.0.0.1:3030';
+let apiHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
 
 async function apiRequest(method: string, path: string, body?: unknown): Promise<ApiResult> {
   const init: RequestInit = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders,
   };
   if (body !== undefined) {
     init.body = JSON.stringify(body);
   }
 
-  const res = await fetch(`${API_BASE}${path}`, init);
+  const res = await fetch(`${apiBase}${path}`, init);
   const text = await res.text();
   let json: any = null;
   try {
@@ -248,7 +228,14 @@ describe('Pipes: custom MCP connection picker', function () {
 
   before(async () => {
     await waitForAppReady();
-    await waitForApi();
+    await openHomeWindow();
+    const cfg = await getLocalApiConfig();
+    apiBase = `http://127.0.0.1:${cfg.port}`;
+    apiHeaders = {
+      'Content-Type': 'application/json',
+      ...authHeaders(cfg.key),
+    };
+    await waitForLocalApi(cfg.port);
     await cleanupFixtures();
     await seedMcpServer();
     await installFixturePipe();
