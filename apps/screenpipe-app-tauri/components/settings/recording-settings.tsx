@@ -25,6 +25,7 @@ export const searchIndex: SettingsField[] = [
   // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
   { label: "Microphone echo cancellation", keywords: ["echo", "voiceprocessingio"], conditional: true },
   { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
+  { label: "Exclude apps from system audio", keywords: ["exclude", "audio", "chrome", "exe"], conditional: true },
   { label: "Screen recording", keywords: ["screen", "video"] },
   { label: "Use all monitors", keywords: ["monitor", "display"] },
   { label: "Recording quality", keywords: ["fps", "quality"] },
@@ -81,7 +82,7 @@ import {
   CheckCircle2,
   XCircle,
   Circle,
-  Download,
+  Upload,
   Trash2,
   Search,
   ListTodo,
@@ -99,7 +100,14 @@ import {
   CommandGroup,
   CommandItem,
 } from "@/components/ui/command";
-import { commands, SettingsStore, MonitorDevice, AudioDeviceInfo, HardwareCapability } from "@/lib/utils/tauri";
+import {
+  commands,
+  SettingsStore,
+  MonitorDevice,
+  AudioDeviceInfo,
+  HardwareCapability,
+  type ExcludedApp,
+} from "@/lib/utils/tauri";
 
 import {
   useSettings,
@@ -117,17 +125,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
-import {
-  Language,
-  areLanguageSelectionsEqual,
-  filterLanguagesForTranscriptionEngine,
-  getLanguageOptionsForTranscriptionEngine,
-  getTranscriptionEngineLanguageSupportKey,
-  hasLimitedLanguageSupport,
-  resolveLanguageSelectionForTranscriptionEngine,
-  transcriptionEngineUsesLanguageHints,
-} from "@/lib/language";
-import { open } from "@tauri-apps/plugin-dialog";
+import { Language } from "@/lib/language";
 import { ToastAction } from "@/components/ui/toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
@@ -137,13 +135,13 @@ import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MeetingAppsPicker } from "./meeting-apps-picker";
+import { AudioExclusionPicker } from "./audio-exclusion-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
-import { ApplyRestartBar } from "./apply-restart-bar";
 // ScheduleSettings moved to privacy-section
 import { ValidatedInput } from "../ui/validated-input";
 import {
@@ -167,6 +165,23 @@ type PermissionsStatus = {
 
 // AudioDeviceInfo and MonitorDevice are imported from @/lib/utils/tauri
 
+function exclusionEntryKey(app: ExcludedApp): string {
+  if (app.bundleId) return `bundle:${app.bundleId}`;
+  if (app.exePath) return `path:${app.exePath.toLowerCase()}`;
+  if (app.exeName) return `exe:${app.exeName.toLowerCase()}`;
+  return `unknown:${app.name ?? ""}`;
+}
+
+function exclusionEntryLabel(app: ExcludedApp): string {
+  if (app.name) return app.name;
+  if (app.exeName) return app.exeName;
+  if (app.exePath) {
+    const parts = app.exePath.split(/[/\\]/);
+    return parts[parts.length - 1] ?? app.exePath;
+  }
+  return app.bundleId ?? "Application";
+}
+
 const formatCount = (count: number): string => {
   if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
   return `${count}`;
@@ -188,7 +203,6 @@ const TRANSCRIPTION_ENGINE_LABELS: Record<string, string> = {
   "openai-compatible": "OpenAI Compatible",
   "qwen3-asr": "Qwen3-ASR",
   parakeet: "Parakeet",
-  "parakeet-mlx": "Parakeet MLX",
   disabled: "Disabled (capture only)",
 };
 
@@ -203,17 +217,10 @@ type AudioEngineResolution = {
   fallbackReason: AudioEngineFallbackReason | null;
 };
 
-type AudioEngineResolutionSettings = Pick<
-  Settings,
-  "audioTranscriptionEngine" | "deepgramApiKey" | "user"
->;
-
 const getTranscriptionEngineLabel = (engine: string) =>
   TRANSCRIPTION_ENGINE_LABELS[engine] ?? engine;
 
-const getAudioEngineResolution = (
-  settings: AudioEngineResolutionSettings
-): AudioEngineResolution => {
+const getAudioEngineResolution = (settings: Settings): AudioEngineResolution => {
   const requested = settings.audioTranscriptionEngine;
   const fallback = FALLBACK_TRANSCRIPTION_ENGINE;
   const hasCloudAuth = Boolean(settings.user?.token || settings.user?.id);
@@ -1295,7 +1302,7 @@ function TranscriptionDictionary({
               className="h-7 text-xs px-2 gap-1"
               onClick={() => setShowBulk(!showBulk)}
             >
-              <Download className="h-3 w-3" />
+              <Upload className="h-3 w-3" />
               bulk import
             </Button>
             {vocabularyWords.length > 0 && (
@@ -1725,6 +1732,7 @@ export function RecordingSettings() {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [pendingChanges, setPendingChanges] = useState<Partial<SettingsStore>>({});
   const [meetingAppsPickerOpen, setMeetingAppsPickerOpen] = useState(false);
+  const [audioExclusionPickerOpen, setAudioExclusionPickerOpen] = useState(false);
 
   const { items: windowItems, isLoading: isWindowItemsLoading } =
     useSqlAutocomplete("window");
@@ -1750,30 +1758,57 @@ export function RecordingSettings() {
       .catch(() => setCoreaudioTapAvailable(false));
   }, []);
 
-  type ExcludedApp = {
-    bundleId: string;
-    name: string | null;
-    icon: string | null;
-  };
+  const [audioExclusionProbe, setAudioExclusionProbe] = useState<boolean | null>(null);
+  useEffect(() => {
+    commands
+      .checkAudioExclusionAvailable()
+      .then((available) => setAudioExclusionProbe(available))
+      .catch(() => setAudioExclusionProbe(null));
+  }, []);
 
-  // Per-app exclusions for the CoreAudio Process Tap. The list is owned by
+  const [isMacOS, setIsMacOS] = useState(() => {
+    try {
+      return platform() === "macos";
+    } catch {
+      return false;
+    }
+  });
+  const [isWindows, setIsWindows] = useState(() => {
+    try {
+      return platform() === "windows";
+    } catch {
+      return false;
+    }
+  });
+
+  // Windows: always show the card when audio is on (WASAPI probe may be absent on
+  // older app builds until Rust is rebuilt). macOS: requires CoreAudio tap + flag.
+  const showAudioExclusionCard =
+    !settings.disableAudio &&
+    (isWindows ||
+      (audioExclusionProbe !== false &&
+        coreaudioTapAvailable &&
+        settings.experimentalCoreaudioSystemAudio));
+
+  // Per-app exclusions for system-audio capture. The list is owned by
   // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
   // read/write it through Tauri commands. Hot-reload happens engine-side
   // on the existing 500ms tap-rebuild loop, so a write here propagates in
   // ~1 tick subject to the 60s REBUILD_COOLDOWN.
   const [audioExclusions, setAudioExclusions] = useState<ExcludedApp[]>([]);
   const [pendingAudioExclusions, setPendingAudioExclusions] = useState<ExcludedApp[] | null>(null);
-  const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
+  const [selectedExclusionKey, setSelectedExclusionKey] = useState<string | null>(null);
   const effectiveAudioExclusions = pendingAudioExclusions ?? audioExclusions;
 
   const { toast } = useToast();
 
   const reloadAudioExclusions = useCallback(async () => {
     try {
-      const resExcl = await commands.readAudioExclusions();
-      if (resExcl.status === "error") throw new Error(resExcl.error);
-      const apps = resExcl.data;
-      setAudioExclusions(apps);
+      const result = await commands.readAudioExclusions();
+      if (result.status === "error") {
+        throw new Error(result.error);
+      }
+      setAudioExclusions(result.data);
     } catch (e) {
       console.error("read_audio_exclusions failed", e);
       toast({
@@ -1785,14 +1820,17 @@ export function RecordingSettings() {
   }, [toast]);
 
   useEffect(() => {
-    if (!coreaudioTapAvailable) return;
+    if (!showAudioExclusionCard) return;
     reloadAudioExclusions();
-  }, [coreaudioTapAvailable, reloadAudioExclusions]);
+  }, [showAudioExclusionCard, reloadAudioExclusions]);
 
   const addAudioExclusion = useCallback(
     (app: ExcludedApp) => {
       const current = pendingAudioExclusions ?? audioExclusions;
-      if (!app.bundleId || current.some((a) => a.bundleId === app.bundleId)) return;
+      const key = exclusionEntryKey(app);
+      if (key.startsWith("unknown:") || current.some((a) => exclusionEntryKey(a) === key)) {
+        return;
+      }
       setPendingAudioExclusions([...current, app]);
       setHasUnsavedChanges(true);
     },
@@ -1800,58 +1838,45 @@ export function RecordingSettings() {
   );
 
   const removeAudioExclusion = useCallback(
-    (bundleId: string) => {
+    (entryKey: string) => {
       const current = pendingAudioExclusions ?? audioExclusions;
-      setPendingAudioExclusions(current.filter((a) => a.bundleId !== bundleId));
-      setSelectedBundleId((curr) => (curr === bundleId ? null : curr));
+      setPendingAudioExclusions(
+        current.filter((a) => exclusionEntryKey(a) !== entryKey)
+      );
+      setSelectedExclusionKey((curr) => (curr === entryKey ? null : curr));
       setHasUnsavedChanges(true);
     },
     [pendingAudioExclusions, audioExclusions]
   );
 
-  const pickAppToExclude = useCallback(async () => {
-    const picked = await open({
-      filters: [{ name: "Application", extensions: ["app"] }],
-      defaultPath: "/Applications",
-      multiple: false,
-      directory: false,
-    });
-    if (!picked || typeof picked !== "string") return;
-    try {
-      const resMeta = await commands.readAppBundleMetadata(picked);
-      if (resMeta.status === "error") throw new Error(resMeta.error);
-      const meta = resMeta.data;
-      addAudioExclusion(meta);
-    } catch (e) {
-      toast({
-        title: "Couldn't read app bundle",
-        description: String(e),
-        variant: "destructive",
-      });
-    }
-  }, [addAudioExclusion, toast]);
+  const isAudioExclusionAdded = useCallback(
+    (app: ExcludedApp) => {
+      const key = exclusionEntryKey(app);
+      const current = pendingAudioExclusions ?? audioExclusions;
+      return current.some((a) => exclusionEntryKey(a) === key);
+    },
+    [pendingAudioExclusions, audioExclusions]
+  );
 
   useEffect(() => {
-    if (!selectedBundleId) return;
+    if (!selectedExclusionKey) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        removeAudioExclusion(selectedBundleId);
-        setSelectedBundleId(null);
+        removeAudioExclusion(selectedExclusionKey);
+        setSelectedExclusionKey(null);
       } else if (e.key === "Escape") {
-        setSelectedBundleId(null);
+        setSelectedExclusionKey(null);
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedBundleId, removeAudioExclusion]);
+  }, [selectedExclusionKey, removeAudioExclusion]);
 
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
   const isDisabled = health?.status_code === 500;
   const audioPipeline = health?.audio_pipeline ?? null;
-  const [isMacOS, setIsMacOS] = useState(false);
-  const [isWindows, setIsWindows] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
@@ -1896,37 +1921,6 @@ export function RecordingSettings() {
       settings.user?.token,
     ]
   );
-  const languageSupportEngine = audioEngineResolution.active;
-  const languageSupportKey =
-    getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
-  const languageSelectionsBySupportKeyRef = React.useRef<Record<string, string[]>>(
-    {}
-  );
-  const languageSelectionSnapshotRef = React.useRef<{
-    supportKey: string;
-    languages: string[];
-  }>({
-    supportKey: languageSupportKey,
-    languages: [...settings.languages],
-  });
-  const supportedLanguageOptions = useMemo(
-    () => getLanguageOptionsForTranscriptionEngine(languageSupportEngine),
-    [languageSupportEngine]
-  );
-  const languageSupportIsLimited = hasLimitedLanguageSupport(languageSupportEngine);
-  const languageSupportLabel = getTranscriptionEngineLabel(languageSupportEngine);
-  const languageSelectionUsesHints =
-    transcriptionEngineUsesLanguageHints(languageSupportEngine);
-  const languageSupportDescription =
-    settings.languages.length === 0
-      ? languageSupportIsLimited
-        ? `Auto-detects among ${supportedLanguageOptions.length} languages supported by ${languageSupportLabel}`
-        : "Automatically detects spoken language"
-      : !languageSelectionUsesHints
-        ? `${settings.languages.length} supported selected for ${languageSupportLabel}`
-        : languageSupportIsLimited
-          ? `Restricts transcription to selected languages supported by ${languageSupportLabel}`
-          : "Restricts transcription to selected";
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -1999,52 +1993,6 @@ export function RecordingSettings() {
     };
     checkPlatform();
   }, []);
-
-  useEffect(() => {
-    const previousSnapshot = languageSelectionSnapshotRef.current;
-    if (previousSnapshot.supportKey !== languageSupportKey) {
-      languageSelectionsBySupportKeyRef.current[previousSnapshot.supportKey] = [
-        ...previousSnapshot.languages,
-      ];
-    }
-
-    const preferredLanguages =
-      languageSelectionsBySupportKeyRef.current[languageSupportKey];
-    const resolvedLanguages = resolveLanguageSelectionForTranscriptionEngine(
-      settings.languages,
-      languageSupportEngine,
-      preferredLanguages
-    );
-
-    if (!areLanguageSelectionsEqual(settings.languages, resolvedLanguages)) {
-      languageSelectionSnapshotRef.current = {
-        supportKey: languageSupportKey,
-        languages: resolvedLanguages,
-      };
-      handleSettingsChange({ languages: resolvedLanguages }, false);
-      return;
-    }
-
-    const supportedLanguages = filterLanguagesForTranscriptionEngine(
-      settings.languages,
-      languageSupportEngine
-    );
-    if (areLanguageSelectionsEqual(settings.languages, supportedLanguages)) {
-      languageSelectionsBySupportKeyRef.current[languageSupportKey] = [
-        ...settings.languages,
-      ];
-    }
-
-    languageSelectionSnapshotRef.current = {
-      supportKey: languageSupportKey,
-      languages: [...settings.languages],
-    };
-  }, [
-    settings.languages,
-    languageSupportEngine,
-    languageSupportKey,
-    handleSettingsChange,
-  ]);
 
   // Listen for data-dir-fallback event (custom dir unavailable, fell back to default)
   useEffect(() => {
@@ -2221,8 +2169,10 @@ export function RecordingSettings() {
 
       if (pendingAudioExclusions !== null) {
         try {
-          const resWriteExcl = await commands.writeAudioExclusions(pendingAudioExclusions);
-    if (resWriteExcl.status === "error") throw new Error(resWriteExcl.error);
+          const writeResult = await commands.writeAudioExclusions(pendingAudioExclusions);
+          if (writeResult.status === "error") {
+            throw new Error(writeResult.error);
+          }
           setAudioExclusions(pendingAudioExclusions);
           setPendingAudioExclusions(null);
         } catch (e) {
@@ -2315,38 +2265,10 @@ export function RecordingSettings() {
       return;
     }
 
-    let newSettings: Partial<Settings>;
-    if (realtime) {
-      newSettings = { realtimeAudioTranscriptionEngine: value };
-    } else {
-      languageSelectionsBySupportKeyRef.current[languageSupportKey] = [
-        ...settings.languages,
-      ];
-      languageSelectionSnapshotRef.current = {
-        supportKey: languageSupportKey,
-        languages: [...settings.languages],
-      };
-
-      const nextAudioEngineResolution = getAudioEngineResolution({
-        ...settings,
-        audioTranscriptionEngine: value,
-      });
-      const nextLanguageSupportEngine = nextAudioEngineResolution.active;
-      const nextLanguageSupportKey =
-        getTranscriptionEngineLanguageSupportKey(nextLanguageSupportEngine);
-      const preferredLanguages =
-        languageSelectionsBySupportKeyRef.current[nextLanguageSupportKey];
-
-      newSettings = {
-        audioTranscriptionEngine: value,
-        languages: resolveLanguageSelectionForTranscriptionEngine(
-          settings.languages,
-          nextLanguageSupportEngine,
-          preferredLanguages
-        ),
-      };
-    }
-
+    // Only proceed with the change if all checks pass
+    const newSettings = realtime
+      ? { realtimeAudioTranscriptionEngine: value }
+      : { audioTranscriptionEngine: value };
     handleSettingsChange(newSettings, true);
   };
 
@@ -3304,7 +3226,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Languages</h3>
-                  <p className="text-xs text-muted-foreground">{languageSupportDescription}</p>
+                  <p className="text-xs text-muted-foreground">{settings.languages.length === 0 ? "Automatically detects spoken language" : "Restricts transcription to selected"}</p>
                 </div>
               </div>
               <Popover open={openLanguages} onOpenChange={setOpenLanguages}>
@@ -3320,9 +3242,48 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <CommandList>
                       <CommandEmpty>No languages found.</CommandEmpty>
                       <CommandGroup>
-                        {supportedLanguageOptions.map((language) => (
-                          <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code)}>
-                            <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code) ? "opacity-100" : "opacity-0")} />
+                        {[
+                          { code: "english", name: "English" }, { code: "spanish", name: "Spanish" },
+                          { code: "french", name: "French" }, { code: "german", name: "German" },
+                          { code: "italian", name: "Italian" }, { code: "portuguese", name: "Portuguese" },
+                          { code: "russian", name: "Russian" }, { code: "japanese", name: "Japanese" },
+                          { code: "korean", name: "Korean" }, { code: "chinese", name: "Chinese" },
+                          { code: "arabic", name: "Arabic" }, { code: "hindi", name: "Hindi" },
+                          { code: "dutch", name: "Dutch" }, { code: "swedish", name: "Swedish" },
+                          { code: "indonesian", name: "Indonesian" }, { code: "finnish", name: "Finnish" },
+                          { code: "hebrew", name: "Hebrew" }, { code: "ukrainian", name: "Ukrainian" },
+                          { code: "greek", name: "Greek" }, { code: "malay", name: "Malay" },
+                          { code: "czech", name: "Czech" }, { code: "romanian", name: "Romanian" },
+                          { code: "danish", name: "Danish" }, { code: "hungarian", name: "Hungarian" },
+                          { code: "norwegian", name: "Norwegian" }, { code: "thai", name: "Thai" },
+                          { code: "urdu", name: "Urdu" }, { code: "croatian", name: "Croatian" },
+                          { code: "bulgarian", name: "Bulgarian" }, { code: "lithuanian", name: "Lithuanian" },
+                          { code: "latin", name: "Latin" }, { code: "welsh", name: "Welsh" },
+                          { code: "slovak", name: "Slovak" }, { code: "persian", name: "Persian" },
+                          { code: "latvian", name: "Latvian" }, { code: "bengali", name: "Bengali" },
+                          { code: "serbian", name: "Serbian" }, { code: "azerbaijani", name: "Azerbaijani" },
+                          { code: "slovenian", name: "Slovenian" }, { code: "estonian", name: "Estonian" },
+                          { code: "macedonian", name: "Macedonian" }, { code: "nepali", name: "Nepali" },
+                          { code: "mongolian", name: "Mongolian" }, { code: "bosnian", name: "Bosnian" },
+                          { code: "kazakh", name: "Kazakh" }, { code: "albanian", name: "Albanian" },
+                          { code: "swahili", name: "Swahili" }, { code: "galician", name: "Galician" },
+                          { code: "marathi", name: "Marathi" }, { code: "punjabi", name: "Punjabi" },
+                          { code: "sinhala", name: "Sinhala" }, { code: "khmer", name: "Khmer" },
+                          { code: "afrikaans", name: "Afrikaans" }, { code: "belarusian", name: "Belarusian" },
+                          { code: "gujarati", name: "Gujarati" }, { code: "amharic", name: "Amharic" },
+                          { code: "yiddish", name: "Yiddish" }, { code: "lao", name: "Lao" },
+                          { code: "uzbek", name: "Uzbek" }, { code: "faroese", name: "Faroese" },
+                          { code: "pashto", name: "Pashto" }, { code: "maltese", name: "Maltese" },
+                          { code: "sanskrit", name: "Sanskrit" }, { code: "luxembourgish", name: "Luxembourgish" },
+                          { code: "myanmar", name: "Myanmar" }, { code: "tibetan", name: "Tibetan" },
+                          { code: "tagalog", name: "Tagalog" }, { code: "assamese", name: "Assamese" },
+                          { code: "tatar", name: "Tatar" }, { code: "hausa", name: "Hausa" },
+                          { code: "javanese", name: "Javanese" }, { code: "turkish", name: "Turkish" },
+                          { code: "polish", name: "Polish" }, { code: "catalan", name: "Catalan" },
+                          { code: "malayalam", name: "Malayalam" },
+                        ].map((language) => (
+                          <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code as Language)}>
+                            <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code as Language) ? "opacity-100" : "opacity-0")} />
                             <span className="text-xs">{language.name}</span>
                           </CommandItem>
                         ))}
@@ -3480,74 +3441,123 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           onToggle={handleToggleIgnoredMeetingApp}
         />
 
-        {/* Per-app exclusion list for the CoreAudio Process Tap. Only
-            meaningful when the tap is the active backend. */}
-        {!settings.disableAudio && coreaudioTapAvailable && settings.experimentalCoreaudioSystemAudio && (
-        <Card className="border-border bg-card">
+        <AudioExclusionPicker
+          open={audioExclusionPickerOpen}
+          onOpenChange={setAudioExclusionPickerOpen}
+          isWindows={isWindows}
+          isMacOS={isMacOS}
+          isAdded={isAudioExclusionAdded}
+          onAdd={addAudioExclusion}
+        />
+
+        {/* Per-app exclusion list for system-audio capture (macOS Process Tap / Windows WASAPI). */}
+        {showAudioExclusionCard && (
+        <Card className="border-border bg-card" data-testid="audio-exclusion-card">
           <CardContent className="px-3 py-2.5 space-y-2">
             <div className="flex items-center space-x-2.5">
               <VolumeX className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground">
-                  Exclude apps from system audio
-                </h3>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-sm font-medium text-foreground">
+                    Exclude apps from system audio
+                  </h3>
+                  <HelpTooltip
+                    text={
+                      isWindows
+                        ? "Pick a .exe to exclude its audio from system capture (e.g. trading alerts, browser tabs). Changes apply after you click Apply. The engine hot-reloads the list while running."
+                        : "Pick a .app bundle to exclude its audio from system capture. Requires Experimental CoreAudio System Audio above. Changes apply after you click Apply."
+                    }
+                  />
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Audio from these apps will be filtered out of system-audio capture.
+                  {isWindows
+                    ? "Audio from these executables is filtered out of system-audio capture."
+                    : "Audio from these apps is filtered out of system-audio capture."}
                 </p>
+                {isWindows && audioExclusionProbe === null && (
+                  <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                    Per-app filtering requires a current build of screenpipe. Update the app
+                    to enable WASAPI process loopback on this machine.
+                  </p>
+                )}
+                {isWindows && audioExclusionProbe === false && (
+                  <Alert variant="destructive" className="mt-2 text-xs">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <AlertTitle className="text-xs font-medium">Per-app audio filtering unavailable</AlertTitle>
+                    <AlertDescription className="text-xs mt-0.5">
+                      WASAPI process loopback requires Windows 10 version 2004 or later.
+                      All system audio will be captured without per-app filtering.
+                    </AlertDescription>
+                  </Alert>
+                )}
               </div>
             </div>
             <div
               className="flex flex-wrap gap-1.5 pl-6"
-              onClick={() => setSelectedBundleId(null)}
+              onClick={() => setSelectedExclusionKey(null)}
             >
-              {effectiveAudioExclusions.map((app) => (
+              {effectiveAudioExclusions.map((app) => {
+                const entryKey = exclusionEntryKey(app);
+                const label = exclusionEntryLabel(app);
+                return (
                 <Badge
-                  key={app.bundleId}
-                  variant={selectedBundleId === app.bundleId ? "default" : "secondary"}
+                  key={entryKey}
+                  data-testid="audio-exclusion-chip"
+                  data-entry-key={entryKey}
+                  variant={selectedExclusionKey === entryKey ? "default" : "secondary"}
                   className="gap-1.5 pr-1 cursor-pointer"
                   role="button"
                   tabIndex={0}
-                  aria-pressed={selectedBundleId === app.bundleId}
-                  title={app.bundleId}
+                  aria-pressed={selectedExclusionKey === entryKey}
+                  title={app.bundleId ?? app.exePath ?? app.exeName ?? label}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedBundleId(
-                      selectedBundleId === app.bundleId ? null : app.bundleId
+                    setSelectedExclusionKey(
+                      selectedExclusionKey === entryKey ? null : entryKey
                     );
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setSelectedBundleId(
-                        selectedBundleId === app.bundleId ? null : app.bundleId
+                      setSelectedExclusionKey(
+                        selectedExclusionKey === entryKey ? null : entryKey
                       );
                     }
                   }}
                 >
-                  {app.icon && (
-                    <img src={app.icon} alt="" className="h-4 w-4 rounded-sm" />
+                  {(app.icon || label) && (
+                    <img
+                      src={app.icon ?? getAppIconUrl(label)}
+                      alt=""
+                      className="h-4 w-4 rounded-sm object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
                   )}
-                  <span className="text-xs">{app.name ?? app.bundleId}</span>
+                  <span className="text-xs">{label}</span>
                   <button
                     type="button"
                     className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                    aria-label={`Remove ${app.name ?? app.bundleId} from audio exclusions`}
+                    aria-label={`Remove ${label} from audio exclusions`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      removeAudioExclusion(app.bundleId);
+                      removeAudioExclusion(entryKey);
                     }}
                   >
                     <XCircle className="h-3 w-3" />
                   </button>
                 </Badge>
-              ))}
+              );
+              })}
               <Button
                 variant="outline"
                 size="sm"
                 className="h-6 text-xs"
+                data-testid="audio-exclusion-add-btn"
                 onClick={(e) => {
                   e.stopPropagation();
-                  pickAppToExclude();
+                  setAudioExclusionPickerOpen(true);
                 }}
               >
                 + add app
@@ -3784,14 +3794,24 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </DialogContent>
       </Dialog>
 
-      {/* Floating apply & restart bar — always visible when changes pending */}
-      <ApplyRestartBar
-        visible={hasUnsavedChanges}
-        onApply={handleUpdate}
-        isUpdating={isUpdating}
-        disabled={Object.keys(validationErrors).length > 0}
-        message="unsaved recording changes. restart to apply."
-      />
+      {/* Floating apply & restart button — always visible when changes pending */}
+      {hasUnsavedChanges && (
+        <div className="sticky bottom-4 flex justify-end pointer-events-none z-50">
+          <Button
+            onClick={handleUpdate}
+            disabled={isUpdating || Object.keys(validationErrors).length > 0}
+            size="sm"
+            className="pointer-events-auto flex items-center gap-1.5 h-9 px-4 text-sm bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 shadow-lg"
+          >
+            {isUpdating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Apply & Restart
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

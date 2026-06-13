@@ -176,7 +176,64 @@ impl AudioStream {
             #[cfg(not(target_os = "macos"))]
             let use_process_tap = false;
 
-            if use_process_tap {
+            #[cfg(target_os = "windows")]
+            let use_process_loopback = {
+                use super::audio_exclusions;
+                use super::device::DeviceType;
+                use super::windows_process_loopback;
+                let is_output = device.device_type == DeviceType::Output;
+                let loopback_available =
+                    windows_process_loopback::is_process_loopback_available();
+                let (entries, _) =
+                    audio_exclusions::read_entries(&audio_exclusions::config_path());
+                is_output
+                    && audio_exclusions::should_use_windows_process_loopback(
+                        loopback_available,
+                        &entries,
+                    )
+            };
+            #[cfg(not(target_os = "windows"))]
+            let use_process_loopback = false;
+
+            if use_process_loopback {
+                #[cfg(target_os = "windows")]
+                {
+                    info!(
+                        device = %device,
+                        "screenpipe-audio: routing Windows output capture through WASAPI process loopback"
+                    );
+                    match super::windows_process_loopback::spawn_windows_process_loopback_capture(
+                        tx.clone(),
+                        is_disconnected.clone(),
+                    ) {
+                        Ok((config, thread)) => {
+                            drop(stream_control_rx);
+                            (config, thread)
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Windows process loopback failed, falling back to WASAPI: {}",
+                                e
+                            );
+                            Self::start_cpal_stream(
+                                &device,
+                                tx,
+                                stream_control_rx,
+                                &is_running,
+                                &is_disconnected,
+                                &stream_control_tx,
+                                windows_input_aec,
+                                macos_input_vpio,
+                            )
+                            .await?
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    unreachable!()
+                }
+            } else if use_process_tap {
                 #[cfg(target_os = "macos")]
                 {
                     match super::process_tap::spawn_process_tap_capture(
@@ -935,6 +992,51 @@ impl Drop for AudioStream {
             .stream_control
             .send(StreamControl::stop_without_wait(StopMode::Immediate));
         self.is_disconnected.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod windows_process_loopback_routing_tests {
+    use super::super::audio_exclusions::{should_use_windows_process_loopback, ExclusionEntry};
+    use crate::core::device::DeviceType;
+
+    fn windows_entry() -> ExclusionEntry {
+        ExclusionEntry {
+            bundle_id: None,
+            exe_name: Some("chrome.exe".to_string()),
+            exe_path: None,
+            name: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn output_device_uses_loopback_when_gated() {
+        let is_output = true;
+        let entries = vec![windows_entry()];
+        assert!(is_output && should_use_windows_process_loopback(true, &entries));
+    }
+
+    #[test]
+    fn input_device_never_uses_loopback_gate() {
+        let is_output = DeviceType::Input == DeviceType::Output;
+        let entries = vec![windows_entry()];
+        assert!(!is_output);
+        assert!(!is_output && should_use_windows_process_loopback(true, &entries));
+    }
+
+    #[test]
+    fn empty_exclusion_list_keeps_cpal_path() {
+        let is_output = true;
+        assert!(!should_use_windows_process_loopback(true, &[]));
+        assert!(!(is_output && should_use_windows_process_loopback(true, &[])));
+    }
+
+    #[test]
+    fn unavailable_api_keeps_cpal_path() {
+        let is_output = true;
+        let entries = vec![windows_entry()];
+        assert!(!(is_output && should_use_windows_process_loopback(false, &entries)));
     }
 }
 

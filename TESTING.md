@@ -490,6 +490,21 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **No console flash during GPU detection** — On Windows startup, verify that no temporary console window flashes during the GPU detection process. (`a0aba1643`)
 - [ ] **Filter noisy system apps** — On Windows, verify that noisy system apps are filtered out from screen capture and do not appear in the timeline or search results.
 - [ ] **Settings window instead of overlay** — On Windows, verify that the Settings window is used instead of the overlay for settings, and the shortcut toggle works correctly. (`c13e21b55`)
+- [ ] **Windows per-app audio exclusion** — On Windows 10+, Settings → Recording shows **Exclude apps from system audio**. Add `notepad.exe`, click Apply, confirm `~/.screenpipe/audio-exclusions.json` contains `exe_name`. Play audio from the excluded app — no new transcription within ~60 s. Play audio from a non-excluded app — transcription appears. Remove the exclusion and Apply — behavior returns to normal cpal loopback. Edit the JSON while running — change picked up within ~65 s (500 ms poll + 60 s rebuild cooldown). Empty list → identical behavior to pre-exclusion builds.
+
+#### Windows audio exclusion (hardware integration tests)
+
+Run on a Windows machine with a working sound card. Unit tests cover JSON parsing and routing gates; these manual/integration checks need real WASAPI loopback:
+
+```powershell
+cargo test -p screenpipe-audio
+cargo test -p screenpipe-audio --lib windows_loopback_excludes_target_process -- --ignored --nocapture
+```
+
+- [ ] **Basic exclusion** — Tone from excluded process is near-silent in captured stream (RMS &lt; 0.01).
+- [ ] **Non-excluded still captured** — Tone from a non-excluded process remains audible (RMS &gt; 0.05).
+- [ ] **Hot-reload** — Adding an exclusion while capture is running removes that app's audio after rebuild cooldown.
+- [ ] **Empty list fallback** — With no Windows entries in `audio-exclusions.json`, output capture uses the legacy cpal path (no panic, audio still records).
 
 commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`, `67caf1d1`
 

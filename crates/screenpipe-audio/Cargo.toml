@@ -100,6 +100,7 @@ ort = { workspace = true, features = ["download-binaries", "tls-native"] }
 # MS Teams/Zoom route audio to the eCommunications endpoint, which may
 # differ from the multimedia/console default that cpal returns.
 [target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.23"
 windows = { workspace = true, features = [
     "Win32_Media_Audio",
     "Win32_System_Com",

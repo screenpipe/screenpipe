@@ -193,13 +193,19 @@ Instead of recording every second, screenpipe listens for meaningful events — 
 ### Audio transcription
 Captures system audio (what you hear) and microphone input (what you say). Real-time speech-to-text using Whisper (Large-V3-Turbo) running locally on your device, or Deepgram for cloud transcription. Speaker identification and diarization. Works with any audio source — Zoom, Google Meet, Teams, or any other application.
 
-On macOS 14.4+, you can exclude specific apps from system-audio capture by listing their bundle IDs in `~/.screenpipe/audio-exclusions.json`. Enable Experimental CoreAudio System Audio in Settings → Recording first; the picker UI only appears once that flag is on.
+On **macOS 14.4+**, you can exclude specific apps from system-audio capture. Enable **Experimental CoreAudio System Audio** in Settings → Recording, then use **Exclude apps from system audio** to pick `.app` bundles (or edit `~/.screenpipe/audio-exclusions.json` directly):
 
 ```json
 { "excluded_apps": [{ "bundle_id": "com.spotify.client", "name": "Spotify" }] }
 ```
 
-The exclusion list hot-reloads — edits to the file and excluded apps launching/quitting are picked up on the engine's existing 500 ms tap-rebuild loop without restarting screenpipe. Override the file path with `SCREENPIPE_AUDIO_EXCLUSIONS_PATH` for testing. Note: this requires the "System Audio Recording Only" TCC permission in System Settings → Privacy & Security → Screen & System Audio Recording.
+On **Windows 10+**, use the same Settings panel to pick `.exe` files (e.g. `chrome.exe` for browser audio). The engine routes system audio through WASAPI process loopback when at least one Windows exclusion is configured:
+
+```json
+{ "excluded_apps": [{ "exe_name": "chrome.exe", "name": "Google Chrome" }] }
+```
+
+The exclusion list hot-reloads — edits to the file and excluded apps launching/quitting are picked up on the engine's 500 ms rebuild loop (subject to a 60 s cooldown). Override the file path with `SCREENPIPE_AUDIO_EXCLUSIONS_PATH` for testing. On macOS this requires the "System Audio Recording Only" TCC permission in System Settings → Privacy & Security → Screen & System Audio Recording.
 
 ### AI-powered search
 Natural language search across accessibility-first screen text, OCR fallback text, and audio transcriptions. Filter by application name, window title, browser URL, date range. Full-text keyword search (SQLite FTS5) under the hood. Returns screenshots and audio clips alongside text results.

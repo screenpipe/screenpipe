@@ -172,6 +172,12 @@ async checkArcInstalled() : Promise<boolean> {
     return await TAURI_INVOKE("check_arc_installed");
 },
 /**
+ * Cross-platform probe for whether per-app audio exclusion is available.
+ */
+async checkAudioExclusionAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("check_audio_exclusion_available");
+},
+/**
  * Check if Automation permission is granted for all installed Chromium browsers.
  * Returns true only if ALL installed browsers have automation granted.
  */
@@ -1358,6 +1364,17 @@ async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
 }
 },
 /**
+ * Read display name and optional icon from a Windows `.exe` file.
+ */
+async readExeMetadata(path: string) : Promise<Result<ExcludedApp, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_exe_metadata", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Read a file for the viewer. Returns text for text-like files, a
  * base64 data URL for images. Files larger than `MAX_VIEWER_FILE_BYTES`
  * are truncated for text or refused for images, since both would blow
@@ -2244,7 +2261,7 @@ alias?: string | null }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
-export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
+export type ExcludedApp = { bundleId: string | null; exeName: string | null; exePath: string | null; name: string | null; icon: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**

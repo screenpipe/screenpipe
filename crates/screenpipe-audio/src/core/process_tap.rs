@@ -19,6 +19,7 @@ use ca::aggregate_device_keys as agg_keys;
 use ca::sub_device_keys as sub_keys;
 use cidre::{cat, cf, core_audio as ca, os};
 
+use super::audio_exclusions;
 use super::stream::AudioStreamConfig;
 use crate::utils::audio::audio_to_mono;
 
@@ -67,233 +68,6 @@ fn detect_os_version() -> Option<(u64, u64, u64)> {
         2 => Some((parts[0], parts[1], 0)),
         3.. => Some((parts[0], parts[1], parts[2])),
         _ => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Per-app exclusion list for the Process Tap
-// ---------------------------------------------------------------------------
-
-/// Per-app exclusion list for the macOS CoreAudio Process Tap.
-///
-/// The exclusion list is a JSON file with the shape:
-///
-/// ```json
-/// { "excluded_apps": [{ "bundle_id": "com.example.app", "name": "Example" }] }
-/// ```
-///
-/// Path defaults to `$HOME/.screenpipe/audio-exclusions.json` and can be
-/// overridden with the `SCREENPIPE_AUDIO_EXCLUSIONS_PATH` environment
-/// variable. The engine reads the file on every Process Tap rebuild and
-/// polls its mtime + the resolved AudioObjectID set on the existing 500ms
-/// loop in [`spawn_process_tap_capture`], so changes (file edits, an
-/// excluded app launching, or an excluded app quitting) take effect without
-/// an engine restart, subject to the existing 60s `REBUILD_COOLDOWN` to
-/// prevent tap thrash.
-///
-/// Errors are intentionally swallowed (missing file, malformed JSON, wrong
-/// JSON shape) and surface as an empty exclusion list: losing the tap
-/// entirely is much worse for the user than losing the exclusion filter.
-mod exclusions {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::SystemTime;
-
-    use cidre::{arc, core_audio as ca, ns};
-
-    pub const ENV_OVERRIDE: &str = "SCREENPIPE_AUDIO_EXCLUSIONS_PATH";
-    pub const DEFAULT_RELATIVE_PATH: &str = ".screenpipe/audio-exclusions.json";
-
-    /// Snapshot of the exclusion state used by the rebuild loop to detect drift.
-    ///
-    /// AudioObjectIDs are stored as `u32` (their underlying `ca::Obj`
-    /// representation) so snapshots can be compared without holding
-    /// Objective-C-bound references across thread boundaries — the
-    /// `spawn_blocking` rebuild thread doesn't have an autorelease pool
-    /// owning these by default.
-    #[derive(Default, Clone)]
-    pub struct Snapshot {
-        pub bundle_ids: Vec<String>,
-        pub audio_object_ids: Vec<u32>,
-        pub mtime: Option<SystemTime>,
-    }
-
-    /// Returns the active config-file path: env override wins, else
-    /// `$HOME/.screenpipe/audio-exclusions.json`.
-    pub fn config_path() -> PathBuf {
-        let override_val = std::env::var(ENV_OVERRIDE).ok();
-        let home = std::env::var("HOME").unwrap_or_default();
-        resolved_path(override_val.as_deref(), &home)
-    }
-
-    /// Pure resolution helper, factored out for testability without
-    /// mutating process-wide environment variables.
-    fn resolved_path(env_override: Option<&str>, home: &str) -> PathBuf {
-        if let Some(p) = env_override {
-            return PathBuf::from(p);
-        }
-        PathBuf::from(home).join(DEFAULT_RELATIVE_PATH)
-    }
-
-    /// Returns the bundle IDs declared in the file and the file's mtime.
-    /// Missing file, unreadable file, malformed JSON, or wrong-shape JSON
-    /// all produce an empty list, by design.
-    pub fn read_bundle_ids(path: &Path) -> (Vec<String>, Option<SystemTime>) {
-        let Ok(meta) = fs::metadata(path) else {
-            return (Vec::new(), None);
-        };
-        let mtime = meta.modified().ok();
-        let body = match fs::read_to_string(path) {
-            Ok(b) => b,
-            Err(_) => return (Vec::new(), mtime),
-        };
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-        let ids = parsed
-            .get("excluded_apps")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|entry| {
-                        entry
-                            .get("bundle_id")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        (ids, mtime)
-    }
-
-    /// Resolve bundle IDs to the AudioObjectIDs of their currently running
-    /// processes. A bundle ID that isn't running produces no entry; multiple
-    /// running instances of the same bundle each contribute their own
-    /// AudioObjectID. The result is sorted+deduped so snapshots can be
-    /// compared with `==`.
-    pub fn resolve_to_audio_object_ids(bundle_ids: &[String]) -> Vec<u32> {
-        let mut out = Vec::new();
-        for bid in bundle_ids {
-            let bid_ns = ns::String::with_str(bid);
-            let apps = ns::RunningApp::with_bundle_id(&bid_ns);
-            for app in apps.iter() {
-                let pid = app.pid();
-                if let Ok(proc) = ca::Process::with_pid(pid) {
-                    // ca::Process(pub Obj) where Obj(pub u32) is #[repr(transparent)].
-                    // The inner u32 is the AudioObjectID that the tap descriptor
-                    // expects (wrapped in ns::Number, see build_exclusion_array).
-                    let audio_obj_id = proc.0 .0;
-                    if audio_obj_id != 0 {
-                        out.push(audio_obj_id);
-                    }
-                }
-            }
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
-    }
-
-    /// Build the `ns::Array<ns::Number>` exclusion list in the shape that
-    /// `TapDesc::with_stereo_global_tap_excluding_processes` expects.
-    pub fn build_exclusion_array(audio_object_ids: &[u32]) -> arc::R<ns::Array<ns::Number>> {
-        let numbers: Vec<arc::R<ns::Number>> = audio_object_ids
-            .iter()
-            .map(|id| ns::Number::with_u32(*id))
-            .collect();
-        ns::Array::from_slice_retained(&numbers)
-    }
-
-    /// Build a complete snapshot by reading the file and resolving once.
-    pub fn snapshot() -> Snapshot {
-        let (bundle_ids, mtime) = read_bundle_ids(&config_path());
-        let audio_object_ids = resolve_to_audio_object_ids(&bundle_ids);
-        Snapshot {
-            bundle_ids,
-            audio_object_ids,
-            mtime,
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::io::Write;
-
-        fn write_tmp(body: &str) -> tempfile::NamedTempFile {
-            let mut f = tempfile::NamedTempFile::new().unwrap();
-            f.write_all(body.as_bytes()).unwrap();
-            f
-        }
-
-        #[test]
-        fn missing_file_returns_empty() {
-            let (ids, mt) = read_bundle_ids(Path::new(
-                "/nonexistent/screenpipe-audio-exclusion-test/path.json",
-            ));
-            assert!(ids.is_empty());
-            assert!(mt.is_none());
-        }
-
-        #[test]
-        fn malformed_json_returns_empty() {
-            let f = write_tmp("{ not json");
-            let (ids, mt) = read_bundle_ids(f.path());
-            assert!(ids.is_empty());
-            // File exists, so mtime should be populated even on parse failure.
-            assert!(mt.is_some());
-        }
-
-        #[test]
-        fn missing_key_returns_empty() {
-            let f = write_tmp(r#"{"other_key": ["x"]}"#);
-            assert!(read_bundle_ids(f.path()).0.is_empty());
-        }
-
-        #[test]
-        fn empty_array_returns_empty() {
-            let f = write_tmp(r#"{"excluded_apps": []}"#);
-            assert!(read_bundle_ids(f.path()).0.is_empty());
-        }
-
-        #[test]
-        fn entries_missing_bundle_id_are_skipped() {
-            let f =
-                write_tmp(r#"{"excluded_apps": [{}, {"bundle_id": "com.a"}, {"name": "no id"}]}"#);
-            let (ids, _) = read_bundle_ids(f.path());
-            assert_eq!(ids, vec!["com.a".to_string()]);
-        }
-
-        #[test]
-        fn well_formed_returns_list() {
-            let f = write_tmp(
-                r#"{"excluded_apps": [{"bundle_id": "com.stremio.stremio"}, {"bundle_id": "com.spotify.client"}]}"#,
-            );
-            let (ids, mt) = read_bundle_ids(f.path());
-            assert_eq!(
-                ids,
-                vec![
-                    "com.stremio.stremio".to_string(),
-                    "com.spotify.client".to_string()
-                ]
-            );
-            assert!(mt.is_some());
-        }
-
-        #[test]
-        fn resolved_path_env_override_wins() {
-            let p = resolved_path(Some("/tmp/custom.json"), "/Users/anyone");
-            assert_eq!(p, PathBuf::from("/tmp/custom.json"));
-        }
-
-        #[test]
-        fn resolved_path_default_uses_home() {
-            let p = resolved_path(None, "/Users/anyone");
-            assert_eq!(
-                p,
-                PathBuf::from("/Users/anyone/.screenpipe/audio-exclusions.json")
-            );
-        }
     }
 }
 
@@ -594,7 +368,7 @@ fn build_capture(
     ProcessTapCapture,
     AudioStreamConfig,
     String,
-    exclusions::Snapshot,
+    audio_exclusions::Snapshot,
 )> {
     let output_device = ca::System::default_output_device()
         .map_err(|s| anyhow!("No default output device: {:?}", s))?;
@@ -604,14 +378,16 @@ fn build_capture(
     let output_uid_str = output_uid.to_string();
     debug!("Process Tap: anchoring to '{}'", output_uid_str);
 
-    let snapshot = exclusions::snapshot();
-    let excluded_array = exclusions::build_exclusion_array(&snapshot.audio_object_ids);
-    if !snapshot.bundle_ids.is_empty() {
+    let snapshot = audio_exclusions::snapshot();
+    let bundle_ids = snapshot.macos_bundle_ids();
+    let excluded_array =
+        audio_exclusions::build_exclusion_array(&snapshot.resolved_audio_object_ids);
+    if !bundle_ids.is_empty() {
         info!(
             "Process Tap: excluding {} bundle ID(s), resolved to {} AudioObjectID(s): {:?}",
-            snapshot.bundle_ids.len(),
-            snapshot.audio_object_ids.len(),
-            snapshot.bundle_ids
+            bundle_ids.len(),
+            snapshot.resolved_audio_object_ids.len(),
+            bundle_ids
         );
     }
     let tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&excluded_array);
@@ -727,7 +503,7 @@ pub fn spawn_process_tap_capture(
     info!(
         "Process Tap capture started (device: {}, exclusions: {})",
         initial_uid,
-        initial_snapshot.bundle_ids.len()
+        initial_snapshot.macos_bundle_ids().len()
     );
 
     let handle = tokio::task::spawn_blocking(move || {
@@ -822,9 +598,9 @@ pub fn spawn_process_tap_capture(
             // NSRunningApp::with_bundle_id per configured bundle ID
             // (typically 0–5 IDs). The file is only re-read if its mtime
             // changed since the last build.
-            let new_snapshot = exclusions::snapshot();
-            let exclusion_set_changed =
-                new_snapshot.audio_object_ids != current_snapshot.audio_object_ids;
+            let new_snapshot = audio_exclusions::snapshot();
+            let exclusion_set_changed = new_snapshot.resolved_audio_object_ids
+                != current_snapshot.resolved_audio_object_ids;
             let exclusion_mtime_changed =
                 new_snapshot.mtime.is_some() && new_snapshot.mtime != current_snapshot.mtime;
             let should_rebuild_for_exclusions = (exclusion_set_changed || exclusion_mtime_changed)
@@ -864,8 +640,8 @@ pub fn spawn_process_tap_capture(
                 info!(
                     "Audio exclusion drift detected ({}): {} bundle ID(s) -> {} AudioObjectID(s). Rebuilding Process Tap.",
                     reason,
-                    new_snapshot.bundle_ids.len(),
-                    new_snapshot.audio_object_ids.len()
+                    new_snapshot.macos_bundle_ids().len(),
+                    new_snapshot.resolved_audio_object_ids.len()
                 );
             }
 
@@ -886,7 +662,7 @@ pub fn spawn_process_tap_capture(
                     info!(
                         "Process Tap re-anchored to '{}' (exclusions: {})",
                         uid,
-                        snapshot.bundle_ids.len()
+                        snapshot.macos_bundle_ids().len()
                     );
                     current = Some(cap);
                     current_uid = uid;
