@@ -105,8 +105,7 @@ impl LoopbackSession {
             let additional = (new_frames as usize * self.block_align)
                 .saturating_sub(self.raw_queue.capacity() - self.raw_queue.len());
             self.raw_queue.reserve(additional);
-            self
-                .capture_client
+            self.capture_client
                 .read_from_device_to_deque(&mut self.raw_queue)
                 .context("read_from_device_to_deque")?;
         }
@@ -136,10 +135,9 @@ fn open_exclude_session(pid: u32, wave_format: &WaveFormat) -> Result<LoopbackSe
         .ok()
         .context("initialize_mta for process loopback")?;
 
-    let mut audio_client =
-        AudioClient::new_application_loopback_client(pid, false).context(format!(
-            "new_application_loopback_client(pid={pid}, exclude)"
-        ))?;
+    let mut audio_client = AudioClient::new_application_loopback_client(pid, false).context(
+        format!("new_application_loopback_client(pid={pid}, exclude)"),
+    )?;
     let mode = StreamMode::EventsShared {
         autoconvert: true,
         buffer_duration_hns: BUFFER_DURATION_HNS,
@@ -263,18 +261,27 @@ fn maybe_log_capture_rate(sample_count: usize) {
 /// - 0 exclude sessions: return reference (full mix) if present.
 /// - 1 exclude session: return it directly (`M - A`).
 /// - N > 1: `sum(S_i) - (N-1) * reference` where each `S_i = M - A_i`.
+///
+/// Returns `Err` when N > 1 sessions are present but the reference loopback
+/// is missing or has zero samples — without the reference the subtraction
+/// formula cannot recover the desired mix, so we surface the failure instead
+/// of silently producing corrupted audio.
 fn mix_exclude_streams(
     exclude_monos: &[Vec<f32>],
     reference_mono: Option<&[f32]>,
-) -> Vec<f32> {
+) -> Result<Vec<f32>> {
     match exclude_monos.len() {
-        0 => reference_mono.map(|r| r.to_vec()).unwrap_or_default(),
-        1 => exclude_monos[0].clone(),
+        0 => Ok(reference_mono.map(|r| r.to_vec()).unwrap_or_default()),
+        1 => Ok(exclude_monos[0].clone()),
         n => {
-            let reference = reference_mono.unwrap_or_else(|| {
-                debug_assert!(false, "reference loopback required for multi-PID exclusion");
-                &[]
-            });
+            let reference = reference_mono.ok_or_else(|| {
+                anyhow!("reference loopback required to mix {n} excluded PIDs (got None)")
+            })?;
+            if reference.is_empty() {
+                return Err(anyhow!(
+                    "reference loopback has zero samples; cannot mix {n} excluded PIDs"
+                ));
+            }
             let len = exclude_monos
                 .iter()
                 .map(|v| v.len())
@@ -282,7 +289,7 @@ fn mix_exclude_streams(
                 .min()
                 .unwrap_or(0);
             if len == 0 {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let mut sum = vec![0.0f32; len];
             for stream in exclude_monos {
@@ -296,7 +303,7 @@ fn mix_exclude_streams(
                 .for_each(|(out, reference_sample)| {
                     *out -= factor * reference_sample;
                 });
-            sum
+            Ok(sum)
         }
     }
 }
@@ -355,16 +362,12 @@ fn drain_tick(
         v
     });
 
-    Ok(mix_exclude_streams(
-        &trimmed_exclude,
-        trimmed_reference.as_deref(),
-    ))
+    mix_exclude_streams(&trimmed_exclude, trimmed_reference.as_deref())
 }
 
 fn build_capture(
     snapshot: &audio_exclusions::Snapshot,
 ) -> Result<(WindowsLoopbackCapture, AudioStreamConfig)> {
-
     let wave_format = capture_wave_format();
     let pids = &snapshot.resolved_pids;
 
@@ -380,10 +383,7 @@ fn build_capture(
 
     let needs_reference = exclude_sessions.len() > 1;
     let reference_session = if needs_reference || exclude_sessions.is_empty() {
-        Some(
-            open_reference_loopback(&wave_format)
-                .context("open reference render loopback")?,
-        )
+        Some(open_reference_loopback(&wave_format).context("open reference render loopback")?)
     } else {
         None
     };
@@ -521,10 +521,9 @@ fn run_capture_loop(
                 .unwrap_or(true);
 
         let new_snapshot = audio_exclusions::snapshot();
-        let exclusion_set_changed =
-            new_snapshot.resolved_pids != current_snapshot.resolved_pids;
-        let exclusion_mtime_changed = new_snapshot.mtime.is_some()
-            && new_snapshot.mtime != current_snapshot.mtime;
+        let exclusion_set_changed = new_snapshot.resolved_pids != current_snapshot.resolved_pids;
+        let exclusion_mtime_changed =
+            new_snapshot.mtime.is_some() && new_snapshot.mtime != current_snapshot.mtime;
         let should_rebuild_for_exclusions = (exclusion_set_changed || exclusion_mtime_changed)
             && last_rebuild
                 .map(|t| t.elapsed() >= REBUILD_COOLDOWN)
@@ -651,7 +650,7 @@ mod tests {
     #[test]
     fn mix_single_exclude_returns_session() {
         let exclude = vec![vec![0.5, 0.25]];
-        let mixed = mix_exclude_streams(&exclude, None);
+        let mixed = mix_exclude_streams(&exclude, None).unwrap();
         assert_eq!(mixed, vec![0.5, 0.25]);
     }
 
@@ -663,7 +662,7 @@ mod tests {
         let b = vec![0.0, 0.3];
         let s1: Vec<f32> = m.iter().zip(&a).map(|(m, a)| m - a).collect();
         let s2: Vec<f32> = m.iter().zip(&b).map(|(m, b)| m - b).collect();
-        let mixed = mix_exclude_streams(&[s1, s2], Some(&m));
+        let mixed = mix_exclude_streams(&[s1, s2], Some(&m)).unwrap();
         let expected: Vec<f32> = m
             .iter()
             .zip(&a)
@@ -672,6 +671,38 @@ mod tests {
             .collect();
         assert!((mixed[0] - expected[0]).abs() < 1e-6);
         assert!((mixed[1] - expected[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mix_zero_exclude_returns_reference() {
+        let reference = vec![1.0, 2.0, 3.0];
+        assert_eq!(
+            mix_exclude_streams(&[], Some(&reference)).unwrap(),
+            reference
+        );
+    }
+
+    #[test]
+    fn mix_zero_exclude_no_reference_returns_empty() {
+        assert_eq!(mix_exclude_streams(&[], None).unwrap(), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn mix_multi_exclude_without_reference_errors() {
+        let err = mix_exclude_streams(&[vec![1.0], vec![2.0]], None).unwrap_err();
+        assert!(
+            err.to_string().contains("reference loopback"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mix_multi_exclude_with_empty_reference_errors() {
+        let err = mix_exclude_streams(&[vec![1.0], vec![2.0]], Some(&[])).unwrap_err();
+        assert!(
+            err.to_string().contains("zero samples"),
+            "unexpected error: {err}"
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -713,8 +744,8 @@ mod tests {
         exclude_tree: bool,
         duration: std::time::Duration,
     ) -> anyhow::Result<Vec<f32>> {
-        use std::time::Instant;
         use crate::utils::audio::audio_to_mono;
+        use std::time::Instant;
 
         initialize_mta()
             .ok()
@@ -765,8 +796,7 @@ mod tests {
             let aligned_len = raw_queue.len() - (raw_queue.len() % 4);
             if aligned_len > 0 {
                 let contiguous = raw_queue.make_contiguous();
-                let samples =
-                    bytemuck::cast_slice::<u8, f32>(&contiguous[..aligned_len]).to_vec();
+                let samples = bytemuck::cast_slice::<u8, f32>(&contiguous[..aligned_len]).to_vec();
                 raw_queue.drain(..aligned_len);
                 mono_samples.extend(audio_to_mono(&samples, channels));
             }

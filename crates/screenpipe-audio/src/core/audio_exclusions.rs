@@ -130,14 +130,8 @@ fn parse_entry(value: &serde_json::Value) -> Option<ExclusionEntry> {
         .get("exe_path")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let name = value
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let icon = value
-        .get("icon")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let name = value.get("name").and_then(|v| v.as_str()).map(String::from);
+    let icon = value.get("icon").and_then(|v| v.as_str()).map(String::from);
 
     if bundle_id.is_none() && exe_name.is_none() && exe_path.is_none() {
         return None;
@@ -166,8 +160,7 @@ pub fn read_entries(path: &Path) -> (Vec<ExclusionEntry>, Option<SystemTime>) {
         Ok(b) => b,
         Err(_) => return (Vec::new(), mtime),
     };
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
     let entries = parsed
         .get("excluded_apps")
         .and_then(|v| v.as_array())
@@ -186,8 +179,8 @@ pub fn read_entries_strict(path: &Path) -> Result<Vec<ExclusionEntry>, String> {
     if body.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
     Ok(parsed
         .get("excluded_apps")
         .and_then(|v| v.as_array())
@@ -290,7 +283,9 @@ pub fn build_exclusion_array(
 
 #[cfg(target_os = "windows")]
 fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "\\").to_ascii_lowercase()
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase()
 }
 
 #[cfg(target_os = "windows")]
@@ -299,7 +294,11 @@ fn exe_name_matches(process_name: &str, target: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn entry_matches_process(entry: &ExclusionEntry, process_name: &str, process_exe: Option<&Path>) -> bool {
+fn entry_matches_process(
+    entry: &ExclusionEntry,
+    process_name: &str,
+    process_exe: Option<&Path>,
+) -> bool {
     if let Some(exe_path) = &entry.exe_path {
         if let Some(proc_exe) = process_exe {
             return normalize_path(proc_exe) == normalize_path(Path::new(exe_path));
@@ -386,8 +385,7 @@ pub fn describe_resolved_pids(entries: &[ExclusionEntry], pids: &[u32]) -> Vec<S
     let mut sys = System::new();
     sys.refresh_processes();
 
-    pids
-        .iter()
+    pids.iter()
         .map(|&pid_u32| {
             let pid = Pid::from_u32(pid_u32);
             let process_name = sys
@@ -433,10 +431,7 @@ pub fn snapshot() -> Snapshot {
     let (entries, mtime) = read_entries(&config_path());
     #[cfg(target_os = "macos")]
     {
-        let bundle_ids: Vec<String> = entries
-            .iter()
-            .filter_map(|e| e.bundle_id.clone())
-            .collect();
+        let bundle_ids: Vec<String> = entries.iter().filter_map(|e| e.bundle_id.clone()).collect();
         let resolved_audio_object_ids = resolve_to_audio_object_ids(&bundle_ids);
         Snapshot {
             entries,
@@ -494,10 +489,7 @@ mod tests {
         );
         let (entries, mt) = read_entries(f.path());
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].bundle_id.as_deref(),
-            Some("com.spotify.client")
-        );
+        assert_eq!(entries[0].bundle_id.as_deref(), Some("com.spotify.client"));
         assert_eq!(entries[0].name.as_deref(), Some("Spotify"));
         assert!(entries[0].exe_name.is_none());
         assert!(entries[0].exe_path.is_none());
@@ -533,9 +525,7 @@ mod tests {
 
     #[test]
     fn read_entries_skips_entries_without_identifiers() {
-        let f = write_tmp(
-            r#"{"excluded_apps": [{}, {"bundle_id": "com.ok"}, {"name": "no id"}]}"#,
-        );
+        let f = write_tmp(r#"{"excluded_apps": [{}, {"bundle_id": "com.ok"}, {"name": "no id"}]}"#);
         let (entries, _) = read_entries(f.path());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].bundle_id.as_deref(), Some("com.ok"));
@@ -597,22 +587,13 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(!should_use_windows_process_loopback(
-            true,
-            &[]
-        ));
+        assert!(!should_use_windows_process_loopback(true, &[]));
         assert!(!should_use_windows_process_loopback(
             false,
             &[windows_entry.clone()]
         ));
-        assert!(!should_use_windows_process_loopback(
-            true,
-            &[macos_only]
-        ));
-        assert!(should_use_windows_process_loopback(
-            true,
-            &[windows_entry]
-        ));
+        assert!(!should_use_windows_process_loopback(true, &[macos_only]));
+        assert!(should_use_windows_process_loopback(true, &[windows_entry]));
     }
 
     #[cfg(target_os = "windows")]

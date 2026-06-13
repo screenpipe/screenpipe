@@ -182,10 +182,8 @@ impl AudioStream {
                 use super::device::DeviceType;
                 use super::windows_process_loopback;
                 let is_output = device.device_type == DeviceType::Output;
-                let loopback_available =
-                    windows_process_loopback::is_process_loopback_available();
-                let (entries, _) =
-                    audio_exclusions::read_entries(&audio_exclusions::config_path());
+                let loopback_available = windows_process_loopback::is_process_loopback_available();
+                let (entries, _) = audio_exclusions::read_entries(&audio_exclusions::config_path());
                 is_output
                     && audio_exclusions::should_use_windows_process_loopback(
                         loopback_available,
@@ -200,20 +198,27 @@ impl AudioStream {
                 {
                     info!(
                         device = %device,
-                        "screenpipe-audio: routing Windows output capture through WASAPI process loopback"
+                        "routing Windows output capture through WASAPI process loopback for per-app audio exclusion"
                     );
                     match super::windows_process_loopback::spawn_windows_process_loopback_capture(
                         tx.clone(),
                         is_disconnected.clone(),
                     ) {
                         Ok((config, thread)) => {
+                            info!(
+                                device = %device,
+                                sample_rate = config.sample_rate,
+                                channels = config.channels,
+                                "started Windows process loopback capture"
+                            );
                             drop(stream_control_rx);
                             (config, thread)
                         }
                         Err(e) => {
                             warn!(
-                                "Windows process loopback failed, falling back to WASAPI: {}",
-                                e
+                                device = %device,
+                                error = %e,
+                                "Windows process loopback unavailable, falling back to cpal WASAPI loopback"
                             );
                             Self::start_cpal_stream(
                                 &device,
