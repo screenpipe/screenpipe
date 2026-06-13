@@ -8266,9 +8266,10 @@ export function StandaloneChat({
         className={cn(
           "relative flex items-center gap-3 px-4 py-3.5 border-b border-border/50 bg-gradient-to-r from-background to-muted/30",
           !className && "cursor-grab active:cursor-grabbing",
-          conversationId && messages.length > 0 && "py-0.5",
+          (!className || (conversationId && messages.length > 0)) && "py-0.5",
           sidebarCollapsed && conversationId && messages.length > 0 && "!pl-[58px]",
-          sidebarCollapsed && isMac && !isFullscreen && "!pl-[128px]"
+          sidebarCollapsed && isMac && !isFullscreen && "!pl-[128px]",
+          !className && isMac && !isFullscreen && "!pl-[78px]"
         )}
         onMouseDown={async (e) => {
           if (className) return; // embedded — don't drag
