@@ -1446,12 +1446,22 @@ async fn main() -> anyhow::Result<()> {
             Box::pin(async move {
                 let mut missing = Vec::new();
                 for conn_id in required {
-                    let configured = screenpipe_connect::connections::is_connection_configured(
-                        ss.as_deref(),
-                        &dir,
-                        &conn_id,
-                    )
-                    .await;
+                    let configured =
+                        if screenpipe_connect::mcp_servers::parse_mcp_connection_id(&conn_id)
+                            .is_some()
+                        {
+                            screenpipe_connect::mcp_servers::is_mcp_connection_configured(
+                                &dir, &conn_id,
+                            )
+                            .await
+                        } else {
+                            screenpipe_connect::connections::is_connection_configured(
+                                ss.as_deref(),
+                                &dir,
+                                &conn_id,
+                            )
+                            .await
+                        };
                     if !configured {
                         missing.push(conn_id);
                     }

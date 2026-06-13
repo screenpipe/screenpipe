@@ -2203,6 +2203,7 @@ impl PipeManager {
                 }
             });
 
+            let mcp_server_allowlist = selected_mcp_server_ids(&config);
             let run_result = tokio::time::timeout(
                 timeout_duration,
                 executor.run_streaming(
@@ -2216,6 +2217,7 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
+                    Some(mcp_server_allowlist.as_slice()),
                     // Owner tag: a pipe's owned-browser navigations are
                     // `pipe:<name>`, which never matches an open chat's
                     // conversationId, so they stay out of whatever chat is on
@@ -2696,6 +2698,7 @@ impl PipeManager {
                 }
             });
 
+            let mcp_server_allowlist = selected_mcp_server_ids(&config);
             let run_result = tokio::time::timeout(
                 timeout_duration,
                 executor.run_streaming(
@@ -2709,6 +2712,7 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
+                    Some(mcp_server_allowlist.as_slice()),
                     // Owner tag: a pipe's owned-browser navigations are
                     // `pipe:<name>`, which never matches an open chat's
                     // conversationId, so they stay out of whatever chat is on
@@ -3767,6 +3771,7 @@ impl PipeManager {
                     let semaphore = execution_semaphore.clone();
                     let pipes_dir_for_mark = pipes_dir.clone();
                     let queued_ref = queued_or_running.clone();
+                    let mcp_server_allowlist = selected_mcp_server_ids(config);
 
                     tokio::spawn(async move {
                         // Event-triggered pipes skip the queue for low-latency response.
@@ -3889,6 +3894,7 @@ impl PipeManager {
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
+                                Some(mcp_server_allowlist.as_slice()),
                                 // Owner tag — see run_pipe_with_trigger.
                                 Some(format!("pipe:{pipe_name}").as_str()),
                             ),
@@ -4410,6 +4416,15 @@ fn render_pipe_system_prompt(
     }
 
     sys
+}
+
+fn selected_mcp_server_ids(config: &PipeConfig) -> Vec<String> {
+    config
+        .connections
+        .iter()
+        .filter_map(|connection| connection.strip_prefix("mcp:").map(str::to_string))
+        .filter(|id| !id.trim().is_empty())
+        .collect()
 }
 
 /// Build the dynamic user prompt for a pipe.

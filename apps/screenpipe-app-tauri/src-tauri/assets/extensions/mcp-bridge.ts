@@ -18,6 +18,15 @@ const AUTH_KEY =
   process.env.SCREENPIPE_LOCAL_API_KEY ||
   process.env.SCREENPIPE_API_AUTH_KEY || // deprecated alias, drop next release
   "";
+const MCP_ALLOWLIST_RAW = process.env.SCREENPIPE_MCP_SERVER_ALLOWLIST;
+const MCP_ALLOWLIST =
+  MCP_ALLOWLIST_RAW === undefined
+    ? null
+    : new Set(
+        MCP_ALLOWLIST_RAW.split(",")
+          .map((id) => id.trim())
+          .filter(Boolean)
+      );
 
 function authHeaders(): Record<string, string> {
   return AUTH_KEY
@@ -47,7 +56,9 @@ async function fetchServers(signal: AbortSignal): Promise<ServerSummary[]> {
     throw new Error(`mcp-bridge: GET /mcp-servers returned ${res.status}`);
   }
   const body = (await res.json()) as { data?: ServerSummary[] };
-  return (body.data ?? []).filter((s) => s.enabled);
+  return (body.data ?? [])
+    .filter((s) => s.enabled)
+    .filter((s) => MCP_ALLOWLIST === null || MCP_ALLOWLIST.has(s.id));
 }
 
 const listToolsParams = {
