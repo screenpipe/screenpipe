@@ -1081,7 +1081,6 @@ export const AIPresetsSelector = ({
   const [selectedPresetToEdit, setSelectedPresetToEdit] = useState<
     AIPreset | undefined
   >();
-
   const isControlled = onControlledSelect !== undefined;
   const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
@@ -1364,13 +1363,14 @@ export const AIPresetsSelector = ({
       return;
     }
 
-    // Prevent deletion of screenpipe-cloud preset for Pro subscribers
+    // Safety net: prevent deletion of the last screenpipe-cloud preset for subscribers
     if (preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
-      toast.error("Cannot delete cloud preset", {
-        description: "This preset is included with your Business subscription",
-      });
-      return;
+      const cloudPresets = settings.aiPresets.filter((p) => p.provider === "screenpipe-cloud");
+      if (cloudPresets.length <= 1) {
+        return;
+      }
     }
+
     if (preset.defaultPreset) {
       toast.error("Cannot delete default preset", {
         description: "Please set another preset as default first",
@@ -1387,6 +1387,14 @@ export const AIPresetsSelector = ({
       description: `${preset.id} has been removed`,
     });
   };
+
+  // Hide delete button on the last remaining screenpipe-cloud preset for subscribers
+  const cloudPresetCount = useMemo(
+    () => (settings?.aiPresets || []).filter((p) => p.provider === "screenpipe-cloud").length,
+    [settings?.aiPresets]
+  );
+  const isLastCloudPreset = (preset: AIPreset) =>
+    preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed && cloudPresetCount <= 1;
 
   return (
     <>
@@ -1687,7 +1695,7 @@ export const AIPresetsSelector = ({
                                 <Star className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {!preset.defaultPreset && canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && (
+                            {!preset.defaultPreset && canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && !isLastCloudPreset(preset) && (
                               <Button
                                 variant="ghost"
                                 size="icon"
