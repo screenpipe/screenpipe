@@ -2331,7 +2331,7 @@ useEffect(() => {
         >
           <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-3">
             {(() => {
-              const cloudPresetCount = visiblePresets.filter((p) => p.provider === "screenpipe-cloud").length;
+              const cloudPresetCount = (settings.aiPresets || []).filter((p) => p.provider === "screenpipe-cloud").length;
               return visiblePresets.map((preset) => {
                 const readOnly =
                   isEnterprise &&
