@@ -57,7 +57,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AIPreset, commands } from "@/lib/utils/tauri";
-import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import {
   DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
@@ -130,8 +129,6 @@ export const DEFAULT_PROMPT = `Rules:
 function ChatGptSignInButton() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { settings, updateSettings } = useSettings();
-
   useEffect(() => {
     commands.chatgptOauthStatus().then((res) => {
       if (res.status === "ok") setLoggedIn(res.data.logged_in);
@@ -156,11 +153,6 @@ function ChatGptSignInButton() {
             const res = await commands.chatgptOauthLogin();
             if (res.status === "ok" && res.data) {
               setLoggedIn(true);
-              // auto-create a ChatGPT preset on first connection
-              await ensureChatGptPreset(
-                settings.aiPresets || [],
-                (presets) => updateSettings({ aiPresets: presets })
-              );
             }
           } catch (e) {
             console.error("chatgpt oauth failed:", e);
@@ -418,6 +410,7 @@ export function AIProviderConfig({
         } catch { /* ignore */ }
         // Fallback: Codex models available via ChatGPT subscription
         setOpenAIModels([
+          { id: "gpt-5.5" }, { id: "gpt-5.5-codex" },
           { id: "gpt-5.4" }, { id: "gpt-5.3-codex" },
           { id: "gpt-5.2-codex" }, { id: "gpt-5.2" }, { id: "gpt-5.1-codex-max" },
           { id: "gpt-5.1" }, { id: "gpt-5.1-codex-mini" },
