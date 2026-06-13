@@ -33,6 +33,12 @@ import {
   Star,
 } from "lucide-react";
 import { usePipeFavorites } from "@/lib/hooks/use-pipe-favorites";
+import {
+  isMcpConnectionKey,
+  mcpConnectionKey,
+  pipeConnectionInstanceName,
+  pipeConnectionLookupKey,
+} from "@/lib/pipe-connections";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -363,28 +369,6 @@ interface PipeConnectionOption {
   instanceName: string | null;
   connected: boolean;
   kind?: "connection" | "mcp";
-}
-
-const MCP_CONNECTION_PREFIX = "mcp:";
-
-function isMcpConnectionKey(connectionId: string): boolean {
-  return connectionId.startsWith(MCP_CONNECTION_PREFIX);
-}
-
-function mcpConnectionKey(serverId: string): string {
-  return `${MCP_CONNECTION_PREFIX}${serverId}`;
-}
-
-function pipeConnectionLookupKey(connectionId: string): string {
-  if (isMcpConnectionKey(connectionId)) return connectionId;
-  return connectionId.includes(":") ? connectionId.split(":")[0] : connectionId;
-}
-
-function pipeConnectionInstanceName(connectionId: string): string | null {
-  if (isMcpConnectionKey(connectionId)) return null;
-  return connectionId.includes(":")
-    ? connectionId.split(":").slice(1).join(":")
-    : null;
 }
 
 function pipeConnectionDisplayName(

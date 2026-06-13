@@ -24,6 +24,12 @@ import {
   IntegrationInfo,
 } from "@/components/settings/connections-section";
 import { localFetch } from "@/lib/api";
+import {
+  isMcpConnectionKey,
+  mcpServerIdFromConnection,
+  pipeConnectionInstanceName,
+  pipeConnectionLookupKey,
+} from "@/lib/pipe-connections";
 
 interface PostInstallConnectionsModalProps {
   open: boolean;
@@ -48,24 +54,6 @@ interface McpServerSummary {
   id: string;
   name: string;
   enabled: boolean;
-}
-
-const MCP_CONNECTION_PREFIX = "mcp:";
-
-function isMcpConnectionKey(connectionId: string): boolean {
-  return connectionId.startsWith(MCP_CONNECTION_PREFIX);
-}
-
-function pipeConnectionBaseId(connectionId: string): string {
-  if (isMcpConnectionKey(connectionId)) return connectionId;
-  return connectionId.includes(":") ? connectionId.split(":")[0] : connectionId;
-}
-
-function pipeConnectionInstanceName(connectionId: string): string | null {
-  if (isMcpConnectionKey(connectionId)) return null;
-  return connectionId.includes(":")
-    ? connectionId.split(":").slice(1).join(":")
-    : null;
 }
 
 export function PostInstallConnectionsModal({
@@ -105,11 +93,11 @@ export function PostInstallConnectionsModal({
 
         for (const connId of connections) {
           // support instance keys like "notion:crm" — match on base id
-          const baseId = pipeConnectionBaseId(connId);
+          const baseId = pipeConnectionLookupKey(connId);
           const instanceName = pipeConnectionInstanceName(connId);
 
           if (isMcpConnectionKey(connId)) {
-            const serverId = connId.slice(MCP_CONNECTION_PREFIX.length);
+            const serverId = mcpServerIdFromConnection(connId) || connId;
             const server = mcpServers.find((s) => s.id === serverId);
             newStatuses[connId] = {
               integration: null,
