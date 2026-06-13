@@ -321,6 +321,9 @@ export type Settings = SettingsStore & {
 		audioCaptureStalled?: boolean;
 		/** In-app /notify when audio is captured but no live transcript arrives within 60s. Default true. */
 		liveTranscriptStalled?: boolean;
+		/** Toast on informational power-profile transitions (Balanced / Saver), e.g. when unplugging AC.
+		 *  Critical AudioPaused/FullPause alerts always fire regardless. Default true. */
+		powerModeChanges?: boolean;
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */
