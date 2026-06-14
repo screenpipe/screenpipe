@@ -10,10 +10,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use screenpipe_connect::connections::render_context;
-use screenpipe_connect::mcp_servers::{
-    is_mcp_connection_configured, parse_mcp_connection_id,
-    render_context_for_connections as mcp_render_context_for_connections,
-};
 use screenpipe_core::pipes::PipeManager;
 use screenpipe_secrets::SecretStore;
 use serde::Deserialize;
@@ -181,22 +177,12 @@ pub async fn run_pipe_now(
             .unwrap_or(mgr.pipes_dir())
             .to_path_buf();
         let ss = secret_store.as_ref().map(|e| e.0.as_ref());
-        let mut missing = Vec::new();
-        for conn_id in &required_connections {
-            let configured = if parse_mcp_connection_id(conn_id).is_some() {
-                is_mcp_connection_configured(&screenpipe_dir, conn_id).await
-            } else {
-                screenpipe_connect::connections::is_connection_configured(
-                    ss,
-                    &screenpipe_dir,
-                    conn_id,
-                )
-                .await
-            };
-            if !configured {
-                missing.push(conn_id.as_str());
-            }
-        }
+        let missing = screenpipe_connect::missing_pipe_connections(
+            ss,
+            &screenpipe_dir,
+            &required_connections,
+        )
+        .await;
         if !missing.is_empty() {
             return Json(json!({
                 "error": format!(
@@ -217,15 +203,7 @@ pub async fn run_pipe_now(
         .to_path_buf();
     let api_port = mgr.api_port();
     let ss = secret_store.as_ref().map(|e| e.0.as_ref());
-    let mut conn_ctx = render_context(&screenpipe_dir, api_port, ss).await;
-    // Append user-supplied MCP servers — the `mcp-bridge.ts` extension
-    // surfaces them as tools, but the model also needs a natural-language
-    // listing in its system prompt so it knows what's available.
-    let mcp_ctx =
-        mcp_render_context_for_connections(&screenpipe_dir, api_port, &required_connections).await;
-    if !mcp_ctx.is_empty() {
-        conn_ctx.push_str(&mcp_ctx);
-    }
+    let conn_ctx = render_context(&screenpipe_dir, api_port, ss).await;
     mgr.set_connections_context(conn_ctx);
 
     let result = mgr.start_pipe_background(&id).await;

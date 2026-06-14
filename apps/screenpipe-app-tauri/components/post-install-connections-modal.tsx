@@ -47,7 +47,7 @@ interface ConnectionStatus {
   displayName: string;
   instanceName: string | null;
   serverId?: string;
-  missingReason?: "deleted_mcp" | "disabled_mcp";
+  missingReason?: "deleted_mcp" | "disabled_mcp" | "unknown_mcp";
 }
 
 interface McpServerSummary {
@@ -87,6 +87,7 @@ export function PostInstallConnectionsModal({
           mcpRes && mcpRes.ok
             ? await mcpRes.json().catch(() => ({ data: [] }))
             : { data: [] };
+        const mcpStatusUnavailable = !mcpRes || !mcpRes.ok;
         const mcpServers: McpServerSummary[] = mcpData.data || [];
 
         const newStatuses: Record<string, ConnectionStatus> = {};
@@ -97,21 +98,25 @@ export function PostInstallConnectionsModal({
           const instanceName = pipeConnectionInstanceName(connId);
 
           if (isMcpConnectionKey(connId)) {
-            const serverId = mcpServerIdFromConnection(connId) || connId;
-            const server = mcpServers.find((s) => s.id === serverId);
+            const serverId = mcpServerIdFromConnection(connId) || undefined;
+            const server = serverId
+              ? mcpServers.find((s) => s.id === serverId)
+              : undefined;
             newStatuses[connId] = {
               integration: null,
               configured: !!server?.enabled,
               loading: false,
               kind: "mcp",
-              displayName: server?.name || "deleted MCP server",
+              displayName: server?.name || (mcpStatusUnavailable ? "custom MCP server" : "deleted MCP server"),
               instanceName: null,
               serverId,
               missingReason: server
                 ? server.enabled
                   ? undefined
                   : "disabled_mcp"
-                : "deleted_mcp",
+                : mcpStatusUnavailable
+                  ? "unknown_mcp"
+                  : "deleted_mcp",
             };
             continue;
           }
@@ -271,7 +276,9 @@ export function PostInstallConnectionsModal({
                   ? "deleted"
                   : status?.missingReason === "disabled_mcp"
                     ? "disabled"
-                    : "not configured";
+                    : status?.missingReason === "unknown_mcp"
+                      ? "unknown"
+                      : "not configured";
 
               return (
                 <div
@@ -350,13 +357,18 @@ export function PostInstallConnectionsModal({
                           this MCP server is disabled. enable it in custom MCP
                           settings or remove it from this pipe.
                         </p>
+                      ) : status?.missingReason === "unknown_mcp" ? (
+                        <p className="text-xs text-muted-foreground">
+                          MCP server status could not be loaded. try again or
+                          manage custom MCP servers in settings.
+                        </p>
                       ) : (
                         <p className="text-xs text-muted-foreground">
                           custom MCP servers are configured once, then selected by pipes.
                         </p>
                       )}
                       <div className="flex flex-wrap gap-2">
-                        {!status?.configured && (
+                        {!status?.configured && status?.missingReason !== "unknown_mcp" && (
                           <Button
                             size="sm"
                             variant="outline"

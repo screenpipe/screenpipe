@@ -18,6 +18,7 @@ const AUTH_KEY =
   process.env.SCREENPIPE_LOCAL_API_KEY ||
   process.env.SCREENPIPE_API_AUTH_KEY || // deprecated alias, drop next release
   "";
+const SESSION_ID = process.env.SCREENPIPE_SESSION_ID || "";
 const MCP_ALLOWLIST_RAW = process.env.SCREENPIPE_MCP_SERVER_ALLOWLIST;
 const MCP_ALLOWLIST =
   MCP_ALLOWLIST_RAW === undefined
@@ -29,9 +30,10 @@ const MCP_ALLOWLIST =
       );
 
 function authHeaders(): Record<string, string> {
-  return AUTH_KEY
-    ? { Authorization: `Bearer ${AUTH_KEY}` }
-    : {};
+  return {
+    ...(AUTH_KEY ? { Authorization: `Bearer ${AUTH_KEY}` } : {}),
+    ...(SESSION_ID ? { "x-screenpipe-session": SESSION_ID } : {}),
+  };
 }
 
 interface ServerSummary {

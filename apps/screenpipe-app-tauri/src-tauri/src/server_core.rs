@@ -457,6 +457,9 @@ impl ServerCore {
             pipe_store,
             config.port,
         );
+        let mcp_session_access =
+            screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
+        pipe_manager.set_mcp_session_access(mcp_session_access.clone());
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }
@@ -471,29 +474,8 @@ impl ServerCore {
                 let ss = secret_store_for_check.clone();
                 let dir = screenpipe_dir_for_check.clone();
                 Box::pin(async move {
-                    let mut missing = Vec::new();
-                    for conn_id in required {
-                        let configured =
-                            if screenpipe_connect::mcp_servers::parse_mcp_connection_id(&conn_id)
-                                .is_some()
-                            {
-                                screenpipe_connect::mcp_servers::is_mcp_connection_configured(
-                                    &dir, &conn_id,
-                                )
-                                .await
-                            } else {
-                                screenpipe_connect::connections::is_connection_configured(
-                                    ss.as_deref(),
-                                    &dir,
-                                    &conn_id,
-                                )
-                                .await
-                            };
-                        if !configured {
-                            missing.push(conn_id);
-                        }
-                    }
-                    missing
+                    screenpipe_connect::missing_pipe_connections(ss.as_deref(), &dir, &required)
+                        .await
                 })
             }));
         }
@@ -643,6 +625,7 @@ impl ServerCore {
 
         let server = server
             .with_pipe_manager(shared_pipe_manager.clone())
+            .with_mcp_session_access(mcp_session_access)
             .with_high_fps_controller(high_fps_controller.clone());
 
         // Install pi agent in background

@@ -34,8 +34,9 @@ import {
 } from "lucide-react";
 import { usePipeFavorites } from "@/lib/hooks/use-pipe-favorites";
 import {
+  type AvailableConnection,
+  fetchAvailablePipeConnections,
   isMcpConnectionKey,
-  mcpConnectionKey,
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
@@ -347,21 +348,6 @@ interface PipeConfig {
   [key: string]: unknown;
 }
 
-interface AvailableConnection {
-  id: string;
-  name: string;
-  icon: string;
-  connected: boolean;
-  kind?: "connection" | "mcp";
-  instances?: { instanceKey: string; instanceLabel: string }[];
-}
-
-interface McpServerSummary {
-  id: string;
-  name: string;
-  enabled: boolean;
-}
-
 interface PipeConnectionOption {
   key: string;
   label: string;
@@ -407,9 +393,7 @@ function buildPipeConnectionOptions(
             key: instance.instanceKey,
             label: instance.instanceLabel,
             connectionName: connection.name,
-            instanceName: instance.instanceKey.includes(":")
-              ? instance.instanceKey.split(":").slice(1).join(":")
-              : null,
+            instanceName: pipeConnectionInstanceName(instance.instanceKey),
             connected: connection.connected,
             kind: connection.kind,
           }));
@@ -1139,46 +1123,10 @@ export function PipesSection() {
 
   const fetchConnections = useCallback(async () => {
     try {
-      const [res, mcpRes] = await Promise.all([
-        fetch(`${apiBase}/connections`),
-        fetch(`${apiBase}/mcp-servers`).catch(() => null),
-      ]);
-      const data = await res.json();
-      const mcpData =
-        mcpRes && mcpRes.ok
-          ? await mcpRes.json().catch(() => ({ data: [] }))
-          : { data: [] };
-      if (data.data) {
-        const conns: AvailableConnection[] = data.data.map((c: any) => ({
-          id: c.id, name: c.name, icon: c.icon, connected: c.connected, kind: "connection",
-        }));
-        // fetch instances for connected integrations to support multi-instance selection
-        await Promise.all(conns.filter(c => c.connected).map(async (c) => {
-          try {
-            const instRes = await fetch(`${apiBase}/connections/${c.id}/instances`);
-            if (!instRes.ok) return;
-            const instData = await instRes.json();
-            const list = instData.data || instData.instances || instData || [];
-            if (Array.isArray(list) && list.length > 1) {
-              c.instances = list.map((inst: any) => ({
-                instanceKey: inst.instance ? `${c.id}:${inst.instance}` : c.id,
-                instanceLabel: inst.instance ? `${c.name} (${inst.instance})` : c.name,
-              }));
-            }
-          } catch { /* ignore */ }
-        }));
-        const mcpConnections: AvailableConnection[] = ((mcpData.data || []) as McpServerSummary[])
-          .map((server) => ({
-            id: mcpConnectionKey(server.id),
-            name: server.name,
-            icon: "custom-mcp",
-            connected: server.enabled,
-            kind: "mcp",
-          }));
-        setAvailableConnections([...conns, ...mcpConnections]);
-      }
+      const next = await fetchAvailablePipeConnections(apiBase, availableConnections);
+      setAvailableConnections(next);
     } catch { /* server may not be running */ }
-  }, [apiBase]);
+  }, [apiBase, availableConnections]);
 
   const checkForUpdates = useCallback(async () => {
     try {
@@ -3329,33 +3277,10 @@ export function PipesSection() {
               // availableConnections are keyed by base ID ("notion").
               let latestConnections = availableConnections;
               try {
-                const [res, mcpRes] = await Promise.all([
-                  fetch(`${apiBase}/connections`),
-                  fetch(`${apiBase}/mcp-servers`).catch(() => null),
-                ]);
-                const data = await res.json();
-                if (data.data) {
-                  const conns: AvailableConnection[] = data.data.map((c: any) => ({
-                    id: c.id,
-                    name: c.name,
-                    icon: c.icon,
-                    connected: c.connected,
-                    kind: "connection",
-                  }));
-                  const mcpData =
-                    mcpRes && mcpRes.ok
-                      ? await mcpRes.json().catch(() => ({ data: [] }))
-                      : { data: [] };
-                  const mcpConnections: AvailableConnection[] = ((mcpData.data || []) as McpServerSummary[])
-                    .map((server) => ({
-                      id: mcpConnectionKey(server.id),
-                      name: server.name,
-                      icon: "custom-mcp",
-                      connected: server.enabled,
-                      kind: "mcp",
-                    }));
-                  latestConnections = [...conns, ...mcpConnections];
-                }
+                latestConnections = await fetchAvailablePipeConnections(
+                  apiBase,
+                  availableConnections
+                );
               } catch {
                 // Fall back to current in-memory state if fetch fails.
               }

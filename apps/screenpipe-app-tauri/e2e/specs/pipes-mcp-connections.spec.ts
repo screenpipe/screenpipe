@@ -10,9 +10,11 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
 import { authHeaders, getLocalApiConfig, waitForLocalApi } from '../helpers/api-utils.js';
 
 const PIPE_NAME = 'e2e-mcp-picker-pipe';
+const SCHEDULED_SKIP_PIPE_NAME = 'e2e-mcp-missing-connection-skip';
 const MCP_ID = 'e2e-mcp-pipe';
 const MCP_NAME = 'E2E MCP Pipe Server';
 const MCP_CONNECTION = `mcp:${MCP_ID}`;
+const MISSING_MCP_CONNECTION = 'mcp:e2e-missing-mcp';
 const MCP_OPTION_TEST_ID = `pipe-connection-option-${MCP_CONNECTION.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
 type ApiResult = {
@@ -23,6 +25,7 @@ type ApiResult = {
 };
 
 let pipeTempDir = '';
+let scheduledSkipPipeTempDir = '';
 let apiBase = 'http://127.0.0.1:3030';
 let apiHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
 
@@ -49,6 +52,7 @@ async function apiRequest(method: string, path: string, body?: unknown): Promise
 
 async function cleanupFixtures(): Promise<void> {
   await apiRequest('DELETE', `/pipes/${encodeURIComponent(PIPE_NAME)}`).catch(() => undefined);
+  await apiRequest('DELETE', `/pipes/${encodeURIComponent(SCHEDULED_SKIP_PIPE_NAME)}`).catch(() => undefined);
   await apiRequest('DELETE', `/mcp-servers/${encodeURIComponent(MCP_ID)}`).catch(() => undefined);
 }
 
@@ -73,6 +77,29 @@ Use only the MCP servers selected in this pipe's connections list.
   }
 }
 
+async function installScheduledMissingConnectionPipe(): Promise<void> {
+  scheduledSkipPipeTempDir = mkdtempSync(join(tmpdir(), 'screenpipe-e2e-mcp-missing-'));
+  const pipeFile = join(scheduledSkipPipeTempDir, `${SCHEDULED_SKIP_PIPE_NAME}.md`);
+  writeFileSync(
+    pipeFile,
+    `---
+schedule: "every 1s"
+enabled: true
+connections:
+  - ${MISSING_MCP_CONNECTION}
+---
+
+This pipe should never reach the agent in this test because its MCP connection is missing.
+`,
+    'utf8'
+  );
+
+  const result = await apiRequest('POST', '/pipes/install', { source: pipeFile });
+  if (!result.json?.success) {
+    throw new Error(`failed to install scheduled missing-connection pipe: ${result.text}`);
+  }
+}
+
 async function seedMcpServer(): Promise<void> {
   const result = await apiRequest('PUT', `/mcp-servers/${encodeURIComponent(MCP_ID)}`, {
     name: MCP_NAME,
@@ -91,6 +118,12 @@ async function getPipeConnections(): Promise<string[]> {
   const result = await apiRequest('GET', `/pipes/${encodeURIComponent(PIPE_NAME)}`);
   const connections = result.json?.data?.config?.connections;
   return Array.isArray(connections) ? connections : [];
+}
+
+async function getPipeExecutions(pipeName: string): Promise<any[]> {
+  const result = await apiRequest('GET', `/pipes/${encodeURIComponent(pipeName)}/executions?limit=10`);
+  const executions = result.json?.data;
+  return Array.isArray(executions) ? executions : [];
 }
 
 async function openMyPipes(): Promise<void> {
@@ -246,6 +279,9 @@ describe('Pipes: custom MCP connection picker', function () {
     if (pipeTempDir) {
       rmSync(pipeTempDir, { recursive: true, force: true });
     }
+    if (scheduledSkipPipeTempDir) {
+      rmSync(scheduledSkipPipeTempDir, { recursive: true, force: true });
+    }
   });
 
   it('adds an enabled custom MCP server to a pipe connection allowlist', async () => {
@@ -364,5 +400,33 @@ describe('Pipes: custom MCP connection picker', function () {
 
     const filepath = await saveScreenshot('pipes-deleted-mcp-connection-removed');
     expect(existsSync(filepath)).toBe(true);
+  });
+
+  it('records a visible failed execution when a scheduled pipe is missing an MCP connection', async () => {
+    await installScheduledMissingConnectionPipe();
+
+    await browser.waitUntil(
+      async () => {
+        const executions = await getPipeExecutions(SCHEDULED_SKIP_PIPE_NAME);
+        return executions.some((execution) => {
+          const text = `${execution.stderr || ''}\n${execution.error_message || ''}`;
+          return (
+            execution.status === 'failed' &&
+            execution.error_type === 'missing_connections' &&
+            text.includes(MISSING_MCP_CONNECTION)
+          );
+        });
+      },
+      {
+        timeout: t(45_000),
+        interval: 1_000,
+        timeoutMsg: 'scheduled missing-connection pipe did not create a visible failed execution',
+      }
+    );
+
+    const executions = await getPipeExecutions(SCHEDULED_SKIP_PIPE_NAME);
+    const failed = executions.find((execution) => execution.error_type === 'missing_connections');
+    expect(failed?.status).toBe('failed');
+    expect(`${failed?.stderr || ''}\n${failed?.error_message || ''}`).toContain(MISSING_MCP_CONNECTION);
   });
 });
