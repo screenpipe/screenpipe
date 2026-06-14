@@ -149,11 +149,7 @@ fn read_file_with_share_delete(path: &Path) -> std::io::Result<String> {
         FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let handle = unsafe {
         CreateFileW(
             windows::core::PCWSTR(wide.as_ptr()),
