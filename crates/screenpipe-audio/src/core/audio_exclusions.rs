@@ -17,8 +17,9 @@
 //! }
 //! ```
 //!
-//! Path defaults to `$HOME/.screenpipe/audio-exclusions.json` (or the platform
-//! home directory) and can be overridden with `SCREENPIPE_AUDIO_EXCLUSIONS_PATH`.
+//! Path defaults to `$SCREENPIPE_DATA_DIR/audio-exclusions.json` when that env
+//! var is set (e.g. E2E), else `$HOME/.screenpipe/audio-exclusions.json`.
+//! Override the file path with `SCREENPIPE_AUDIO_EXCLUSIONS_PATH`.
 //! The audio engine reads this file on capture rebuild and polls for changes.
 
 use std::fs;
@@ -88,21 +89,24 @@ impl Snapshot {
     }
 }
 
-/// Returns the active config-file path: env override wins, else home-relative default.
+/// Returns the active config-file path: explicit env override wins, else the
+/// active Screenpipe data directory (`SCREENPIPE_DATA_DIR` or `~/.screenpipe`).
 pub fn config_path() -> PathBuf {
-    let override_val = std::env::var(ENV_OVERRIDE).ok();
-    let home = dirs::home_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    resolved_path(override_val.as_deref(), &home)
+    resolved_path(
+        std::env::var(ENV_OVERRIDE).ok().as_deref(),
+        std::env::var("SCREENPIPE_DATA_DIR").ok().as_deref(),
+    )
 }
 
 /// Pure resolution helper, factored out for testability without mutating env.
-pub fn resolved_path(env_override: Option<&str>, home: &str) -> PathBuf {
-    if let Some(p) = env_override {
+pub fn resolved_path(env_override: Option<&str>, data_dir: Option<&str>) -> PathBuf {
+    if let Some(p) = env_override.filter(|p| !p.is_empty()) {
         return PathBuf::from(p);
     }
-    PathBuf::from(home).join(DEFAULT_RELATIVE_PATH)
+    if let Some(dir) = data_dir.filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir).join("audio-exclusions.json");
+    }
+    screenpipe_core::paths::default_screenpipe_data_dir().join("audio-exclusions.json")
 }
 
 fn parse_entry(value: &serde_json::Value) -> Option<ExclusionEntry> {
@@ -623,16 +627,22 @@ mod tests {
 
     #[test]
     fn config_path_env_override_wins() {
-        let p = resolved_path(Some("/tmp/custom.json"), "/Users/anyone");
+        let p = resolved_path(Some("/tmp/custom.json"), Some("/e2e"));
         assert_eq!(p, PathBuf::from("/tmp/custom.json"));
     }
 
     #[test]
-    fn config_path_default_uses_home() {
-        let p = resolved_path(None, "/Users/anyone");
+    fn config_path_data_dir_override() {
+        let p = resolved_path(None, Some("/e2e/isolated"));
+        assert_eq!(p, PathBuf::from("/e2e/isolated/audio-exclusions.json"));
+    }
+
+    #[test]
+    fn config_path_default_uses_screenpipe_data_dir() {
+        let p = resolved_path(None, None);
         assert_eq!(
             p,
-            PathBuf::from("/Users/anyone/.screenpipe/audio-exclusions.json")
+            screenpipe_core::paths::default_screenpipe_data_dir().join("audio-exclusions.json")
         );
     }
 
