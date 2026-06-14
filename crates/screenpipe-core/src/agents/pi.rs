@@ -1789,9 +1789,13 @@ impl AgentExecutor for PiExecutor {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| anyhow!("pi installation failed: could not run bun at {}: {}", bun, e))?;
+        let output = cmd.output().map_err(|e| {
+            anyhow!(
+                "pi installation failed: could not run bun at {}: {}",
+                bun,
+                e
+            )
+        })?;
         if output.status.success() {
             info!("pi installed successfully into {}", install_dir.display());
             Ok(())
@@ -3389,10 +3393,7 @@ mod tests {
             stderr: Vec::new(),
         };
         let msg = format_subprocess_failure("bun add", &silent_failure);
-        assert_eq!(
-            msg,
-            "bun add exit code 1; stderr: (empty); stdout: (empty)"
-        );
+        assert_eq!(msg, "bun add exit code 1; stderr: (empty); stdout: (empty)");
 
         // Killed by a signal (raw status = signal number, no exit code).
         let sigill = Output {
