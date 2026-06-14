@@ -279,24 +279,22 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
     }
     let tmp = path.with_extension("json.tmp");
     // #region agent log
-    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=write_tmp tmp={:?} dest={:?}", tmp, path);
+    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=write_tmp tmp={:?} dest={:?}", tmp, path);
     // #endregion
     write_entries(&tmp, entries)?;
     // #region agent log
-    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=post_write_tmp success");
+    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=post_write_tmp OK");
     // #endregion
 
-    // Open with WRITE access for sync_all (FlushFileBuffers on Windows requires
-    // GENERIC_WRITE; File::open only grants GENERIC_READ which returns
-    // ERROR_ACCESS_DENIED / os error 5).
-    // #region agent log
-    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=pre_sync_all");
-    // #endregion
-    let file = std::fs::OpenOptions::new().write(true).open(&tmp)?;
-    file.sync_all()?;
+    // Open with WRITE access for sync_all: FlushFileBuffers (Windows) requires
+    // GENERIC_WRITE; File::open only grants GENERIC_READ → ERROR_ACCESS_DENIED (os error 5).
+    let file = std::fs::OpenOptions::new().write(true).open(&tmp)
+        .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=open_tmp_fail err={}", e); e })?;
+    file.sync_all()
+        .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all_fail err={}", e); e })?;
     drop(file);
     // #region agent log
-    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=post_sync_all success");
+    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all OK");
     // #endregion
 
     // On Windows a rename may collide with concurrent readers even when they
@@ -305,35 +303,34 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
     #[cfg(target_os = "windows")]
     {
         for attempt in 0..10 {
-            // #region agent log
-            tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=rename attempt={}", attempt);
-            // #endregion
             match fs::rename(&tmp, path) {
                 Ok(()) => {
                     // #region agent log
-                    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=rename_ok attempt={}", attempt);
+                    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=rename_ok attempt={}", attempt);
                     // #endregion
                     return Ok(());
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 9 => {
                     warn!(
-                        "audio-exclusions atomic rename blocked, retrying ({}/10): {e}",
+                        "[dbg-6735a1] audio-exclusions atomic rename blocked, retrying ({}/10): {e}",
                         attempt + 1
                     );
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(e) => {
-                    // #region agent log
-                    tracing::error!(target: "audio_exclusions", "write_entries_atomic: step=rename_fail attempt={} err={}", attempt, e);
-                    // #endregion
+                    tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=rename_fail attempt={} err={}", attempt, e);
                     return Err(e);
                 }
             }
         }
-        warn!("audio-exclusions atomic rename failed after retries; falling back to direct write");
+        warn!("[dbg-6735a1] audio-exclusions atomic rename failed after retries; falling back to direct write");
         let body = fs::read_to_string(&tmp)?;
-        fs::write(path, body)?;
+        fs::write(path, body)
+            .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=fallback_write_fail err={}", e); e })?;
         fs::remove_file(&tmp).ok();
+        // #region agent log
+        tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=fallback_write OK");
+        // #endregion
         return Ok(());
     }
 

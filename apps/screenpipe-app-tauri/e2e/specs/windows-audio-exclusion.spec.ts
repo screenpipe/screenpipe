@@ -32,7 +32,16 @@ async function openRecordingSettings(): Promise<void> {
 }
 
 async function clearExclusionsFile(): Promise<void> {
-  await invokeOrThrow("write_audio_exclusions", { apps: [] });
+  // #region agent log
+  console.log("[dbg-6735a1] clearExclusionsFile: calling write_audio_exclusions");
+  try {
+    await invokeOrThrow("write_audio_exclusions", { apps: [] });
+    console.log("[dbg-6735a1] clearExclusionsFile: write_audio_exclusions OK");
+  } catch (e) {
+    console.error("[dbg-6735a1] clearExclusionsFile: write_audio_exclusions FAILED:", String(e));
+    throw e;
+  }
+  // #endregion
 }
 
 describe("Windows audio exclusion", () => {
