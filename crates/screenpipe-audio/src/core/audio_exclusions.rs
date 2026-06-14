@@ -278,10 +278,26 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
         fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("json.tmp");
+    // #region agent log
+    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=write_tmp tmp={:?} dest={:?}", tmp, path);
+    // #endregion
     write_entries(&tmp, entries)?;
-    let file = std::fs::File::open(&tmp)?;
+    // #region agent log
+    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=post_write_tmp success");
+    // #endregion
+
+    // Open with WRITE access for sync_all (FlushFileBuffers on Windows requires
+    // GENERIC_WRITE; File::open only grants GENERIC_READ which returns
+    // ERROR_ACCESS_DENIED / os error 5).
+    // #region agent log
+    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=pre_sync_all");
+    // #endregion
+    let file = std::fs::OpenOptions::new().write(true).open(&tmp)?;
     file.sync_all()?;
     drop(file);
+    // #region agent log
+    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=post_sync_all success");
+    // #endregion
 
     // On Windows a rename may collide with concurrent readers even when they
     // share delete; retry briefly, then fall back to a direct overwrite so the
@@ -289,8 +305,16 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
     #[cfg(target_os = "windows")]
     {
         for attempt in 0..10 {
+            // #region agent log
+            tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=rename attempt={}", attempt);
+            // #endregion
             match fs::rename(&tmp, path) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    // #region agent log
+                    tracing::debug!(target: "audio_exclusions", "write_entries_atomic: step=rename_ok attempt={}", attempt);
+                    // #endregion
+                    return Ok(());
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 9 => {
                     warn!(
                         "audio-exclusions atomic rename blocked, retrying ({}/10): {e}",
@@ -298,7 +322,12 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
                     );
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    // #region agent log
+                    tracing::error!(target: "audio_exclusions", "write_entries_atomic: step=rename_fail attempt={} err={}", attempt, e);
+                    // #endregion
+                    return Err(e);
+                }
             }
         }
         warn!("audio-exclusions atomic rename failed after retries; falling back to direct write");
