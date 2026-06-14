@@ -106,6 +106,8 @@ windows = { workspace = true, features = [
     "Win32_System_Com",
     "Win32_Devices_FunctionDiscovery",
     "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
 ] }
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]

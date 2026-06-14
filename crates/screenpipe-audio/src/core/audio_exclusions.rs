@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 pub const ENV_OVERRIDE: &str = "SCREENPIPE_AUDIO_EXCLUSIONS_PATH";
 pub const DEFAULT_RELATIVE_PATH: &str = ".screenpipe/audio-exclusions.json";
@@ -133,6 +134,46 @@ fn parse_entry(value: &serde_json::Value) -> Option<ExclusionEntry> {
     })
 }
 
+/// Read a file with `FILE_SHARE_DELETE` on Windows.
+///
+/// The audio engine polls this file every 500ms; std's default `read_to_string`
+/// omits `FILE_SHARE_DELETE` on Windows, so an atomic rename from the UI would
+/// fail with "Access is denied" whenever a reader has the file open.
+#[cfg(target_os = "windows")]
+fn read_file_with_share_delete(path: &Path) -> std::io::Result<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let handle = unsafe {
+        CreateFileW(
+            windows::core::PCWSTR(wide.as_ptr()),
+            FILE_GENERIC_READ.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            HANDLE(std::ptr::null_mut()),
+        )
+    }
+    .map_err(|e: windows::core::Error| std::io::Error::from_raw_os_error(e.code().0))?
+    .0;
+
+    let mut file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
+    let mut body = String::new();
+    std::io::Read::read_to_string(&mut file, &mut body)?;
+    Ok(body)
+}
+
 /// Returns parsed entries and the file's mtime.
 ///
 /// Missing file, unreadable file, malformed JSON, or wrong-shape JSON all
@@ -143,6 +184,12 @@ pub fn read_entries(path: &Path) -> (Vec<ExclusionEntry>, Option<SystemTime>) {
         return (Vec::new(), None);
     };
     let mtime = meta.modified().ok();
+    #[cfg(target_os = "windows")]
+    let body = match read_file_with_share_delete(path) {
+        Ok(b) => b,
+        Err(_) => return (Vec::new(), mtime),
+    };
+    #[cfg(not(target_os = "windows"))]
     let body = match fs::read_to_string(path) {
         Ok(b) => b,
         Err(_) => return (Vec::new(), mtime),
@@ -158,6 +205,13 @@ pub fn read_entries(path: &Path) -> (Vec<ExclusionEntry>, Option<SystemTime>) {
 
 /// Like [`read_entries`] but surfaces malformed JSON for the Settings UI.
 pub fn read_entries_strict(path: &Path) -> Result<Vec<ExclusionEntry>, String> {
+    #[cfg(target_os = "windows")]
+    let body = match read_file_with_share_delete(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("read {}: {e}", path.display())),
+    };
+    #[cfg(not(target_os = "windows"))]
     let body = match fs::read_to_string(path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -228,8 +282,37 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
     let file = std::fs::File::open(&tmp)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(&tmp, path)?;
-    Ok(())
+
+    // On Windows a rename may collide with concurrent readers even when they
+    // share delete; retry briefly, then fall back to a direct overwrite so the
+    // UI never gets permanently wedged.
+    #[cfg(target_os = "windows")]
+    {
+        for attempt in 0..10 {
+            match fs::rename(&tmp, path) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 9 => {
+                    warn!(
+                        "audio-exclusions atomic rename blocked, retrying ({}/10): {e}",
+                        attempt + 1
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        warn!("audio-exclusions atomic rename failed after retries; falling back to direct write");
+        let body = fs::read_to_string(&tmp)?;
+        fs::write(path, body)?;
+        fs::remove_file(&tmp).ok();
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(&tmp, path)?;
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
