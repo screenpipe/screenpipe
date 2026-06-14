@@ -286,15 +286,20 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
     tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=post_write_tmp OK");
     // #endregion
 
-    // Open with WRITE access for sync_all: FlushFileBuffers (Windows) requires
-    // GENERIC_WRITE; File::open only grants GENERIC_READ → ERROR_ACCESS_DENIED (os error 5).
-    let file = std::fs::OpenOptions::new().write(true).open(&tmp)
-        .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=open_tmp_fail err={}", e); e })?;
-    file.sync_all()
-        .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all_fail err={}", e); e })?;
-    drop(file);
+    // On Windows, NTFS MoveFileEx(MOVEFILE_REPLACE_EXISTING) provides atomic
+    // replacement without a preceding fsync. Calling sync_all (FlushFileBuffers)
+    // on Windows requires GENERIC_WRITE; opening read-only causes ERROR_ACCESS_DENIED
+    // (os error 5). Skip sync_all on Windows entirely — NTFS handles this correctly.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let file = std::fs::File::open(&tmp)
+            .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=open_tmp_fail err={}", e); e })?;
+        file.sync_all()
+            .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all_fail err={}", e); e })?;
+        drop(file);
+    }
     // #region agent log
-    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all OK");
+    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all OK (skipped on windows)");
     // #endregion
 
     // On Windows a rename may collide with concurrent readers even when they
