@@ -119,9 +119,14 @@ ort = { workspace = true, features = ["download-binaries", "tls-native"] }
 samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }
 
-# Windows ARM64: use our own ONNX Runtime DLL at runtime (load-dynamic); no compile-time link, no ort.pyke.io cache
+# Windows ARM64: do NOT use `load-dynamic` — its runtime LoadLibrary of
+# onnxruntime.dll hangs with ort rc.12 the same way it did on x86_64 (see #4173).
+# ort links at build time instead; CI sets ORT_STRATEGY=system + ORT_LIB_LOCATION
+# to the bundled MS onnxruntime-win-arm64 (pyke ships no arm64-windows prebuilt,
+# so the `download-binaries` strategy that comes in transitively is overridden by
+# ORT_STRATEGY=system).
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-ort = { workspace = true, default-features = false, features = ["load-dynamic"] }
+ort = { workspace = true, default-features = false, features = ["api-24", "tracing"] }
 ort-sys = { workspace = true }
 samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }

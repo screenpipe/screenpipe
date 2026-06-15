@@ -863,6 +863,12 @@ jobs:
           GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2' || '-DGGML_NATIVE=OFF' }}
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
+          # ONNX Runtime link strategy. x86_64 pulls the pyke prebuilt
+          # (download-binaries). ARM64 has no pyke prebuilt and load-dynamic hangs
+          # with ort rc.12 (see #4173), so link the MS onnxruntime-win-arm64 DLL
+          # downloaded by the "Download ONNX Runtime" step above.
+          ORT_STRATEGY: ${{ matrix.target == 'aarch64-pc-windows-msvc' && 'system' || 'download' }}
+          ORT_LIB_LOCATION: ${{ matrix.target == 'aarch64-pc-windows-msvc' && format('{0}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-arm64-1.22.0', github.workspace) || '' }}
         run: bunx tauri build --verbose ${{ matrix.tauri-args }}
 
       - name: Sign NSIS installer with SSL.com EV (Windows)
