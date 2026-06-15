@@ -107,10 +107,15 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell_PropertiesSystem",
 ] }
 
+# Bundle ONNX Runtime at build time on Windows x86_64 (same as Linux/macOS-arm64).
+# `load-dynamic` (runtime LoadLibrary of onnxruntime.dll) was tried but HANGS on
+# some hosts: ort rc.12's first call deadlocks inside `libloading::Library::new`
+# at 0% CPU, before `CreateEnv`, so the audio engine never finishes the
+# `building_audio` boot phase and the app looks dead (recording, VAD, diarization
+# all broken). Load-time linking of the *same* onnxruntime.dll initializes in
+# ~30ms. See PR #4171.
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-# Avoid build-time network downloads (ort-sys download-binaries) for Windows x86_64.
-# When ONNX Runtime is available at runtime, `ort` can load it dynamically.
-ort = { workspace = true, default-features = false, features = ["load-dynamic"] }
+ort = { workspace = true, features = ["download-binaries", "tls-native"] }
 samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }
 
