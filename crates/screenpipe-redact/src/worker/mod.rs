@@ -51,7 +51,7 @@ pub struct WorkerConfig {
     pub poll_interval: Duration,
     /// Tables to reconcile. Default: all of [`ALL_TARGET_TABLES`] (ocr,
     /// audio, accessibility, ui_events:keyboard, ui_events:clipboard,
-    /// elements, frames:full_text).
+    /// ui_events:element_name/value/description, elements, frames:full_text).
     pub tables: Vec<TargetTable>,
 }
 

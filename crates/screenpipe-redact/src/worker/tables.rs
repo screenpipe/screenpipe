@@ -12,8 +12,9 @@
 //!
 //! ## What we redact
 //!
-//! Six logical surfaces, seven [`TargetTable`] variants (UI events
-//! split into keyboard vs clipboard):
+//! Seven logical surfaces, ten [`TargetTable`] variants (UI events
+//! split into keyboard vs clipboard, plus three accessibility-element
+//! columns):
 //!
 //! 1. **`ocr_text`** — OCR'd screen text. Source column `text`.
 //! 2. **`audio_transcriptions`** — speech-to-text output. Source column
@@ -43,6 +44,17 @@
 //!    so the `frames` row carries independent full-text / accessibility
 //!    / image redaction state. The `frames_au AFTER UPDATE OF full_text`
 //!    trigger re-indexes `frames_fts` when the overwrite lands.
+//! 7. **`ui_events` accessibility element columns** — every event type
+//!    can carry focused-control metadata: `element_name` (AX label,
+//!    indexed by `ui_events_fts`), `element_value` (control contents,
+//!    e.g. form-field text captured on click — issue #4115), and
+//!    `element_description` (AX help/hint). Three variants, one per
+//!    column, with prefixed watermarks so each reconciles independently.
+//!    No `event_type` filter — a `click` on a form field is the headline
+//!    case and would be excluded by the keyboard/clipboard filters.
+//!    FTS for `element_name` is kept in sync by the row-scoped
+//!    `ui_events_au AFTER UPDATE` trigger. `window_title` is deliberately
+//!    out of scope (same metadata bucket as `app_name` / `browser_url`).
 //!
 //! ## "Needs redaction" predicate
 //!
@@ -82,6 +94,22 @@ pub enum TargetTable {
     /// column added by `20260613000001_add_frames_full_text_redacted_at.sql`
     /// (issue #4097).
     FullText,
+    /// Accessibility element name on `ui_events` (e.g. the AX label of
+    /// the focused control). Source column `element_name`; watermark
+    /// `element_name_redacted_at` (issue #4115). Indexed by
+    /// `ui_events_fts`, kept in sync by the row-scoped
+    /// `ui_events_au AFTER UPDATE` trigger.
+    UiEventsElementName,
+    /// Accessibility element value on `ui_events` (the contents of the
+    /// focused control — e.g. typed form-field text captured on click).
+    /// Highest-risk surface of the three. Source column `element_value`;
+    /// watermark `element_value_redacted_at` (issue #4115).
+    UiEventsElementValue,
+    /// Accessibility element description on `ui_events` (the AX help /
+    /// hint text for the focused control). Source column
+    /// `element_description`; watermark `element_description_redacted_at`
+    /// (issue #4115).
+    UiEventsElementDescription,
 }
 
 pub const ALL_TARGET_TABLES: &[TargetTable] = &[
@@ -92,6 +120,9 @@ pub const ALL_TARGET_TABLES: &[TargetTable] = &[
     TargetTable::UiEventsClipboard,
     TargetTable::Elements,
     TargetTable::FullText,
+    TargetTable::UiEventsElementName,
+    TargetTable::UiEventsElementValue,
+    TargetTable::UiEventsElementDescription,
 ];
 
 /// One row to redact.
@@ -110,7 +141,11 @@ impl TargetTable {
             // accessibility_text lives on frames after the 2026-03-12
             // consolidation; see the variant docs above.
             Self::Accessibility => "frames",
-            Self::UiEventsKeyboard | Self::UiEventsClipboard => "ui_events",
+            Self::UiEventsKeyboard
+            | Self::UiEventsClipboard
+            | Self::UiEventsElementName
+            | Self::UiEventsElementValue
+            | Self::UiEventsElementDescription => "ui_events",
             Self::Elements => "elements",
             // full_text also lives on frames (a different column +
             // watermark than the accessibility variant).
@@ -125,6 +160,9 @@ impl TargetTable {
             Self::AudioTranscription => "transcription",
             Self::Accessibility => "accessibility_text",
             Self::UiEventsKeyboard | Self::UiEventsClipboard => "text_content",
+            Self::UiEventsElementName => "element_name",
+            Self::UiEventsElementValue => "element_value",
+            Self::UiEventsElementDescription => "element_description",
             Self::Elements => "text",
             Self::FullText => "full_text",
         }
@@ -133,12 +171,16 @@ impl TargetTable {
     /// Column holding the unix-seconds timestamp of the last redaction,
     /// used both as the "needs redaction" gate (`IS NULL`) and as
     /// audit metadata. Prefixed for the two `frames`-backed variants
-    /// (accessibility text, full text) so they don't collide with each
-    /// other or with the image-redaction worker's `image_redacted_at`.
+    /// (accessibility text, full text) and the three `ui_events`
+    /// element-column variants so they don't collide with each other
+    /// or with the image-redaction worker's `image_redacted_at`.
     pub fn redacted_at_col(&self) -> &'static str {
         match self {
             Self::Accessibility => "accessibility_redacted_at",
             Self::FullText => "full_text_redacted_at",
+            Self::UiEventsElementName => "element_name_redacted_at",
+            Self::UiEventsElementValue => "element_value_redacted_at",
+            Self::UiEventsElementDescription => "element_description_redacted_at",
             _ => "redacted_at",
         }
     }
@@ -155,6 +197,12 @@ impl TargetTable {
 
     /// Extra `WHERE`-clause filter beyond the redacted-NULL predicate.
     /// Used to slice the `ui_events` table by `event_type`.
+    ///
+    /// The three element-column variants deliberately fall through to
+    /// `None`: every `event_type` can carry element data (the motivating
+    /// example is a `click` on a form field, which the keyboard /
+    /// clipboard filters would exclude), and the `IS NOT NULL AND != ''`
+    /// predicate already skips empty rows.
     pub fn extra_filter(&self) -> Option<&'static str> {
         match self {
             Self::UiEventsKeyboard => Some("event_type IN ('text','key')"),
@@ -173,6 +221,9 @@ impl TargetTable {
             Self::UiEventsClipboard => "ui_events:clipboard",
             Self::Elements => "elements",
             Self::FullText => "frames:full_text",
+            Self::UiEventsElementName => "ui_events:element_name",
+            Self::UiEventsElementValue => "ui_events:element_value",
+            Self::UiEventsElementDescription => "ui_events:element_description",
         }
     }
 }
@@ -290,7 +341,13 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_type TEXT NOT NULL,
                 text_content TEXT,
-                redacted_at INTEGER
+                element_name TEXT,
+                element_value TEXT,
+                element_description TEXT,
+                redacted_at INTEGER,
+                element_name_redacted_at INTEGER,
+                element_value_redacted_at INTEGER,
+                element_description_redacted_at INTEGER
             );
             -- Per-element OCR/accessibility rows; `text` is NULL on
             -- container nodes. Watermark column added by the
@@ -553,5 +610,177 @@ mod tests {
             .await
             .unwrap();
         assert!(pending_full.is_empty(), "full_text must be marked done");
+    }
+
+    /// Headline case from #4115: a `click` persists form-field contents
+    /// in `element_value`, which the keyboard/clipboard variants never
+    /// touch.
+    #[tokio::test]
+    async fn ui_events_element_value_fetches_click_events() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO ui_events (event_type, element_value) \
+             VALUES ('click', 'alice@example.com')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let kb = fetch_unredacted(&pool, TargetTable::UiEventsKeyboard, 10)
+            .await
+            .unwrap();
+        assert!(kb.is_empty(), "keyboard variant must not pick up clicks");
+
+        let rows = fetch_unredacted(&pool, TargetTable::UiEventsElementValue, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "alice@example.com");
+    }
+
+    #[tokio::test]
+    async fn ui_events_element_variants_skip_null_and_empty() {
+        let pool = setup().await;
+        sqlx::query("INSERT INTO ui_events (event_type, element_name) VALUES ('click', NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO ui_events (event_type, element_value) VALUES ('click', '')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO ui_events (event_type, element_description) VALUES ('click', '')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for variant in [
+            TargetTable::UiEventsElementName,
+            TargetTable::UiEventsElementValue,
+            TargetTable::UiEventsElementDescription,
+        ] {
+            let rows = fetch_unredacted(&pool, variant, 10).await.unwrap();
+            assert!(rows.is_empty(), "{:?} must skip NULL/empty", variant);
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_events_element_writes_overwrite_source_and_stamp_prefixed_timestamp(
+    ) {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO ui_events (event_type, element_name, element_value, element_description) \
+             VALUES ('click', 'Email field', 'bob@example.com', 'Enter your email')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        write_redacted(&pool, TargetTable::UiEventsElementName, 1, "[LABEL]")
+            .await
+            .unwrap();
+        write_redacted(&pool, TargetTable::UiEventsElementValue, 1, "[EMAIL]")
+            .await
+            .unwrap();
+        write_redacted(
+            &pool,
+            TargetTable::UiEventsElementDescription,
+            1,
+            "[HINT]",
+        )
+        .await
+        .unwrap();
+
+        let row = sqlx::query(
+            "SELECT element_name, element_name_redacted_at, \
+                    element_value, element_value_redacted_at, \
+                    element_description, element_description_redacted_at \
+             FROM ui_events WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>(0), "[LABEL]");
+        assert!(row.get::<Option<i64>, _>(1).is_some());
+        assert_eq!(row.get::<String, _>(2), "[EMAIL]");
+        assert!(row.get::<Option<i64>, _>(3).is_some());
+        assert_eq!(row.get::<String, _>(4), "[HINT]");
+        assert!(row.get::<Option<i64>, _>(5).is_some());
+    }
+
+    /// All four `ui_events` text surfaces (text_content + three element
+    /// columns) must reconcile independently on the same row.
+    #[tokio::test]
+    async fn ui_events_element_variants_have_independent_watermarks() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO ui_events (event_type, text_content, element_name, element_value, element_description) \
+             VALUES ('text', 'typed secret', 'Name field', 'alice@example.com', 'Your name')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        write_redacted(&pool, TargetTable::UiEventsElementValue, 1, "[EMAIL]")
+            .await
+            .unwrap();
+
+        let pending_name = fetch_unredacted(&pool, TargetTable::UiEventsElementName, 10)
+            .await
+            .unwrap();
+        assert_eq!(pending_name.len(), 1, "element_name must stay pending");
+
+        let pending_desc =
+            fetch_unredacted(&pool, TargetTable::UiEventsElementDescription, 10)
+                .await
+                .unwrap();
+        assert_eq!(
+            pending_desc.len(),
+            1,
+            "element_description must stay pending"
+        );
+
+        let pending_text = fetch_unredacted(&pool, TargetTable::UiEventsKeyboard, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            pending_text.len(),
+            1,
+            "text_content watermark must stay independent"
+        );
+        assert_eq!(pending_text[0].text, "typed secret");
+
+        let pending_value = fetch_unredacted(&pool, TargetTable::UiEventsElementValue, 10)
+            .await
+            .unwrap();
+        assert!(pending_value.is_empty(), "element_value must be marked done");
+    }
+
+    #[tokio::test]
+    async fn ui_events_element_variants_read_distinct_columns() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO ui_events (event_type, element_name) \
+             VALUES ('click', 'Submit button')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let name = fetch_unredacted(&pool, TargetTable::UiEventsElementName, 10)
+            .await
+            .unwrap();
+        assert_eq!(name.len(), 1);
+        assert_eq!(name[0].text, "Submit button");
+
+        for variant in [
+            TargetTable::UiEventsElementValue,
+            TargetTable::UiEventsElementDescription,
+        ] {
+            let rows = fetch_unredacted(&pool, variant, 10).await.unwrap();
+            assert!(rows.is_empty(), "{:?} must not fetch name-only row", variant);
+        }
     }
 }
