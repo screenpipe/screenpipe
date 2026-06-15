@@ -35,7 +35,6 @@ import { exists, writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
-import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
@@ -560,7 +559,6 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
         <path d="M20.32 4.37a19.8 19.8 0 00-4.89-1.52.07.07 0 00-.08.04c-.21.38-.44.87-.6 1.25a18.27 18.27 0 00-5.49 0 12.64 12.64 0 00-.62-1.25.08.08 0 00-.08-.04 19.74 19.74 0 00-4.89 1.52.07.07 0 00-.03.03C1.11 8.39.34 12.27.74 16.1a.08.08 0 00.03.06 19.9 19.9 0 005.99 3.03.08.08 0 00.08-.03c.46-.63.87-1.3 1.22-2a.08.08 0 00-.04-.11 13.1 13.1 0 01-1.87-.9.08.08 0 01-.01-.13c.13-.09.25-.19.37-.29a.08.08 0 01.08-.01c3.93 1.79 8.18 1.79 12.07 0a.08.08 0 01.08.01c.12.1.25.2.37.29a.08.08 0 01 0 .13c-.6.35-1.22.65-1.87.9a.08.08 0 00-.04.1c.36.7.77 1.37 1.22 2a.08.08 0 00.08.03 19.83 19.83 0 006-3.03.08.08 0 00.04-.05c.46-4.54-.78-8.38-3.36-11.77a.06.06 0 00-.03-.03zM8.02 13.72c-1.02 0-1.86-.93-1.86-2.08s.82-2.08 1.86-2.08c1.05 0 1.88.94 1.86 2.08 0 1.15-.82 2.08-1.86 2.08zm6.88 0c-1.02 0-1.86-.93-1.86-2.08s.82-2.08 1.86-2.08c1.05 0 1.88.94 1.86 2.08 0 1.15-.81 2.08-1.86 2.08z"/>
       </svg>
     ),
-    "apple-intelligence": <img src="/images/apple-intelligence.png" alt="Apple Intelligence" className="w-5 h-5 rounded" />,
     "input-monitoring": <Keyboard className="h-5 w-5 text-muted-foreground" />,
     "apple-calendar": (
       <svg
@@ -3452,7 +3450,6 @@ export function ConnectionsSection({
         { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: browserUrlConnected, detected: browserUrlDetected },
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
       ] : []),
-      ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
       ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted }] : []),
       ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: appleCalendarConnected }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
@@ -3590,7 +3587,6 @@ export function ConnectionsSection({
       case "user-browser": return <UserBrowserCard />;
       case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
-      case "apple-intelligence": return <AppleIntelligenceCard />;
       case "input-monitoring": return <InputMonitoringPanel onStatusChange={setInputMonitoringGranted} />;
       case "apple-calendar": return <AppleCalendarCard onStatusChange={setAppleCalendarConnected} />;
       case "google-calendar": return <GoogleCalendarCard

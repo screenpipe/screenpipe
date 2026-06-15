@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 48
-- Declared test blocks: 172
-- Weighted coverage points: 134.0
+- Mapped specs: 50
+- Declared test blocks: 175
+- Weighted coverage points: 137.3
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 41 | 161 | 130.6 | 15 | 50 | 92% |
-| macos | 45 | 138 | 106.6 | 15 | 51 | 89% |
-| linux | 35 | 126 | 103.0 | 13 | 47 | 86% |
+| windows | 43 | 164 | 133.9 | 15 | 51 | 92% |
+| macos | 47 | 141 | 109.9 | 15 | 51 | 89% |
+| linux | 37 | 129 | 106.3 | 13 | 48 | 86% |
 
 ## Runtime Results
 
@@ -36,15 +36,15 @@ pass/fail/skip counts.
 | audio-device | 2 specs / 26 tests / 19.4 pts | 1 specs / 1 tests / 0.3 pts | - |
 | billing | 1 specs / 1 tests / 1.0 pts | 1 specs / 1 tests / 1.0 pts | 1 specs / 1 tests / 1.0 pts |
 | capture-ocr | 2 specs / 13 tests / 5.2 pts | 2 specs / 3 tests / 1.2 pts | 1 specs / 2 tests / 0.8 pts |
-| chat-ai | 7 specs / 7 tests / 3.9 pts | 9 specs / 10 tests / 4.8 pts | 7 specs / 7 tests / 3.9 pts |
-| local-api | 11 specs / 86 tests / 71.7 pts | 10 specs / 61 tests / 52.7 pts | 9 specs / 60 tests / 52.3 pts |
+| chat-ai | 8 specs / 8 tests / 4.9 pts | 10 specs / 11 tests / 5.8 pts | 8 specs / 8 tests / 4.9 pts |
+| local-api | 12 specs / 88 tests / 74.0 pts | 11 specs / 63 tests / 55.0 pts | 10 specs / 62 tests / 54.6 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts |
 | os-integration | 3 specs / 16 tests / 15.1 pts | 3 specs / 3 tests / 0.9 pts | - |
 | performance | 2 specs / 43 tests / 43.0 pts | 4 specs / 33 tests / 29.5 pts | 1 specs / 28 tests / 28.0 pts |
-| pipes | 1 specs / 8 tests / 8.0 pts | 1 specs / 8 tests / 8.0 pts | 1 specs / 8 tests / 8.0 pts |
-| real-ui-e2e | 22 specs / 84 tests / 68.2 pts | 23 specs / 71 tests / 57.7 pts | 19 specs / 65 tests / 55.8 pts |
-| settings | 8 specs / 25 tests / 23.2 pts | 8 specs / 18 tests / 15.5 pts | 7 specs / 17 tests / 15.2 pts |
+| pipes | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts |
+| real-ui-e2e | 24 specs / 88 tests / 72.2 pts | 25 specs / 75 tests / 61.7 pts | 21 specs / 69 tests / 59.8 pts |
+| settings | 9 specs / 26 tests / 24.2 pts | 9 specs / 19 tests / 16.5 pts | 8 specs / 18 tests / 16.2 pts |
 | storage-privacy | 6 specs / 20 tests / 19.1 pts | 5 specs / 12 tests / 11.1 pts | 4 specs / 12 tests / 11.1 pts |
 | tauri-command | 8 specs / 17 tests / 10.3 pts | 9 specs / 19 tests / 10.8 pts | 8 specs / 17 tests / 10.3 pts |
 | window-lifecycle | 16 specs / 60 tests / 51.2 pts | 16 specs / 41 tests / 29.6 pts | 12 specs / 36 tests / 28.1 pts |
@@ -57,7 +57,7 @@ pass/fail/skip counts.
 | Home to floating Search | real-ui-e2e | covered (strong; windows-user-journey, tray-search) | covered (partial; tray-search) | covered (partial; tray-search) |
 | Timeline navigation and frames | real-ui-e2e | covered (strong; windows-user-journey, windows-core-recording) | covered (strong; home-window, timeline) | covered (strong; home-window, timeline) |
 | Real capture, OCR, and indexing | capture-ocr | weak (conditional; windows-core-recording, timeline) | weak (conditional; timeline, hd-recording-pipeline) | weak (conditional; timeline) |
-| Local API auth enforcement | local-api | covered (strong; api-search-stress, windows-system-integration) | covered (strong; api-search-stress, outputs-api) | covered (strong; api-search-stress, outputs-api) |
+| Local API auth enforcement | local-api | covered (strong; api-search-stress, windows-system-integration) | covered (strong; api-search-stress, artifacts-api) | covered (strong; api-search-stress, artifacts-api) |
 | Local API search stability | local-api | covered (strong; api-search-stress, windows-core-recording) | covered (strong; api-search-stress) | covered (strong; api-search-stress) |
 | Recording settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, meeting-apps-picker) | covered (strong; settings-sections, meeting-apps-picker) |
 | Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | covered (strong; settings-sections, privacy-api-auth) |
@@ -65,8 +65,8 @@ pass/fail/skip counts.
 | Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; audio-fallback) | gap |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
 | Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) |
-| Pipes discover, install, and play | pipes | covered (strong; pipes) | covered (strong; pipes) | covered (strong; pipes) |
-| Chat window, composer, and streaming state | chat-ai | covered (strong; chat-window, chat-composer-isolation) | covered (strong; chat-window, chat-streaming-performance) | covered (strong; chat-window, chat-composer-isolation) |
+| Pipes discover, install, and play | pipes | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) |
+| Chat window, composer, and streaming state | chat-ai | covered (strong; chat-settings-background-stream, chat-window) | covered (strong; chat-settings-background-stream, chat-window) | covered (strong; chat-settings-background-stream, chat-window) |
 | Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
 | Storage retention safety UX | storage-privacy | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections) | covered (strong; settings-sections) |
 | Updater install and rollback safety | os-integration | gap | gap | gap |
@@ -94,12 +94,14 @@ pass/fail/skip counts.
 | api-search-stress.spec.ts | windows, macos, linux | local-api, performance | local-api-auth, local-api-search, health, audio-device-health, local-api-load | high | strong | api | 28 | Broad readonly API, auth, search, and load coverage. |
 | api.spec.ts | windows, macos, linux | local-api | health, audio-device-health, connections, local-api-auth | high | partial | api | 4 | Smoke coverage for local HTTP API shape and auth behavior. |
 | app-lifecycle.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, webview-stability, route-churn, browser-storage | high | strong | mixed | 14 | Home webview, routing, reload, focus, resize, and storage stability. |
+| artifacts-api.spec.ts | windows, macos, linux | local-api | local-api-auth, artifacts | medium | strong | api | 7 | CRUD coverage for artifact registration, validation, unified listing, upsert, and delete. |
 | audio-fallback.spec.ts | macos | audio-device, settings, notifications | audio-device-health, settings-recording, notifications | medium | conditional | real-user-flow | 1 | Opt-in macOS cloud audio fallback seed. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 9 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-newchat-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Synthetic chat event regression for duplicate sidebar rows. |
 | chat-parallel-jobs-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Parallel auto-send prefill dedupe regression. |
 | chat-prefill-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-prefill | medium | partial | synthetic | 1 | Cross-window prefill duplicate regression. |
+| chat-settings-background-stream.spec.ts | windows, macos, linux | chat-ai, settings, real-ui-e2e | chat, chat-streaming, settings | high | strong | real-user-flow | 1 | Opening the standalone Settings route mid-stream must not abort the chat: a long synthetic stream keeps running while the user round-trips to Settings, remains live in Recents, and restores the full response (early + final tokens) after the row is clicked. |
 | chat-sidebar-stub-dedup.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Listener-order regression for metadata-only sidebar stubs gaining dedup keys. |
 | chat-streaming-performance.spec.ts | macos | chat-ai, performance | chat, chat-streaming | medium | conditional | performance | 2 | macOS-only chat streaming responsiveness. |
 | chat-switch-context-loss.spec.ts | windows, macos, linux | chat-ai | chat, chat-context | medium | partial | synthetic | 1 | Switching conversations during streaming must not corrupt state. |
@@ -117,9 +119,9 @@ pass/fail/skip counts.
 | meeting-note-bottom-click.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 3 | Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line. |
 | notification-viewer-link.spec.ts | windows, macos, linux | notifications, local-api, window-lifecycle | notifications, viewer-deeplink | high | partial | mixed | 3 | Notification local file links rewrite into in-app viewer links. |
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 3 | Opt-in no-onboarding seed verifies onboarding redirect. |
-| outputs-api.spec.ts | windows, macos, linux | local-api | local-api-auth, outputs | medium | strong | api | 8 | CRUD coverage for output registration, validation, listing, fetch, upsert, and delete. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
 | permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for missing TCC permissions. |
+| pipes-mcp-connections.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes, connections | high | strong | real-user-flow | 3 | Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies the mcp:<id> allowlist persists. |
 | pipes.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes | high | strong | real-user-flow | 8 | Pipes discover, install failure, connection modal, install, list, and play. |
 | privacy-api-auth-enforcement.spec.ts | windows, macos, linux | settings, local-api, storage-privacy | settings-privacy-api-auth, local-api-auth, restart-flow | high | conditional | mixed | 1 | Opt-in restart smoke toggles API auth and verifies backend behavior. |
 | privacy-api-auth.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-api-auth, local-api-auth | high | strong | real-user-flow | 1 | Privacy settings reveal/copy local API key flow. |

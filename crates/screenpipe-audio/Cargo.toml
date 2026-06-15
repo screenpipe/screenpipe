@@ -125,7 +125,17 @@ libsamplerate-sys = { workspace = true }
 cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a" }
 once_cell = { workspace = true }
 objc = { workspace = true }
+
+# Apple Silicon: bundle ONNX Runtime via the pyke prebuilt (arm64 xcframework).
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 ort = { workspace = true, features = ["download-binaries", "tls-native"] }
+
+# Intel mac: ort rc.12 ships no x86_64 prebuilt (pyke + upstream ONNX Runtime
+# are arm64-only since ~1.20). load-dynamic links against headers only and
+# loads the dylib at runtime if present. The ONNX ASR paths (parakeet/qwen3)
+# are not enabled on Intel, so no dylib is required for a working build.
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+ort = { workspace = true, default-features = false, features = ["load-dynamic", "api-24"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

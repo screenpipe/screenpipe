@@ -711,10 +711,7 @@ pub async fn apply_manifest_to_disk(
                         if let Err(e) = store.set_json(&secret_key, token).await {
                             errors.push(format!("failed to save oauth token {}: {}", key, e));
                         }
-                    } else if let Err(e) = std::fs::write(
-                        connection_oauth_file_path(screenpipe_dir, key),
-                        serde_json::to_string_pretty(token).unwrap_or_default(),
-                    ) {
+                    } else if let Err(e) = write_oauth_token_file(screenpipe_dir, key, token) {
                         errors.push(format!("failed to write oauth token {}: {}", key, e));
                     }
 
@@ -809,10 +806,7 @@ pub async fn apply_manifest_to_disk(
                         errors.push(format!("missing oauth token for {}", key));
                         continue;
                     };
-                    if let Err(e) = std::fs::write(
-                        connection_oauth_file_path(screenpipe_dir, key),
-                        serde_json::to_string_pretty(token).unwrap_or_default(),
-                    ) {
+                    if let Err(e) = write_oauth_token_file(screenpipe_dir, key, token) {
                         errors.push(format!("failed to write oauth token {}: {}", key, e));
                     }
                     connection_file.remove(key);
@@ -852,13 +846,39 @@ pub async fn apply_manifest_to_disk(
     errors
 }
 
+/// Atomic write of a per-connection OAuth token file (tmp + rename), matching
+/// write_connection_file. The previous inline `std::fs::write(..).
+/// unwrap_or_default()` was non-atomic (a crash mid-write truncates the token)
+/// and would silently persist an empty `""` token on a serialize failure; here
+/// the serialize error is surfaced and the old token survives a failed write.
+fn write_oauth_token_file(
+    screenpipe_dir: &Path,
+    manifest_key: &str,
+    token: &Value,
+) -> Result<(), String> {
+    let path = connection_oauth_file_path(screenpipe_dir, manifest_key);
+    let tmp = path.with_extension("tmp");
+    let json = serde_json::to_string_pretty(token).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&tmp, &json).map_err(|e| format!("write tmp {:?}: {}", tmp, e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename {:?}: {}", path, e))?;
+    Ok(())
+}
+
+/// Atomic write of connections.json (tmp file + rename), matching
+/// write_connection_tombstones. A direct write could truncate the file if it
+/// failed partway (crash, disk full), wiping every saved connection/credential;
+/// the temp-then-rename keeps the previous good file intact until the new one
+/// is fully written.
 fn write_connection_file(
     screenpipe_dir: &Path,
     connections: &HashMap<String, SavedConnection>,
 ) -> Result<(), String> {
     let path = screenpipe_dir.join("connections.json");
+    let tmp = path.with_extension("tmp");
     let json = serde_json::to_string_pretty(connections).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, &json).map_err(|e| format!("write {}: {}", path.display(), e))
+    std::fs::write(&tmp, &json).map_err(|e| format!("write tmp {:?}: {}", tmp, e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename {:?}: {}", path, e))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,5 +1183,95 @@ mod tests {
         assert!(manifest.connections.contains_key("notion"));
         assert_eq!(manifest.connections["notion"].integration_id, "notion");
         assert!(!manifest.connections["notion"].is_oauth);
+    }
+
+    #[test]
+    fn write_connection_file_preserves_existing_on_failed_write() {
+        // A failed write must NOT destroy the previously-saved connections.
+        // Force the temp write to fail by occupying the temp path with a
+        // directory; the atomic writer then errors and leaves connections.json
+        // untouched. A non-atomic direct write would clobber it instead — so
+        // this test fails against the old implementation and passes against the
+        // atomic one.
+        let dir = TempDir::new().unwrap();
+
+        let mut good = HashMap::new();
+        good.insert(
+            "gmail".to_string(),
+            SavedConnection {
+                enabled: true,
+                credentials: Map::new(),
+            },
+        );
+        write_connection_file(dir.path(), &good).expect("initial write");
+        assert!(read_connection_file(dir.path()).contains_key("gmail"));
+
+        // Block the temp path so the replacement write cannot land.
+        fs::create_dir(dir.path().join("connections.tmp")).unwrap();
+
+        let mut replacement = HashMap::new();
+        replacement.insert(
+            "outlook".to_string(),
+            SavedConnection {
+                enabled: true,
+                credentials: Map::new(),
+            },
+        );
+        let result = write_connection_file(dir.path(), &replacement);
+
+        assert!(result.is_err(), "write into a blocked temp path must error");
+        let reloaded = read_connection_file(dir.path());
+        assert!(
+            reloaded.contains_key("gmail"),
+            "existing connections must survive a failed write"
+        );
+        assert!(!reloaded.contains_key("outlook"));
+    }
+
+    #[test]
+    fn write_oauth_token_file_preserves_existing_on_failed_write() {
+        // A failed token write must not destroy the existing token. Block the
+        // temp path with a directory to force failure, then assert the previous
+        // token is intact and the call errors. Fails against the old inline
+        // direct write (which would overwrite); passes against the atomic one.
+        let dir = TempDir::new().unwrap();
+        let good = serde_json::json!({ "access_token": "good" });
+        write_oauth_token_file(dir.path(), "gmail", &good).expect("initial write");
+
+        let path = connection_oauth_file_path(dir.path(), "gmail");
+        assert!(path.exists());
+
+        fs::create_dir(path.with_extension("tmp")).unwrap();
+
+        let replacement = serde_json::json!({ "access_token": "new" });
+        let result = write_oauth_token_file(dir.path(), "gmail", &replacement);
+
+        assert!(result.is_err(), "write into a blocked temp path must error");
+        let reloaded: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            reloaded["access_token"], "good",
+            "existing token must survive a failed write"
+        );
+    }
+
+    #[test]
+    fn write_connection_file_roundtrips_and_leaves_no_temp() {
+        let dir = TempDir::new().unwrap();
+        let mut conns = HashMap::new();
+        conns.insert(
+            "slack".to_string(),
+            SavedConnection {
+                enabled: false,
+                credentials: Map::new(),
+            },
+        );
+        write_connection_file(dir.path(), &conns).expect("write");
+
+        let reloaded = read_connection_file(dir.path());
+        assert_eq!(reloaded.len(), 1);
+        assert!(reloaded.contains_key("slack"));
+        assert!(!reloaded["slack"].enabled);
+        // The temp file must be renamed away, not left behind.
+        assert!(!dir.path().join("connections.tmp").exists());
     }
 }

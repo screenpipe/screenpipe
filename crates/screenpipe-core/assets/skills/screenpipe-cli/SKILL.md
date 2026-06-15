@@ -163,7 +163,7 @@ bun x screenpipe@latest connection test telegram
 bun x screenpipe@latest connection list
 ```
 
-Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `apple-intelligence`, `openclaw`
+Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `openclaw`
 
 Credentials are stored locally at `~/.screenpipe/connections.json`.
 

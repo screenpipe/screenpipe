@@ -35,6 +35,8 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+const PIPE_COMPLETED_EVENT_PREFIX: &str = "pipe_completed:";
+
 // ---------------------------------------------------------------------------
 // Config & log types
 // ---------------------------------------------------------------------------
@@ -2217,7 +2219,7 @@ impl PipeManager {
             });
 
             let mcp_server_allowlist = selected_mcp_server_ids(&config);
-            let session_owner = format!("pipe:{pipe_name}");
+            let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
             if let Some(ref registry) = mcp_session_access {
                 if mcp_server_allowlist.is_empty() {
                     registry.clear_session(&session_owner).await;
@@ -2241,10 +2243,10 @@ impl PipeManager {
                     history_enabled,
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
                     Some(session_owner.as_str()),
                 ),
             )
@@ -2725,7 +2727,7 @@ impl PipeManager {
             });
 
             let mcp_server_allowlist = selected_mcp_server_ids(&config);
-            let session_owner = format!("pipe:{name}");
+            let session_owner = format!("pipe:{name}:{}", exec_id.unwrap_or(0));
             if let Some(ref registry) = self.mcp_session_access {
                 if mcp_server_allowlist.is_empty() {
                     registry.clear_session(&session_owner).await;
@@ -2749,10 +2751,10 @@ impl PipeManager {
                     history_enabled,
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
                     Some(session_owner.as_str()),
                 ),
             )
@@ -3527,7 +3529,7 @@ impl PipeManager {
                     }
                     // pipe_completed:* — filter from all-events subscription
                     while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
-                        if e.name.starts_with("pipe_completed:") {
+                        if is_pipe_completed_event(&e.name) {
                             pending_events.push((e.name, e.data));
                         }
                     }
@@ -3546,16 +3548,14 @@ impl PipeManager {
                                 }
 
                                 // Don't let a pipe trigger itself
-                                if *event_name == format!("pipe_completed:{}", name) {
+                                if is_pipe_completed_for_pipe(event_name, name) {
                                     continue;
                                 }
 
                                 // Circular chain detection: if pipe X was triggered by
                                 // pipe_completed:Y within the cooldown, don't let
                                 // pipe_completed:X trigger Y back.
-                                if let Some(source_pipe) =
-                                    event_name.strip_prefix("pipe_completed:")
-                                {
+                                if let Some(source_pipe) = pipe_completed_source(event_name) {
                                     let reverse_key = format!("{}→{}", name, source_pipe);
                                     if recent_chain.contains_key(&reverse_key) {
                                         debug!(
@@ -3984,7 +3984,7 @@ impl PipeManager {
                             }
                         });
 
-                        let session_owner = format!("pipe:{pipe_name}");
+                        let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
                         if let Some(ref registry) = mcp_session_access_ref {
                             if mcp_server_allowlist.is_empty() {
                                 registry.clear_session(&session_owner).await;
@@ -4011,7 +4011,8 @@ impl PipeManager {
                                 history_enabled,
                                 Some(&pipe_system_prompt),
                                 mcp_allowlist_arg(&mcp_server_allowlist),
-                                // Owner tag — see run_pipe_with_trigger.
+                                // Owner tag — must match pipeSessionId() on the
+                                // frontend. See run_pipe_with_trigger.
                                 Some(session_owner.as_str()),
                             ),
                         )
@@ -4652,6 +4653,18 @@ fn validate_one_off_freshness(schedule: &str) -> Result<()> {
     Ok(())
 }
 
+fn pipe_completed_source(event_name: &str) -> Option<&str> {
+    event_name.strip_prefix(PIPE_COMPLETED_EVENT_PREFIX)
+}
+
+fn is_pipe_completed_event(event_name: &str) -> bool {
+    pipe_completed_source(event_name).is_some()
+}
+
+fn is_pipe_completed_for_pipe(event_name: &str, pipe_name: &str) -> bool {
+    matches!(pipe_completed_source(event_name), Some(source_pipe) if source_pipe == pipe_name)
+}
+
 /// Parsed schedule — fixed interval, cron, or a single fire-once timestamp.
 pub enum ParsedSchedule {
     Interval(std::time::Duration),
@@ -5157,6 +5170,24 @@ mod tests {
         // cap larger than input keeps everything
         let files = vec![f("a.md", 100)];
         assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn pipe_completed_helpers_match_exact_pipe_event() {
+        assert!(is_pipe_completed_event("pipe_completed:daily-summary"));
+        assert_eq!(
+            pipe_completed_source("pipe_completed:daily-summary"),
+            Some("daily-summary")
+        );
+        assert!(is_pipe_completed_for_pipe(
+            "pipe_completed:daily-summary",
+            "daily-summary"
+        ));
+        assert!(!is_pipe_completed_for_pipe(
+            "pipe_completed:daily-summary",
+            "daily"
+        ));
+        assert!(!is_pipe_completed_event("workflow_event"));
     }
 
     #[test]

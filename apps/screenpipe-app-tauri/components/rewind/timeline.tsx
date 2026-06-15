@@ -35,7 +35,6 @@ import { usePipes, type TemplatePipe } from "@/lib/hooks/use-pipes";
 
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { DailySummaryCard } from "@/components/rewind/daily-summary";
 import { useTimelineFilters } from "@/components/rewind/hooks/use-timeline-filters";
 import { useScrollZoom } from "@/components/rewind/hooks/use-scroll-zoom";
 import { useDateNavigation } from "@/components/rewind/hooks/use-date-navigation";
@@ -1225,11 +1224,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						mutedDevices={mutedDevices}
 						onToggleDeviceMute={toggleDeviceMute}
 					/>
-				</div>
-
-				{/* Daily Summary — top right, below controls */}
-				<div className={`absolute ${embedded ? "top-12" : "top-[calc(env(safe-area-inset-top)+56px)]"} right-4 z-40`}>
-					<DailySummaryCard currentDate={currentDate} />
 				</div>
 
 				{/* Browser URL bar — at top of frame, above nav */}

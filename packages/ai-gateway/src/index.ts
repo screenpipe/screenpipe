@@ -16,11 +16,11 @@ import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleV
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
 import { handleTinfoilAttestation, handleTinfoilProxy } from './handlers/tinfoil-proxy';
-import { logCost, getModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, isZeroCostModel, resolveServedModel } from './services/cost-tracker';
+import { logCost, getModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, resolveServedModel } from './services/cost-tracker';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
-import { getModelWeight } from './services/usage-tracker';
 import { pruneModelHealth } from './services/model-health';
 import { resolveLatencyClass } from './utils/latency';
+import { enforceDailyCostCap } from './services/cost-cap';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
 export { RateLimiter };
@@ -124,33 +124,12 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 				})));
 			}
 
-			// Per-user daily cost cap — only for expensive models (weight >= 3).
-			// Cheap models (weight 0-1) like qwen3.5-flash, haiku, deepseek-chat
-			// should not trigger cost caps — they're affordable and pipes need them.
-			// Subscribed users get 5x higher cap.
-			//
-			// Credits extend the cap 1:1: a user with a $50 credit balance gets
-			// $50 more headroom for today before this 429 fires. Required to make
-			// the /billing one-click top-up actually unblock the user it sold to.
-			// (The credits are separately consumed per-query in the trackUsage
-			// path below, so this is just the ceiling check.)
-			const modelWeight = getModelWeight(body.model);
-			if (!isZeroCostModel(body.model) && modelWeight >= 3) {
-				const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-				const maxCost = getTierDailyCostCap(authResult.tier, env);
-				const credits = authResult.userId ? await getCreditBalance(env, authResult.userId) : 0;
-				if (dailyCost >= maxCost + credits) {
-					const resetsAt = new Date();
-					resetsAt.setUTCHours(24, 0, 0, 0);
-					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-						error: 'daily_cost_limit_exceeded',
-						message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (gemini-3-flash, qwen3.5-flash, claude-haiku-4-5) or review Settings → Pipes for chatty schedules.`,
-						resets_at: resetsAt.toISOString(),
-						tier: authResult.tier,
-						free_models: ['gemini-3-flash', 'qwen3.5-flash', 'claude-haiku-4-5'],
-					})));
-				}
-			}
+			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
+			// Applies to every priced model: weight-0 "free" models like
+			// gemini-3.5-flash still bleed real money once caching inflates the
+			// prompt, so the old weight>=3 gate let a single user hit ~$270/day.
+			const capError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, body.model);
+			if (capError) return capError;
 
 			// Track usage and check daily limit (includes IP-based abuse prevention)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
@@ -425,23 +404,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 				// If body parse fails, let the proxy handle the error downstream
 			}
 
-			// Per-user daily cost cap — only expensive models (weight >= 3)
-			const msgModelWeight = getModelWeight(parsedModel);
-			if (!isZeroCostModel(parsedModel) && msgModelWeight >= 3) {
-				const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-				const maxCost = getTierDailyCostCap(authResult.tier, env);
-				if (dailyCost >= maxCost) {
-					const resetsAt = new Date();
-					resetsAt.setUTCHours(24, 0, 0, 0);
-					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-						error: 'daily_cost_limit_exceeded',
-						message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (gemini-3-flash, qwen3.5-flash, claude-haiku-4-5) or review Settings → Pipes for chatty schedules.`,
-						resets_at: resetsAt.toISOString(),
-						tier: authResult.tier,
-						free_models: ['gemini-3-flash', 'qwen3.5-flash', 'claude-haiku-4-5'],
-					})));
-				}
-			}
+			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
+			const msgCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, parsedModel);
+			if (msgCapError) return msgCapError;
 
 			// Track usage and check daily limit (weighted by model)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
@@ -543,23 +508,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 				// body parse failure — proceed with defaults
 			}
 
-			// Per-user daily cost cap — only expensive models (weight >= 3)
-			const ocModelWeight = getModelWeight(ocModel);
-			if (!isZeroCostModel(ocModel) && ocModelWeight >= 3) {
-				const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-				const maxCost = getTierDailyCostCap(authResult.tier, env);
-				if (dailyCost >= maxCost) {
-					const resetsAt = new Date();
-					resetsAt.setUTCHours(24, 0, 0, 0);
-					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-						error: 'daily_cost_limit_exceeded',
-						message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (gemini-3-flash, qwen3.5-flash, claude-haiku-4-5) or review Settings → Pipes for chatty schedules.`,
-						resets_at: resetsAt.toISOString(),
-						tier: authResult.tier,
-						free_models: ['gemini-3-flash', 'qwen3.5-flash', 'claude-haiku-4-5'],
-					})));
-				}
-			}
+			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
+			const ocCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, ocModel);
+			if (ocCapError) return ocCapError;
 
 			// Track usage for OpenCode requests (weighted by model)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;

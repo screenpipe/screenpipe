@@ -32,7 +32,7 @@ import {
 import { toast } from "@/components/ui/use-toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
-import { planDisplayName } from "@/lib/app-entitlement";
+import { planDisplayName, isSignedInCloudSubscriber } from "@/lib/app-entitlement";
 import { Card } from "../ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -169,9 +169,17 @@ export function AccountSection() {
                 const subStatus = subData.subscription?.status;
                 const isActive = subData.hasSubscription || subStatus === "trialing" || subStatus === "active";
                 if (isActive) {
-                  updateSettings({
-                    user: { ...settings.user!, cloud_subscribed: true },
-                  });
+                  // Never persist cloud_subscribed without a session token — a
+                  // stale { cloud_subscribed: true, token: null } user desyncs
+                  // the app-wide pro gating from the login state and renders a
+                  // "Business · active" card under a "not logged in" header.
+                  // (This poll runs token-authenticated, so the guard is
+                  // belt-and-suspenders.)
+                  if (settings.user?.token) {
+                    updateSettings({
+                      user: { ...settings.user, cloud_subscribed: true },
+                    });
+                  }
                   toast({
                     title: "subscription activated",
                     description: "welcome to screenpipe business!",
@@ -265,9 +273,11 @@ export function AccountSection() {
         </div>
       </div>
 
-      {/* Subscribed view */}
-      {settings.user?.cloud_subscribed ? (
-        <Card className="p-5">
+      {/* Subscribed view — requires a session token, not just cloud_subscribed,
+          so a token-hydration failure can't render this "active" card under a
+          "not logged in" header (see isSignedInCloudSubscriber). */}
+      {isSignedInCloudSubscriber(settings.user) ? (
+        <Card className="p-5" data-testid="account-cloud-active-card">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />

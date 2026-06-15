@@ -54,6 +54,11 @@ pub fn init(telemetry_enabled: bool) {
     );
 }
 
+/// Whether telemetry-backed analytics are currently enabled.
+pub fn is_enabled() -> bool {
+    TELEMETRY_ENABLED.load(Ordering::SeqCst)
+}
+
 /// Get the current distinct_id
 pub fn get_distinct_id() -> &'static str {
     ANALYTICS.distinct_id()
@@ -61,7 +66,7 @@ pub fn get_distinct_id() -> &'static str {
 
 /// Capture an analytics event
 pub async fn capture_event(event: &str, properties: Value) {
-    if !TELEMETRY_ENABLED.load(Ordering::SeqCst) {
+    if !is_enabled() {
         return;
     }
 
@@ -95,7 +100,7 @@ pub async fn capture_event(event: &str, properties: Value) {
 
 /// Capture event without blocking (fire and forget)
 pub fn capture_event_nonblocking(event: &'static str, properties: Value) {
-    if !TELEMETRY_ENABLED.load(Ordering::SeqCst) {
+    if !is_enabled() {
         return;
     }
 
@@ -118,7 +123,7 @@ fn parse_macos_major_version(version_str: &str) -> Option<u32> {
 /// - Below 14 (Sonoma): sck-rs may have issues, recommended to upgrade
 #[cfg(target_os = "macos")]
 pub fn check_macos_version() {
-    if !TELEMETRY_ENABLED.load(Ordering::SeqCst) {
+    if !is_enabled() {
         return;
     }
 

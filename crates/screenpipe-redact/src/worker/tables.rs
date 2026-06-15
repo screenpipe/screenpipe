@@ -15,8 +15,13 @@
 //! Seven logical surfaces, ten [`TargetTable`] variants (UI events
 //! split into keyboard vs clipboard, plus three accessibility-element
 //! columns):
+//! Five logical surfaces, six [`TargetTable`] variants (UI events
+//! split into keyboard vs clipboard):
 //!
-//! 1. **`ocr_text`** — OCR'd screen text. Source column `text`.
+//! 1. **`frames.full_text`** — OCR + accessibility screen text, unified on the
+//!    frame after the `ocr_text` table was retired (2026-06). It backs
+//!    `frames_fts`, the primary search index. Source column `full_text`;
+//!    watermark `full_text_redacted_at`.
 //! 2. **`audio_transcriptions`** — speech-to-text output. Source column
 //!    `transcription`.
 //! 3. **`frames.accessibility_text`** — accessibility-tree text. The
@@ -67,8 +72,6 @@ use sqlx::{Row, SqlitePool};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetTable {
-    /// OCR'd screen text (`ocr_text.text`).
-    Ocr,
     /// Speech-to-text (`audio_transcriptions.transcription`).
     AudioTranscription,
     /// Accessibility-tree text — lives on `frames.accessibility_text`
@@ -113,7 +116,6 @@ pub enum TargetTable {
 }
 
 pub const ALL_TARGET_TABLES: &[TargetTable] = &[
-    TargetTable::Ocr,
     TargetTable::AudioTranscription,
     TargetTable::Accessibility,
     TargetTable::UiEventsKeyboard,
@@ -136,7 +138,6 @@ impl TargetTable {
     /// Physical SQLite table.
     pub fn table(&self) -> &'static str {
         match self {
-            Self::Ocr => "ocr_text",
             Self::AudioTranscription => "audio_transcriptions",
             // accessibility_text lives on frames after the 2026-03-12
             // consolidation; see the variant docs above.
@@ -156,7 +157,6 @@ impl TargetTable {
     /// Source column the redactor reads AND overwrites.
     pub fn source_col(&self) -> &'static str {
         match self {
-            Self::Ocr => "text",
             Self::AudioTranscription => "transcription",
             Self::Accessibility => "accessibility_text",
             Self::UiEventsKeyboard | Self::UiEventsClipboard => "text_content",
@@ -185,14 +185,10 @@ impl TargetTable {
         }
     }
 
-    /// Primary key. `ocr_text` is keyed by `frame_id`; everything
-    /// else (including both `frames`-backed variants) uses an
-    /// autoincrement `id`.
+    /// Primary key. Every surviving target keys on an autoincrement `id`
+    /// (the `frames`-based variants use `frames.id`).
     pub fn pk_col(&self) -> &'static str {
-        match self {
-            Self::Ocr => "frame_id",
-            _ => "id",
-        }
+        "id"
     }
 
     /// Extra `WHERE`-clause filter beyond the redacted-NULL predicate.
@@ -214,7 +210,6 @@ impl TargetTable {
     /// Stable-ish identifier for logs / status.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Ocr => "ocr_text",
             Self::AudioTranscription => "audio_transcriptions",
             Self::Accessibility => "frames:accessibility_text",
             Self::UiEventsKeyboard => "ui_events:keyboard",
@@ -321,21 +316,16 @@ mod tests {
 
         sqlx::query(
             r#"
-            CREATE TABLE ocr_text (
-                frame_id INTEGER PRIMARY KEY,
-                text TEXT NOT NULL,
-                redacted_at INTEGER
-            );
-            -- Accessibility text now lives on `frames` (the standalone
-            -- `accessibility` table was dropped on 2026-03-12). The
-            -- consolidated searchable `full_text` lives here too. Each
-            -- carries its own prefixed "is processed" timestamp.
+            -- OCR text and accessibility text both live on `frames` now (the
+            -- ocr_text table was retired 2026-06; the standalone accessibility
+            -- table was dropped 2026-03-12). Each surface has its own prefixed
+            -- redaction watermark so they reconcile independently.
             CREATE TABLE frames (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                accessibility_text TEXT,
-                accessibility_redacted_at INTEGER,
                 full_text TEXT,
-                full_text_redacted_at INTEGER
+                full_text_redacted_at INTEGER,
+                accessibility_text TEXT,
+                accessibility_redacted_at INTEGER
             );
             CREATE TABLE ui_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -368,17 +358,21 @@ mod tests {
     #[tokio::test]
     async fn fetch_returns_only_unredacted() {
         let pool = setup().await;
-        sqlx::query("INSERT INTO ocr_text (frame_id, text) VALUES (1, 'hi')")
+        sqlx::query("INSERT INTO frames (id, full_text) VALUES (1, 'hi')")
             .execute(&pool)
             .await
             .unwrap();
-        // Already-processed row: source overwritten + redacted_at stamped.
-        sqlx::query("INSERT INTO ocr_text (frame_id, text, redacted_at) VALUES (2, '[X]', 1)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        // Already-processed row: source overwritten + full_text_redacted_at stamped.
+        sqlx::query(
+            "INSERT INTO frames (id, full_text, full_text_redacted_at) VALUES (2, '[X]', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        let rows = fetch_unredacted(&pool, TargetTable::Ocr, 10).await.unwrap();
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, 1);
     }
@@ -386,27 +380,29 @@ mod tests {
     #[tokio::test]
     async fn fetch_skips_empty_text() {
         let pool = setup().await;
-        sqlx::query("INSERT INTO ocr_text (frame_id, text) VALUES (1, '')")
+        sqlx::query("INSERT INTO frames (id, full_text) VALUES (1, '')")
             .execute(&pool)
             .await
             .unwrap();
-        let rows = fetch_unredacted(&pool, TargetTable::Ocr, 10).await.unwrap();
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+            .await
+            .unwrap();
         assert!(rows.is_empty());
     }
 
     #[tokio::test]
     async fn write_redacted_overwrites_source_and_stamps_redacted_at() {
         let pool = setup().await;
-        sqlx::query("INSERT INTO ocr_text (frame_id, text) VALUES (1, 'alice@example.com')")
+        sqlx::query("INSERT INTO frames (id, full_text) VALUES (1, 'alice@example.com')")
             .execute(&pool)
             .await
             .unwrap();
 
-        write_redacted(&pool, TargetTable::Ocr, 1, "[EMAIL]")
+        write_redacted(&pool, TargetTable::FullText, 1, "[EMAIL]")
             .await
             .unwrap();
 
-        let row = sqlx::query("SELECT text, redacted_at FROM ocr_text WHERE frame_id = 1")
+        let row = sqlx::query("SELECT full_text, full_text_redacted_at FROM frames WHERE id = 1")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -420,13 +416,15 @@ mod tests {
     async fn fetch_orders_newest_first() {
         let pool = setup().await;
         for id in 1..=5 {
-            sqlx::query("INSERT INTO ocr_text (frame_id, text) VALUES (?, 'x')")
+            sqlx::query("INSERT INTO frames (id, full_text) VALUES (?, 'x')")
                 .bind(id)
                 .execute(&pool)
                 .await
                 .unwrap();
         }
-        let rows = fetch_unredacted(&pool, TargetTable::Ocr, 10).await.unwrap();
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+            .await
+            .unwrap();
         let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         assert_eq!(ids, vec![5, 4, 3, 2, 1]);
     }

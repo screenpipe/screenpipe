@@ -193,28 +193,45 @@ impl AudioPipelineMetrics {
 
     // --- Real-time audio level ---
 
-    /// Update RMS audio level from raw f32 samples. Called per audio buffer (~50-100ms).
-    pub fn update_audio_level(&self, samples: &[f32]) {
+    fn rms_level_x10000(samples: &[f32]) -> Option<u64> {
         if samples.is_empty() {
-            return;
+            return None;
         }
         let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
         let rms = (sum_sq / samples.len() as f64).sqrt();
-        // Clamp to 0-1 and store as x10000
-        let level = (rms.min(1.0) * 10000.0) as u64;
-        self.audio_level_rms_x10000.store(level, Ordering::Relaxed);
+        Some((rms.min(1.0) * 10000.0) as u64)
+    }
+
+    /// Update RMS audio level from raw f32 samples. Called per audio buffer (~50-100ms).
+    pub fn update_audio_level(&self, samples: &[f32]) {
+        if let Some(level) = Self::rms_level_x10000(samples) {
+            self.audio_level_rms_x10000.store(level, Ordering::Relaxed);
+        }
     }
 
     /// Update RMS audio level for a specific device.
     pub fn update_audio_level_for_device(&self, device_name: &str, samples: &[f32]) {
-        if samples.is_empty() {
-            return;
+        if let Some(level) = Self::rms_level_x10000(samples) {
+            self.update_audio_level_for_device_x10000(device_name, level);
         }
-        let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
-        let rms = (sum_sq / samples.len() as f64).sqrt();
-        let level = (rms.min(1.0) * 10000.0) as u64;
+    }
+
+    /// Update the global and per-device RMS levels from the same sample pass.
+    pub fn update_audio_levels(&self, device_name: &str, samples: &[f32]) {
+        let Some(level) = Self::rms_level_x10000(samples) else {
+            return;
+        };
+        self.audio_level_rms_x10000.store(level, Ordering::Relaxed);
+        self.update_audio_level_for_device_x10000(device_name, level);
+    }
+
+    fn update_audio_level_for_device_x10000(&self, device_name: &str, level: u64) {
         if let Ok(mut map) = self.per_device_rms_x10000.write() {
-            map.insert(device_name.to_string(), level);
+            if let Some(existing) = map.get_mut(device_name) {
+                *existing = level;
+            } else {
+                map.insert(device_name.to_string(), level);
+            }
         }
     }
 
@@ -363,4 +380,29 @@ pub struct AudioMetricsSnapshot {
     pub last_db_write_ts: u64,
     /// Unix timestamp (secs) of most recent transcription attempt (heartbeat)
     pub last_transcription_attempt_ts: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combined_audio_level_update_sets_global_and_device_rms() {
+        let metrics = AudioPipelineMetrics::new();
+
+        metrics.update_audio_levels("mic", &[0.3, 0.4]);
+
+        let snapshot = metrics.snapshot();
+        assert!((snapshot.audio_level_rms - 0.3535).abs() < 0.0002);
+
+        let per_device = metrics.per_device_rms_snapshot();
+        assert_eq!(per_device.len(), 1);
+        assert!((per_device["mic"] - snapshot.audio_level_rms).abs() < 0.0001);
+
+        metrics.update_audio_levels("mic", &[0.0]);
+
+        let per_device = metrics.per_device_rms_snapshot();
+        assert_eq!(per_device.len(), 1);
+        assert_eq!(per_device["mic"], 0.0);
+    }
 }

@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { resolveLatencyClass } from '../utils/latency';
+import { resolveLatencyClass, isFlexEligible } from '../utils/latency';
 import { GeminiProvider } from '../providers/gemini';
 import { getModelCost, hasPricing, inferProvider } from '../services/cost-tracker';
 import { RequestBody, Env } from '../types';
@@ -25,8 +25,11 @@ const req = (headers?: Record<string, string>) => new Request('https://api.scree
 
 describe('resolveLatencyClass', () => {
 	it('defaults to interactive when no header is sent (flex is strictly opt-in)', () => {
-		// Critical: chat must never be flexed. Non-streaming chat (JSON mode, tool
-		// steps) must NOT be inferred as background — only an explicit header flexes.
+		// The latency CLASS stays interactive without an explicit header — this is
+		// what keeps interactive 'auto' on the glm-5-first chain (not the
+		// Gemini-first background chain). Note: flexing interactive *Gemini* is a
+		// separate, handler-level decision (isFlexEligible), so "interactive class"
+		// no longer means "never flexed" — see the isFlexEligible suite below.
 		expect(resolveLatencyClass(req(), { ...BODY, stream: false }, {} as Env)).toBe('interactive');
 		expect(resolveLatencyClass(req(), { ...BODY }, {} as Env)).toBe('interactive'); // stream omitted
 		expect(resolveLatencyClass(req(), { ...BODY, stream: true }, {} as Env)).toBe('interactive');
@@ -42,6 +45,27 @@ describe('resolveLatencyClass', () => {
 	it('FLEX_TIER_ENABLED=false forces interactive (kill switch, overrides the header)', () => {
 		const env = { FLEX_TIER_ENABLED: 'false' } as unknown as Env;
 		expect(resolveLatencyClass(req({ 'x-screenpipe-latency': 'background' }), { ...BODY, stream: false }, env)).toBe('interactive');
+	});
+});
+
+describe('isFlexEligible', () => {
+	it('flexes interactive Gemini by default (the gemini-3.5-flash cost fix)', () => {
+		// Regression: interactive chat landing on gemini-3.5-flash used to pay full
+		// standard rate on cache-inflated prompts. It must now be flex-eligible.
+		expect(isFlexEligible('interactive', {} as Env)).toBe(true);
+		expect(isFlexEligible('background', {} as Env)).toBe(true);
+	});
+
+	it('GEMINI_FLEX_INTERACTIVE=false reverts only the interactive half', () => {
+		const env = { GEMINI_FLEX_INTERACTIVE: 'false' } as unknown as Env;
+		expect(isFlexEligible('interactive', env)).toBe(false);
+		expect(isFlexEligible('background', env)).toBe(true); // background still flexes
+	});
+
+	it('FLEX_TIER_ENABLED=false disables all flex, interactive and background', () => {
+		const env = { FLEX_TIER_ENABLED: 'false' } as unknown as Env;
+		expect(isFlexEligible('interactive', env)).toBe(false);
+		expect(isFlexEligible('background', env)).toBe(false);
 	});
 });
 

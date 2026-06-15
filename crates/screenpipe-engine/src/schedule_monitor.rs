@@ -7,7 +7,7 @@
 //! Similar to `drm_detector.rs`: exposes a global `AtomicBool` that capture loops
 //! check to decide whether recording should be active.
 
-use chrono::Datelike;
+use chrono::{Datelike, Timelike};
 use screenpipe_config::ScheduleRule;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast;
@@ -15,6 +15,13 @@ use tracing::info;
 
 /// Global flag — when `true`, recording should be paused (outside schedule).
 static SCHEDULE_PAUSED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy)]
+struct ScheduleWindow {
+    day_of_week: u8,
+    start_minutes: u16,
+    end_minutes: u16,
+}
 
 /// Read the current schedule pause state.
 pub fn schedule_paused() -> bool {
@@ -31,7 +38,27 @@ pub fn reset_schedule_paused() {
 }
 
 /// Check if the given time falls within any schedule rule for today.
+#[cfg(test)]
 fn is_within_schedule(rules: &[ScheduleRule], now: &chrono::DateTime<chrono::Local>) -> bool {
+    let (day_of_week, current_minutes) = schedule_position(now);
+    rules
+        .iter()
+        .any(|rule| rule_active(rule, day_of_week, current_minutes))
+}
+
+fn is_within_schedule_windows(
+    windows: &[ScheduleWindow],
+    now: &chrono::DateTime<chrono::Local>,
+) -> bool {
+    let (day_of_week, current_minutes) = schedule_position(now);
+    windows.iter().any(|window| {
+        window.day_of_week == day_of_week
+            && current_minutes >= window.start_minutes
+            && current_minutes < window.end_minutes
+    })
+}
+
+fn schedule_position(now: &chrono::DateTime<chrono::Local>) -> (u8, u16) {
     use chrono::Weekday::*;
 
     let day_of_week: u8 = match now.weekday() {
@@ -43,43 +70,60 @@ fn is_within_schedule(rules: &[ScheduleRule], now: &chrono::DateTime<chrono::Loc
         Sat => 5,
         Sun => 6,
     };
-    let current_time = now.format("%H:%M").to_string();
+    let current_minutes = (now.hour() as u16) * 60 + now.minute() as u16;
+    (day_of_week, current_minutes)
+}
 
-    let day_rules: Vec<_> = rules
-        .iter()
-        .filter(|r| r.day_of_week == day_of_week)
-        .collect();
-    if day_rules.is_empty() {
-        return false; // No rules for today = don't record
+fn rule_active(rule: &ScheduleRule, day_of_week: u8, current_minutes: u16) -> bool {
+    if rule.day_of_week != day_of_week {
+        return false;
     }
-    day_rules
+    let Some(start_minutes) = parse_hh_mm(&rule.start_time) else {
+        return false;
+    };
+    let Some(end_minutes) = parse_hh_mm(&rule.end_time) else {
+        return false;
+    };
+    current_minutes >= start_minutes && current_minutes < end_minutes
+}
+
+fn parse_hh_mm(value: &str) -> Option<u16> {
+    let (hour, minute) = value.split_once(':')?;
+    let hour: u16 = hour.parse().ok()?;
+    let minute: u16 = minute.parse().ok()?;
+    if hour >= 24 || minute >= 60 {
+        return None;
+    }
+    Some(hour * 60 + minute)
+}
+
+fn parse_schedule_windows(rules: &[ScheduleRule]) -> Vec<ScheduleWindow> {
+    rules
         .iter()
-        .any(|r| current_time >= r.start_time && current_time < r.end_time)
+        .filter_map(|rule| {
+            Some(ScheduleWindow {
+                day_of_week: rule.day_of_week,
+                start_minutes: parse_hh_mm(&rule.start_time)?,
+                end_minutes: parse_hh_mm(&rule.end_time)?,
+            })
+        })
+        .collect()
 }
 
 /// Returns the `record_mode` of the currently active schedule rule, if any.
 pub fn current_record_mode(rules: &[ScheduleRule]) -> Option<String> {
-    use chrono::Weekday::*;
-
     let now = chrono::Local::now();
-    let day_of_week: u8 = match now.weekday() {
-        Mon => 0,
-        Tue => 1,
-        Wed => 2,
-        Thu => 3,
-        Fri => 4,
-        Sat => 5,
-        Sun => 6,
-    };
-    let current_time = now.format("%H:%M").to_string();
+    current_record_mode_at(rules, &now)
+}
 
+fn current_record_mode_at(
+    rules: &[ScheduleRule],
+    now: &chrono::DateTime<chrono::Local>,
+) -> Option<String> {
+    let (day_of_week, current_minutes) = schedule_position(now);
     rules
         .iter()
-        .find(|r| {
-            r.day_of_week == day_of_week
-                && current_time >= r.start_time
-                && current_time < r.end_time
-        })
+        .find(|r| rule_active(r, day_of_week, current_minutes))
         .map(|r| r.record_mode.clone())
 }
 
@@ -89,11 +133,16 @@ pub fn current_record_mode(rules: &[ScheduleRule]) -> Option<String> {
 /// configured schedule rules. Updates `SCHEDULE_PAUSED` accordingly.
 pub fn start_schedule_monitor(rules: Vec<ScheduleRule>, mut shutdown: broadcast::Receiver<()>) {
     tokio::spawn(async move {
-        info!("schedule monitor started with {} rules", rules.len());
+        let windows = parse_schedule_windows(&rules);
+        info!(
+            "schedule monitor started with {} rules ({} valid windows)",
+            rules.len(),
+            windows.len()
+        );
 
         loop {
             let now = chrono::Local::now();
-            let within = is_within_schedule(&rules, &now);
+            let within = is_within_schedule_windows(&windows, &now);
             let should_pause = !within;
 
             let was_paused = SCHEDULE_PAUSED.swap(should_pause, Ordering::SeqCst);
@@ -191,6 +240,39 @@ mod tests {
             .with_ymd_and_hms(2026, 3, 30, 15, 0, 0)
             .unwrap();
         assert!(is_within_schedule(&rules, &now2));
+    }
+
+    #[test]
+    fn current_record_mode_uses_active_rule() {
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 3, 30, 15, 0, 0)
+            .unwrap();
+        let rules = vec![
+            make_rule(0, "09:00", "12:00", "all"),
+            make_rule(0, "14:00", "18:00", "audio"),
+        ];
+
+        assert_eq!(
+            current_record_mode_at(&rules, &now),
+            Some("audio".to_string())
+        );
+    }
+
+    #[test]
+    fn parsed_schedule_windows_match_active_rules() {
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 3, 30, 15, 0, 0)
+            .unwrap();
+        let rules = vec![
+            make_rule(0, "09:00", "12:00", "all"),
+            make_rule(0, "14:00", "18:00", "audio"),
+            make_rule(0, "bad", "25:00", "invalid"),
+        ];
+
+        let windows = parse_schedule_windows(&rules);
+
+        assert_eq!(windows.len(), 2);
+        assert!(is_within_schedule_windows(&windows, &now));
     }
 
     #[test]

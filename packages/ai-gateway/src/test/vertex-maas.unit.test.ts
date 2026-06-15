@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import {
+	backfillToolCallIds,
 	isVertexMaasModel,
 	parseVertexMaasJsonResponse,
 	promoteReasoningStream,
@@ -260,6 +261,72 @@ describe('VertexMaasProvider.formatMessages', () => {
 			tool_calls: [{ id: 'call_42' }],
 		});
 		expect(result[2]).toMatchObject({ role: 'tool', tool_call_id: 'call_42' });
+	});
+
+	// SCREENPIPE-AI-PROXY-C: a tool-call turn arriving without an id used to be
+	// forwarded verbatim, so Vertex 400'd with "Expected the 'id' of a(n)
+	// 'assistant' 'tool_calls' array element to be populated" and the whole
+	// request failed. formatMessages must hand it a populated id and keep the
+	// matching tool result paired to it.
+	it('populates id-less assistant tool_calls so Vertex does not 400', () => {
+		const result = provider.formatMessages([
+			{ role: 'user', content: 'list files' },
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{ type: 'function', function: { name: 'ls', arguments: '{}' } }],
+			} as any,
+			{ role: 'tool', content: 'a.txt' } as any,
+		]);
+		expect(result).toHaveLength(3);
+		const id = result[1].tool_calls[0].id;
+		expect(id).toBeTruthy();
+		expect(result[2]).toMatchObject({ role: 'tool', tool_call_id: id });
+	});
+});
+
+describe('backfillToolCallIds', () => {
+	it('synthesizes an id for an id-less assistant tool_call and pairs its result', () => {
+		const out = backfillToolCallIds([
+			{ role: 'user', content: 'list files' },
+			{ role: 'assistant', content: '', tool_calls: [{ type: 'function', function: { name: 'ls', arguments: '{}' } }] },
+			{ role: 'tool', content: 'a.txt' },
+		] as any);
+		const id = (out[1] as any).tool_calls[0].id;
+		expect(id).toBeTruthy();
+		expect((out[2] as any).tool_call_id).toBe(id);
+	});
+
+	it('leaves well-formed messages untouched (same object references)', () => {
+		const input = [
+			{ role: 'assistant', content: '', tool_calls: [{ id: 'call_42', type: 'function', function: { name: 'ls', arguments: '{}' } }] },
+			{ role: 'tool', content: 'x', tool_call_id: 'call_42' },
+		] as any;
+		const out = backfillToolCallIds(input);
+		expect(out[0]).toBe(input[0]);
+		expect(out[1]).toBe(input[1]);
+	});
+
+	it('pairs multiple id-less calls to their results in order', () => {
+		const out = backfillToolCallIds([
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [
+					{ type: 'function', function: { name: 'a', arguments: '{}' } },
+					{ type: 'function', function: { name: 'b', arguments: '{}' } },
+				],
+			},
+			{ role: 'tool', content: 'result a' },
+			{ role: 'tool', content: 'result b' },
+		] as any);
+		const id0 = (out[0] as any).tool_calls[0].id;
+		const id1 = (out[0] as any).tool_calls[1].id;
+		expect(id0).toBeTruthy();
+		expect(id1).toBeTruthy();
+		expect(id0).not.toBe(id1);
+		expect((out[1] as any).tool_call_id).toBe(id0);
+		expect((out[2] as any).tool_call_id).toBe(id1);
 	});
 });
 

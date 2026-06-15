@@ -176,7 +176,6 @@ const APP_SUGGESTION_LIMIT = 10;
 const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
 const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
-const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 
@@ -1439,7 +1438,6 @@ const STATIC_APP_ICONS: Record<string, string> = {
   airtable: "/images/airtable.png",
   apple: "/images/apple.svg",
   "apple-calendar": "/images/apple.svg",
-  "apple intelligence": "/images/apple-intelligence.png",
   screenpipe: "/images/screenpipe.png",
 };
 
@@ -2813,6 +2811,10 @@ export function StandaloneChat({
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
+  // Mirrors of streaming-relevant state so the unmount-snapshot effect (which
+  // runs with `[]` deps) can read the latest values instead of stale closures.
+  const isLoadingRef = useRef(false);
+  const messagesRef = useRef<Message[]>([]);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -3062,10 +3064,6 @@ export function StandaloneChat({
     executionId: number;
   } | null>(null);
 
-  // Follow-up suggestions state (TikTok-style)
-  const [followUpSuggestions, setFollowUpSuggestions] = useState<string[]>([]);
-  const followUpAbortRef = useRef<AbortController | null>(null);
-  const followUpFiredRef = useRef(false);
   const lastUserMessageRef = useRef<string>("");
 
   // Ref to sendMessage so useEffect callbacks can call it without stale closures
@@ -4129,6 +4127,50 @@ export function StandaloneChat({
   useEffect(() => {
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Snapshot the in-flight chat session into the store on unmount.
+  //
+  // The foreground panel keeps streaming tokens in local React state / refs
+  // (piStreamingTextRef, piContentBlocksRef, messages) — NOT live-mirrored to
+  // the chat-store, for render perf. When the panel unmounts mid-stream because
+  // the user navigated into the standalone /settings route (which tears down
+  // the whole home page), those local tokens would be lost and the background
+  // pi-event router — which takes over once foreground unregisters — would
+  // resume accumulating from a stale store point, leaving a gap in the reply.
+  //
+  // Mirrors the snapshot-on-switch in `loadConversation`: persist the current
+  // messages + streaming cursor so the router continues seamlessly and the
+  // return path (`loadConversation`) rehydrates the full content. Refs (not the
+  // closure values) so the `[]`-deps cleanup reads the latest state. Skipped for
+  // pipe-watch sessions, which are owned by `pipe-watch-writer` (snapshotting
+  // the panel's mirrored copy back would be a lossy round-trip).
+  useEffect(() => {
+    return () => {
+      const sid = piSessionIdRef.current;
+      if (!sid) return;
+      if (!isStreamingRef.current && !isLoadingRef.current) return;
+      const store = useChatStore.getState();
+      const existing = store.sessions[sid];
+      if (!existing || existing.kind === "pipe-watch") return;
+      store.actions.snapshotSession(sid, {
+        messages: messagesRef.current as any,
+        streamingText: piStreamingTextRef.current,
+        streamingMessageId: piMessageIdRef.current,
+        contentBlocks: [...piContentBlocksRef.current],
+        isStreaming: isStreamingRef.current,
+        isLoading: isLoadingRef.current,
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
@@ -5662,20 +5704,6 @@ export function StandaloneChat({
               setTimeout(() => {
                 posthog.capture("chat_response_received", analyticsPayload);
               }, POST_STREAM_SIDE_EFFECT_DELAY_MS);
-
-              const followUpText = streamedText || content || "";
-              if (followUpText.length > 500 && !followUpFiredRef.current) {
-                const followUpTurnId = msgId;
-                const followUpSessionId = piSessionIdRef.current;
-                const userPromptForFollowUps = lastUserMessageRef.current;
-                followUpFiredRef.current = true;
-                setTimeout(() => {
-                  if (!mountedRef.current) return;
-                  if (piSessionIdRef.current !== followUpSessionId) return;
-                  if (piMessageIdRef.current && piMessageIdRef.current !== followUpTurnId) return;
-                  generateFollowUps(userPromptForFollowUps, followUpText);
-                }, FOLLOW_UP_GENERATION_DELAY_MS);
-              }
             }
           }
           if (!isPipeWatch) {
@@ -5685,7 +5713,6 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piActiveStopRequestedRef.current = false;
             piThinkingStartRef.current = null;
-            followUpFiredRef.current = false;
             forceQueueModeRef.current = false;
             piRateLimitRetries.current = 0;
             setIsLoading(false);
@@ -6072,10 +6099,19 @@ export function StandaloneChat({
       unlistenLog?.();
       unlistenReauth?.();
       unlistenQueue?.();
-      // Abort any in-flight Pi request when navigating away from chat.
-      // Without this, Pi keeps streaming in the background and rejects
-      // new messages with "already processing" when the user returns.
-      commands.piAbort(piSessionIdRef.current).catch(() => {});
+      // Deliberately do NOT abort the Pi session here. Unmount happens when
+      // the user navigates away from chat (e.g. into the standalone /settings
+      // route, which unmounts the whole home page). Aborting would kill an
+      // in-flight response — the exact regression users hit ("opening Settings
+      // stops the current chat"). Instead we let the session keep streaming:
+      //   - the app-lifetime pi-event router (registerDefault) takes over once
+      //     this panel releases its foreground registration and accumulates
+      //     tokens into the chat-store while we're away;
+      //   - on return, `loadConversation` rehydrates that background-streamed
+      //     state and re-registers foreground, resuming exactly where we left.
+      // The old "already processing" hazard this guarded against is now handled
+      // by the Rust command queue (pi_command_queue.rs), which serializes/queues
+      // prompts instead of rejecting them.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -6259,67 +6295,6 @@ export function StandaloneChat({
       if (watchPollTimer) clearTimeout(watchPollTimer);
     };
   }, []);
-
-  // Generate follow-up suggestions using Apple Intelligence
-  async function generateFollowUps(userMsg: string, partialResponse: string) {
-    try {
-      // Check if Apple Intelligence is available
-      const statusResp = await localFetch("/ai/status");
-      if (!statusResp.ok) return;
-      const statusData = await statusResp.json();
-      if (!statusData.available) return;
-
-      const controller = new AbortController();
-      followUpAbortRef.current = controller;
-
-      const resp = await localFetch("/ai/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          messages: [
-            {
-              role: "system",
-              content:
-                "Suggest 1-2 short follow-up questions the user might want to ask next. Respond with ONLY a JSON array of strings, nothing else.",
-            },
-            {
-              role: "user",
-              content: `User asked: ${userMsg.slice(0, 200)}\n\nAssistant responded: ${partialResponse.slice(0, 500)}`,
-            },
-          ],
-        }),
-      });
-
-      if (!resp.ok || controller.signal.aborted) return;
-
-      const data = await resp.json();
-      const content =
-        data?.choices?.[0]?.message?.content || "";
-
-      // Parse JSON array
-      let questions: string[] = [];
-      try {
-        questions = JSON.parse(content);
-      } catch {
-        // Try extracting array from wrapped text
-        const match = content.match(/\[[\s\S]*\]/);
-        if (match) {
-          try {
-            questions = JSON.parse(match[0]);
-          } catch {
-            return;
-          }
-        }
-      }
-
-      if (!controller.signal.aborted && Array.isArray(questions) && questions.length > 0) {
-        setFollowUpSuggestions(questions.filter((q: unknown) => typeof q === "string").slice(0, 2));
-      }
-    } catch {
-      // Silently fail — no UI impact
-    }
-  }
 
   // Send message using Pi agent
   /**
@@ -6655,14 +6630,7 @@ export function StandaloneChat({
     piMessageIdRef.current = assistantMessageId;
     piContentBlocksRef.current = [];
 
-    // Clear follow-ups for new message
-    setFollowUpSuggestions([]);
-    followUpFiredRef.current = false;
     piRateLimitRetries.current = 0;
-    if (followUpAbortRef.current) {
-      followUpAbortRef.current.abort();
-      followUpAbortRef.current = null;
-    }
     lastUserMessageRef.current = userMessage;
 
     let nextRowsAfterUserAppend: Message[] | null = null;
@@ -7555,13 +7523,7 @@ export function StandaloneChat({
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
     const fallbackOriginalUserMessage = lastUserMessageRef.current;
 
-    setFollowUpSuggestions([]);
-    followUpFiredRef.current = false;
     piRateLimitRetries.current = 0;
-    if (followUpAbortRef.current) {
-      followUpAbortRef.current.abort();
-      followUpAbortRef.current = null;
-    }
     lastUserMessageRef.current = trimmed;
     const turnIntentId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const steerAttachments = consumePendingAttachments();
@@ -9057,44 +9019,6 @@ export function StandaloneChat({
           </div>
         )}
 
-        {/* Follow-up suggestions (TikTok-style) */}
-        <AnimatePresence>
-          {!isLoading && settings?.showChatSuggestions !== false && followUpSuggestions.length > 0 && messages.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              transition={{ duration: 0.2 }}
-              className="px-5 sm:px-6 pt-2 flex flex-col gap-1"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium">follow up</span>
-                <button
-                  type="button"
-                  onClick={() => updateSettings({ showChatSuggestions: false })}
-                  title="Hide chat suggestions — re-enable in Settings → Display"
-                  aria-label="Hide chat suggestions"
-                  className="-my-1 -mr-1 p-1 text-muted-foreground/40 hover:text-foreground transition-colors shrink-0"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {followUpSuggestions.map((q, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => sendMessage(q)}
-                    className="px-2.5 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 rounded-full border border-primary/20 hover:border-primary/40 text-primary hover:text-primary transition-colors cursor-pointer"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {/* Persistent auto-suggestions above input. Inline chips when the
             input is wide enough; collapses to a single trigger button that
             opens a popover when narrow (e.g. BrowserSidebar squeezed the
@@ -9127,17 +9051,15 @@ export function StandaloneChat({
               >
                 <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               </button>
-              {followUpSuggestions.length === 0 && (
-                <button
-                  type="button"
-                  onClick={() => updateSettings({ showChatSuggestions: false })}
-                  className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
-                  title="Hide chat suggestions — re-enable in Settings → Display"
-                  aria-label="Hide chat suggestions"
-                >
-                  <X className="w-3 h-3" strokeWidth={1.5} />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => updateSettings({ showChatSuggestions: false })}
+                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
+                title="Hide chat suggestions — re-enable in Settings → Display"
+                aria-label="Hide chat suggestions"
+              >
+                <X className="w-3 h-3" strokeWidth={1.5} />
+              </button>
             </div>
           ) : (
             <div className="px-5 sm:px-6 pt-2 flex items-center gap-1.5">
@@ -9187,17 +9109,15 @@ export function StandaloneChat({
               >
                 <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               </button>
-              {followUpSuggestions.length === 0 && (
-                <button
-                  type="button"
-                  onClick={() => updateSettings({ showChatSuggestions: false })}
-                  className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
-                  title="Hide chat suggestions — re-enable in Settings → Display"
-                  aria-label="Hide chat suggestions"
-                >
-                  <X className="w-3 h-3" strokeWidth={1.5} />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => updateSettings({ showChatSuggestions: false })}
+                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
+                title="Hide chat suggestions — re-enable in Settings → Display"
+                aria-label="Hide chat suggestions"
+              >
+                <X className="w-3 h-3" strokeWidth={1.5} />
+              </button>
             </div>
           )
         )}

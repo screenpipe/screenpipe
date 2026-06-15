@@ -926,6 +926,14 @@ impl PiExecutor {
         std::fs::write(&models_tmp, serde_json::to_string_pretty(&models_config)?)?;
         std::fs::rename(&models_tmp, &models_path)?;
 
+        // models.json embeds the raw cloud JWT as the screenpipe provider's
+        // apiKey while signed in (#3943) — same hardening as auth.json below.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&models_path, std::fs::Permissions::from_mode(0o600));
+        }
+
         // -- auth.json: merge/remove screenpipe token, preserve other providers --
         // Only manage screenpipe auth when screenpipe provider is actually being used.
         if should_add_screenpipe {
@@ -1344,7 +1352,8 @@ impl PiExecutor {
             cmd.env("SCREENPIPE_SESSION_ID", owner);
             // Expose the bare pipe name for extensions (e.g. register-artifact)
             // that need it without the "pipe:" routing prefix.
-            if let Some(name) = owner.strip_prefix("pipe:") {
+            if let Some(rest) = owner.strip_prefix("pipe:") {
+                let name = rest.rsplit_once(':').map_or(rest, |(n, _)| n);
                 cmd.env("SCREENPIPE_PIPE_NAME", name);
             }
         }

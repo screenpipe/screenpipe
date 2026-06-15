@@ -514,17 +514,16 @@ async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
 }
 },
 /**
- * Read the user's screenpipe cloud session JWT from `~/.screenpipe/
- * auth.json`. Returns None when the file is missing, malformed, or the
- * token field is empty.
+ * Read the user's screenpipe cloud session JWT.
  *
- * The settings store (`store.bin → user.token`) is the canonical
- * runtime cache for this token but is only populated after a fresh
- * in-app sign-in. `auth.json` is the durable on-disk copy written by
- * the pi-agent configuration flow — it survives store resets and dev-
- * mode launches where the in-memory user object hasn't been hydrated
- * yet. Used by the enterprise-policy hook to send the Bearer header
- * even when the in-app user object is still null.
+ * #3943: the authoritative copy lives in the encrypted secret store and is
+ * mirrored into an in-process cache at startup and on every
+ * `set_cloud_token`; that cache is served first. The legacy plaintext
+ * `~/.screenpipe/auth.json` (the CLI credential file) remains as a fallback
+ * for installs that have not migrated yet; sign-out removes it. Returns
+ * None when signed out. Used by the settings hydration and the
+ * enterprise-policy hook to send the Bearer header even when the in-app
+ * user object is still null.
  */
 async getCloudToken() : Promise<string | null> {
     return await TAURI_INVOKE("get_cloud_token");
