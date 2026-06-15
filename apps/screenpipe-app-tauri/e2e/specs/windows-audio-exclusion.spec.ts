@@ -32,16 +32,7 @@ async function openRecordingSettings(): Promise<void> {
 }
 
 async function clearExclusionsFile(): Promise<void> {
-  // #region agent log
-  console.log("[dbg-6735a1] clearExclusionsFile: calling write_audio_exclusions");
-  try {
-    await invokeOrThrow("write_audio_exclusions", { apps: [] });
-    console.log("[dbg-6735a1] clearExclusionsFile: write_audio_exclusions OK");
-  } catch (e) {
-    console.error("[dbg-6735a1] clearExclusionsFile: write_audio_exclusions FAILED:", String(e));
-    throw e;
-  }
-  // #endregion
+  await invokeOrThrow("write_audio_exclusions", { apps: [] });
 }
 
 describe("Windows audio exclusion", () => {
@@ -79,7 +70,7 @@ describe("Windows audio exclusion", () => {
 
     const addBtn = await $('[data-testid="audio-exclusion-add-btn"]');
     await addBtn.waitForExist({ timeout: t(5_000) });
-    expect(await addBtn.getText()).toContain(".exe");
+    expect((await addBtn.getText()).toLowerCase()).toContain("add app");
 
     const filepath = await saveScreenshot("windows-audio-exclusion-card");
     expect(existsSync(filepath)).toBe(true);

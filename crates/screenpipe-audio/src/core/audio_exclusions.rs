@@ -278,13 +278,7 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
         fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("json.tmp");
-    // #region agent log
-    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=write_tmp tmp={:?} dest={:?}", tmp, path);
-    // #endregion
     write_entries(&tmp, entries)?;
-    // #region agent log
-    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=post_write_tmp OK");
-    // #endregion
 
     // On Windows, NTFS MoveFileEx(MOVEFILE_REPLACE_EXISTING) provides atomic
     // replacement without a preceding fsync. Calling sync_all (FlushFileBuffers)
@@ -292,15 +286,10 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
     // (os error 5). Skip sync_all on Windows entirely — NTFS handles this correctly.
     #[cfg(not(target_os = "windows"))]
     {
-        let file = std::fs::File::open(&tmp)
-            .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=open_tmp_fail err={}", e); e })?;
-        file.sync_all()
-            .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all_fail err={}", e); e })?;
+        let file = std::fs::File::open(&tmp)?;
+        file.sync_all()?;
         drop(file);
     }
-    // #region agent log
-    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=sync_all OK (skipped on windows)");
-    // #endregion
 
     // On Windows a rename may collide with concurrent readers even when they
     // share delete; retry briefly, then fall back to a direct overwrite so the
@@ -310,32 +299,22 @@ pub fn write_entries_atomic(path: &Path, entries: &[ExclusionEntry]) -> std::io:
         for attempt in 0..10 {
             match fs::rename(&tmp, path) {
                 Ok(()) => {
-                    // #region agent log
-                    tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=rename_ok attempt={}", attempt);
-                    // #endregion
                     return Ok(());
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 9 => {
                     warn!(
-                        "[dbg-6735a1] audio-exclusions atomic rename blocked, retrying ({}/10): {e}",
+                        "audio-exclusions atomic rename blocked, retrying ({}/10): {e}",
                         attempt + 1
                     );
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                Err(e) => {
-                    tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=rename_fail attempt={} err={}", attempt, e);
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
-        warn!("[dbg-6735a1] audio-exclusions atomic rename failed after retries; falling back to direct write");
+        warn!("audio-exclusions atomic rename failed after retries; falling back to direct write");
         let body = fs::read_to_string(&tmp)?;
-        fs::write(path, body)
-            .map_err(|e| { tracing::error!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=fallback_write_fail err={}", e); e })?;
+        fs::write(path, body)?;
         fs::remove_file(&tmp).ok();
-        // #region agent log
-        tracing::info!(target: "audio_exclusions", "[dbg-6735a1] write_entries_atomic: step=fallback_write OK");
-        // #endregion
         return Ok(());
     }
 

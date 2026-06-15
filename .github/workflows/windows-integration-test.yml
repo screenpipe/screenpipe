@@ -2,9 +2,9 @@ name: Windows CLI Integration Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -19,253 +19,288 @@ env:
 jobs:
   test-windows:
     runs-on: windows-2022
+    env:
+      CARGO_TARGET_DIR: C:\t
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Setup Node
-      uses: actions/setup-node@v4
-      with:
-        node-version: 22
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
-    - name: Install Rust
-      run: |
-        Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile rustup-init.exe
-        .\rustup-init.exe -y
+      - name: Install Rust
+        run: |
+          Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile rustup-init.exe
+          .\rustup-init.exe -y
 
-    - name: Set up Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-        cache: true
-        rustflags: ""
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          cache: true
+          rustflags: ""
 
-    - name: Install Chocolatey
-      run: |
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+      - name: Install Chocolatey
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
-    - name: Install dependencies
-      shell: pwsh
-      run: |
-        # openssl is preinstalled on the windows-2022 runner and already on PATH
-        # (e2e-test.yml mints the same Scream cert with no choco openssl). Installing
-        # it via choco breaks when slproweb.com 404s the latest OpenSSL installer.
-        choco install ffmpeg
-        echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          # openssl is preinstalled on the windows-2022 runner and already on PATH
+          # (e2e-test.yml mints the same Scream cert with no choco openssl). Installing
+          # it via choco breaks when slproweb.com 404s the latest OpenSSL installer.
+          choco install ffmpeg
+          echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-    - name: Install Scream on Windows
-      shell: powershell
-      run: |
-        Invoke-WebRequest https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip -OutFile Scream4.0.zip
-        Expand-Archive -Path Scream4.0.zip -DestinationPath Scream
-        openssl req -batch -verbose -x509 -newkey rsa -keyout ScreamCertificate.pvk -out ScreamCertificate.cer -nodes -extensions v3_req
-        openssl pkcs12 -export -nodes -in ScreamCertificate.cer -inkey ScreamCertificate.pvk -out ScreamCertificate.pfx -passout pass:
+      - name: Install Scream on Windows
+        shell: powershell
+        run: |
+          Invoke-WebRequest https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip -OutFile Scream4.0.zip
+          Expand-Archive -Path Scream4.0.zip -DestinationPath Scream
+          openssl req -batch -verbose -x509 -newkey rsa -keyout ScreamCertificate.pvk -out ScreamCertificate.cer -nodes -extensions v3_req
+          openssl pkcs12 -export -nodes -in ScreamCertificate.cer -inkey ScreamCertificate.pvk -out ScreamCertificate.pfx -passout pass:
 
-    - name: Setup MSVC Dev Cmd
-      uses: ilammy/msvc-dev-cmd@v1
+      - name: Setup MSVC Dev Cmd
+        uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Sign and Install Scream Driver on Windows
-      shell: powershell
-      run: |
-        signtool sign /v /fd SHA256 /f ScreamCertificate.pfx Scream\Install\driver\x64\Scream.cat
-        Import-Certificate -FilePath ScreamCertificate.cer -CertStoreLocation Cert:\LocalMachine\root
-        Import-Certificate -FilePath ScreamCertificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
-        Scream\Install\helpers\devcon-x64.exe install Scream\Install\driver\x64\Scream.inf *Scream
-      timeout-minutes: 5
-
-    - name: Start Windows Audio Service
-      shell: powershell
-      run: |
-        $service = Get-Service -Name audiosrv
-        if ($service.Status -ne 'Running') {
-          net start audiosrv
-        } else {
-          Write-Host "Audio service is already running"
-        }
-
-    - name: Install 7zip
-      shell: powershell
-      run: |
-        $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
-        $7zipInstaller = "7z-installer.exe"
-        Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller
-        Start-Process -FilePath .\$7zipInstaller -Args "/S" -Wait
-        Remove-Item $7zipInstaller
-        echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-    - name: Download ONNX Runtime (CPU)
-      shell: pwsh
-      run: |
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip"
-        $zipFile = "onnxruntime-win-x64-1.24.2.zip"
-        $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2"
-        Invoke-WebRequest -Uri $url -OutFile $zipFile
-        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-        7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
-        Write-Host "ONNX Runtime extracted to $extractDir"
-
-    - name: Setup OpenBLAS
-      shell: pwsh
-      run: |
-        cd apps/screenpipe-app-tauri
-        bun scripts/setup_openblas.js
-        "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-    - name: Build CLI
-      env:
-        RUSTFLAGS: "-C link-arg=/LTCG"
-        ORT_STRATEGY: system
-        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
-        OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
-        # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
-        AWS_LC_SYS_PREBUILT_NASM: "1"
-      run: cargo build --release -p screenpipe-engine --bin screenpipe --target x86_64-pc-windows-msvc
-
-    - name: Run Windows live meeting audio regressions
-      shell: pwsh
-      timeout-minutes: 10
-      env:
-        RUSTFLAGS: "-C link-arg=/LTCG"
-        ORT_STRATEGY: system
-        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
-        OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
-        AWS_LC_SYS_PREBUILT_NASM: "1"
-      run: |
-        cargo test --release -p screenpipe-audio --lib core::run_record_and_transcribe::tests --target x86_64-pc-windows-msvc -- --nocapture
-        cargo test --release -p screenpipe-audio --lib detects_windows_builtin_mics_as_wired --target x86_64-pc-windows-msvc -- --nocapture
-        cargo test --release -p screenpipe-audio --lib live_ready_session_suppresses_background_recording --target x86_64-pc-windows-msvc -- --nocapture
-        cargo test --release -p screenpipe-audio --lib live_not_ready_session_keeps_background_recording_enabled --target x86_64-pc-windows-msvc -- --nocapture
-
-    - name: Run CLI and generate activity
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        $env:RUST_LOG = "debug"
-        $screenpipeDir = Join-Path $env:RUNNER_TEMP "screenpipe-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-        if (Test-Path $screenpipeDir) {
-          Remove-Item $screenpipeDir -Recurse -Force
-        }
-        New-Item -ItemType Directory -Path $screenpipeDir -Force | Out-Null
-        $exePath = if (Test-Path ".\target\x86_64-pc-windows-msvc\release\screenpipe.exe") {
-          ".\target\x86_64-pc-windows-msvc\release\screenpipe.exe"
-        } else {
-          ".\target\release\screenpipe.exe"
-        }
-        $binDir = Split-Path $exePath
-        function Copy-DllIfMissing($source, $destinationDirectory) {
-          $destination = Join-Path $destinationDirectory (Split-Path $source -Leaf)
-          if (-not (Test-Path $destination)) {
-            Copy-Item $source $destinationDirectory -Force
+      - name: Add native build tools to PATH
+        shell: pwsh
+        run: |
+          $cmakeBin = "C:\Program Files\CMake\bin"
+          if (Test-Path $cmakeBin) {
+            echo $cmakeBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           }
-        }
+          cmake --version
 
-        # Copy runtime DLLs next to the binary unless the build already staged them.
-        $ortDll = "apps\screenpipe-app-tauri\src-tauri\onnxruntime-win-x64-1.24.2\lib\onnxruntime.dll"
-        if (Test-Path $ortDll) {
-          Copy-DllIfMissing $ortDll $binDir
-        }
-        $openblasBin = "apps\screenpipe-app-tauri\src-tauri\openblas\bin"
-        if (Test-Path $openblasBin) {
-          Get-ChildItem "$openblasBin\*.dll" | ForEach-Object {
-            Copy-DllIfMissing $_.FullName $binDir
+      - name: Sign and Install Scream Driver on Windows
+        shell: powershell
+        run: |
+          signtool sign /v /fd SHA256 /f ScreamCertificate.pfx Scream\Install\driver\x64\Scream.cat
+          Import-Certificate -FilePath ScreamCertificate.cer -CertStoreLocation Cert:\LocalMachine\root
+          Import-Certificate -FilePath ScreamCertificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+          Scream\Install\helpers\devcon-x64.exe install Scream\Install\driver\x64\Scream.inf *Scream
+        timeout-minutes: 5
+
+      - name: Start Windows Audio Service
+        shell: powershell
+        run: |
+          $service = Get-Service -Name audiosrv
+          if ($service.Status -ne 'Running') {
+            net start audiosrv
+          } else {
+            Write-Host "Audio service is already running"
           }
-        }
-        $arguments = @(
-          "record",
-          "--debug",
-          "--disable-telemetry",
-          "--audio-transcription-engine",
-          "disabled",
-          "--data-dir",
-          $screenpipeDir
-        )
-        $process = Start-Process -FilePath $exePath -ArgumentList $arguments -PassThru -RedirectStandardOutput "screenpipe_output.log" -RedirectStandardError "screenpipe_error.log" -NoNewWindow
-        try {
-          Start-Sleep -Seconds 10
-          if ($process.HasExited) {
-            Write-Host "CLI exited during startup with code $($process.ExitCode)"
-            Get-Content "screenpipe_output.log" -ErrorAction SilentlyContinue
+
+      - name: Install 7zip
+        shell: powershell
+        run: |
+          $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
+          $7zipInstaller = "7z-installer.exe"
+          Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller
+          Start-Process -FilePath .\$7zipInstaller -Args "/S" -Wait
+          Remove-Item $7zipInstaller
+          echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Download ONNX Runtime (CPU)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip"
+          $zipFile = "onnxruntime-win-x64-1.24.2.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zipFile
+              break
+            } catch {
+              if ($attempt -eq 5) { throw }
+              Write-Host "onnxruntime download failed on attempt $attempt; retrying..."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
+          Write-Host "ONNX Runtime extracted to $extractDir"
+
+      - name: Setup OpenBLAS
+        shell: pwsh
+        run: |
+          cd apps/screenpipe-app-tauri
+          bun scripts/setup_openblas.js
+          "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build CLI
+        env:
+          RUSTFLAGS: "-C link-arg=/LTCG"
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
+          ORT_STRATEGY: system
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+          OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          AWS_LC_SYS_PREBUILT_NASM: "1"
+        run: cargo build --release -p screenpipe-engine --bin screenpipe --target x86_64-pc-windows-msvc
+
+      - name: Run Windows live meeting audio regressions
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          RUSTFLAGS: "-C link-arg=/LTCG"
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
+          ORT_STRATEGY: system
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+          OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
+          AWS_LC_SYS_PREBUILT_NASM: "1"
+        run: |
+          cargo test --release -p screenpipe-audio --lib core::run_record_and_transcribe::tests --target x86_64-pc-windows-msvc -- --nocapture
+          cargo test --release -p screenpipe-audio --lib detects_windows_builtin_mics_as_wired --target x86_64-pc-windows-msvc -- --nocapture
+          cargo test --release -p screenpipe-audio --lib live_ready_session_suppresses_background_recording --target x86_64-pc-windows-msvc -- --nocapture
+          cargo test --release -p screenpipe-audio --lib live_not_ready_session_keeps_background_recording_enabled --target x86_64-pc-windows-msvc -- --nocapture
+
+      - name: Run CLI and generate activity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:RUST_LOG = "debug"
+          $screenpipeDir = Join-Path $env:RUNNER_TEMP "screenpipe-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path $screenpipeDir) {
+            Remove-Item $screenpipeDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $screenpipeDir -Force | Out-Null
+          $shortTargetExe = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc\release\screenpipe.exe"
+          $exePath = if (Test-Path $shortTargetExe) {
+            $shortTargetExe
+          } elseif (Test-Path ".\target\x86_64-pc-windows-msvc\release\screenpipe.exe") {
+            ".\target\x86_64-pc-windows-msvc\release\screenpipe.exe"
+          } else {
+            ".\target\release\screenpipe.exe"
+          }
+          $binDir = Split-Path $exePath
+          function Copy-DllIfMissing($source, $destinationDirectory) {
+            $destination = Join-Path $destinationDirectory (Split-Path $source -Leaf)
+            if (-not (Test-Path $destination)) {
+              Copy-Item $source $destinationDirectory -Force
+            }
+          }
+
+          # Copy runtime DLLs next to the binary unless the build already staged them.
+          $ortDll = "apps\screenpipe-app-tauri\src-tauri\onnxruntime-win-x64-1.24.2\lib\onnxruntime.dll"
+          if (Test-Path $ortDll) {
+            Copy-DllIfMissing $ortDll $binDir
+          }
+          $openblasBin = "apps\screenpipe-app-tauri\src-tauri\openblas\bin"
+          if (Test-Path $openblasBin) {
+            Get-ChildItem "$openblasBin\*.dll" | ForEach-Object {
+              Copy-DllIfMissing $_.FullName $binDir
+            }
+          }
+          $arguments = @(
+            "record",
+            "--debug",
+            "--disable-telemetry",
+            "--audio-transcription-engine",
+            "disabled",
+            "--data-dir",
+            $screenpipeDir
+          )
+          $process = Start-Process -FilePath $exePath -ArgumentList $arguments -PassThru -RedirectStandardOutput "screenpipe_output.log" -RedirectStandardError "screenpipe_error.log" -NoNewWindow
+          try {
+            Start-Sleep -Seconds 10
+            if ($process.HasExited) {
+              Write-Host "CLI exited during startup with code $($process.ExitCode)"
+              Get-Content "screenpipe_output.log" -ErrorAction SilentlyContinue
+              Get-Content "screenpipe_error.log" -ErrorAction SilentlyContinue
+              throw "CLI exited during startup with code $($process.ExitCode)"
+            }
+
+            # Generate some screen activity
+            for ($i = 0; $i -lt 5; $i++) {
+              Start-Process "notepad.exe"
+              Start-Sleep -Seconds 2
+              Stop-Process -Name "notepad" -Force
+              Start-Sleep -Seconds 2
+            }
+
+            # Assert that Windows audio capture produces real energy, not just
+            # "device exists" or "no crash". This would have caught the cpal
+            # WASAPI near-silence regression before release.
+            & .\.github\scripts\assert_windows_audio_rms.ps1 `
+              -HealthUrl "http://127.0.0.1:3030/health" `
+              -MinRms 0.002 `
+              -TimeoutSeconds 180 `
+              -HealthRequestTimeoutSeconds 10 `
+              -ToneSeconds 30
+
+            Start-Sleep -Seconds 30  # Allow more time for processing
+          } finally {
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Check for crashes and captured data
+        shell: pwsh
+        run: |
+          if (Select-String -Path "screenpipe_output.log" -Pattern "panic" -Quiet) {
+            Write-Host "CLI crashed"
+            Get-Content "screenpipe_output.log"
+            exit 1
+          }
+          Write-Host "CLI ran successfully without crashing"
+
+          $screenpipeDir = Join-Path $env:RUNNER_TEMP "screenpipe-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $dataDir = Join-Path $screenpipeDir "data"
+          if (-not (Test-Path $dataDir)) {
+            Write-Host "No screenpipe data directory was created at $dataDir"
+            Get-Content "screenpipe_output.log" -Tail 100 -ErrorAction SilentlyContinue
             Get-Content "screenpipe_error.log" -ErrorAction SilentlyContinue
-            throw "CLI exited during startup with code $($process.ExitCode)"
+            exit 1
+          }
+          $capturedFiles = Get-ChildItem -Path $dataDir -Recurse
+          if ($capturedFiles.Count -eq 0) {
+            Write-Host "No data was captured"
+            exit 1
+          }
+          Write-Host "Data captured successfully. File count: $($capturedFiles.Count)"
+
+          if (Select-String -Path "screenpipe_error.log" -Pattern "no audio devices available" -Quiet) {
+            Write-Host "Audio device setup failed"
+            exit 1
           }
 
-          # Generate some screen activity
-          for ($i = 0; $i -lt 5; $i++) {
-            Start-Process "notepad.exe"
-            Start-Sleep -Seconds 2
-            Stop-Process -Name "notepad" -Force
-            Start-Sleep -Seconds 2
-          }
+          Get-Content "screenpipe_output.log" -Tail 100
+          Get-Content "screenpipe_error.log"
 
-          # Assert that Windows audio capture produces real energy, not just
-          # "device exists" or "no crash". This would have caught the cpal
-          # WASAPI near-silence regression before release.
-          & .\.github\scripts\assert_windows_audio_rms.ps1 `
-            -HealthUrl "http://127.0.0.1:3030/health" `
-            -MinRms 0.002 `
-            -TimeoutSeconds 180 `
-            -HealthRequestTimeoutSeconds 10 `
-            -ToneSeconds 30
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenpipe-logs
+          include-hidden-files: true
+          path: |
+            screenpipe_output.log
+            screenpipe_error.log
 
-          Start-Sleep -Seconds 30  # Allow more time for processing
-        } finally {
-          if ($process -and -not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          }
-        }
-
-    - name: Check for crashes and captured data
-      shell: pwsh
-      run: |
-        if (Select-String -Path "screenpipe_output.log" -Pattern "panic" -Quiet) {
-          Write-Host "CLI crashed"
-          Get-Content "screenpipe_output.log"
-          exit 1
-        }
-        Write-Host "CLI ran successfully without crashing"
-
-        $screenpipeDir = Join-Path $env:RUNNER_TEMP "screenpipe-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-        $dataDir = Join-Path $screenpipeDir "data"
-        if (-not (Test-Path $dataDir)) {
-          Write-Host "No screenpipe data directory was created at $dataDir"
-          Get-Content "screenpipe_output.log" -Tail 100 -ErrorAction SilentlyContinue
-          Get-Content "screenpipe_error.log" -ErrorAction SilentlyContinue
-          exit 1
-        }
-        $capturedFiles = Get-ChildItem -Path $dataDir -Recurse
-        if ($capturedFiles.Count -eq 0) {
-          Write-Host "No data was captured"
-          exit 1
-        }
-        Write-Host "Data captured successfully. File count: $($capturedFiles.Count)"
-        
-        if (Select-String -Path "screenpipe_error.log" -Pattern "no audio devices available" -Quiet) {
-          Write-Host "Audio device setup failed"
-          exit 1
-        }
-        
-        Get-Content "screenpipe_output.log" -Tail 100
-        Get-Content "screenpipe_error.log"
-
-    - name: Upload logs
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: screenpipe-logs
-        include-hidden-files: true
-        path: |
-          screenpipe_output.log
-          screenpipe_error.log
-
-    - name: Upload data
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: screenpipe-data
-        include-hidden-files: true
-        path: |
-          ${{ runner.temp }}/screenpipe-ci-${{ github.run_id }}-${{ github.run_attempt }}/*
+      - name: Upload data
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenpipe-data
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/screenpipe-ci-${{ github.run_id }}-${{ github.run_attempt }}/*

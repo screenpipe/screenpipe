@@ -18,10 +18,24 @@
 // restartEngineForTrailingSpecs below).
 
 import { openHomeWindow, waitForAppReady, t } from '../helpers/test-utils.js';
-import { invoke } from '../helpers/tauri.js';
 import { getLocalApiConfig, waitForLocalApi } from '../helpers/api-utils.js';
 
 const FORCE_KEY = 'screenpipe_e2e_force_billing_gate';
+
+async function kickSpawnScreenpipe(): Promise<void> {
+  await browser.execute(() => {
+    const g = globalThis as unknown as {
+      __TAURI__?: {
+        core?: { invoke: (cmd: string, args?: object) => Promise<unknown> };
+      };
+      __TAURI_INTERNALS__?: {
+        invoke: (cmd: string, args?: object) => Promise<unknown>;
+      };
+    };
+    const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
+    void inv?.('spawn_screenpipe', { overrideArgs: null }).catch(() => {});
+  });
+}
 
 /** Forcing the gate on drives the entitlement gate to stop the engine
  *  (components/app-entitlement-gate.tsx calls stopScreenpipe for an unentitled
@@ -42,7 +56,7 @@ async function restartEngineForTrailingSpecs(): Promise<void> {
   // Retry across the restart cooldown (RESTART_COOLDOWN_SECS = 30s): an immediate
   // spawn after a stop can be deferred, so re-kick and re-wait a few times.
   for (let attempt = 0; attempt < 3; attempt++) {
-    await invoke('spawn_screenpipe', { overrideArgs: null }).catch(() => {});
+    await kickSpawnScreenpipe().catch(() => {});
     try {
       await waitForLocalApi(port);
       return;
@@ -77,7 +91,9 @@ async function setForceGate(on: boolean): Promise<void> {
   }
 }
 
-describe('App entitlement gate', () => {
+describe('App entitlement gate', function () {
+  this.timeout(t(180_000));
+
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();

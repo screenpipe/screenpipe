@@ -74,8 +74,8 @@ export async function fetchJson(
   }
 }
 
-export async function waitForLocalApi(port = 3030): Promise<void> {
-  const deadline = Date.now() + t(30_000);
+export async function waitForLocalApi(port = 3030, timeoutMs = t(30_000)): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   let lastErr = "";
   while (Date.now() < deadline) {
     const res = await fetchJson(`http://127.0.0.1:${port}/health`);

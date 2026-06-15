@@ -12,6 +12,10 @@ use anyhow::{anyhow, Result};
 /// - 1 exclude session: return it directly (`M - A`).
 /// - N > 1: `sum(S_i) - (N-1) * reference` where each `S_i = M - A_i`.
 ///
+/// Multi-session WASAPI streams are drained to the shortest per-tick buffer.
+/// That keeps the mixer bounded, but it is not sample-perfect if independent
+/// sessions drift. The common N=1 path uses native exclusion and is exact.
+///
 /// Returns `Err` when N > 1 sessions are present but the reference loopback
 /// is missing or has zero samples — without the reference the subtraction
 /// formula cannot recover the desired mix, so we surface the failure instead

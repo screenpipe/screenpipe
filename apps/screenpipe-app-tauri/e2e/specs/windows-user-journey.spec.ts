@@ -867,6 +867,16 @@ describe("Windows user journey", function () {
       "Storage settings did not show the local retention controls",
     );
 
+    const offRetentionMode = await $('[data-testid="retention-mode-off"]');
+    await offRetentionMode.waitForExist({ timeout: t(20_000) });
+    await offRetentionMode.scrollIntoView();
+    await offRetentionMode.click();
+
+    await waitForBodyText(
+      (bodyText) => bodyText.includes("currently: keeping everything forever."),
+      "Storage retention did not reset to keep-everything mode before preview",
+    );
+
     const mediaRetentionMode = await $('[data-testid="retention-mode-media"]');
     await mediaRetentionMode.waitForExist({ timeout: t(20_000) });
     await mediaRetentionMode.scrollIntoView();

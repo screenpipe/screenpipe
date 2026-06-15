@@ -1351,9 +1351,8 @@ async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>>
 },
 /**
  * Read the current exclusion list. Returns an empty Vec if the file is
- * missing, unreadable, or wrong-shape (matches engine fallback behavior).
- * Returns Err only for malformed JSON, so the UI can surface "your file
- * has a syntax error" to the user.
+ * missing. Returns Err only for malformed JSON, so the UI can surface
+ * "your file has a syntax error" to the user.
  */
 async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
     try {
@@ -2139,10 +2138,8 @@ async vaultUnlock(password: string) : Promise<Result<null, string>> {
 }
 },
 /**
- * Write the exclusion list atomically (write-to-tmp + rename) so the
- * engine's 500 ms mtime poll never observes a half-written file. The
- * engine picks up the new list on the next tick subject to its
- * `REBUILD_COOLDOWN` (60 s).
+ * Write the exclusion list atomically so the engine's mtime poll never
+ * observes a half-written file.
  */
 async writeAudioExclusions(apps: ExcludedApp[]) : Promise<Result<null, string>> {
     try {

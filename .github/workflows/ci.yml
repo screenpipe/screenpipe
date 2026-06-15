@@ -7,18 +7,18 @@ name: Rust CI
 on:
   push:
     paths:
-      - '**.rs'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '.github/workflows/ci.yml'
-      - '.github/scripts/**'
+      - "**.rs"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/ci.yml"
+      - ".github/scripts/**"
   pull_request:
     paths:
-      - '**.rs'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '.github/workflows/ci.yml'
-      - '.github/scripts/**'
+      - "**.rs"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/ci.yml"
+      - ".github/scripts/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
@@ -76,6 +76,8 @@ jobs:
     # image so we keep getting security patches and can pin a stable build
     # toolchain.
     runs-on: windows-2022
+    env:
+      CARGO_TARGET_DIR: C:\t
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -111,6 +113,15 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Add native build tools to PATH
+        shell: pwsh
+        run: |
+          $cmakeBin = "C:\Program Files\CMake\bin"
+          if (Test-Path $cmakeBin) {
+            echo $cmakeBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          cmake --version
+
       - name: Install 7zip
         shell: powershell
         run: |
@@ -138,10 +149,16 @@ jobs:
         working-directory: ./apps/screenpipe-app-tauri
 
       - name: Copy test image
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p target/debug/deps || true
-          cp crates/screenpipe-screen/tests/testing_OCR.png target/debug/deps/
+          $depsDirs = @(
+            (Join-Path $env:CARGO_TARGET_DIR "debug\deps"),
+            (Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc\release\deps")
+          )
+          foreach ($dir in $depsDirs) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Copy-Item "crates\screenpipe-screen\tests\testing_OCR.png" $dir -Force
+          }
 
       # ORT_STRATEGY=system tells ort to LINK against onnxruntime.lib but
       # does NOT copy onnxruntime*.dll next to the test binary. Without
@@ -156,7 +173,7 @@ jobs:
         shell: pwsh
         run: |
           $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib"
-          $dst = "${{ github.workspace }}/target/x86_64-pc-windows-msvc/release/deps"
+          $dst = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc\release\deps"
           if (-not (Test-Path $dst)) {
             New-Item -ItemType Directory -Path $dst -Force | Out-Null
           }
@@ -222,8 +239,15 @@ jobs:
       - name: Run specific Windows OCR cargo test
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+          OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-screen test_process_ocr_task_windows --release --target x86_64-pc-windows-msvc
@@ -231,8 +255,15 @@ jobs:
       - name: Run PII removal tests
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+          OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-core pii_removal --release --target x86_64-pc-windows-msvc
@@ -240,8 +271,15 @@ jobs:
       - name: Run PII redaction tests
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+          OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-engine --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc

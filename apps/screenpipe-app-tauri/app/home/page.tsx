@@ -151,6 +151,29 @@ function HomeContent() {
     void emit("chat-load-conversation", { conversationId: id });
   }, [setActiveSection]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (window as any).__e2eSeedChatSessionStub = (sid: string, title: string) => {
+      const now = Date.now();
+      useChatStore.getState().actions.upsert({
+        id: sid,
+        title: title.trim() || "untitled",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+        pinned: false,
+        hidden: false,
+        unread: false,
+      });
+    };
+    return () => {
+      delete (window as any).__e2eSeedChatSessionStub;
+    };
+  }, []);
+
   // Redirect settings sections to the standalone settings page
   useEffect(() => {
     if (SETTINGS_SECTIONS.has(activeSection)) {

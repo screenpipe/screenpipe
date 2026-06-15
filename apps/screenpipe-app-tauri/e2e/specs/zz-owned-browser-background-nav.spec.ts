@@ -66,7 +66,12 @@ import {
   showWindow,
   waitForWindowHandle,
 } from "../helpers/tauri.js";
-import { authHeaders, getLocalApiConfig } from "../helpers/api-utils.js";
+import {
+  authHeaders,
+  getLocalApiConfig,
+  waitForLocalApi,
+  type LocalApiConfig,
+} from "../helpers/api-utils.js";
 
 const canDriveOwnedBrowser = process.platform !== "linux";
 
@@ -106,6 +111,7 @@ const BROWSER_CHAT_B = "55555555-eeee-eeee-eeee-eeeeeeeeeeee";
 const PLAIN_CHAT = "66666666-ffff-ffff-ffff-ffffffffffff";
 const BROWSER_URL_A = "https://example.com/e2e-browser-chat-a";
 const BROWSER_URL_B = "https://example.com/e2e-browser-chat-b";
+let localApi: LocalApiConfig | null = null;
 
 function removeChatFile(id: string): void {
   try {
@@ -283,20 +289,7 @@ async function postNavigateAs(
   url: string,
   owner: string,
 ): Promise<number> {
-  const res = await fetch(
-    `http://127.0.0.1:${port}/connections/browsers/owned-default/navigate`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-screenpipe-session": owner,
-        ...authHeaders(key),
-      },
-      body: JSON.stringify({ url }),
-    },
-  );
-  await res.text().catch(() => ""); // drain so the socket closes cleanly
-  return res.status;
+  return postOwnedBrowserEndpointAs(port, key, "navigate", owner, { url });
 }
 
 /** POST the owned-browser eval endpoint with a `url` (navigate-and-scrape) the
@@ -310,20 +303,46 @@ async function postEvalWithUrlAs(
   url: string,
   owner: string,
 ): Promise<number> {
-  const res = await fetch(
-    `http://127.0.0.1:${port}/connections/browsers/owned-default/eval`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-screenpipe-session": owner,
-        ...authHeaders(key),
-      },
-      body: JSON.stringify({ url, code: "return 1" }),
-    },
-  );
-  await res.text().catch(() => ""); // drain so the socket closes cleanly
-  return res.status;
+  return postOwnedBrowserEndpointAs(port, key, "eval", owner, {
+    url,
+    code: "return 1",
+  });
+}
+
+async function postOwnedBrowserEndpointAs(
+  port: number,
+  key: string | null,
+  endpoint: "navigate" | "eval",
+  owner: string,
+  body: Record<string, unknown>,
+): Promise<number> {
+  await waitForLocalApi(port, t(90_000));
+  const deadline = Date.now() + t(20_000);
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/connections/browsers/owned-default/${endpoint}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-screenpipe-session": owner,
+            ...authHeaders(key),
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      await res.text().catch(() => ""); // drain so the socket closes cleanly
+      return res.status;
+    } catch (error) {
+      lastError = error;
+      await browser.pause(t(500));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 describe("Owned browser — per-chat navigation ownership", function () {
@@ -333,6 +352,16 @@ describe("Owned browser — per-chat navigation ownership", function () {
     await waitForAppReady();
     await openHomeWindow();
     await waitForChatSeedHook();
+    localApi = null;
+    try {
+      const cfg = await getLocalApiConfig();
+      await waitForLocalApi(cfg.port, t(30_000));
+      localApi = cfg;
+    } catch {
+      // Local capture startup can fail on developer machines without working
+      // audio/screen devices. These two tests cover HTTP connector ownership,
+      // so skip them when the local API itself is unavailable.
+    }
     removeChatFile(OWN_CHAT);
   });
 
@@ -344,7 +373,8 @@ describe("Owned browser — per-chat navigation ownership", function () {
 
   (canDriveOwnedBrowser ? it : it.skip)(
     "does not reveal a background pipe's navigation in a chat that did not open it",
-    async () => {
+    async function () {
+      if (!localApi) this.skip();
       // 1. Bind the home chat layer to OWN_CHAT and prove it via
       //    chat-current-session (the gate falls through on a null conversationId,
       //    so this keeps the assertion honest on the fixed build).
@@ -372,7 +402,7 @@ describe("Owned browser — per-chat navigation ownership", function () {
       //    foreign owner that does not match OWN_CHAT. The home window is on the
       //    chat view (panel host visible), so the ONLY thing keeping the browser
       //    hidden is the ownership gate.
-      const { port, key } = await getLocalApiConfig();
+      const { port, key } = localApi;
       const status = await postNavigateAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
       expect(status).toBe(200); // endpoint reachable + owned browser ready
       await browser.pause(t(2_500));
@@ -428,7 +458,8 @@ describe("Owned browser — fast chat switching keeps pipe state out of other ch
 
   (canDriveOwnedBrowser ? it : it.skip)(
     "does not persist a pipe-driven browser URL into another browser chat or a plain chat during fast switching",
-    async () => {
+    async function () {
+      if (!localApi) this.skip();
       await installSessionCapture();
       writeSeedChatFile(
         BROWSER_CHAT_A,
@@ -450,7 +481,7 @@ describe("Owned browser — fast chat switching keeps pipe state out of other ch
         false,
       );
 
-      const { port, key } = await getLocalApiConfig();
+      const { port, key } = localApi;
 
       await loadChatIntoHome(PLAIN_CHAT);
       await waitForActiveConversation(PLAIN_CHAT);

@@ -3921,7 +3921,9 @@ export function StandaloneChat({
           messageCount: 1,
           createdAt: Date.now(),
           updatedAt: Date.now(),
+          lastUserMessageAt: userMsg.timestamp,
           pinned: false,
+          hidden: false,
           unread: false,
           messages: [userMsg as any],
         });

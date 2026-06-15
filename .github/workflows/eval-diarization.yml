@@ -42,19 +42,19 @@ name: Audio Eval
 on:
   pull_request:
     paths:
-      - 'crates/screenpipe-audio/src/speaker/**'
-      - 'crates/screenpipe-audio/src/audio_manager/**'
-      - 'crates/screenpipe-audio/src/transcription/**'
-      - 'crates/screenpipe-audio/src/segmentation/**'
-      - 'crates/screenpipe-audio/src/core/stream.rs'
-      - 'crates/screenpipe-audio-eval/**'
-      - 'crates/screenpipe-db/src/db.rs'
-      - '.github/workflows/eval-diarization.yml'
+      - "crates/screenpipe-audio/src/speaker/**"
+      - "crates/screenpipe-audio/src/audio_manager/**"
+      - "crates/screenpipe-audio/src/transcription/**"
+      - "crates/screenpipe-audio/src/segmentation/**"
+      - "crates/screenpipe-audio/src/core/stream.rs"
+      - "crates/screenpipe-audio-eval/**"
+      - "crates/screenpipe-db/src/db.rs"
+      - ".github/workflows/eval-diarization.yml"
   workflow_dispatch:
     inputs:
       fixtures:
-        description: 'Comma-separated VoxConverse fixture stems to score'
-        default: 'abjxc,bxpwa,dhorc'
+        description: "Comma-separated VoxConverse fixture stems to score"
+        default: "abjxc,bxpwa,dhorc"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
@@ -106,6 +106,7 @@ jobs:
 
       - name: Install audio system deps
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
@@ -117,11 +118,72 @@ jobs:
             cmake \
             build-essential \
             libopenblas-dev
-          # antirez-asr-sys build script emits -llibopenblas (double lib prefix).
-          # Mirror the symlink workaround that release-cli.yml uses.
+
           sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
-          sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
-          sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+          sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/include
+
+          find_openblas_so() {
+            local versioned
+            versioned="$(find /usr/lib /usr/local/lib /lib 2>/dev/null \
+              -name 'libopenblas.so.*' -print 2>/dev/null | head -1)"
+            if [ -n "$versioned" ]; then
+              printf '%s\n' "$versioned"
+              return
+            fi
+            find /usr/lib /usr/local/lib /lib 2>/dev/null \
+              -name 'libopenblas.so' -print 2>/dev/null | head -1
+          }
+
+          REAL_SO="$(find_openblas_so)"
+          if [ -z "$REAL_SO" ]; then
+            echo "libopenblas not found on disk — forcing fresh install"
+            sudo apt-get update -qq
+            sudo apt-get install -y --reinstall libopenblas-dev
+            REAL_SO="$(find_openblas_so)"
+          fi
+          if [ -z "$REAL_SO" ]; then
+            echo "::error::libopenblas still not found after --reinstall"
+            dpkg -L libopenblas-dev 2>/dev/null | head -20 || true
+            find /usr/lib /usr/local/lib /lib -name 'libopenblas*' 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          echo "libopenblas.so -> $REAL_SO"
+
+          REAL_A="$(find /usr/lib /usr/local/lib /lib -name 'libopenblas.a' 2>/dev/null | head -1 || true)"
+          [ -n "$REAL_A" ] && echo "libopenblas.a  -> $REAL_A"
+
+          # antirez-asr-sys emits `-l libopenblas` (double-lib).
+          sudo ln -sf "$REAL_SO" /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
+          [ -n "$REAL_A" ] && sudo ln -sf "$REAL_A" /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+          sudo ln -sf "$REAL_SO" /usr/lib/x86_64-linux-gnu/liblibopenblas.so
+          [ -n "$REAL_A" ] && sudo ln -sf "$REAL_A" /usr/lib/x86_64-linux-gnu/liblibopenblas.a
+
+          SONAME="$(basename "$REAL_SO")"
+          SONAME_DEST="/usr/lib/x86_64-linux-gnu/${SONAME}"
+          if [ "$REAL_SO" != "$SONAME_DEST" ]; then
+            sudo ln -sf "$REAL_SO" "$SONAME_DEST"
+          fi
+          UNVER_DEST="/usr/lib/x86_64-linux-gnu/libopenblas.so"
+          if [ "$REAL_SO" != "$UNVER_DEST" ]; then
+            sudo ln -sf "$REAL_SO" "$UNVER_DEST"
+          fi
+          sudo ldconfig
+
+          test -e /usr/lib/x86_64-linux-gnu/liblibopenblas.so
+          test -e /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
+          test -e "/usr/lib/x86_64-linux-gnu/${SONAME}"
+
+          CBLAS_HEADER="$(find /usr/include /usr/lib -name cblas.h 2>/dev/null | head -n1 || true)"
+          if [ -z "$CBLAS_HEADER" ]; then
+            CBLAS_HEADER="$(dpkg -L libopenblas-dev | grep -m1 '/cblas\.h$' || true)"
+          fi
+          if [ -n "$CBLAS_HEADER" ]; then
+            CBLAS_DIR="$(dirname "$CBLAS_HEADER")"
+            sudo ln -sf "$CBLAS_HEADER" /usr/include/cblas.h
+            sudo ln -sf "$CBLAS_HEADER" /usr/lib/x86_64-linux-gnu/openblas/include/cblas.h
+            echo "C_INCLUDE_PATH=$CBLAS_DIR:/usr/include:/usr/lib/x86_64-linux-gnu/openblas/include:${C_INCLUDE_PATH:-}" >> "$GITHUB_ENV"
+            echo "CFLAGS=-I$CBLAS_DIR -I/usr/include -I/usr/lib/x86_64-linux-gnu/openblas/include ${CFLAGS:-}" >> "$GITHUB_ENV"
+          fi
           echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> $GITHUB_ENV
 
       # Hash the download script so a script change busts the cache. The

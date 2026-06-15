@@ -100,9 +100,11 @@ async function waitForChatSeedHook(): Promise<void> {
   await browser.waitUntil(
     async () =>
       (await browser.execute(
-        () => typeof (window as any).__e2eSeedUserMessage === "function",
+        () =>
+          typeof (window as any).__e2eSeedUserMessage === "function" &&
+          typeof (window as any).__e2eSeedChatSessionStub === "function",
       )) as boolean,
-    { timeout: t(10_000), interval: 100, timeoutMsg: "E2E chat seed hook did not mount" },
+    { timeout: t(10_000), interval: 100, timeoutMsg: "E2E chat seed hooks did not mount" },
   );
 }
 
@@ -113,6 +115,16 @@ async function seedUserMessage(sessionId: string, text: string): Promise<void> {
     },
     sessionId,
     text,
+  );
+}
+
+async function seedSessionStub(sessionId: string, title: string): Promise<void> {
+  await browser.execute(
+    (sid: string, rowTitle: string) => {
+      (window as any).__e2eSeedChatSessionStub(sid, rowTitle);
+    },
+    sessionId,
+    title,
   );
 }
 
@@ -153,12 +165,7 @@ describe("Chat sidebar stub row dedup", function () {
       timeoutMsg: "seeded chat X never rendered in Recents",
     });
 
-    await emitTauri("chat-session-activity", {
-      id: CHAT_Y,
-      title: "stub dedup twin",
-      updatedAt: Date.now(),
-      status: "idle",
-    });
+    await seedSessionStub(CHAT_Y, "stub dedup twin");
 
     await browser.waitUntil(async () => (await visibleRowCount([CHAT_X, CHAT_Y])) === 2, {
       timeout: t(10_000),
