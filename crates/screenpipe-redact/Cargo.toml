@@ -25,6 +25,7 @@ once_cell = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 sha3 = "0.10"
 sqlx = { workspace = true, features = ["chrono"] }
@@ -66,7 +67,7 @@ default = []
 
 # Enable the ONNX-based image redactor (rfdetr) AND the v45 phase 3
 # text redactor (xlm-roberta-base BIO token classifier). CPU baseline.
-onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:serde_json", "ort/download-binaries", "ort/tls-native", "ort/std"]
+onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "ort/download-binaries", "ort/tls-native", "ort/std"]
 # Mac: CoreML execution provider (uses Metal + ANE where available).
 onnx-coreml = ["onnx-cpu", "ort/coreml"]
 # Windows: DirectML EP (any DX12-capable GPU, no CUDA toolkit).
@@ -101,13 +102,6 @@ optional = true
 workspace = true
 default-features = false
 features = ["onig"]
-optional = true
-
-# Used by the ONNX text adapter to parse `config.json` (the id2label
-# mapping for the 27 BIO tags). Workspace already pulls serde_json
-# transitively; declare explicitly so the dep graph is honest.
-[dependencies.serde_json]
-workspace = true
 optional = true
 
 # OPF text redactor (pure-Rust candle port; same model as the v3

@@ -12,7 +12,7 @@
 //!
 //! ## What we redact
 //!
-//! Six logical surfaces, seven [`TargetTable`] variants (UI events
+//! Seven logical surfaces, eight [`TargetTable`] variants (UI events
 //! split into keyboard vs clipboard):
 //!
 //! 1. **`ocr_text`** — OCR'd screen text. Source column `text`.
@@ -43,6 +43,15 @@
 //!    so the `frames` row carries independent full-text / accessibility
 //!    / image redaction state. The `frames_au AFTER UPDATE OF full_text`
 //!    trigger re-indexes `frames_fts` when the overwrite lands.
+//! 7. **`frames.accessibility_tree_json`** — per-frame accessibility
+//!    tree as a JSON array of nodes with PII-bearing string fields
+//!    (`text`, `value`, `help_text`, `placeholder`, `url`). Served raw
+//!    by `/frames/:id/context` until reconciled (issue #4116). Source
+//!    column `accessibility_tree_json`; watermark prefixed
+//!    (`accessibility_tree_redacted_at`) so the `frames` row carries
+//!    independent tree / accessibility / full-text / image redaction
+//!    state. The `frames_au AFTER UPDATE` trigger does NOT watch this
+//!    column, so no FTS re-index plumbing is required.
 //!
 //! ## "Needs redaction" predicate
 //!
@@ -51,6 +60,12 @@
 //! so re-redacting redacted text would be a no-op anyway).
 
 use sqlx::{Row, SqlitePool};
+
+/// Per-node PII-bearing string fields on `frames.accessibility_tree_json`.
+/// See `AccessibilityTreeNode` in `screenpipe-a11y/src/tree/mod.rs`.
+/// Order is the redaction-extraction order — [`TargetTable::extract_strings`]
+/// and [`TargetTable::rebuild_source`] MUST iterate this slice identically.
+const PII_TREE_FIELDS: &[&str] = &["text", "value", "help_text", "placeholder", "url"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,6 +97,14 @@ pub enum TargetTable {
     /// column added by `20260613000001_add_frames_full_text_redacted_at.sql`
     /// (issue #4097).
     FullText,
+    /// Per-frame accessibility tree (`frames.accessibility_tree_json`),
+    /// a JSON array of nodes with PII-bearing string fields (`text`,
+    /// `value`, `help_text`, `placeholder`, `url`). Issue #4116: until this
+    /// variant was added, scrubbing `accessibility_text` left the same
+    /// content readable in the tree JSON served by `/frames/:id/context`.
+    /// Watermark column added by
+    /// `20260614000000_add_frames_accessibility_tree_redacted_at.sql`.
+    AccessibilityTree,
 }
 
 pub const ALL_TARGET_TABLES: &[TargetTable] = &[
@@ -92,6 +115,7 @@ pub const ALL_TARGET_TABLES: &[TargetTable] = &[
     TargetTable::UiEventsClipboard,
     TargetTable::Elements,
     TargetTable::FullText,
+    TargetTable::AccessibilityTree,
 ];
 
 /// One row to redact.
@@ -114,7 +138,7 @@ impl TargetTable {
             Self::Elements => "elements",
             // full_text also lives on frames (a different column +
             // watermark than the accessibility variant).
-            Self::FullText => "frames",
+            Self::FullText | Self::AccessibilityTree => "frames",
         }
     }
 
@@ -127,6 +151,7 @@ impl TargetTable {
             Self::UiEventsKeyboard | Self::UiEventsClipboard => "text_content",
             Self::Elements => "text",
             Self::FullText => "full_text",
+            Self::AccessibilityTree => "accessibility_tree_json",
         }
     }
 
@@ -139,6 +164,7 @@ impl TargetTable {
         match self {
             Self::Accessibility => "accessibility_redacted_at",
             Self::FullText => "full_text_redacted_at",
+            Self::AccessibilityTree => "accessibility_tree_redacted_at",
             _ => "redacted_at",
         }
     }
@@ -173,6 +199,91 @@ impl TargetTable {
             Self::UiEventsClipboard => "ui_events:clipboard",
             Self::Elements => "elements",
             Self::FullText => "frames:full_text",
+            Self::AccessibilityTree => "frames:accessibility_tree_json",
+        }
+    }
+
+    /// Pre-redaction transform. For plain-text variants this is the
+    /// identity (`[src.to_string()]`). For JSON-shaped variants we parse
+    /// the source, collect every PII-bearing string field across all
+    /// nodes, and return them in a fixed order. The order must match
+    /// what [`Self::rebuild_source`] expects.
+    pub fn extract_strings(&self, src: &str) -> Result<Vec<String>, anyhow::Error> {
+        match self {
+            Self::AccessibilityTree => {
+                let nodes: Vec<serde_json::Value> = serde_json::from_str(src)
+                    .map_err(|e| anyhow::anyhow!("parse accessibility_tree_json: {e}"))?;
+                let mut out = Vec::new();
+                for n in &nodes {
+                    for key in PII_TREE_FIELDS {
+                        if let Some(s) = n.get(*key).and_then(|v| v.as_str()) {
+                            if !s.is_empty() {
+                                out.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            _ => Ok(vec![src.to_string()]),
+        }
+    }
+
+    /// Post-redaction transform. For plain-text variants returns
+    /// `redacted[0]`. For JSON variants splices the redacted strings
+    /// back into the parsed tree in the same field-iteration order as
+    /// [`Self::extract_strings`] used, then re-serializes.
+    pub fn rebuild_source(&self, src: &str, redacted: &[String]) -> Result<String, anyhow::Error> {
+        match self {
+            Self::AccessibilityTree => {
+                let mut nodes: Vec<serde_json::Value> = serde_json::from_str(src)
+                    .map_err(|e| anyhow::anyhow!("parse accessibility_tree_json: {e}"))?;
+                let mut idx = 0usize;
+                for n in nodes.iter_mut() {
+                    let obj = match n.as_object_mut() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    for key in PII_TREE_FIELDS {
+                        let is_nonempty_str = obj
+                            .get(*key)
+                            .and_then(|v| v.as_str())
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false);
+                        if is_nonempty_str {
+                            let new_val = redacted.get(idx).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "rebuild_source: redacted slice exhausted at field {:?} (idx={})",
+                                    key, idx
+                                )
+                            })?;
+                            obj.insert(
+                                (*key).to_string(),
+                                serde_json::Value::String(new_val.clone()),
+                            );
+                            idx += 1;
+                        }
+                    }
+                }
+                if idx != redacted.len() {
+                    anyhow::bail!(
+                        "rebuild_source: {} redacted strings provided, {} consumed",
+                        redacted.len(),
+                        idx
+                    );
+                }
+                serde_json::to_string(&nodes)
+                    .map_err(|e| anyhow::anyhow!("re-serialize accessibility_tree_json: {e}"))
+            }
+            _ => {
+                if redacted.len() != 1 {
+                    anyhow::bail!(
+                        "rebuild_source for plain-text variant expected 1 redacted string, got {}",
+                        redacted.len()
+                    );
+                }
+                Ok(redacted[0].clone())
+            }
         }
     }
 }
@@ -277,6 +388,8 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 accessibility_text TEXT,
                 accessibility_redacted_at INTEGER,
+                accessibility_tree_json TEXT,
+                accessibility_tree_redacted_at INTEGER,
                 full_text TEXT,
                 full_text_redacted_at INTEGER
             );
@@ -547,5 +660,110 @@ mod tests {
             .await
             .unwrap();
         assert!(pending_full.is_empty(), "full_text must be marked done");
+    }
+
+    #[tokio::test]
+    async fn accessibility_tree_reads_from_frames_accessibility_tree_json() {
+        let pool = setup().await;
+        let tree = r#"[{"role":"AXButton","text":"Send to alice@x.io","depth":0}]"#;
+        sqlx::query("INSERT INTO frames (accessibility_tree_json) VALUES (?)")
+            .bind(tree)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rows = fetch_unredacted(&pool, TargetTable::AccessibilityTree, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, tree);
+    }
+
+    #[tokio::test]
+    async fn accessibility_tree_extract_pulls_only_pii_fields_in_order() {
+        let tree = r#"[
+        {"role":"AXTextField","text":"label","value":"alice@x.io","placeholder":"email",
+         "automation_id":"id-123","class_name":"NSTextField"},
+        {"role":"AXLink","text":"","url":"https://x.io?token=abc","help_text":"open"}
+    ]"#;
+        let got = TargetTable::AccessibilityTree
+            .extract_strings(tree)
+            .unwrap();
+        // Order is the PII_TREE_FIELDS order, per node, skipping empty/missing.
+        // Node 1: text, value, placeholder. Node 2: url, help_text.
+        // Structural fields (role, automation_id, class_name) MUST NOT appear.
+        assert_eq!(
+            got,
+            vec![
+                "label",
+                "alice@x.io",
+                "email",
+                "open",
+                "https://x.io?token=abc"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>(),
+        );
+    }
+
+    #[tokio::test]
+    async fn accessibility_tree_rebuild_round_trip_preserves_structural_fields() {
+        let tree = r#"[{"role":"AXButton","text":"alice@x.io","depth":0,"automation_id":"btn-7"}]"#;
+        let strings = TargetTable::AccessibilityTree
+            .extract_strings(tree)
+            .unwrap();
+        assert_eq!(strings, vec!["alice@x.io".to_string()]);
+        let rebuilt = TargetTable::AccessibilityTree
+            .rebuild_source(tree, &["[EMAIL]".to_string()])
+            .unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&rebuilt).unwrap();
+        assert_eq!(parsed[0]["text"], "[EMAIL]");
+        // Structural fields preserved verbatim.
+        assert_eq!(parsed[0]["role"], "AXButton");
+        assert_eq!(parsed[0]["automation_id"], "btn-7");
+        assert_eq!(parsed[0]["depth"], 0);
+    }
+
+    #[tokio::test]
+    async fn accessibility_tree_writes_overwrite_source_and_stamp_prefixed_timestamp() {
+        let pool = setup().await;
+        let tree = r#"[{"role":"AXStaticText","text":"bob@example.com"}]"#;
+        sqlx::query("INSERT INTO frames (accessibility_tree_json) VALUES (?)")
+            .bind(tree)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let redacted_tree = r#"[{"role":"AXStaticText","text":"[EMAIL]"}]"#;
+        write_redacted(&pool, TargetTable::AccessibilityTree, 1, redacted_tree)
+            .await
+            .unwrap();
+        let row = sqlx::query(
+            "SELECT accessibility_tree_json, accessibility_tree_redacted_at FROM frames WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let raw: String = row.get(0);
+        let when: Option<i64> = row.get(1);
+        assert!(raw.contains("[EMAIL]") && !raw.contains("bob@example.com"));
+        assert!(when.is_some());
+    }
+
+    #[tokio::test]
+    async fn accessibility_tree_extract_returns_empty_for_no_pii_fields() {
+        // Only structural fields — no user content. Round-trip must succeed
+        // (the row still needs its watermark stamped so it isn't re-fetched).
+        let tree = r#"[{"role":"AXGroup","depth":0,"automation_id":"grp-1"}]"#;
+        let got = TargetTable::AccessibilityTree
+            .extract_strings(tree)
+            .unwrap();
+        assert!(got.is_empty());
+        let rebuilt = TargetTable::AccessibilityTree
+            .rebuild_source(tree, &[])
+            .unwrap();
+        // Re-serialized form is equivalent JSON (whitespace may differ).
+        let a: serde_json::Value = serde_json::from_str(tree).unwrap();
+        let b: serde_json::Value = serde_json::from_str(&rebuilt).unwrap();
+        assert_eq!(a, b);
     }
 }

@@ -7,8 +7,8 @@
 //! Runs on a separate tokio task off the capture hot path. Polls the
 //! database for un-redacted rows across the target text surfaces (OCR
 //! text, audio transcripts, accessibility text, typed/clipboard input,
-//! per-element text, and the consolidated `frames.full_text` search
-//! surface) and writes redacted versions back. Mirrors the existing FTS
+//! per-element text, the consolidated `frames.full_text` search
+//! surface, and `frames.accessibility_tree_json`) and writes redacted versions back. Mirrors the existing FTS
 //! / migration backfill workers in shape — pause / resume / status,
 //! idle-aware scheduling knobs, retry-with-backoff on transient errors.
 //!
@@ -51,7 +51,7 @@ pub struct WorkerConfig {
     pub poll_interval: Duration,
     /// Tables to reconcile. Default: all of [`ALL_TARGET_TABLES`] (ocr,
     /// audio, accessibility, ui_events:keyboard, ui_events:clipboard,
-    /// elements, frames:full_text).
+    /// elements, frames:full_text, frames:accessibility_tree_json).
     pub tables: Vec<TargetTable>,
 }
 
@@ -274,19 +274,44 @@ impl Worker {
         }
         debug!(table = ?table, count = rows.len(), "redacting batch");
 
-        let texts: Vec<String> = rows.iter().map(|r| r.text.clone()).collect();
-        let outputs = self.redactor.redact_batch(&texts).await?;
-
-        if outputs.len() != rows.len() {
-            anyhow::bail!(
-                "redactor returned {} outputs for {} inputs",
-                outputs.len(),
-                rows.len()
-            );
+        // Flatten per-row strings into one batch (preserves redactor batch
+        // efficiency — Redactor::redact_batch contract guarantees order).
+        // For plain-text variants each row contributes one string; for
+        // JSON-shaped variants (AccessibilityTree) each row contributes
+        // one per PII-bearing leaf.
+        let mut flat: Vec<String> = Vec::with_capacity(rows.len());
+        let mut slots: Vec<(usize, usize)> = Vec::with_capacity(rows.len()); // (start, count) per row
+        for row in &rows {
+            let strs = table.extract_strings(&row.text)?;
+            let start = flat.len();
+            let count = strs.len();
+            flat.extend(strs);
+            slots.push((start, count));
         }
 
-        for (row, out) in rows.iter().zip(outputs.iter()) {
-            tables::write_redacted(&self.pool, table, row.id, &out.redacted).await?;
+        // If a JSON row had zero PII-bearing fields it still gets a write
+        // below — that stamps `redacted_at` so we don't re-fetch it.
+        let outputs = if flat.is_empty() {
+            Vec::new()
+        } else {
+            let out = self.redactor.redact_batch(&flat).await?;
+            if out.len() != flat.len() {
+                anyhow::bail!(
+                    "redactor returned {} outputs for {} inputs",
+                    out.len(),
+                    flat.len()
+                );
+            }
+            out
+        };
+
+        for (row, (start, count)) in rows.iter().zip(slots.iter()) {
+            let redacted_slice: Vec<String> = outputs[*start..*start + count]
+                .iter()
+                .map(|o| o.redacted.clone())
+                .collect();
+            let new_src = table.rebuild_source(&row.text, &redacted_slice)?;
+            tables::write_redacted(&self.pool, table, row.id, &new_src).await?;
         }
 
         let n = rows.len() as u32;
