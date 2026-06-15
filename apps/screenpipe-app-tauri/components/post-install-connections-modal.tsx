@@ -14,7 +14,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronDown, ChevronRight, Loader2, Lock } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ExternalLink, Loader2, Lock } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -24,18 +24,36 @@ import {
   IntegrationInfo,
 } from "@/components/settings/connections-section";
 import { localFetch } from "@/lib/api";
+import {
+  isMcpConnectionKey,
+  mcpServerIdFromConnection,
+  pipeConnectionInstanceName,
+  pipeConnectionLookupKey,
+} from "@/lib/pipe-connections";
 
 interface PostInstallConnectionsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pipeName: string;
   connections: string[];
+  onConnectionRemoved?: (connectionId: string, updatedConnections: string[]) => void;
 }
 
 interface ConnectionStatus {
   integration: IntegrationInfo | null;
   configured: boolean;
   loading: boolean;
+  kind: "connection" | "mcp";
+  displayName: string;
+  instanceName: string | null;
+  serverId?: string;
+  missingReason?: "deleted_mcp" | "disabled_mcp" | "unknown_mcp";
+}
+
+interface McpServerSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
 }
 
 export function PostInstallConnectionsModal({
@@ -43,12 +61,14 @@ export function PostInstallConnectionsModal({
   onOpenChange,
   pipeName,
   connections,
+  onConnectionRemoved,
 }: PostInstallConnectionsModalProps) {
   const { settings } = useSettings();
   const isPro = !!settings.user?.cloud_subscribed;
   const [statuses, setStatuses] = useState<Record<string, ConnectionStatus>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [removingConnection, setRemovingConnection] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || connections.length === 0) return;
@@ -57,16 +77,50 @@ export function PostInstallConnectionsModal({
       setLoading(true);
       try {
         // Fetch all available integrations
-        const res = await localFetch("/connections");
+        const [res, mcpRes] = await Promise.all([
+          localFetch("/connections"),
+          localFetch("/mcp-servers").catch(() => null),
+        ]);
         const data = await res.json();
         const integrations: IntegrationInfo[] = data.data || [];
+        const mcpData =
+          mcpRes && mcpRes.ok
+            ? await mcpRes.json().catch(() => ({ data: [] }))
+            : { data: [] };
+        const mcpStatusUnavailable = !mcpRes || !mcpRes.ok;
+        const mcpServers: McpServerSummary[] = mcpData.data || [];
 
         const newStatuses: Record<string, ConnectionStatus> = {};
 
         for (const connId of connections) {
           // support instance keys like "notion:crm" — match on base id
-          const baseId = connId.includes(":") ? connId.split(":")[0] : connId;
-          const instanceName = connId.includes(":") ? connId.split(":").slice(1).join(":") : null;
+          const baseId = pipeConnectionLookupKey(connId);
+          const instanceName = pipeConnectionInstanceName(connId);
+
+          if (isMcpConnectionKey(connId)) {
+            const serverId = mcpServerIdFromConnection(connId) || undefined;
+            const server = serverId
+              ? mcpServers.find((s) => s.id === serverId)
+              : undefined;
+            newStatuses[connId] = {
+              integration: null,
+              configured: !!server?.enabled,
+              loading: false,
+              kind: "mcp",
+              displayName: server?.name || (mcpStatusUnavailable ? "custom MCP server" : "deleted MCP server"),
+              instanceName: null,
+              serverId,
+              missingReason: server
+                ? server.enabled
+                  ? undefined
+                  : "disabled_mcp"
+                : mcpStatusUnavailable
+                  ? "unknown_mcp"
+                  : "deleted_mcp",
+            };
+            continue;
+          }
+
           const integration = integrations.find((i) => i.id === baseId) || null;
 
           let configured = integration?.connected ?? false;
@@ -94,6 +148,9 @@ export function PostInstallConnectionsModal({
             integration,
             configured,
             loading: false,
+            kind: "connection",
+            displayName: integration?.name || connId,
+            instanceName,
           };
         }
 
@@ -150,6 +207,42 @@ export function PostInstallConnectionsModal({
     }
   };
 
+  const openCustomMcpSettings = () => {
+    window.dispatchEvent(new CustomEvent("open-settings", {
+      detail: { section: "connections", connectionId: "custom-mcp", category: "AI" },
+    }));
+    onOpenChange(false);
+  };
+
+  const removeConnectionFromPipe = async (connId: string) => {
+    const updatedConnections = connections.filter((id) => id !== connId);
+    setRemovingConnection(connId);
+    try {
+      const res = await localFetch(`/pipes/${encodeURIComponent(pipeName)}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connections: updatedConnections }),
+      });
+      if (!res.ok) {
+        throw new Error(`failed to update pipe config: HTTP ${res.status}`);
+      }
+      setStatuses((prev) => {
+        const next = { ...prev };
+        delete next[connId];
+        return next;
+      });
+      const nextUnconfigured = updatedConnections.find(
+        (id) => !statuses[id]?.configured
+      );
+      setExpanded(nextUnconfigured || null);
+      onConnectionRemoved?.(connId, updatedConnections);
+    } catch (error) {
+      console.error("failed to remove connection from pipe:", error);
+    } finally {
+      setRemovingConnection(null);
+    }
+  };
+
   const allConfigured = connections.every((c) => statuses[c]?.configured);
 
   return (
@@ -176,6 +269,16 @@ export function PostInstallConnectionsModal({
               const status = statuses[connId];
               const isExpanded = expanded === connId;
               const integration = status?.integration;
+              const isMcp = status?.kind === "mcp";
+              const statusLabel = status?.configured
+                ? "configured"
+                : status?.missingReason === "deleted_mcp"
+                  ? "deleted"
+                  : status?.missingReason === "disabled_mcp"
+                    ? "disabled"
+                    : status?.missingReason === "unknown_mcp"
+                      ? "unknown"
+                      : "not configured";
 
               return (
                 <div
@@ -191,6 +294,10 @@ export function PostInstallConnectionsModal({
                     <div className="relative flex-shrink-0">
                       {integration ? (
                         <IntegrationIcon icon={integration.icon} />
+                      ) : isMcp ? (
+                        <div className="w-5 h-5 border border-border flex items-center justify-center text-[8px] font-mono">
+                          MCP
+                        </div>
                       ) : (
                         <div className="w-5 h-5 rounded-full border-2 border-muted-foreground/30" />
                       )}
@@ -201,22 +308,16 @@ export function PostInstallConnectionsModal({
                       )}
                     </div>
                     <span className="text-xs font-medium flex-1">
-                      {integration?.name || connId}
-                      {connId.includes(":") && (
+                      {status?.displayName || integration?.name || connId}
+                      {status?.instanceName && (
                         <span className="text-muted-foreground font-normal ml-1">
-                          ({connId.split(":").slice(1).join(":")})
+                          ({status.instanceName})
                         </span>
                       )}
                     </span>
-                    {status?.configured ? (
-                      <span className="text-[10px] text-foreground">
-                        configured
-                      </span>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">
-                        not configured
-                      </span>
-                    )}
+                    <span className={status?.configured ? "text-[10px] text-foreground" : "text-[10px] text-muted-foreground"}>
+                      {statusLabel}
+                    </span>
                     {isExpanded ? (
                       <ChevronDown className="h-3 w-3 text-muted-foreground" />
                     ) : (
@@ -234,6 +335,67 @@ export function PostInstallConnectionsModal({
                         }
                         onSaved={() => handleSaved(connId)}
                       />
+                    </div>
+                  )}
+
+                  {isExpanded && isMcp && (
+                    <div className="px-3 pb-3 border-t border-border pt-3 space-y-2">
+                      {status?.missingReason === "deleted_mcp" ? (
+                        <>
+                          <p className="text-xs text-muted-foreground">
+                            this MCP server was deleted or is no longer available.
+                            remove it from this pipe or add a new MCP server from the dropdown.
+                          </p>
+                          {status.serverId && (
+                            <p className="text-[10px] text-muted-foreground font-mono">
+                              id: {status.serverId}
+                            </p>
+                          )}
+                        </>
+                      ) : status?.missingReason === "disabled_mcp" ? (
+                        <p className="text-xs text-muted-foreground">
+                          this MCP server is disabled. enable it in custom MCP
+                          settings or remove it from this pipe.
+                        </p>
+                      ) : status?.missingReason === "unknown_mcp" ? (
+                        <p className="text-xs text-muted-foreground">
+                          MCP server status could not be loaded. try again or
+                          manage custom MCP servers in settings.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          custom MCP servers are configured once, then selected by pipes.
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {!status?.configured && status?.missingReason !== "unknown_mcp" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs normal-case font-sans tracking-normal"
+                            disabled={removingConnection === connId}
+                            onClick={() => removeConnectionFromPipe(connId)}
+                          >
+                            {removingConnection === connId ? (
+                              <>
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                                removing...
+                              </>
+                            ) : (
+                              "remove from pipe"
+                            )}
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1.5 normal-case font-sans tracking-normal"
+                          onClick={openCustomMcpSettings}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          manage MCP servers
+                        </Button>
+                      </div>
                     </div>
                   )}
 
@@ -280,7 +442,7 @@ export function PostInstallConnectionsModal({
                     </div>
                   )}
 
-                  {isExpanded && !integration && (
+                  {isExpanded && !integration && !isMcp && (
                     <div className="px-3 pb-3 border-t border-border pt-3">
                       <p className="text-xs text-muted-foreground">
                         connection &quot;{connId}&quot; is not available. it

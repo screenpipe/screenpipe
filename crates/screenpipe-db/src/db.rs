@@ -30,14 +30,15 @@ use zerocopy::AsBytes;
 use futures::future::try_join_all;
 
 use crate::{
-    text_similarity::is_similar_transcription, AudioChunkProcessingSnapshot, AudioChunksResponse,
-    AudioDevice, AudioEntry, AudioResult, AudioResultRaw, ChunkOutcome, ContentType, DeviceType,
-    Element, ElementRow, ElementSource, FrameData, FrameRow, FrameRowLight, FrameWindowData,
-    InsertUiEvent, MeetingRecord, MeetingTranscriptSegment, MemoryRecord, MemorySyncRow,
-    NewDiarizationSegment, OCREntry, OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order,
-    ReplacementAudioTranscription, SearchMatch, SearchMatchGroup, SearchResult, Speaker,
-    TagContentType, TextBounds, TextPosition, TimeSeriesChunk, UiContent, UiEventRecord,
-    UiEventRow, VideoMetadata, MAX_TRANSCRIPTION_ATTEMPTS,
+    text_similarity::{is_similar_to_normalized, normalize_transcription},
+    AudioChunkProcessingSnapshot, AudioChunksResponse, AudioDevice, AudioEntry, AudioResult,
+    AudioResultRaw, ChunkOutcome, ContentType, DeviceType, Element, ElementRow, ElementSource,
+    FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord,
+    MeetingTranscriptSegment, MemoryRecord, MemorySyncRow, NewDiarizationSegment, OCREntry,
+    OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order, ReplacementAudioTranscription,
+    SearchMatch, SearchMatchGroup, SearchResult, Speaker, TagContentType, TextBounds, TextPosition,
+    TimeSeriesChunk, UiContent, UiEventRecord, UiEventRow, VideoMetadata,
+    MAX_TRANSCRIPTION_ATTEMPTS,
 };
 
 /// Time window (in seconds) to check for similar transcriptions across devices.
@@ -1501,9 +1502,12 @@ impl DatabaseManager {
         .fetch_all(&self.pool)
         .await?;
 
-        // Check similarity against each recent transcription
+        // Normalize the incoming transcription once, then reuse it across every
+        // recent row instead of re-tokenizing it on each comparison (up to 50x
+        // per inserted chunk, 24/7).
+        let new_words = normalize_transcription(transcription);
         for (existing,) in recent {
-            if is_similar_transcription(transcription, &existing, DEDUP_SIMILARITY_THRESHOLD) {
+            if is_similar_to_normalized(&new_words, &existing, DEDUP_SIMILARITY_THRESHOLD) {
                 return Ok(true);
             }
         }

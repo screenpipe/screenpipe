@@ -403,6 +403,16 @@
       "notes": "Pipes discover, install failure, connection modal, install, list, and play."
     },
     {
+      "spec": "pipes-mcp-connections.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["pipes", "real-ui-e2e", "local-api"],
+      "features": ["pipes", "connections"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies the mcp:<id> allowlist persists."
+    },
+    {
       "spec": "privacy-api-auth.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "storage-privacy", "real-ui-e2e"],

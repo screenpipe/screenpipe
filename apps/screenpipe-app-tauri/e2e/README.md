@@ -239,4 +239,5 @@ Saves to `e2e/videos/`.
 | `permission-recovery.spec.ts` | macOS recovery window smoke for missing TCC permissions, route wiring, dedupe, and clean close |
 | `owned-browser.spec.ts` | Verifies the embedded agent browser queues navigation and hides safely |
 | `pipes.spec.ts` | Opens Pipes section; verifies pipe store mounts without crash; navigates back to Home |
+| `pipes-mcp-connections.spec.ts` | Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies `mcp:<id>` persists in the pipe config |
 | `parallel-chat.spec.ts` | Drives chat-load-conversation + fake `pi_event` envelopes from the webview to walk Louis's repro: chat A → chat B → back to A. Asserts A's messages are still in the DOM (catches the "switch wipes A" regression) and that backgrounded streaming does NOT reorder sidebar rows. |

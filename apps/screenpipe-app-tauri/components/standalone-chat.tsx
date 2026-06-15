@@ -9059,7 +9059,7 @@ export function StandaloneChat({
 
         {/* Follow-up suggestions (TikTok-style) */}
         <AnimatePresence>
-          {!isLoading && followUpSuggestions.length > 0 && messages.length > 0 && (
+          {!isLoading && settings?.showChatSuggestions !== false && followUpSuggestions.length > 0 && messages.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
@@ -9067,7 +9067,18 @@ export function StandaloneChat({
               transition={{ duration: 0.2 }}
               className="px-5 sm:px-6 pt-2 flex flex-col gap-1"
             >
-              <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium">follow up</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium">follow up</span>
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ showChatSuggestions: false })}
+                  title="Hide chat suggestions — re-enable in Settings → Display"
+                  aria-label="Hide chat suggestions"
+                  className="-my-1 -mr-1 p-1 text-muted-foreground/40 hover:text-foreground transition-colors shrink-0"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {followUpSuggestions.map((q, i) => (
                   <button
@@ -9089,7 +9100,7 @@ export function StandaloneChat({
             opens a popover when narrow (e.g. BrowserSidebar squeezed the
             chat column). 520px is the rough threshold below which 3 chips
             wrap to multiple rows and eat too much vertical space. */}
-        {messages.length > 0 && !isLoading && connectionAwareSuggestions.length > 0 && (
+        {messages.length > 0 && !isLoading && settings?.showChatSuggestions !== false && connectionAwareSuggestions.length > 0 && (
           inputSectionWidth >= 520 ? (
             <div className="px-5 sm:px-6 pt-2 flex flex-wrap gap-1.5 items-center">
               {connectionAwareSuggestions.slice(0, 3).map((s, i) => (
@@ -9116,6 +9127,17 @@ export function StandaloneChat({
               >
                 <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               </button>
+              {followUpSuggestions.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ showChatSuggestions: false })}
+                  className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
+                  title="Hide chat suggestions — re-enable in Settings → Display"
+                  aria-label="Hide chat suggestions"
+                >
+                  <X className="w-3 h-3" strokeWidth={1.5} />
+                </button>
+              )}
             </div>
           ) : (
             <div className="px-5 sm:px-6 pt-2 flex items-center gap-1.5">
@@ -9165,6 +9187,17 @@ export function StandaloneChat({
               >
                 <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               </button>
+              {followUpSuggestions.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ showChatSuggestions: false })}
+                  className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
+                  title="Hide chat suggestions — re-enable in Settings → Display"
+                  aria-label="Hide chat suggestions"
+                >
+                  <X className="w-3 h-3" strokeWidth={1.5} />
+                </button>
+              )}
             </div>
           )
         )}
@@ -9522,125 +9555,125 @@ export function StandaloneChat({
                 )}
               </AnimatePresence>
             </div>
-            {/* Buttons row below textarea so scrollbar is above and full width is typeable */}
-            <div className="flex items-center gap-1.5 shrink-0 px-2 pb-2 pt-1">
-              <Popover open={appFilterOpen} onOpenChange={setAppFilterOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className={cn(
-                      "h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50 relative shrink-0",
-                      hasActiveFilters && "text-foreground bg-muted/50"
-                    )}
-                    title="Add attachments and filters"
-                    aria-label="Add attachments and filters"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {activeFilterCount > 0 && (
-                      <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full bg-foreground text-background text-[9px] font-mono font-semibold flex items-center justify-center">
-                        {activeFilterCount}
-                      </span>
-                    )}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="w-72 p-0 max-h-[420px] overflow-y-auto"
-                  align="start"
-                  side="top"
-                  sideOffset={6}
+          </div>
+          {/* Controls row — sits below the input box, not inside it */}
+          <div className="flex items-center gap-1.5 px-1 pt-2">
+            <Popover open={appFilterOpen} onOpenChange={setAppFilterOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className={cn(
+                    "h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50 relative shrink-0",
+                    hasActiveFilters && "text-foreground bg-muted/50"
+                  )}
+                  title="Add attachments and filters"
+                  aria-label="Add attachments and filters"
                 >
-                  {renderComposerUtilityMenu()}
-                </PopoverContent>
-              </Popover>
-              <div className="flex-1 min-w-0">
-                {hasActiveFilters && (
-                <div className="hidden sm:flex min-w-0 items-center gap-1 overflow-hidden">
-                  {activeFilterLabels.slice(0, 2).map((label, idx) => (
-                    <span
-                      key={`${label}-${idx}`}
-                      className="inline-flex h-6 max-w-[140px] items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground truncate"
-                      title={label}
-                    >
-                      {label}
-                    </span>
-                  ))}
-                  {activeFilterLabels.length > 2 && (
-                    <span className="inline-flex h-6 items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground shrink-0">
-                      +{activeFilterLabels.length - 2}
+                  <Plus className="h-4 w-4" />
+                  {activeFilterCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full bg-foreground text-background text-[9px] font-mono font-semibold flex items-center justify-center">
+                      {activeFilterCount}
                     </span>
                   )}
-                </div>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-72 p-0 max-h-[420px] overflow-y-auto"
+                align="start"
+                side="top"
+                sideOffset={6}
+              >
+                {renderComposerUtilityMenu()}
+              </PopoverContent>
+            </Popover>
+            <div className="flex-1 min-w-0">
+              {hasActiveFilters && (
+              <div className="hidden sm:flex min-w-0 items-center gap-1 overflow-hidden">
+                {activeFilterLabels.slice(0, 2).map((label, idx) => (
+                  <span
+                    key={`${label}-${idx}`}
+                    className="inline-flex h-6 max-w-[140px] items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground truncate"
+                    title={label}
+                  >
+                    {label}
+                  </span>
+                ))}
+                {activeFilterLabels.length > 2 && (
+                  <span className="inline-flex h-6 items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground shrink-0">
+                    +{activeFilterLabels.length - 2}
+                  </span>
                 )}
               </div>
-              <AIPresetsSelector
-                compact
-                showModelOnly
-                containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
-                triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
-                onPresetSaved={handlePiRestart}
-                controlledPresetId={
-                  activePreset?.id ??
-                  settings.aiPresets?.find((p) => p.defaultPreset)?.id ??
-                  settings.aiPresets?.[0]?.id ??
-                  null
-                }
-                onControlledSelect={(id) => {
-                  if (!id) return;
-                  const match = settings.aiPresets?.find((p) => p.id === id);
-                  if (!match) return;
-                  setActivePreset(match);
-                  if (!activePipeExecution) handlePiRestart(match);
-                }}
-              />
-              {(() => {
-                const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
-                const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
-                const isStopMode = primaryAction === "stop";
-                // Pending doc extraction blocks send (but not stop). The
-                // button stays visible but disabled — the spinning chip
-                // upstream is the affordance that explains why.
-                const hasPendingDocs = pendingDocs.length > 0;
-                const sendDisabled = (!hasInput && !isStopMode) || !canChat || (!isStopMode && hasPendingDocs);
-                return (
-                  <>
-                    <Button
-                      type={isStopMode ? "button" : "submit"}
-                      size="icon"
-                      disabled={sendDisabled}
-                      onClick={isStopMode ? handleStop : undefined}
-                      className={cn(
-                        "h-8 w-8 transition-all duration-200 relative",
-                        "bg-foreground text-background hover:bg-foreground/80"
-                      )}
-                      title={
-                        isStopMode
-                          ? "stop"
-                          : hasPendingDocs
-                            ? "waiting for attachment to finish extracting"
-                            : "send"
-                      }
-                      aria-label={
-                        isStopMode
-                          ? "stop reply"
-                          : hasPendingDocs
-                            ? "send disabled while attachment is extracting"
-                            : "send message"
-                      }
-                    >
-                      {isStopMode ? (
-                        <Square className="h-4 w-4" />
-                      ) : hasPendingDocs ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </>
-                );
-              })()}
+              )}
             </div>
+            <AIPresetsSelector
+              compact
+              showModelOnly
+              containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
+              triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
+              onPresetSaved={handlePiRestart}
+              controlledPresetId={
+                activePreset?.id ??
+                settings.aiPresets?.find((p) => p.defaultPreset)?.id ??
+                settings.aiPresets?.[0]?.id ??
+                null
+              }
+              onControlledSelect={(id) => {
+                if (!id) return;
+                const match = settings.aiPresets?.find((p) => p.id === id);
+                if (!match) return;
+                setActivePreset(match);
+                if (!activePipeExecution) handlePiRestart(match);
+              }}
+            />
+            {(() => {
+              const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
+              const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
+              const isStopMode = primaryAction === "stop";
+              // Pending doc extraction blocks send (but not stop). The
+              // button stays visible but disabled — the spinning chip
+              // upstream is the affordance that explains why.
+              const hasPendingDocs = pendingDocs.length > 0;
+              const sendDisabled = (!hasInput && !isStopMode) || !canChat || (!isStopMode && hasPendingDocs);
+              return (
+                <>
+                  <Button
+                    type={isStopMode ? "button" : "submit"}
+                    size="icon"
+                    disabled={sendDisabled}
+                    onClick={isStopMode ? handleStop : undefined}
+                    className={cn(
+                      "h-8 w-8 transition-all duration-200 relative",
+                      "bg-foreground text-background hover:bg-foreground/80"
+                    )}
+                    title={
+                      isStopMode
+                        ? "stop"
+                        : hasPendingDocs
+                          ? "waiting for attachment to finish extracting"
+                          : "send"
+                    }
+                    aria-label={
+                      isStopMode
+                        ? "stop reply"
+                        : hasPendingDocs
+                          ? "send disabled while attachment is extracting"
+                          : "send message"
+                    }
+                  >
+                    {isStopMode ? (
+                      <Square className="h-4 w-4" />
+                    ) : hasPendingDocs ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                  </Button>
+                </>
+              );
+            })()}
           </div>
 
           {/* Connect apps nudge banner — inside the form, below the input box */}
@@ -9684,6 +9717,7 @@ export function StandaloneChat({
             </div>
           )}
         </form>
+
       </div> {/* End of max-w-4xl input wrapper */}
       </div>
       </div> {/* End of chat column */}

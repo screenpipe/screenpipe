@@ -12,7 +12,10 @@ lazy_static! {
         (Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(), "SSN"),
 
         // Contact info
-        (Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b").unwrap(), "EMAIL"),
+        // TLD is letters only. `[A-Z|a-z]` was a bug: inside a character class
+        // `|` is a literal, so it also matched a pipe in the TLD (e.g. "a.c|m"),
+        // producing spurious EMAIL hits. `[A-Za-z]` is the intended set.
+        (Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(), "EMAIL"),
 
         // Phone numbers - require formatting to distinguish from numeric IDs (#2340):
         // +1-234-567-8901, (234) 567-8901, 234-567-8901, 234.567.8901, +12345678901
@@ -366,6 +369,18 @@ mod tests {
         assert!(!contains_pii("Hello World"));
         assert!(!contains_pii("1234"));
         assert!(!contains_pii("not an email"));
+    }
+
+    #[test]
+    fn test_email_tld_is_letters_only() {
+        // Regression: the TLD class previously included a literal `|`
+        // (`[A-Z|a-z]`), so a pipe in the TLD position was treated as an email.
+        assert!(!contains_pii("x@y.c|m"));
+        assert!(!contains_pii("user@host.a|b"));
+        assert_eq!(get_pii_type("x@y.c|m"), None);
+        // Genuine emails must still be detected.
+        assert!(contains_pii("test@example.com"));
+        assert!(contains_pii("user.name+tag@domain.co.uk"));
     }
 
     #[test]

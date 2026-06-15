@@ -228,6 +228,8 @@ pub struct SCServer {
     /// Shared pipe permission token registry — set before starting so PipeManager can use it.
     pub pipe_permissions:
         Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
+    /// Per-pipe MCP allowlist registry shared by PipeManager and /mcp-servers.
+    pub mcp_session_access: Option<screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry>,
     /// Shared manual meeting lock — pass in from binary so persister and server share the same state.
     pub manual_meeting: Option<Arc<tokio::sync::RwLock<Option<i64>>>>,
     /// Owned browser instance — set by the desktop shell so it can attach an
@@ -299,6 +301,7 @@ impl SCServer {
             hot_frame_cache: None,
             power_manager: None,
             pipe_permissions: Arc::new(DashMap::new()),
+            mcp_session_access: None,
             manual_meeting: None,
             owned_browser: None,
             api_auth: false,
@@ -341,6 +344,15 @@ impl SCServer {
     /// Set the pipe manager
     pub fn with_pipe_manager(mut self, pm: crate::pipes_api::SharedPipeManager) -> Self {
         self.pipe_manager = Some(pm);
+        self
+    }
+
+    /// Set the per-pipe MCP allowlist registry.
+    pub fn with_mcp_session_access(
+        mut self,
+        registry: screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry,
+    ) -> Self {
+        self.mcp_session_access = Some(registry);
         self
     }
 
@@ -950,7 +962,10 @@ impl SCServer {
                 self.screenpipe_dir.clone(),
                 self.secret_store.clone(),
             ));
-        let router = router.nest("/mcp-servers", crate::mcp_servers_api::router(mcp_store));
+        let router = router.nest(
+            "/mcp-servers",
+            crate::mcp_servers_api::router(mcp_store, self.mcp_session_access.clone()),
+        );
 
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {

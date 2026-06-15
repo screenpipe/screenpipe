@@ -303,6 +303,11 @@ export type Settings = SettingsStore & {
 	translucentSidebar?: boolean;
 	/** Hide model "thinking" reasoning blocks in chat (default: true) */
 	hideThinkingBlocks?: boolean;
+	/** Show the chat suggestion chips above the input — the "follow up"
+	 *  questions and the connection-aware suggested prompts. The single inline
+	 *  X on the chips flips this to false; re-enable from Settings → Display.
+	 *  Default true. */
+	showChatSuggestions?: boolean;
 	/** Auto-generate chat titles with the LLM after the first message.
 	 *  Costs one extra inference per new chat. Disable to save tokens —
 	 *  chats fall back to a title derived from the first message (default: true) */
