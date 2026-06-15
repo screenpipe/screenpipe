@@ -2811,6 +2811,10 @@ export function StandaloneChat({
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
+  // Mirrors of streaming-relevant state so the unmount-snapshot effect (which
+  // runs with `[]` deps) can read the latest values instead of stale closures.
+  const isLoadingRef = useRef(false);
+  const messagesRef = useRef<Message[]>([]);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -4123,6 +4127,50 @@ export function StandaloneChat({
   useEffect(() => {
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Snapshot the in-flight chat session into the store on unmount.
+  //
+  // The foreground panel keeps streaming tokens in local React state / refs
+  // (piStreamingTextRef, piContentBlocksRef, messages) — NOT live-mirrored to
+  // the chat-store, for render perf. When the panel unmounts mid-stream because
+  // the user navigated into the standalone /settings route (which tears down
+  // the whole home page), those local tokens would be lost and the background
+  // pi-event router — which takes over once foreground unregisters — would
+  // resume accumulating from a stale store point, leaving a gap in the reply.
+  //
+  // Mirrors the snapshot-on-switch in `loadConversation`: persist the current
+  // messages + streaming cursor so the router continues seamlessly and the
+  // return path (`loadConversation`) rehydrates the full content. Refs (not the
+  // closure values) so the `[]`-deps cleanup reads the latest state. Skipped for
+  // pipe-watch sessions, which are owned by `pipe-watch-writer` (snapshotting
+  // the panel's mirrored copy back would be a lossy round-trip).
+  useEffect(() => {
+    return () => {
+      const sid = piSessionIdRef.current;
+      if (!sid) return;
+      if (!isStreamingRef.current && !isLoadingRef.current) return;
+      const store = useChatStore.getState();
+      const existing = store.sessions[sid];
+      if (!existing || existing.kind === "pipe-watch") return;
+      store.actions.snapshotSession(sid, {
+        messages: messagesRef.current as any,
+        streamingText: piStreamingTextRef.current,
+        streamingMessageId: piMessageIdRef.current,
+        contentBlocks: [...piContentBlocksRef.current],
+        isStreaming: isStreamingRef.current,
+        isLoading: isLoadingRef.current,
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
@@ -6051,10 +6099,19 @@ export function StandaloneChat({
       unlistenLog?.();
       unlistenReauth?.();
       unlistenQueue?.();
-      // Abort any in-flight Pi request when navigating away from chat.
-      // Without this, Pi keeps streaming in the background and rejects
-      // new messages with "already processing" when the user returns.
-      commands.piAbort(piSessionIdRef.current).catch(() => {});
+      // Deliberately do NOT abort the Pi session here. Unmount happens when
+      // the user navigates away from chat (e.g. into the standalone /settings
+      // route, which unmounts the whole home page). Aborting would kill an
+      // in-flight response — the exact regression users hit ("opening Settings
+      // stops the current chat"). Instead we let the session keep streaming:
+      //   - the app-lifetime pi-event router (registerDefault) takes over once
+      //     this panel releases its foreground registration and accumulates
+      //     tokens into the chat-store while we're away;
+      //   - on return, `loadConversation` rehydrates that background-streamed
+      //     state and re-registers foreground, resuming exactly where we left.
+      // The old "already processing" hazard this guarded against is now handled
+      // by the Rust command queue (pi_command_queue.rs), which serializes/queues
+      // prompts instead of rejecting them.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

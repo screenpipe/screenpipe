@@ -243,6 +243,16 @@
       "notes": "Switching conversations during streaming must not corrupt state."
     },
     {
+      "spec": "chat-settings-background-stream.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "settings", "real-ui-e2e"],
+      "features": ["chat", "chat-streaming", "settings"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opening the standalone Settings route mid-stream must not abort the chat: a long synthetic stream keeps running while the user round-trips to Settings, remains live in Recents, and restores the full response (early + final tokens) after the row is clicked."
+    },
+    {
       "spec": "chat-window.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "window-lifecycle", "real-ui-e2e"],
