@@ -2216,11 +2216,13 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
-                    Some(format!("pipe:{pipe_name}").as_str()),
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe. When no pipe-watch is open the tag still won't
+                    // match any chat's conversationId (a UUID), so background
+                    // pipe navigations stay invisible to unrelated chats.
+                    Some(format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0)).as_str()),
                 ),
             )
             .await;
@@ -2709,11 +2711,12 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
-                    Some(format!("pipe:{name}").as_str()),
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe. Background navigations still stay invisible to
+                    // unrelated chats (UUIDs never match this prefix).
+                    Some(format!("pipe:{name}:{}", exec_id.unwrap_or(0)).as_str()),
                 ),
             )
             .await;
@@ -3889,8 +3892,9 @@ impl PipeManager {
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
-                                // Owner tag — see run_pipe_with_trigger.
-                                Some(format!("pipe:{pipe_name}").as_str()),
+                                // Owner tag — must match pipeSessionId() on the
+                                // frontend. See run_pipe_with_trigger.
+                                Some(format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0)).as_str()),
                             ),
                         )
                         .await;
