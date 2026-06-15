@@ -1269,12 +1269,16 @@ export const AIPresetsSelector = ({
       });
     }
 
-    // Notify parent to restart Pi if the saved preset is the active/default one
+    // Notify parent to restart Pi only when the edited preset is the one in use.
+    // In chat (controlled mode): the selected preset is the one active in chat.
+    // In Settings (non-controlled): fall back to checking the app-wide default.
     if (onPresetSaved) {
       const savedFull = { ...preset } as AIPreset;
-      const isDefault = selectedPresetToEdit?.defaultPreset ||
-        (!selectedPresetToEdit && settings.aiPresets.length === 0);
-      if (isDefault) {
+      const shouldNotify = isControlled
+        ? selectedPreset === preset.id
+        : selectedPresetToEdit?.defaultPreset ||
+          (!selectedPresetToEdit && settings.aiPresets.length === 0);
+      if (shouldNotify) {
         onPresetSaved(savedFull);
       }
     }
