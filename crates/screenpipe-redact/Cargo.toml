@@ -66,7 +66,11 @@ default = []
 
 # Enable the ONNX-based image redactor (rfdetr) AND the v45 phase 3
 # text redactor (xlm-roberta-base BIO token classifier). CPU baseline.
-onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:serde_json", "ort/download-binaries", "ort/tls-native", "ort/std"]
+# NOTE: the ONNX Runtime link strategy (download a pyke prebuilt vs.
+# load-dynamic at runtime) is NOT baked in here — it is target-conditional
+# in the per-target `[target.….dependencies.ort]` entries below, because
+# ort rc.12 ships no x86_64-apple-darwin prebuilt (Intel uses load-dynamic).
+onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:serde_json", "ort/tls-native", "ort/std"]
 # Mac: CoreML execution provider (uses Metal + ANE where available).
 onnx-coreml = ["onnx-cpu", "ort/coreml"]
 # Windows: DirectML EP (any DX12-capable GPU, no CUDA toolkit).
@@ -87,7 +91,33 @@ mlx-mac = ["dep:screenpipe-rfdetr-mlx"]
 
 [dependencies.ort]
 workspace = true
+default-features = false
 features = ["ndarray"]
+optional = true
+
+# ONNX Runtime link strategy, per target (additively merged into the base
+# entry above). aarch64-mac / linux / windows pull a pyke prebuilt exactly
+# as before. Intel mac has no rc.12 prebuilt, so it links against headers
+# only (load-dynamic) and loads the bundled libonnxruntime.dylib at runtime.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies.ort]
+workspace = true
+features = ["download-binaries", "copy-dylibs", "tracing", "api-24"]
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.ort]
+workspace = true
+features = ["download-binaries", "copy-dylibs", "tracing", "api-24"]
+optional = true
+
+[target.'cfg(target_os = "windows")'.dependencies.ort]
+workspace = true
+features = ["download-binaries", "copy-dylibs", "tracing", "api-24"]
+optional = true
+
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies.ort]
+workspace = true
+default-features = false
+features = ["load-dynamic", "api-24", "tracing"]
 optional = true
 
 [dependencies.ndarray]

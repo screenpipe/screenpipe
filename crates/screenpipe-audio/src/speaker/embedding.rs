@@ -26,9 +26,18 @@ impl EmbeddingExtractor {
     pub fn compute(&mut self, samples: &[f32]) -> Result<impl Iterator<Item = f32>> {
         // knf-rs exposes ndarray 0.16 types; the workspace is on 0.17 for
         // ort rc.12 — rebuild the array in our ndarray version via raw parts.
-        let features_016 = knf_rs::compute_fbank(samples)
-            .map_err(anyhow::Error::msg)
-            .context("compute_fbank failed")?;
+        //
+        // knf-rs also *panics* (Option::unwrap on None deep in
+        // OnlineGenericBaseFeature::InputFinished) when `samples` is too short
+        // to yield an fbank frame, unwinding the audio worker instead of
+        // returning an error — the highest-volume crash in the field
+        // (SCREENPIPE-CLI-3S). Run it under the same panic guard create_session
+        // uses so the caller skips the segment gracefully (see get_speaker_embedding).
+        let features_016 = super::catch_panic_into_error("compute_fbank", || {
+            knf_rs::compute_fbank(samples)
+                .map_err(anyhow::Error::msg)
+                .context("compute_fbank failed")
+        })?;
         let (rows, cols) = features_016.dim();
         let features: Array2<f32> =
             Array2::from_shape_vec((rows, cols), features_016.into_raw_vec())

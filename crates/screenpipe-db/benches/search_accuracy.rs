@@ -52,14 +52,14 @@ async fn get_test_words(pool: &sqlx::SqlitePool) -> Vec<String> {
             SELECT DISTINCT
                 LOWER(TRIM(
                     CASE
-                        WHEN instr(text, ' ') > 5
-                        THEN substr(text, instr(text, ' ')+1,
-                                    instr(substr(text, instr(text, ' ')+1), ' ')-1)
-                        ELSE substr(text, 1, 20)
+                        WHEN instr(full_text, ' ') > 5
+                        THEN substr(full_text, instr(full_text, ' ')+1,
+                                    instr(substr(full_text, instr(full_text, ' ')+1), ' ')-1)
+                        ELSE substr(full_text, 1, 20)
                     END
                 )) as word
-            FROM ocr_text
-            WHERE text IS NOT NULL AND LENGTH(text) > 20
+            FROM frames
+            WHERE full_text IS NOT NULL AND LENGTH(full_text) > 20
             ORDER BY RANDOM()
             LIMIT 3000
         )
@@ -103,11 +103,13 @@ async fn fts_prefix_search(pool: &sqlx::SqlitePool, query: &str) -> HashSet<i64>
 
 async fn like_search(pool: &sqlx::SqlitePool, query: &str) -> HashSet<i64> {
     let pattern = format!("%{}%", query.to_lowercase());
-    let rows = sqlx::query("SELECT frame_id FROM ocr_text WHERE LOWER(text) LIKE ?")
-        .bind(&pattern)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    let rows = sqlx::query(
+        "SELECT id FROM frames WHERE full_text IS NOT NULL AND LOWER(full_text) LIKE ?",
+    )
+    .bind(&pattern)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     rows.iter().map(|r| r.get::<i64, _>("id")).collect()
 }
@@ -121,7 +123,7 @@ async fn simulated_split_search(pool: &sqlx::SqlitePool, query: &str) -> HashSet
     let pattern = format!("%{}%", query.to_lowercase());
 
     // Get all LIKE matches
-    let rows = sqlx::query("SELECT frame_id, text FROM ocr_text WHERE LOWER(text) LIKE ?")
+    let rows = sqlx::query("SELECT id AS frame_id, full_text AS text FROM frames WHERE full_text IS NOT NULL AND LOWER(full_text) LIKE ?")
         .bind(&pattern)
         .fetch_all(pool)
         .await

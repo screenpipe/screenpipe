@@ -1415,6 +1415,8 @@ async fn main() -> anyhow::Result<()> {
         pipe_store,
         config.port,
     );
+    let mcp_session_access = screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
+    pipe_manager.set_mcp_session_access(mcp_session_access.clone());
     // Wire pipe permission token registry (bridges PipeManager ↔ server middleware)
     pipe_manager.set_token_registry(std::sync::Arc::new(
         screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
@@ -1444,19 +1446,7 @@ async fn main() -> anyhow::Result<()> {
             let ss = secret_store_for_check.clone();
             let dir = screenpipe_dir_for_check.clone();
             Box::pin(async move {
-                let mut missing = Vec::new();
-                for conn_id in required {
-                    let configured = screenpipe_connect::connections::is_connection_configured(
-                        ss.as_deref(),
-                        &dir,
-                        &conn_id,
-                    )
-                    .await;
-                    if !configured {
-                        missing.push(conn_id);
-                    }
-                }
-                missing
+                screenpipe_connect::missing_pipe_connections(ss.as_deref(), &dir, &required).await
             })
         }));
     }
@@ -1476,6 +1466,7 @@ async fn main() -> anyhow::Result<()> {
     let shared_pipe_manager = std::sync::Arc::new(tokio::sync::Mutex::new(pipe_manager));
     let server = server
         .with_pipe_manager(shared_pipe_manager.clone())
+        .with_mcp_session_access(mcp_session_access)
         .with_high_fps_controller(high_fps_controller.clone());
 
     // Install pi agent in background

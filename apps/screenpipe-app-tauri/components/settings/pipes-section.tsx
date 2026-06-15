@@ -33,6 +33,13 @@ import {
   Star,
 } from "lucide-react";
 import { usePipeFavorites } from "@/lib/hooks/use-pipe-favorites";
+import {
+  type AvailableConnection,
+  fetchAvailablePipeConnections,
+  isMcpConnectionKey,
+  pipeConnectionInstanceName,
+  pipeConnectionLookupKey,
+} from "@/lib/pipe-connections";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -140,6 +147,21 @@ enabled: true
 
 Your prompt instructions here...
 \`\`\`
+
+## connections
+
+if the pipe needs an external app or a user-configured MCP server, declare it in frontmatter:
+
+\`\`\`
+---
+schedule: every 30m
+connections:
+  - gmail
+  - mcp:my-server-id
+---
+\`\`\`
+
+custom MCP servers use \`mcp:<server_id>\`. only declared MCP servers are exposed to that pipe through \`sp_mcp_list_tools\` and \`sp_mcp_call\`.
 
 ## context header
 
@@ -326,20 +348,34 @@ interface PipeConfig {
   [key: string]: unknown;
 }
 
-interface AvailableConnection {
-  id: string;
-  name: string;
-  icon: string;
-  connected: boolean;
-  instances?: { instanceKey: string; instanceLabel: string }[];
-}
-
 interface PipeConnectionOption {
   key: string;
   label: string;
   connectionName: string;
   instanceName: string | null;
   connected: boolean;
+  kind?: "connection" | "mcp";
+}
+
+function pipeConnectionDisplayName(
+  connectionId: string,
+  connection: AvailableConnection | undefined,
+  instanceName: string | null
+): string {
+  if (instanceName) return `${connection?.name || pipeConnectionLookupKey(connectionId)} (${instanceName})`;
+  if (connection) return connection.name;
+  if (isMcpConnectionKey(connectionId)) return "deleted MCP server";
+  return connectionId;
+}
+
+function pipeConnectionSetupLabel(
+  connectionId: string,
+  connection: AvailableConnection | undefined
+): string {
+  if (isMcpConnectionKey(connectionId) && connection && !connection.connected) {
+    return "disabled";
+  }
+  return "setup";
 }
 
 function buildPipeConnectionOptions(
@@ -357,10 +393,9 @@ function buildPipeConnectionOptions(
             key: instance.instanceKey,
             label: instance.instanceLabel,
             connectionName: connection.name,
-            instanceName: instance.instanceKey.includes(":")
-              ? instance.instanceKey.split(":").slice(1).join(":")
-              : null,
+            instanceName: pipeConnectionInstanceName(instance.instanceKey),
             connected: connection.connected,
+            kind: connection.kind,
           }));
       }
 
@@ -372,10 +407,12 @@ function buildPipeConnectionOptions(
         connectionName: connection.name,
         instanceName: null,
         connected: connection.connected,
+        kind: connection.kind,
       }];
     })
     .sort((a, b) => {
       if (a.connected !== b.connected) return a.connected ? -1 : 1;
+      if (a.kind !== b.kind) return a.kind === "connection" ? -1 : 1;
       return a.label.localeCompare(b.label);
     });
 }
@@ -443,6 +480,7 @@ function PipeConnectionPicker({
           size="sm"
           className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5"
           aria-expanded={open}
+          data-testid="pipe-connection-add"
         >
           <Plus className="h-3 w-3" />
           add
@@ -475,6 +513,7 @@ function PipeConnectionPicker({
                 key={option.key}
                 type="button"
                 onClick={() => handleAdd(option.key)}
+                data-testid={`pipe-connection-option-${option.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
                 className="flex w-full items-center gap-2 border border-transparent px-2 py-2 text-left transition-colors duration-150 hover:border-border hover:bg-muted/50 focus-visible:border-foreground focus-visible:outline-none"
               >
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center border border-border bg-background">
@@ -485,7 +524,11 @@ function PipeConnectionPicker({
                     {option.label}
                   </span>
                   <span className="block truncate text-[11px] text-muted-foreground">
-                    {option.instanceName ? option.connectionName : "connection"}
+                    {option.kind === "mcp"
+                      ? "mcp server"
+                      : option.instanceName
+                        ? option.connectionName
+                        : "connection"}
                   </span>
                 </span>
                 <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -1080,31 +1123,10 @@ export function PipesSection() {
 
   const fetchConnections = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/connections`);
-      const data = await res.json();
-      if (data.data) {
-        const conns: AvailableConnection[] = data.data.map((c: any) => ({
-          id: c.id, name: c.name, icon: c.icon, connected: c.connected,
-        }));
-        // fetch instances for connected integrations to support multi-instance selection
-        await Promise.all(conns.filter(c => c.connected).map(async (c) => {
-          try {
-            const instRes = await fetch(`${apiBase}/connections/${c.id}/instances`);
-            if (!instRes.ok) return;
-            const instData = await instRes.json();
-            const list = instData.data || instData.instances || instData || [];
-            if (Array.isArray(list) && list.length > 1) {
-              c.instances = list.map((inst: any) => ({
-                instanceKey: inst.instance ? `${c.id}:${inst.instance}` : c.id,
-                instanceLabel: inst.instance ? `${c.name} (${inst.instance})` : c.name,
-              }));
-            }
-          } catch { /* ignore */ }
-        }));
-        setAvailableConnections(conns);
-      }
+      const next = await fetchAvailablePipeConnections(apiBase, availableConnections);
+      setAvailableConnections(next);
     } catch { /* server may not be running */ }
-  }, []);
+  }, [apiBase, availableConnections]);
 
   const checkForUpdates = useCallback(async () => {
     try {
@@ -1596,7 +1618,7 @@ export function PipesSection() {
       const requiredConnections: string[] = pipe?.config?.connections ?? [];
       if (requiredConnections.length > 0) {
         const missing = requiredConnections.filter((id) => {
-          const baseId = id.includes(":") ? id.split(":")[0] : id;
+          const baseId = pipeConnectionLookupKey(id);
           const conn = availableConnections.find((c) => c.id === baseId);
           return !conn || !conn.connected;
         });
@@ -2006,7 +2028,7 @@ export function PipesSection() {
                 : "now";
             const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
               // support instance keys like "notion:crm" — match on base id
-              const baseId = id.includes(":") ? id.split(":")[0] : id;
+              const baseId = pipeConnectionLookupKey(id);
               const conn = availableConnections.find((c) => c.id === baseId);
               return !conn || !conn.connected;
             });
@@ -2684,14 +2706,16 @@ export function PipesSection() {
                           <Label className="text-xs mb-2 block cursor-help" title="give the agent access to your apps (Slack, Obsidian, CRM, etc.) — credentials are fetched at runtime">connections</Label>
                           <div className="flex flex-wrap items-center gap-2">
                             {(pipe.config.connections || []).map((connId) => {
-                              const baseId = connId.includes(":") ? connId.split(":")[0] : connId;
-                              const instanceName = connId.includes(":") ? connId.split(":").slice(1).join(":") : null;
+                              const baseId = pipeConnectionLookupKey(connId);
+                              const instanceName = pipeConnectionInstanceName(connId);
                               const conn = availableConnections.find((c) => c.id === baseId);
                               const isConnected = conn?.connected ?? false;
-                              const label = instanceName ? `${conn?.name || baseId} (${instanceName})` : (conn?.name || connId);
+                              const label = pipeConnectionDisplayName(connId, conn, instanceName);
+                              const setupLabel = pipeConnectionSetupLabel(connId, conn);
                               return (
                                 <div
                                   key={connId}
+                                  title={isMcpConnectionKey(connId) && !conn ? connId : undefined}
                                   className={cn(
                                     "flex items-center gap-2 border px-3 py-1.5 text-xs font-mono transition-colors duration-150",
                                     isConnected ? "border-foreground/20" : "border-destructive/50"
@@ -2708,7 +2732,7 @@ export function PipesSection() {
                                         });
                                       }}
                                     >
-                                      {label} — setup
+                                      {label} — {setupLabel}
                                     </button>
                                   ) : (
                                     <span>{label}</span>
@@ -3253,23 +3277,17 @@ export function PipesSection() {
               // availableConnections are keyed by base ID ("notion").
               let latestConnections = availableConnections;
               try {
-                const res = await fetch(`${apiBase}/connections`);
-                const data = await res.json();
-                if (data.data) {
-                  latestConnections = data.data.map((c: any) => ({
-                    id: c.id,
-                    name: c.name,
-                    icon: c.icon,
-                    connected: c.connected,
-                  }));
-                }
+                latestConnections = await fetchAvailablePipeConnections(
+                  apiBase,
+                  availableConnections
+                );
               } catch {
                 // Fall back to current in-memory state if fetch fails.
               }
 
               // If any required connection is still missing, disable the pipe
               const stillMissing = connectionModal.connections.some((id) => {
-                const baseId = id.includes(":") ? id.split(":")[0] : id;
+                const baseId = pipeConnectionLookupKey(id);
                 const conn = latestConnections.find((c) => c.id === baseId);
                 return !conn || !conn.connected;
               });
@@ -3284,6 +3302,24 @@ export function PipesSection() {
           }}
           pipeName={connectionModal.pipeName}
           connections={connectionModal.connections}
+          onConnectionRemoved={(_connectionId, updatedConnections) => {
+            const pipeName = connectionModal.pipeName;
+            setConnectionModal((prev) =>
+              prev ? { ...prev, connections: updatedConnections } : prev
+            );
+            setPipes((prev) =>
+              prev.map((pipe) =>
+                pipe.config.name === pipeName
+                  ? {
+                      ...pipe,
+                      config: { ...pipe.config, connections: updatedConnections },
+                    }
+                  : pipe
+              )
+            );
+            fetchPipes();
+            fetchConnections();
+          }}
         />
       )}
 

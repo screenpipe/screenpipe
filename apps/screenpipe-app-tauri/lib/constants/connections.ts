@@ -138,7 +138,6 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   "input-monitoring": "System",
   "browser-url": "System",
   "user-browser": "System",
-  "apple-intelligence": "System",
   "voice-memos": "System",
 };
 
@@ -161,7 +160,6 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "chatgpt": "Search your screen history from ChatGPT",
   "browser-url": "Capture visited URLs from your browser in real time",
   "voice-memos": "Sync Apple Voice Memos for AI-powered search",
-  "apple-intelligence": "Connect Apple Intelligence writing tools",
   "input-monitoring": "Track keyboard & mouse for productivity insights",
   "apple-calendar": "Search Apple Calendar events with AI",
   "google-calendar": "Search Google Calendar events with AI",

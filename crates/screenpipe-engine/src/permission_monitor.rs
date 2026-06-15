@@ -142,7 +142,7 @@ pub fn start() -> Option<JoinHandle<()>> {
 ///
 /// Skipped silently during the wake grace period to avoid spurious
 /// lost→restored flashes after sleep/wake.
-pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<String>) {
+pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str>) {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
 
     // Suppress emissions during wake grace period. A real transition will
@@ -195,10 +195,10 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<Stri
     } else {
         info!(
             ?kind,
-            reason = reason.as_deref().unwrap_or("(unknown)"),
+            reason = reason.unwrap_or("(unknown)"),
             "permission lost"
         );
-        PermissionEvent::lost(kind, reason)
+        PermissionEvent::lost(kind, reason.map(str::to_owned))
     };
     let _ = send_event(evt.event_name(), evt);
 }
@@ -226,22 +226,22 @@ async fn run() {
         report_state(
             PermissionKind::ScreenRecording,
             granted(perms.screen_recording),
-            Some("poll".to_string()),
+            Some("poll"),
         );
         report_state(
             PermissionKind::Microphone,
             granted(perms.microphone),
-            Some("poll".to_string()),
+            Some("poll"),
         );
         report_state(
             PermissionKind::Accessibility,
             granted(perms.accessibility),
-            Some("poll".to_string()),
+            Some("poll"),
         );
         report_state(
             PermissionKind::Keychain,
             keychain_accessible(),
-            Some("poll".to_string()),
+            Some("poll"),
         );
     }
 }

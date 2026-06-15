@@ -5,10 +5,10 @@
 //! Background reconciliation worker.
 //!
 //! Runs on a separate tokio task off the capture hot path. Polls the
-//! database for un-redacted rows across the target text surfaces (OCR
-//! text, audio transcripts, accessibility text, typed/clipboard input,
-//! per-element text, and the consolidated `frames.full_text` search
-//! surface) and writes redacted versions back. Mirrors the existing FTS
+//! database for un-redacted rows across the target text surfaces (the
+//! consolidated `frames.full_text` search text, audio transcripts,
+//! accessibility text, typed/clipboard input, and per-element text) and
+//! writes redacted versions back. Mirrors the existing FTS
 //! / migration backfill workers in shape — pause / resume / status,
 //! idle-aware scheduling knobs, retry-with-backoff on transient errors.
 //!
@@ -49,9 +49,9 @@ pub struct WorkerConfig {
     pub idle_between_batches: Duration,
     /// Sleep when the queue IS empty (poll interval).
     pub poll_interval: Duration,
-    /// Tables to reconcile. Default: all of [`ALL_TARGET_TABLES`] (ocr,
-    /// audio, accessibility, ui_events:keyboard, ui_events:clipboard,
-    /// elements, frames:full_text).
+    /// Tables to reconcile. Default: all of [`ALL_TARGET_TABLES`]
+    /// (frames:full_text, audio, accessibility, ui_events:keyboard,
+    /// ui_events:clipboard, elements).
     pub tables: Vec<TargetTable>,
 }
 

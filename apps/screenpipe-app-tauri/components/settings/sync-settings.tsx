@@ -1238,7 +1238,7 @@ export function SyncSettings() {
       if (res.status === "error") throw new Error(res.error);
       const result = res.data;
       const parsed = typeof result === "string" ? JSON.parse(result) : result;
-      const total = (parsed.frames_deleted || 0) + (parsed.ocr_deleted || 0) + (parsed.audio_transcriptions_deleted || 0) + (parsed.ui_events_deleted || 0);
+      const total = (parsed.frames_deleted || 0) + (parsed.audio_transcriptions_deleted || 0) + (parsed.ui_events_deleted || 0);
       toast({
         title: "local data cleaned",
         description: `removed ${total} records synced from this device`,

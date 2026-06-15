@@ -26,7 +26,7 @@
 //! detected.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 use super::device_detection::InputDeviceKind;
@@ -48,6 +48,10 @@ const GAP_THRESHOLD_MULTIPLIER_WIRED: f64 = 3.0;
 /// Wired-only: log at `warn` if wall-clock gap exceeds this (ms) — indicates driver/load issues.
 const WIRED_GAP_WARN_MIN_ELAPSED_MS: f64 = 80.0;
 
+/// Wired-only: avoid warning every callback when a virtual device or overloaded
+/// host is chronically delivering multi-second gaps.
+const WIRED_GAP_WARN_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Per-device buffer that detects Bluetooth packet gaps and inserts silence.
 pub struct SourceBuffer {
     device_name: String,
@@ -63,6 +67,11 @@ pub struct SourceBuffer {
     /// Expected duration of a single chunk, derived from the first chunk we see.
     /// Updated as chunk sizes change.
     expected_chunk_duration_ms: Option<f64>,
+
+    /// Last time a large wired gap was logged at warn level. Detection and
+    /// silence insertion still happen for every gap; only noisy warnings are
+    /// rate-limited.
+    last_wired_gap_warn: Option<Instant>,
 
     // ── Statistics ────────────────────────────────────────────────────────────
     pub gaps_detected: u64,
@@ -82,6 +91,7 @@ impl SourceBuffer {
             pending: VecDeque::new(),
             last_chunk_time: None,
             expected_chunk_duration_ms: None,
+            last_wired_gap_warn: None,
             gaps_detected: 0,
             silence_inserted_samples: 0,
             chunks_received: 0,
@@ -131,7 +141,9 @@ impl SourceBuffer {
                         "[{}] bluetooth gap: {:.1}ms elapsed (expected {:.1}ms) → inserting {:.1}ms silence ({} samples)",
                         self.device_name, elapsed_ms, expected_ms, gap_ms, silence_samples
                     );
-                } else if elapsed_ms >= WIRED_GAP_WARN_MIN_ELAPSED_MS {
+                } else if elapsed_ms >= WIRED_GAP_WARN_MIN_ELAPSED_MS
+                    && self.should_warn_wired_gap(now)
+                {
                     warn!(
                         "[{}] large gap on wired device: {:.1}ms elapsed (expected {:.1}ms) → inserting {:.1}ms silence ({} samples)",
                         self.device_name,
@@ -185,6 +197,16 @@ impl SourceBuffer {
             "[{}] source-buffer stats: {} chunks, {} gaps, {:.0}ms silence inserted",
             self.device_name, self.chunks_received, self.gaps_detected, silence_ms
         );
+    }
+
+    fn should_warn_wired_gap(&mut self, now: Instant) -> bool {
+        match self.last_wired_gap_warn {
+            Some(last) if now.saturating_duration_since(last) < WIRED_GAP_WARN_INTERVAL => false,
+            _ => {
+                self.last_wired_gap_warn = Some(now);
+                true
+            }
+        }
     }
 }
 
@@ -244,6 +266,16 @@ mod tests {
         buf.drain_all();
 
         assert!(buf.gaps_detected > 0);
+    }
+
+    #[test]
+    fn wired_gap_warns_at_most_once_per_interval() {
+        let mut buf = SourceBuffer::new("Built-in Microphone", 16000);
+        let now = Instant::now();
+
+        assert!(buf.should_warn_wired_gap(now));
+        assert!(!buf.should_warn_wired_gap(now + Duration::from_secs(1)));
+        assert!(buf.should_warn_wired_gap(now + WIRED_GAP_WARN_INTERVAL + Duration::from_millis(1)));
     }
 
     #[test]

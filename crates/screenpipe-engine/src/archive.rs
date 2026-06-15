@@ -769,9 +769,10 @@ async fn get_archive_chunk(
         type OcrRow = (i64, String, bool, Option<String>, Option<String>);
         let ocr_results: Vec<OcrRow> = sqlx::query_as(
             r#"
-            SELECT frame_id, text, focused, app_name, window_name
-            FROM ocr_text
-            WHERE frame_id IN (SELECT value FROM json_each(?))
+            SELECT id AS frame_id, full_text AS text, COALESCE(focused, 0) AS focused, app_name, window_name
+            FROM frames
+            WHERE id IN (SELECT value FROM json_each(?))
+              AND full_text IS NOT NULL AND full_text != ''
             "#,
         )
         .bind(serde_json::to_string(&frame_ids).unwrap())
@@ -949,17 +950,15 @@ async fn do_cleanup(db: &Arc<DatabaseManager>, cutoff: DateTime<Utc>) -> anyhow:
         {
             Ok(result) => {
                 let batch_total = result.frames_deleted
-                    + result.ocr_deleted
                     + result.audio_transcriptions_deleted
                     + result.ui_events_deleted;
 
                 if batch_total > 0 {
                     any_deleted = true;
                     info!(
-                        "archive: batch deleted frames={} ocr={} audio={} ui_events={} \
+                        "archive: batch deleted frames={} audio={} ui_events={} \
                          (video_files={} snapshot_files={} audio_files={})",
                         result.frames_deleted,
-                        result.ocr_deleted,
                         result.audio_transcriptions_deleted,
                         result.ui_events_deleted,
                         result.video_files.len(),

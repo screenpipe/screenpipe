@@ -1416,10 +1416,13 @@ impl SettingsStore {
         settings.user_id = self
             .user
             .token
-            .as_ref()
+            .clone()
             .filter(|t| !t.is_empty())
-            .or(self.user.id.as_ref().filter(|id| !id.is_empty()))
-            .cloned()
+            // #3943: the token no longer persists in store.bin; fall back to the
+            // secret-store-backed cache (seeded at startup and on every sign-in)
+            // so the engine still gets the cloud Bearer.
+            .or_else(crate::auth_token::cached_cloud_token)
+            .or_else(|| self.user.id.clone().filter(|id| !id.is_empty()))
             .unwrap_or_default();
         // Fallback chain: userName setting → cloud name → cloud email
         settings.user_name = settings

@@ -133,7 +133,7 @@ pub async fn start_monitor_watcher(
                 permission_monitor::report_state(
                     PermissionKind::ScreenRecording,
                     false,
-                    Some("list_monitors PermissionDenied (startup)".to_string()),
+                    Some("list_monitors PermissionDenied (startup)"),
                 );
             }
             Err(e) => {
@@ -364,7 +364,7 @@ pub async fn start_monitor_watcher(
                         permission_monitor::report_state(
                             PermissionKind::ScreenRecording,
                             false,
-                            Some("list_monitors PermissionDenied (runtime)".to_string()),
+                            Some("list_monitors PermissionDenied (runtime)"),
                         );
                     }
                     // Back off to 30s when permission is denied instead of 2s

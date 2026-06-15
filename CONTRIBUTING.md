@@ -38,7 +38,7 @@ before you begin:
 
 4. **build the project**:
    ```bash
-   cargo build --release --features metal,apple-intelligence
+   cargo build --release --features metal
    ```
 
 5. **run screenpipe**:
@@ -50,7 +50,7 @@ before you begin:
    ```bash
    cd apps/screenpipe-app-tauri
    bun install
-   bun tauri build --features metal,apple-intelligence
+   bun tauri build --features metal
    ```
 
 ### windows

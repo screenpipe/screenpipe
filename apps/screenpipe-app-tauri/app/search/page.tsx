@@ -60,7 +60,7 @@ export default function SearchPage() {
 	}, []);
 
 	return (
-		<div className="w-screen bg-transparent">
+		<div className="w-screen h-screen bg-transparent">
 			<SearchModal
 				isOpen={true}
 				standalone

@@ -926,6 +926,14 @@ impl PiExecutor {
         std::fs::write(&models_tmp, serde_json::to_string_pretty(&models_config)?)?;
         std::fs::rename(&models_tmp, &models_path)?;
 
+        // models.json embeds the raw cloud JWT as the screenpipe provider's
+        // apiKey while signed in (#3943) — same hardening as auth.json below.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&models_path, std::fs::Permissions::from_mode(0o600));
+        }
+
         // -- auth.json: merge/remove screenpipe token, preserve other providers --
         // Only manage screenpipe auth when screenpipe provider is actually being used.
         if should_add_screenpipe {
@@ -1266,6 +1274,7 @@ impl PiExecutor {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
+        mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let mut cmd = build_async_command(pi_path);
@@ -1327,6 +1336,10 @@ impl PiExecutor {
         if let Some(ref key) = self.api_auth_key {
             cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
             cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
+        }
+
+        if let Some(ids) = mcp_server_allowlist {
+            cmd.env("SCREENPIPE_MCP_SERVER_ALLOWLIST", ids.join(","));
         }
 
         // Tag this run's local API calls with the owning chat/session so the
@@ -1588,6 +1601,7 @@ impl AgentExecutor for PiExecutor {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
+        mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
@@ -1647,6 +1661,7 @@ impl AgentExecutor for PiExecutor {
                 line_tx.clone(),
                 continue_session,
                 pipe_system_prompt,
+                mcp_server_allowlist,
                 session_owner,
             )
             .await?;
@@ -1680,6 +1695,7 @@ impl AgentExecutor for PiExecutor {
                     line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
+                    mcp_server_allowlist,
                     session_owner,
                 )
                 .await?;
@@ -1728,6 +1744,7 @@ impl AgentExecutor for PiExecutor {
                     line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
+                    mcp_server_allowlist,
                     session_owner,
                 )
                 .await?;

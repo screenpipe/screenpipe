@@ -277,7 +277,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=e22369a2f22ab49d72ad96cf4236aed980e61820#e22369a2f22ab49d72ad96cf4236aed980e61820"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "cc",
 ]
@@ -644,7 +644,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=e22369a2f22ab49d72ad96cf4236aed980e61820#e22369a2f22ab49d72ad96cf4236aed980e61820"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -7175,7 +7175,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=e22369a2f22ab49d72ad96cf4236aed980e61820#e22369a2f22ab49d72ad96cf4236aed980e61820"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "cc",
  "cmake",
@@ -8175,23 +8175,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "screenpipe-apple-intelligence"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "reqwest 0.13.3",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "uuid",
-]
-
-[[package]]
 name = "screenpipe-audio"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8254,7 +8239,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8292,7 +8277,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -8305,7 +8290,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8346,7 +8331,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8398,7 +8383,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8424,7 +8409,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8461,7 +8446,6 @@ dependencies = [
  "reqwest 0.13.3",
  "rpassword",
  "screenpipe-a11y",
- "screenpipe-apple-intelligence",
  "screenpipe-audio",
  "screenpipe-capture",
  "screenpipe-config",
@@ -8484,7 +8468,6 @@ dependencies = [
  "tikv-jemallocator",
  "tinfoil",
  "tokio",
- "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
  "tower 0.4.13",
@@ -8501,7 +8484,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8519,7 +8502,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "anyhow",
  "clap",
@@ -8531,7 +8514,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -8564,7 +8547,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "image",
  "mlx-rs",
@@ -8575,7 +8558,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -8633,7 +8616,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8655,7 +8638,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -8664,7 +8647,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "argon2",
  "chacha20poly1305",

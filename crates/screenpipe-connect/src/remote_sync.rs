@@ -116,11 +116,11 @@ SELECT timestamp, app_name, window_name, browser_url, accessibility_text
 FROM frames ORDER BY timestamp DESC LIMIT 20;
 ```
 
-**ocr_text** — OCR text from screen captures
+**frames.full_text** — OCR + accessibility text from screen captures
 ```sql
-SELECT f.timestamp, o.text, o.app_name, o.window_name
-FROM ocr_text o JOIN frames f ON o.frame_id = f.id
-WHERE o.text LIKE '%search%' ORDER BY f.timestamp DESC LIMIT 20;
+SELECT timestamp, full_text, app_name, window_name
+FROM frames
+WHERE full_text LIKE '%search%' ORDER BY timestamp DESC LIMIT 20;
 ```
 
 **audio_transcriptions** — Speech-to-text (mic + system audio)

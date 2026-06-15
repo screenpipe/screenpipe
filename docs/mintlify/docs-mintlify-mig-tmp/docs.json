@@ -39,7 +39,7 @@
           },
           {
             "group": "integrations",
-            "pages": ["chatgpt", "apple-intelligence", "ollama", "claude-code", "opencode", "openclaw", "cline", "continue", "gemini-cli", "copilot-cli", "obsidian", "msty"]
+            "pages": ["chatgpt", "ollama", "claude-code", "opencode", "openclaw", "cline", "continue", "gemini-cli", "copilot-cli", "obsidian", "msty"]
           },
           {
             "group": "reference",

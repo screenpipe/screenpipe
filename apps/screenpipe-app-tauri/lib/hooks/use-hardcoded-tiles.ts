@@ -141,7 +141,6 @@ export function useHardcodedTiles(): HardcodedTile[] {
       { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: false },
       { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
     ] as HardcodedTile[] : []),
-    ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false } as HardcodedTile] : []),
     ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted } as HardcodedTile] : []),
     ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: calendarConnected } as HardcodedTile] : []),
   ];

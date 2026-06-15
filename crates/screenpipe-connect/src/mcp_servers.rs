@@ -22,11 +22,12 @@
 
 use anyhow::{anyhow, Result};
 use base64::Engine as _;
+pub use screenpipe_core::pipes::connections::{parse_mcp_connection_id, MCP_CONNECTION_PREFIX};
 use screenpipe_secrets::SecretStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio as ProcessStdio;
 use std::sync::Arc;
@@ -245,6 +246,28 @@ struct McpServersFile {
 
 fn store_path(screenpipe_dir: &Path) -> PathBuf {
     screenpipe_dir.join("mcp_servers.json")
+}
+
+pub async fn is_mcp_connection_configured(screenpipe_dir: &Path, conn_id: &str) -> bool {
+    let Some(server_id) = parse_mcp_connection_id(conn_id) else {
+        return false;
+    };
+    let Ok(file) = load_file(screenpipe_dir).await else {
+        return false;
+    };
+    file.servers
+        .iter()
+        .any(|server| server.id == server_id && server.enabled)
+}
+
+pub async fn configured_mcp_connection_ids(screenpipe_dir: &Path) -> Result<HashSet<String>> {
+    let file = load_file(screenpipe_dir).await?;
+    Ok(file
+        .servers
+        .iter()
+        .filter(|server| server.enabled)
+        .map(|server| format!("{}{}", MCP_CONNECTION_PREFIX, server.id))
+        .collect())
 }
 
 /// Read the servers file. Returns an empty file when it doesn't exist yet.
@@ -1981,6 +2004,28 @@ fn truncate(s: &str, max: usize) -> String {
 /// loopback endpoints the pi-agent extension uses. Returns an empty
 /// string when no servers are registered.
 pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
+    render_context_for_ids(screenpipe_dir, api_port, None).await
+}
+
+/// Same as [`render_context`], but limited to MCP ids selected in a pipe's
+/// `connections` list (`mcp:<id>`).
+pub async fn render_context_for_connections(
+    screenpipe_dir: &Path,
+    api_port: u16,
+    connections: &[String],
+) -> String {
+    let ids: Vec<String> = connections
+        .iter()
+        .filter_map(|conn_id| parse_mcp_connection_id(conn_id).map(str::to_string))
+        .collect();
+    render_context_for_ids(screenpipe_dir, api_port, Some(&ids)).await
+}
+
+pub async fn render_context_for_ids(
+    screenpipe_dir: &Path,
+    api_port: u16,
+    allowed_ids: Option<&[String]>,
+) -> String {
     let file = match load_file(screenpipe_dir).await {
         Ok(f) => f,
         Err(e) => {
@@ -1988,7 +2033,16 @@ pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
             return String::new();
         }
     };
-    let enabled: Vec<_> = file.servers.iter().filter(|s| s.enabled).collect();
+    let enabled: Vec<_> = file
+        .servers
+        .iter()
+        .filter(|s| s.enabled)
+        .filter(|s| {
+            allowed_ids
+                .map(|ids| ids.iter().any(|id| id == &s.id))
+                .unwrap_or(true)
+        })
+        .collect();
     if enabled.is_empty() {
         return String::new();
     }
@@ -2152,6 +2206,64 @@ mod tests {
         assert!(ctx.contains("Brave Search (mcp:brave)"));
         assert!(!ctx.contains("Disabled"));
         assert!(ctx.contains("http://localhost:3030/mcp-servers/brave/tools"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_mcp_connection_id_accepts_only_mcp_prefix() {
+        assert_eq!(parse_mcp_connection_id("mcp:brave"), Some("brave"));
+        assert_eq!(
+            parse_mcp_connection_id("mcp:linear-workflows"),
+            Some("linear-workflows")
+        );
+        assert_eq!(parse_mcp_connection_id("mcp:"), None);
+        assert_eq!(parse_mcp_connection_id("gmail"), None);
+        assert_eq!(parse_mcp_connection_id("notion:crm"), None);
+    }
+
+    #[tokio::test]
+    async fn mcp_connection_configured_requires_existing_enabled_server() {
+        let dir = temp_dir();
+        let store = McpServerStore::new(dir.clone(), None);
+
+        store.upsert(sample_config("enabled"), None).await.unwrap();
+
+        let mut disabled = sample_config("disabled");
+        disabled.enabled = false;
+        store.upsert(disabled, None).await.unwrap();
+
+        assert!(is_mcp_connection_configured(&dir, "mcp:enabled").await);
+        assert!(!is_mcp_connection_configured(&dir, "mcp:disabled").await);
+        assert!(!is_mcp_connection_configured(&dir, "mcp:missing").await);
+        assert!(!is_mcp_connection_configured(&dir, "gmail").await);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_for_connections_filters_to_selected_mcp_servers() {
+        let dir = temp_dir();
+        let store = McpServerStore::new(dir.clone(), None);
+
+        let mut brave = sample_config("brave");
+        brave.name = "Brave Search".to_string();
+        store.upsert(brave, None).await.unwrap();
+
+        let mut linear = sample_config("linear");
+        linear.name = "Linear".to_string();
+        store.upsert(linear, None).await.unwrap();
+
+        let connections = vec!["gmail".to_string(), "mcp:linear".to_string()];
+        let ctx = render_context_for_connections(&dir, 3030, &connections).await;
+
+        assert!(ctx.contains("Linear (mcp:linear)"));
+        assert!(ctx.contains("http://localhost:3030/mcp-servers/linear/tools"));
+        assert!(!ctx.contains("Brave Search"));
+        assert!(!ctx.contains("mcp:brave"));
+
+        let empty = render_context_for_connections(&dir, 3030, &[]).await;
+        assert!(empty.is_empty());
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -16,7 +16,7 @@
  */
 
 import { AIProvider } from './base';
-import { Message, RequestBody, ResponseFormat } from '../types';
+import { Message, RequestBody, ResponseFormat, ToolCall } from '../types';
 import { VertexAIProvider } from './vertex';
 
 const MAX_RETRIES = 3;
@@ -221,6 +221,46 @@ export function resolveVertexMaasModel(model: string): { vertexId: string; regio
 	return null;
 }
 
+/**
+ * Backfill ids onto assistant `tool_calls` (and the matching tool result) that
+ * arrive without one. Vertex MaaS rejects the entire request with
+ * `400 INVALID_ARGUMENT "Expected the 'id' of a(n) 'assistant' 'tool_calls'
+ * array element to be populated"` when any assistant tool call has an empty or
+ * absent id — which happens after some clients reconstruct chat history
+ * (SCREENPIPE-AI-PROXY-C).
+ *
+ * We synthesize a stable id for each such call and hand the same id to the next
+ * tool result that is itself missing a `tool_call_id`, pairing them positionally
+ * (OpenAI emits tool results in call order). Running before the orphan filter in
+ * `formatMessages` means the synthesized ids are visible to it, so a repaired
+ * call/result pair survives instead of being dropped or 400ing. Well-formed
+ * messages (every tool call already has an id) pass through untouched.
+ */
+export function backfillToolCallIds(messages: Message[]): Message[] {
+	let counter = 0;
+	const pendingSynthIds: string[] = [];
+	return messages.map((msg) => {
+		if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls)) {
+			const calls = (msg as any).tool_calls as ToolCall[];
+			// Untouched unless at least one call is missing its id.
+			if (!calls.some((c) => !c?.id)) return msg;
+			const fixed = calls.map((c) => {
+				if (c && !c.id) {
+					const id = `call_auto_${counter++}`;
+					pendingSynthIds.push(id);
+					return { ...c, id };
+				}
+				return c;
+			});
+			return { ...msg, tool_calls: fixed };
+		}
+		if (msg.role === 'tool' && !msg.tool_call_id && pendingSynthIds.length > 0) {
+			return { ...msg, tool_call_id: pendingSynthIds.shift()! };
+		}
+		return msg;
+	});
+}
+
 export class VertexMaasProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -330,6 +370,12 @@ export class VertexMaasProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): any[] {
+		// Repair assistant tool_calls (and their matching tool result) that lack
+		// an id before anything else, so Vertex doesn't 400 with "Expected the
+		// 'id' of a(n) 'assistant' 'tool_calls' array element to be populated".
+		// Runs first so the orphan filter below sees the synthesized ids.
+		messages = backfillToolCallIds(messages);
+
 		// Drop orphan tool messages (tool_call_id with no matching assistant
 		// tool_calls earlier in the array, or a content `tool_result` part on
 		// a user/tool message whose id was never emitted). Vertex MaaS rejects

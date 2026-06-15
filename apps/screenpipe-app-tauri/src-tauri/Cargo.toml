@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.38"
+version = "2.5.41"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -270,9 +270,6 @@ official-build = []
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
 enterprise-build = ["dep:thiserror", "dep:screenpipe-sync"]
-
-# On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)
-apple-intelligence = ["screenpipe-engine/apple-intelligence"]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]

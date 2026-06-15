@@ -441,7 +441,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=e22369a2f22ab49d72ad96cf4236aed980e61820#e22369a2f22ab49d72ad96cf4236aed980e61820"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "cc",
 ]
@@ -938,7 +938,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=e22369a2f22ab49d72ad96cf4236aed980e61820#e22369a2f22ab49d72ad96cf4236aed980e61820"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -9743,7 +9743,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=e22369a2f22ab49d72ad96cf4236aed980e61820#e22369a2f22ab49d72ad96cf4236aed980e61820"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "cc",
  "cmake",
@@ -11096,16 +11096,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "screenpipe-apple-intelligence"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "screenpipe-audio"
 version = "0.4.19"
 dependencies = [
@@ -11343,7 +11333,6 @@ dependencies = [
  "reqwest 0.13.3",
  "rpassword",
  "screenpipe-a11y",
- "screenpipe-apple-intelligence",
  "screenpipe-audio",
  "screenpipe-capture",
  "screenpipe-config",
@@ -11365,7 +11354,6 @@ dependencies = [
  "tempfile",
  "tinfoil",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tower-http 0.5.2",
  "tracing",

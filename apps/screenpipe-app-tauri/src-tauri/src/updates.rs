@@ -50,7 +50,13 @@ pub async fn install_specific_version(app: &tauri::AppHandle, version: &str) -> 
 
     // Add auth header so R2 download works for paid users
     if let Ok(Some(settings)) = SettingsStore::get(app) {
-        if let Some(ref token) = settings.user.token {
+        if let Some(token) = settings
+            .user
+            .token
+            .clone()
+            .filter(|t| !t.is_empty())
+            .or_else(crate::auth_token::cached_cloud_token)
+        {
             builder = builder
                 .header("Authorization", format!("Bearer {}", token))
                 .map_err(|e| format!("failed to set auth header: {}", e))?;
@@ -432,7 +438,13 @@ impl UpdatesManager {
                 builder = builder.header("X-License-Key", license_key)?;
             }
         } else if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
-            if let Some(ref token) = settings.user.token {
+            if let Some(token) = settings
+                .user
+                .token
+                .clone()
+                .filter(|t| !t.is_empty())
+                .or_else(crate::auth_token::cached_cloud_token)
+            {
                 builder = builder.header("Authorization", format!("Bearer {}", token))?;
             }
         }

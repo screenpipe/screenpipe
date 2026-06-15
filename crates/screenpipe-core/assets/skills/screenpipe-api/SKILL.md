@@ -21,6 +21,8 @@ The `$SCREENPIPE_LOCAL_API_KEY` env var is already set in your environment. With
 
 API responses can be large. Always write curl output to a file first (`curl ... -o /tmp/sp_result.json`), check size (`wc -c /tmp/sp_result.json`), and if over 5KB read only the first 50-100 lines. Extract what you need with `jq`. NEVER dump full large responses into context.
 
+For the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) you can also cut tokens at the source: add `&format=csv` (or `tsv`) to get a columnar table that writes each column name once instead of repeating keys per row, and `&fields=a,b,c` to return only the columns you need (dotted paths like `content.text`). On a list of UI elements that is roughly a 70% token cut versus JSON. Text-heavy `ocr`/`audio` barely benefit (the text blob dominates), so reach for `fields` + `max_content_length` there. With no `format`/`fields` the response is unchanged JSON.
+
 ---
 
 ## 1. Activity Summary — `GET /activity-summary`
@@ -61,6 +63,8 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | `focused` | boolean | No | Only focused windows |
 | `tags` | string | No | Comma-separated; return only items carrying ALL of them (e.g. `person:ada,project:atlas`). Works for screen/audio and, with `content_type=memory`, memories. See Tags below. |
 | `max_content_length` | integer | No | Truncate each result's text (middle-truncation) |
+| `format` | string | No | `json` (default), `csv`, or `tsv`/`table`. CSV/TSV return a columnar table (column names written once) instead of one JSON object per row, much cheaper to read on list-shaped results. CSV is lossless; TSV collapses newlines (worse for long `ocr` text). |
+| `fields` | string | No | Comma-separated column allowlist of dotted paths, e.g. `type,content.app_name,content.text`. Returns only those columns (handy for dropping the repeated absolute `content.file_path`). Works for `json` too (sparse objects). |
 
 ### Tags — linking people, projects, topics
 
@@ -103,7 +107,12 @@ Lightweight FTS search across UI elements (~100-500 bytes each vs 5-20KB from `/
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/elements?q=Submit&start_time=1h%20ago&limit=10"
 ```
 
-Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`.
+Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, plus `format` (`json`/`csv`/`tsv`) and `fields` (dotted paths). Elements are uniform rows, so this is where the columnar format pays off most:
+
+```bash
+# compact table, only the columns you need (~70% fewer tokens than JSON)
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/elements?frame_id=12345&format=csv&fields=role,text,bounds.left,bounds.top"
+```
 
 ### Frame Context — `GET /frames/{id}/context`
 

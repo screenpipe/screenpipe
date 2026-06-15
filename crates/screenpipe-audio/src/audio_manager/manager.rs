@@ -1082,6 +1082,16 @@ impl AudioManager {
             .collect::<Vec<AudioDevice>>()
     }
 
+    /// Non-blocking read of the *configured* transcription mode. Returns `None`
+    /// if the options lock is momentarily contended, so callers such as
+    /// `/health` never block on it.
+    pub fn configured_transcription_mode(&self) -> Option<TranscriptionMode> {
+        self.options
+            .try_read()
+            .ok()
+            .map(|o| o.transcription_mode.clone())
+    }
+
     pub async fn enabled_devices(&self) -> HashSet<String> {
         self.options.read().await.enabled_devices.clone()
     }

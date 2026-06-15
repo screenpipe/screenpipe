@@ -11,14 +11,13 @@ export async function getStartDate() {
          SELECT
             f.timestamp,
             f.offset_index,
-            ot.text,
-            ot.app_name,
-            ot.window_name,
+            f.full_text as text,
+            f.app_name,
+            f.window_name,
             vc.device_name as screen_device,
             vc.file_path as video_path
          FROM frames f
          JOIN video_chunks vc ON f.video_chunk_id = vc.id
-         LEFT JOIN ocr_text ot ON f.id = ot.frame_id
          ORDER BY f.timestamp ASC, f.offset_index ASC
          LIMIT 1
 
