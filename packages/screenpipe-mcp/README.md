@@ -179,6 +179,7 @@ Get accessibility text, parsed tree nodes, and extracted URLs for a specific fra
 - All timestamps are handled in UTC
 - Results are formatted for readability in Claude's interface
 - macOS automation features require accessibility permissions
+- The MCP tools already return compact, readable text. If you instead call the underlying screenpipe REST API directly (e.g. via `curl`), the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) accept `?format=csv|tsv` for a columnar table (column names written once) and `?fields=a,b,c` to select only the columns you need (dotted paths like `content.text`). On list-shaped results that is roughly a 70% token cut versus the default JSON, which stays unchanged when neither param is set.
 
 ## Privacy Policy
 

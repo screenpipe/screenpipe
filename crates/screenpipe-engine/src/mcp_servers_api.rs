@@ -9,7 +9,7 @@
 //! credentials and connection state.
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -17,6 +17,7 @@ use chrono::Utc;
 use screenpipe_connect::mcp_servers::{
     McpAuthMode, McpHeader, McpServerConfig, McpServerStore, McpTransport,
 };
+use screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -27,6 +28,7 @@ pub type SharedMcpServerStore = Arc<McpServerStore>;
 #[derive(Clone)]
 pub struct McpServersState {
     pub store: SharedMcpServerStore,
+    pub session_access: Option<McpSessionAccessRegistry>,
 }
 
 #[derive(Deserialize)]
@@ -100,15 +102,31 @@ pub struct OAuthStartBody {
 // ---------------------------------------------------------------------------
 
 /// GET /mcp-servers — list all registered servers (no header values).
-async fn list_servers(State(state): State<McpServersState>) -> Response {
+async fn list_servers(State(state): State<McpServersState>, headers: HeaderMap) -> Response {
     match state.store.list().await {
-        Ok(list) => Json(json!({ "data": list })).into_response(),
+        Ok(list) => {
+            let session = session_id(&headers).map(str::to_string);
+            let mut allowed = Vec::new();
+            for server in list {
+                if mcp_server_allowed(&state, session.as_deref(), &server.id).await {
+                    allowed.push(server);
+                }
+            }
+            Json(json!({ "data": allowed })).into_response()
+        }
         Err(e) => internal_error(&e.to_string()),
     }
 }
 
 /// GET /mcp-servers/:id — single server detail (no header values).
-async fn get_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
+async fn get_server(
+    State(state): State<McpServersState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(resp) = ensure_mcp_server_allowed(&state, &headers, &id).await {
+        return resp;
+    }
     match state.store.get(&id).await {
         Ok(Some(cfg)) => Json(json!({ "data": cfg })).into_response(),
         Ok(None) => not_found(&id),
@@ -359,7 +377,14 @@ async fn test_ad_hoc(
 
 /// GET /mcp-servers/:id/tools — cached tools list (same wire format as
 /// `/test`, but suitable for the bridge extension to call cheaply).
-async fn list_tools(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
+async fn list_tools(
+    State(state): State<McpServersState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(resp) = ensure_mcp_server_allowed(&state, &headers, &id).await {
+        return resp;
+    }
     match state.store.probe_tools(&id).await {
         Ok(tools) => Json(json!({ "data": { "tools": tools } })).into_response(),
         Err(e) => bad_gateway(&e.to_string()),
@@ -369,9 +394,13 @@ async fn list_tools(State(state): State<McpServersState>, Path(id): Path<String>
 /// POST /mcp-servers/:id/call — forward a tool call.
 async fn call_tool(
     State(state): State<McpServersState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<CallBody>,
 ) -> Response {
+    if let Err(resp) = ensure_mcp_server_allowed(&state, &headers, &id).await {
+        return resp;
+    }
     match state.store.call_tool(&id, &body.tool, body.arguments).await {
         Ok(result) => Json(json!({ "data": result })).into_response(),
         Err(e) => bad_gateway(&e.to_string()),
@@ -498,12 +527,49 @@ fn bad_gateway(msg: &str) -> Response {
     (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
 }
 
+fn forbidden_mcp_server(id: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": format!("MCP server '{}' is not allowed for this pipe session", id)
+        })),
+    )
+        .into_response()
+}
+
 fn internal_error(msg: &str) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": msg })),
     )
         .into_response()
+}
+
+fn session_id(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-screenpipe-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+async fn mcp_server_allowed(state: &McpServersState, session: Option<&str>, id: &str) -> bool {
+    match &state.session_access {
+        Some(registry) => registry.is_allowed(session, id).await,
+        None => true,
+    }
+}
+
+async fn ensure_mcp_server_allowed(
+    state: &McpServersState,
+    headers: &HeaderMap,
+    id: &str,
+) -> Result<(), Response> {
+    if mcp_server_allowed(state, session_id(headers), id).await {
+        Ok(())
+    } else {
+        Err(forbidden_mcp_server(id))
+    }
 }
 
 fn not_found(id: &str) -> Response {
@@ -551,11 +617,17 @@ fn url_path_segment(value: &str) -> String {
 // Router
 // ---------------------------------------------------------------------------
 
-pub fn router<S>(store: SharedMcpServerStore) -> Router<S>
+pub fn router<S>(
+    store: SharedMcpServerStore,
+    session_access: Option<McpSessionAccessRegistry>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    let state = McpServersState { store };
+    let state = McpServersState {
+        store,
+        session_access,
+    };
     Router::new()
         .route("/", get(list_servers))
         // Ad-hoc probe (must be before /:id to avoid the literal "test"
@@ -718,5 +790,23 @@ mod tests {
         let input = vec![h("X-Token", "  raw value  ")];
         let out = normalise_supplied(input);
         assert_eq!(out[0].value, "  raw value  ");
+    }
+
+    #[tokio::test]
+    async fn mcp_server_allowed_enforces_registered_pipe_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = McpSessionAccessRegistry::new();
+        registry
+            .set_allowlist("pipe:scoped", ["linear".to_string()])
+            .await;
+        let state = McpServersState {
+            store: Arc::new(McpServerStore::new(dir.path().to_path_buf(), None)),
+            session_access: Some(registry),
+        };
+
+        assert!(mcp_server_allowed(&state, Some("pipe:scoped"), "linear").await);
+        assert!(!mcp_server_allowed(&state, Some("pipe:scoped"), "notion").await);
+        assert!(mcp_server_allowed(&state, Some("pipe:legacy"), "notion").await);
+        assert!(mcp_server_allowed(&state, None, "notion").await);
     }
 }

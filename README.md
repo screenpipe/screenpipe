@@ -236,9 +236,6 @@ screenpipe runs as an MCP server, allowing AI assistants to query your screen hi
 ### Developer API
 Full REST API running on localhost (default port 3030). Endpoints for searching screen content, audio, frames. Raw SQL access to the underlying SQLite database. JavaScript/TypeScript SDK available.
 
-### Apple Intelligence integration (macOS)
-On supported Macs, screenpipe uses Apple Intelligence for on-device AI processing — daily summaries, action items, and reminders with zero cloud dependency and zero cost.
-
 ## Privacy and security
 
 - **100% local by default**: All data stored on your device in a local SQLite database. Nothing sent to external servers.

@@ -31,3 +31,26 @@ export function resolveLatencyClass(request: Request, _body: RequestBody, env: E
 	if (hint === 'background' || hint === 'flex') return 'background';
 	return 'interactive';
 }
+
+/**
+ * Whether a request may use Gemini's flex service tier (50% off + cache-read
+ * discount, best-effort latency). Background traffic always is. Interactive
+ * traffic is too BY DEFAULT — interactive chat that landed on gemini-3.5-flash
+ * (vision waterfall, explicit picks) was billed full standard rate on
+ * prompt-caching-inflated histories, the single largest Gemini cost line.
+ *
+ * This is the only place chat is flexed; the latency CLASS stays interactive
+ * (so chain selection still leads with glm-5, not Gemini). tryModel gates actual
+ * flex application to Gemini attempts, and a flex 429 cascades to a standard-tier
+ * sibling, so the best-effort-latency exposure is bounded to the Gemini lane.
+ *
+ * Kill switches (CF dashboard vars, no redeploy):
+ *   FLEX_TIER_ENABLED=false      → no flex at all (background included)
+ *   GEMINI_FLEX_INTERACTIVE=false → revert just the interactive half
+ */
+export function isFlexEligible(latency: LatencyClass, env: Env): boolean {
+	const killSwitchOn = String((env as any)?.FLEX_TIER_ENABLED ?? 'true').toLowerCase() !== 'false';
+	if (!killSwitchOn) return false;
+	if (latency === 'background') return true;
+	return String((env as any)?.GEMINI_FLEX_INTERACTIVE ?? 'true').toLowerCase() !== 'false';
+}

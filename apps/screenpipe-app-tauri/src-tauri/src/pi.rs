@@ -515,6 +515,19 @@ pub(crate) fn clear_screenpipe_auth_token_files() -> Result<(), String> {
     remove_screenpipe_auth_from_path(&auth_path)
 }
 
+/// chmod 600 (unix): pi's `auth.json` / `models.json` embed the user's raw
+/// cloud JWT while signed in (#3943) — keep them out of reach of other local
+/// users. No-op on Windows (per-user ACLs already apply under %USERPROFILE%).
+fn harden_secret_file(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 /// Parse the output of `where pi` on Windows, preferring .cmd files
 /// This is extracted for testability
 #[cfg(windows)]
@@ -1258,6 +1271,7 @@ async fn ensure_pi_config(
         .map_err(|e| format!("Failed to serialize models config: {}", e))?;
     std::fs::write(&models_path, models_str)
         .map_err(|e| format!("Failed to write pi models config: {}", e))?;
+    harden_secret_file(&models_path);
 
     // -- auth.json: merge screenpipe token, preserve other providers --
     let auth_path = config_dir.join("auth.json");
@@ -1277,6 +1291,7 @@ async fn ensure_pi_config(
             .map_err(|e| format!("Failed to serialize auth: {}", e))?;
         std::fs::write(&auth_path, auth_str)
             .map_err(|e| format!("Failed to write pi auth: {}", e))?;
+        harden_secret_file(&auth_path);
     } else {
         remove_screenpipe_auth_from_path(&auth_path)?;
     }

@@ -206,6 +206,51 @@ async function openAccountSettings(): Promise<void> {
   await waitForTestId("account-login-status", 8_000);
 }
 
+/** Phase A is just setup, but it must survive a TRANSIENT cross-window
+ *  sign-out before the assertion can see the login.
+ *
+ *  Since #3943 the cloud token no longer rides along in the (stripped)
+ *  settings broadcast — it lives in the encrypted secret store. After home
+ *  logs in, any OTHER window that re-reads settings re-hydrates the fake
+ *  token via getCloudToken (use-settings get()), then its auto-refresh
+ *  effect fires loadUser(fakeToken) against the REAL /api/user. A window
+ *  that spawned (or reloaded) since before() has no /api/user mock, so it
+ *  401s and the interceptor broadcasts "screenpipe-auth-signout", clearing
+ *  the freshly-logged-in home window — Phase A then times out waiting for
+ *  the email. That auto-refresh stops after a single 401 ("token rejected,
+ *  stopping retries"), so the storm is bounded: re-cover every currently
+ *  open window with the mock, then re-establish the login until the email
+ *  shows AND stays for a settle window. The real regression assertion is
+ *  Phase B, which is left untouched (extra sign-outs only reinforce the
+ *  logged-out state it asserts). Returns true once a stable login holds. */
+async function establishStableLogin(): Promise<boolean> {
+  // Re-cover any window that appeared since before() installed the mock —
+  // e.g. the engine-restart + webview reload in the entitlement-gate spec
+  // that runs just before this one drops the patched fetch on that window.
+  await tuneUserFetchMockAllWindows(0, FAKE_EMAIL);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await tuneUserFetchMock(0, FAKE_EMAIL);
+    await emitDeepLink(`screenpipe://login?api_key=${FAKE_TOKEN}`);
+    try {
+      await browser.waitUntil(
+        async () => (await loginStatusText()).includes(FAKE_EMAIL.toLowerCase()),
+        { timeout: t(5_000), interval: 200 },
+      );
+    } catch {
+      // Never logged in this round (or a sign-out beat us to it). Let the
+      // bounded auto-refresh storm exhaust itself, then re-try.
+      await browser.pause(t(500));
+      continue;
+    }
+    // The email showed — confirm it STAYS (no cross-window sign-out lands
+    // right after) before we trust it as the Phase-B precondition.
+    await browser.pause(t(1_200));
+    if ((await loginStatusText()).includes(FAKE_EMAIL.toLowerCase())) return true;
+    await browser.pause(t(500));
+  }
+  return false;
+}
+
 describe("Logout is not resurrected by an in-flight loadUser", function () {
   this.timeout(180_000);
 
@@ -245,20 +290,13 @@ describe("Logout is not resurrected by an in-flight loadUser", function () {
 
   it("stays logged out after one click even when a slow loadUser resolves afterwards", async () => {
     // ── Phase A: log in (fast mock) so the logout button is present ──────────
-    await tuneUserFetchMock(0, FAKE_EMAIL);
-    await emitDeepLink(`screenpipe://login?api_key=${FAKE_TOKEN}`);
-    // Poll the FULL condition (status carries the fake email), not just
-    // "logged in as", so a one-frame settle can't slip a stale status into the
-    // assertion below. Phase A is setup; the real regression assertion is in
-    // Phase B.
-    await browser.waitUntil(
-      async () => (await loginStatusText()).includes(FAKE_EMAIL.toLowerCase()),
-      {
-        timeout: t(15_000),
-        interval: 250,
-        timeoutMsg: "did not log in via synthetic deep link",
-      },
-    );
+    // Re-establish the login until it holds: a non-home window can re-hydrate
+    // the fake token (#3943 secret store) and 401 the real /api/user, clearing
+    // this window mid-setup. establishStableLogin re-covers windows with the
+    // mock and retries until the email shows AND stays. Phase A is setup; the
+    // real regression assertion is Phase B.
+    const loggedIn = await establishStableLogin();
+    if (!loggedIn) throw new Error("did not log in via synthetic deep link");
     expect(await loginStatusText()).toContain(FAKE_EMAIL.toLowerCase());
 
     // Let the post-login auto-refresh loadUser (also fast) settle before we

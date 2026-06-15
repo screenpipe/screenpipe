@@ -82,6 +82,7 @@ pub trait AgentExecutor: Send + Sync {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         _pipe_system_prompt: Option<&str>,
+        _mcp_server_allowlist: Option<&[String]>,
         // Chat/session that owns this run (e.g. `pipe:<name>`). Exported to the
         // agent subprocess as `SCREENPIPE_SESSION_ID` so its local API calls are
         // tagged, letting the owned-browser sidebar keep a background pipe's

@@ -16,6 +16,8 @@ use std::sync::{
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
+use screenpipe_audio::audio_manager::builder::TranscriptionMode;
+
 use crate::server::AppState;
 use crate::ui_recorder::{
     tree_walker_snapshot, ui_recorder_status_snapshot, TreeWalkerSnapshot, UiRecorderStatus,
@@ -445,6 +447,30 @@ async fn get_audio_reconciliation_backlog(
     }
 
     result
+}
+
+/// Resolve the `transcription_mode` reported by `/health`.
+///
+/// Reports the *configured* mode (#3989). When the options lock is momentarily
+/// contended, `configured` is `None` and we fall back to the legacy
+/// observed-activity heuristic so `/health` stays non-blocking and still returns
+/// a best-effort value.
+fn transcription_mode_label(
+    configured: Option<TranscriptionMode>,
+    deferred: u64,
+    batch_processed: u64,
+) -> &'static str {
+    match configured {
+        Some(TranscriptionMode::Realtime) => "realtime",
+        Some(TranscriptionMode::Batch) => "batch",
+        None => {
+            if deferred > 0 || batch_processed > 0 {
+                "batch"
+            } else {
+                "realtime"
+            }
+        }
+    }
 }
 
 async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
@@ -1054,14 +1080,15 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 } else {
                     Some(device_names)
                 },
-                // Batch/Smart mode
-                transcription_mode: if audio_snap.segments_deferred > 0
-                    || audio_snap.segments_batch_processed > 0
-                {
-                    Some("batch".to_string())
-                } else {
-                    Some("realtime".to_string())
-                },
+                // Reflect the CONFIGURED mode, not observed activity (#3989).
+                transcription_mode: Some(
+                    transcription_mode_label(
+                        state.audio_manager.configured_transcription_mode(),
+                        audio_snap.segments_deferred,
+                        audio_snap.segments_batch_processed,
+                    )
+                    .to_string(),
+                ),
                 transcription_paused: Some(transcription_paused),
                 segments_deferred: if audio_snap.segments_deferred > 0 {
                     Some(audio_snap.segments_deferred)
@@ -1204,6 +1231,31 @@ pub async fn api_vision_status() -> JsonResponse<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_mode_reports_configuration_not_activity() {
+        // The #3989 bug fix: a batch-configured instance reports "batch"
+        // immediately at idle, before any deferred/batch activity is observed.
+        assert_eq!(
+            transcription_mode_label(Some(TranscriptionMode::Batch), 0, 0),
+            "batch"
+        );
+        // Realtime stays realtime even if batch activity counters are non-zero —
+        // configuration always wins over observed activity when the lock is readable.
+        assert_eq!(
+            transcription_mode_label(Some(TranscriptionMode::Realtime), 5, 3),
+            "realtime"
+        );
+    }
+
+    #[test]
+    fn transcription_mode_falls_back_to_activity_when_contended() {
+        // configured == None (options lock momentarily contended) → legacy
+        // observed-activity heuristic, keeping /health non-blocking.
+        assert_eq!(transcription_mode_label(None, 0, 0), "realtime");
+        assert_eq!(transcription_mode_label(None, 1, 0), "batch");
+        assert_eq!(transcription_mode_label(None, 0, 1), "batch");
+    }
 
     fn dummy_response(status: &str) -> HealthCheckResponse {
         HealthCheckResponse {

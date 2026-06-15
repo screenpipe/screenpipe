@@ -23,7 +23,6 @@ screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-redact = { path = "../screenpipe-redact", features = ["opf-text"] }
 screenpipe-a11y = { path = "../screenpipe-a11y", features = ["db"] }
 screenpipe-capture = { path = "../screenpipe-capture" }
-screenpipe-apple-intelligence = { path = "../screenpipe-apple-intelligence", optional = true }
 screenpipe-config = { path = "../screenpipe-config" }
 screenpipe-connect = { path = "../screenpipe-connect" }
 screenpipe-vault = { path = "../screenpipe-vault" }
@@ -54,7 +53,6 @@ sentry = { workspace = true }
 axum = { workspace = true }
 http-body-util = "0.1"
 tokio = { workspace = true }
-tokio-stream = { workspace = true }
 tower-http = { version = "0.5.2", features = ["cors", "trace"] }
 
 # Log
@@ -159,7 +157,6 @@ directml = ["screenpipe-audio/directml"]
 vulkan = ["screenpipe-audio/vulkan"]
 debug-console = ["console-subscriber"]
 pulseaudio = ["screenpipe-audio/pulseaudio"]
-apple-intelligence = ["dep:screenpipe-apple-intelligence"]
 qwen3-asr = ["screenpipe-audio/qwen3-asr"]
 parakeet = ["screenpipe-audio/parakeet"]
 parakeet-mlx = ["screenpipe-audio/parakeet-mlx"]

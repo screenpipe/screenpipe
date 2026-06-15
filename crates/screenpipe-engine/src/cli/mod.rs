@@ -1027,6 +1027,17 @@ impl RecordArgs {
             self.apply_explicit_overrides(&mut settings, sources);
         }
 
+        // #3943: the desktop app migrates the cloud token out of plaintext
+        // store.bin into the shared encrypted SecretStore. A standalone CLI
+        // run whose persisted settings carry no user token must look there,
+        // or cloud features (STT, screenpipe-cloud pipes) silently lose auth
+        // once the app has migrated.
+        if settings.effective_user_id().is_none() {
+            if let Some(token) = crate::auth_key::find_cloud_token(&data_dir).await {
+                settings.user_id = token;
+            }
+        }
+
         // First-launch tier detection for CLI users
         if settings.device_tier.is_none() {
             let config_path = data_dir.join("config.toml");

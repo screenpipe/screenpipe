@@ -200,14 +200,37 @@ impl PresetFallbackRegistry {
         }
     }
 
+    /// Persist state to disk, logging (rather than swallowing) any failure.
+    ///
+    /// A silently-dropped write here means tripped breakers, cooldown timers and
+    /// backoff counts never reach disk: on restart the registry reloads stale
+    /// state and may re-pick a preset that is rate-limited or out of credits, or
+    /// keep a recovered preset closed. We can't propagate from the call sites
+    /// (they're fire-and-forget), but a `warn!` makes the failure observable
+    /// instead of invisible — same lesson as the store.bin wipe fix.
     fn persist(&self, state: &PersistedState) {
-        // Atomic write: write to temp, rename
-        let tmp = self.persist_path.with_extension("json.tmp");
-        if let Ok(json) = serde_json::to_string_pretty(state) {
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.persist_path);
-            }
+        if let Err(e) = self.try_persist(state) {
+            warn!(
+                "failed to persist preset fallback state to {:?}: {}",
+                self.persist_path, e
+            );
         }
+    }
+
+    /// Atomic write: serialize to a temp file, then rename over the target.
+    /// Every failure mode (serialize, write, rename) is surfaced as an error
+    /// rather than dropped. On a failed rename the temp file is removed so a
+    /// stale `.json.tmp` can't linger next to the real state.
+    fn try_persist(&self, state: &PersistedState) -> std::io::Result<()> {
+        let tmp = self.persist_path.with_extension("json.tmp");
+        let json = serde_json::to_string_pretty(state)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&tmp, &json)?;
+        if let Err(e) = std::fs::rename(&tmp, &self.persist_path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Pick the best preset from the list, respecting circuit breakers.
@@ -592,5 +615,44 @@ mod tests {
     fn test_pick_preset_with_floor_empty() {
         let registry = fresh_registry("empty");
         assert_eq!(registry.pick_preset_with_floor(&[], 0), None);
+    }
+
+    /// A tripped breaker must actually survive on disk: persist then reload via
+    /// a fresh registry and confirm the state came back. Guards against a
+    /// `persist` that silently writes nothing (the store.bin failure class).
+    #[test]
+    fn test_state_persists_across_reload() {
+        let dir = std::env::temp_dir().join("sp_preset_fallback_reload");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        {
+            let registry = PresetFallbackRegistry::new(&dir);
+            assert!(registry.record_failure("primary", Some("rate_limited")));
+        }
+
+        // A brand-new registry reads only what made it to disk.
+        let reloaded = PresetFallbackRegistry::new(&dir);
+        let state = reloaded.state.lock().unwrap_or_else(|e| e.into_inner());
+        let breaker = state.presets.get("primary").expect("breaker persisted");
+        assert_eq!(breaker.state, BreakerState::Open);
+        assert_eq!(breaker.failure_count, 1);
+    }
+
+    /// A write that cannot land (parent directory missing) must surface an
+    /// error from `try_persist` rather than being swallowed. Cross-platform:
+    /// writing into a non-existent directory fails on every OS.
+    #[test]
+    fn test_persist_reports_error_when_unwritable() {
+        let dir = std::env::temp_dir().join("sp_preset_fallback_missing_parent");
+        let _ = std::fs::remove_dir_all(&dir); // ensure the parent does not exist
+        let registry = PresetFallbackRegistry::new(&dir);
+
+        let err = registry
+            .try_persist(&PersistedState::default())
+            .expect_err("persist into a missing directory must error");
+        // And no stray temp file should be left behind.
+        assert!(!dir.join("ai_preset_fallback.json.tmp").exists());
+        drop(err);
     }
 }

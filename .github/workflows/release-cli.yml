@@ -216,6 +216,23 @@ jobs:
               || echo "⚠️ Failed to download mlx.metallib"
           fi
 
+          # Bundle the x86_64 ONNX Runtime dylib next to the CLI binary. Intel
+          # mac uses load-dynamic (no rc.12 prebuilt); ort loads it from next to
+          # the executable at runtime. Signed so the hardened-runtime binary can
+          # load it (library validation). Homebrew bottle, immutable ghcr blob.
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            ORT_BLOB="https://ghcr.io/v2/homebrew/core/onnxruntime/blobs/sha256:afe69511a14f1b9351074b0bf9e5de65858d25a6795ab7f228ba78b149079c3d"
+            ORT_TMP="${RUNNER_TEMP:-/tmp}/ort-cli-$$"
+            mkdir -p "$ORT_TMP"
+            curl -fsSL -H "Authorization: Bearer QQ==" "$ORT_BLOB" -o "$ORT_TMP/bottle.tar.gz"
+            tar -xzf "$ORT_TMP/bottle.tar.gz" -C "$ORT_TMP"
+            ORT_DYLIB="$(find "$ORT_TMP" -name 'libonnxruntime*.dylib' | head -1)"
+            cp "$ORT_DYLIB" screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/libonnxruntime.dylib
+            codesign --force --options runtime --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" --timestamp screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/libonnxruntime.dylib
+            rm -rf "$ORT_TMP"
+            echo "✅ Bundled + signed libonnxruntime.dylib for Intel CLI"
+          fi
+
           tar -czf screenpipe-${{ env.VERSION }}-${{ matrix.target }}.tar.gz -C screenpipe-${{ env.VERSION }}-${{ matrix.target }} .
 
       - name: Calculate SHA256
@@ -630,7 +647,7 @@ jobs:
 
           # macOS x64
           mkdir -p packages/cli/screenpipe-darwin-x64/bin
-          cd artifacts/screenpipe-macos-x86_64-apple-darwin && tar -xzf screenpipe-*.tar.gz && cp bin/screenpipe ../../packages/cli/screenpipe-darwin-x64/bin/ && cd ../..
+          cd artifacts/screenpipe-macos-x86_64-apple-darwin && tar -xzf screenpipe-*.tar.gz && cp bin/screenpipe ../../packages/cli/screenpipe-darwin-x64/bin/ && (cp bin/libonnxruntime.dylib ../../packages/cli/screenpipe-darwin-x64/bin/ 2>/dev/null || true) && cd ../..
           chmod +x packages/cli/screenpipe-darwin-x64/bin/screenpipe
 
           # Linux x64

@@ -882,7 +882,7 @@ mod tests {
         .unwrap();
 
         let raw_ocr_text: Vec<(String, Option<i64>)> =
-            sqlx::query_as("SELECT text, frame_id FROM ocr_text")
+            sqlx::query_as("SELECT COALESCE(full_text, '') AS text, id AS frame_id FROM frames")
                 .fetch_all(&db.pool)
                 .await
                 .unwrap();

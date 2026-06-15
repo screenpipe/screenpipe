@@ -47,6 +47,15 @@ WHISPER_URL = ""
 # Legacy compat
 SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 
+# Cost / flex tuning knobs — read with a code default, so they live in the CF
+# dashboard (Settings → Variables), not here, and take effect with no redeploy:
+# - FLEX_TIER_ENABLED ("true"): master kill switch for the Vertex Gemini flex tier.
+# - GEMINI_FLEX_INTERACTIVE ("true"): also flex interactive Gemini, not just
+#   background. Set "false" to revert to background-only flex if best-effort
+#   latency hurts user-facing chat.
+# - MAX_DAILY_COST_PER_USER ("5"): base per-user daily $ cap; ×7 subscribed,
+#   ×0.64 logged_in, ×0.32 anonymous (getTierDailyCostCap). Credits extend 1:1.
+
 # Secrets (set via `wrangler secret put <NAME>`):
 # - VERTEX_SERVICE_ACCOUNT_JSON: GCP service account JSON for Vertex AI
 # - VERTEX_PROJECT_ID: Your GCP project ID

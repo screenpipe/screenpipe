@@ -8,28 +8,48 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 pub fn create_session<P: AsRef<Path>>(path: P) -> Result<ort::session::Session> {
-    let path = path.as_ref();
+    let path = path.as_ref().to_path_buf();
     // ort 2.0.0-rc.10 panics from inside its global OnceLock when the ONNX
     // Runtime API can't be initialized (Windows DLL/version mismatch hits
     // `expect("Failed to initialize ORT API")` at lib.rs:188). That panic
-    // bubbles up the tokio worker and Sentry — convert it to a normal error
-    // so callers fall back gracefully instead of crashing the runtime.
-    catch_panic_into_error(|| {
-        // ort rc.12: builder ops return `Error<SessionBuilder>` (recovery
-        // payload, not Send+Sync) — convert via Display for anyhow.
-        let oe = |e: &dyn std::fmt::Display| anyhow!("ort: {e}");
-        let b = ort::session::Session::builder().map_err(|e| oe(&e))?;
-        let b = b
-            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
-            .map_err(|e| oe(&e))?;
-        let b = b.with_intra_threads(1).map_err(|e| oe(&e))?;
-        let mut b = b.with_inter_threads(1).map_err(|e| oe(&e))?;
-        let session = b.commit_from_file(path).map_err(|e| oe(&e))?;
-        Ok(session)
-    })
+    // bubbles up the tokio worker and Sentry — `catch_panic_into_error`
+    // converts it to a normal error so callers fall back gracefully.
+    //
+    // ort rc.12 added a second, worse failure mode on the same global init: it
+    // can *hang* instead of panicking, which panic-catching cannot recover.
+    // This is the first ort call on the audio boot path, so a hang here freezes
+    // the `building_audio` phase forever and the engine never binds its port.
+    // Run the (blocking) session build under a watchdog so a hung runtime
+    // degrades to an error and the caller falls back (diarization off) instead
+    // of bricking startup. See `utils::ort_watchdog`.
+    crate::utils::ort_watchdog::run_with_timeout(
+        "ort session init",
+        crate::utils::ort_watchdog::ORT_INIT_TIMEOUT,
+        move || {
+            catch_panic_into_error("ort session init", || {
+                // ort rc.12: builder ops return `Error<SessionBuilder>` (recovery
+                // payload, not Send+Sync) — convert via Display for anyhow.
+                let oe = |e: &dyn std::fmt::Display| anyhow!("ort: {e}");
+                let b = ort::session::Session::builder().map_err(|e| oe(&e))?;
+                let b = b
+                    .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
+                    .map_err(|e| oe(&e))?;
+                let b = b.with_intra_threads(1).map_err(|e| oe(&e))?;
+                let mut b = b.with_inter_threads(1).map_err(|e| oe(&e))?;
+                let session = b.commit_from_file(&path).map_err(|e| oe(&e))?;
+                Ok(session)
+            })
+        },
+    )
 }
 
-fn catch_panic_into_error<F, T>(f: F) -> Result<T>
+/// Run `f`, converting any panic it unwinds into an error tagged with
+/// `context`. Both ort (FFI) and knf-rs (fbank) `unwrap()`/`expect()` deep in
+/// native bindings on bad input or environment mismatches; without this guard
+/// those panics unwind the audio/tokio worker and crash the runtime instead of
+/// being handled. The `context` names which guarded call failed so logs and
+/// Sentry stay legible (e.g. "ort session init" vs "compute_fbank").
+fn catch_panic_into_error<F, T>(context: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
 {
@@ -41,7 +61,7 @@ where
                 .map(|s| (*s).to_string())
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "unknown panic".to_string());
-            Err(anyhow!("ort session init panicked: {}", msg))
+            Err(anyhow!("{context} panicked: {msg}"))
         }
     }
 }
@@ -99,13 +119,14 @@ mod tests {
 
     #[test]
     fn catch_panic_into_error_passes_through_ok() {
-        let r: Result<i32> = catch_panic_into_error(|| Ok(7));
+        let r: Result<i32> = catch_panic_into_error("ort session init", || Ok(7));
         assert_eq!(r.unwrap(), 7);
     }
 
     #[test]
     fn catch_panic_into_error_passes_through_err() {
-        let r: Result<()> = catch_panic_into_error(|| Err(anyhow!("normal failure")));
+        let r: Result<()> =
+            catch_panic_into_error("ort session init", || Err(anyhow!("normal failure")));
         let msg = r.unwrap_err().to_string();
         assert!(msg.contains("normal failure"));
         assert!(!msg.contains("panicked"));
@@ -113,7 +134,7 @@ mod tests {
 
     #[test]
     fn catch_panic_into_error_catches_str_panic() {
-        let r: Result<()> = catch_panic_into_error(|| panic!("boom"));
+        let r: Result<()> = catch_panic_into_error("ort session init", || panic!("boom"));
         let msg = r.unwrap_err().to_string();
         assert!(msg.contains("ort session init panicked"));
         assert!(msg.contains("boom"));
@@ -121,7 +142,8 @@ mod tests {
 
     #[test]
     fn catch_panic_into_error_catches_string_panic() {
-        let r: Result<()> = catch_panic_into_error(|| panic!("formatted: {}", 42));
+        let r: Result<()> =
+            catch_panic_into_error("ort session init", || panic!("formatted: {}", 42));
         let msg = r.unwrap_err().to_string();
         assert!(msg.contains("ort session init panicked"));
         assert!(msg.contains("42"));
@@ -131,10 +153,35 @@ mod tests {
     fn catch_panic_into_error_simulates_ort_api_init_panic() {
         // Mirrors the exact panic ort 2.0.0-rc.10 raises at lib.rs:188 when
         // `NonNull::new(api).expect("Failed to initialize ORT API")` triggers.
-        let r: Result<()> = catch_panic_into_error(|| panic!("Failed to initialize ORT API"));
+        let r: Result<()> = catch_panic_into_error("ort session init", || {
+            panic!("Failed to initialize ORT API")
+        });
         let msg = r.unwrap_err().to_string();
         assert!(msg.contains("ort session init panicked"));
         assert!(msg.contains("Failed to initialize ORT API"));
+    }
+
+    #[test]
+    fn catch_panic_into_error_uses_supplied_context() {
+        // The context tag distinguishes which guarded call panicked. embedding.rs
+        // passes "compute_fbank"; make sure that label reaches the error.
+        let r: Result<()> = catch_panic_into_error("compute_fbank", || panic!("boom"));
+        let msg = r.unwrap_err().to_string();
+        assert!(msg.contains("compute_fbank panicked"), "got: {msg}");
+        assert!(msg.contains("boom"));
+    }
+
+    #[test]
+    fn compute_fbank_tiny_input_is_contained_by_guard() {
+        // SCREENPIPE-CLI-3S regression: knf-rs unwraps a None deep in
+        // OnlineGenericBaseFeature::InputFinished for buffers too short to yield
+        // a frame, unwinding the audio worker. Routing compute_fbank through the
+        // guard must contain that. Reaching the end of this test (no unwind) is
+        // the assertion; the result may be Ok or a handled Err depending on knf.
+        let guarded = catch_panic_into_error("compute_fbank", || {
+            knf_rs::compute_fbank(&[0.0f32; 16]).map_err(anyhow::Error::msg)
+        });
+        let _ = guarded;
     }
 
     #[test]

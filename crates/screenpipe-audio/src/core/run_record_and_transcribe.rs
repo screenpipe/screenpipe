@@ -343,8 +343,7 @@ async fn recv_audio_chunk(
 
     match recv_result {
         Ok(Ok(chunk)) => {
-            metrics.update_audio_level(&chunk);
-            metrics.update_audio_level_for_device(device_name, &chunk);
+            metrics.update_audio_levels(device_name, &chunk);
 
             if !is_silent_buffer(&chunk) {
                 *last_non_zero_at = Some(Instant::now());

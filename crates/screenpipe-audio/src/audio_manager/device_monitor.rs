@@ -63,24 +63,35 @@ fn is_device_type_running(
 
 use super::{AudioManager, AudioManagerStatus};
 
-/// Exponential backoff for output device recovery.
+/// Exponential backoff for device recovery.
 ///
 /// Transient errors (e.g., ScreenCaptureKit not yet initialized) use a short
 /// ceiling (8s) so recovery is fast when the system is just slow to start.
 ///
-/// Permanent errors (e.g., no display device exists) use a long ceiling (120s)
-/// to avoid spamming logs when recovery is impossible until hardware changes.
-struct OutputRecoveryBackoff {
+/// Permanent errors (e.g., no display/input device exists) use a longer ceiling
+/// to avoid spamming logs and device probes until hardware changes.
+struct DeviceRecoveryBackoff {
     attempts: u32,
     is_permanent: bool,
     last_attempt: Instant,
+    transient_max_secs: u64,
+    permanent_max_secs: u64,
 }
 
-impl OutputRecoveryBackoff {
+impl DeviceRecoveryBackoff {
     const TRANSIENT_MAX_SECS: u64 = 8;
-    const PERMANENT_MAX_SECS: u64 = 120;
+    const INPUT_PERMANENT_MAX_SECS: u64 = 30;
+    const OUTPUT_PERMANENT_MAX_SECS: u64 = 120;
 
-    fn new() -> Self {
+    fn for_input() -> Self {
+        Self::new(Self::TRANSIENT_MAX_SECS, Self::INPUT_PERMANENT_MAX_SECS)
+    }
+
+    fn for_output() -> Self {
+        Self::new(Self::TRANSIENT_MAX_SECS, Self::OUTPUT_PERMANENT_MAX_SECS)
+    }
+
+    fn new(transient_max_secs: u64, permanent_max_secs: u64) -> Self {
         Self {
             attempts: 0,
             is_permanent: false,
@@ -90,6 +101,8 @@ impl OutputRecoveryBackoff {
             last_attempt: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or(Instant::now()),
+            transient_max_secs,
+            permanent_max_secs,
         }
     }
 
@@ -108,9 +121,9 @@ impl OutputRecoveryBackoff {
             return 0;
         }
         let cap = if self.is_permanent {
-            Self::PERMANENT_MAX_SECS
+            self.permanent_max_secs
         } else {
-            Self::TRANSIENT_MAX_SECS
+            self.transient_max_secs
         };
         // 2^min(attempts, 10) capped at the ceiling
         let exp = 2u64.saturating_pow(self.attempts.min(10));
@@ -123,6 +136,13 @@ impl OutputRecoveryBackoff {
 fn is_permanent_output_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string();
     msg.contains("no display audio device found")
+}
+
+/// Returns true if the error from `default_input_device()` indicates a
+/// hardware-availability condition that won't resolve without a device change.
+fn is_permanent_input_error(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("No default input device detected")
 }
 
 /// Grace window before engaging a fallback for a missing pinned input device.
@@ -343,9 +363,8 @@ pub async fn start_device_monitor(
         // Track devices that repeatedly fail to start so we don't spam errors
         // every 2 seconds. After a failure, back off for increasing durations.
         let mut failed_devices: HashMap<String, (u32, Instant)> = HashMap::new();
-        let mut output_recovery_backoff = OutputRecoveryBackoff::new();
-        let mut no_input_retry_count: u32 = 0;
-        let mut last_no_input_log: Option<Instant> = None;
+        let mut input_recovery_backoff = DeviceRecoveryBackoff::for_input();
+        let mut output_recovery_backoff = DeviceRecoveryBackoff::for_output();
 
         // Central handler restart cooldown: max 3 restarts in a 5-minute window
         let mut central_restart_times: Vec<Instant> = Vec::new();
@@ -761,80 +780,77 @@ pub async fn start_device_monitor(
                     // Ensure an input device is actually running.
                     // Handles the case where the input device was lost after a
                     // server restart or device reconnection (e.g. AirPods).
-                    // No backoff — missing input audio is critical.
+                    // Fast initial recovery, then back off when the system has
+                    // no default input device. This keeps no-mic systems from
+                    // probing audio hardware every monitor tick forever.
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
-                        let user_disabled = audio_manager.user_disabled_devices().await;
                         let has_input = is_device_type_running(
                             &device_manager,
                             &current_enabled,
                             DeviceType::Input,
                         );
-                        // Don't try to recover if user explicitly disabled all inputs
-                        let all_inputs_user_disabled = !has_input && {
-                            match default_input_device() {
-                                Ok(d) => user_disabled.contains(&d.to_string()),
-                                Err(_) => false,
-                            }
-                        };
-
-                        if !has_input && !all_inputs_user_disabled {
-                            no_input_retry_count += 1;
-
-                            // Throttle logging after many retries to avoid spamming logs
-                            // (e.g. Bluetooth device disconnected permanently)
-                            let should_log = if no_input_retry_count <= 10 {
-                                true // always log first 10 attempts
+                        if !has_input {
+                            let backoff_secs = input_recovery_backoff.next_delay_secs();
+                            let elapsed = input_recovery_backoff.last_attempt.elapsed();
+                            if elapsed < Duration::from_secs(backoff_secs) {
+                                // Still within backoff window - skip this cycle.
                             } else {
-                                // After 10 attempts, log once per 60s
-                                match last_no_input_log {
-                                    Some(t) => t.elapsed().as_secs() >= 60,
-                                    None => true,
-                                }
-                            };
-
-                            match default_input_device() {
-                                Ok(default_input) => {
-                                    let device_name = default_input.to_string();
-                                    if should_log {
-                                        warn!(
-                                            "[DEVICE_RECOVERY] no input device running (attempt {}), starting default: {}",
-                                            no_input_retry_count, device_name
-                                        );
-                                        last_no_input_log = Some(Instant::now());
-                                    }
-                                    match audio_manager.start_device(&default_input).await {
-                                        Ok(()) => {
-                                            failed_devices.remove(&device_name);
-                                            default_tracker.last_input = Some(device_name.clone());
-                                            no_input_retry_count = 0;
-                                            info!(
-                                                "[DEVICE_RECOVERY] input device restored, device={}", device_name
+                                input_recovery_backoff.last_attempt = Instant::now();
+                                match default_input_device() {
+                                    Ok(default_input) => {
+                                        let device_name = default_input.to_string();
+                                        let user_disabled =
+                                            audio_manager.user_disabled_devices().await;
+                                        if user_disabled.contains(&device_name) {
+                                            input_recovery_backoff.record_failure(true);
+                                        } else {
+                                            warn!(
+                                                "[DEVICE_RECOVERY] no input device running (attempt {}), starting default: {}",
+                                                input_recovery_backoff.attempts, device_name
                                             );
-                                        }
-                                        Err(e) => {
-                                            if should_log {
-                                                warn!(
-                                                    "[DEVICE_RECOVERY] failed to start input device {} (attempt {}): {}",
-                                                    device_name, no_input_retry_count, e
-                                                );
-                                                last_no_input_log = Some(Instant::now());
+                                            match audio_manager.start_device(&default_input).await {
+                                                Ok(()) => {
+                                                    failed_devices.remove(&device_name);
+                                                    default_tracker.last_input =
+                                                        Some(device_name.clone());
+                                                    input_recovery_backoff.reset();
+                                                    info!(
+                                                        "[DEVICE_RECOVERY] input device restored, device={}", device_name
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    input_recovery_backoff.record_failure(false);
+                                                    warn!(
+                                                        "[DEVICE_RECOVERY] failed to start input device {} (attempt {}, next retry in {}s): {}",
+                                                        device_name,
+                                                        input_recovery_backoff.attempts,
+                                                        input_recovery_backoff.next_delay_secs(),
+                                                        e
+                                                    );
+                                                }
                                             }
                                         }
                                     }
-                                }
-                                Err(e) => {
-                                    if should_log {
-                                        warn!(
-                                            "[DEVICE_RECOVERY] no input device running and default_input_device() failed (attempt {}): {}",
-                                            no_input_retry_count, e
-                                        );
-                                        last_no_input_log = Some(Instant::now());
+                                    Err(e) => {
+                                        let is_permanent = is_permanent_input_error(&e);
+                                        input_recovery_backoff.record_failure(is_permanent);
+                                        if input_recovery_backoff.attempts <= 3
+                                            || input_recovery_backoff.attempts.is_multiple_of(30)
+                                        {
+                                            warn!(
+                                                "[DEVICE_RECOVERY] no input device available (attempt {}, {}, next retry in {}s): {}",
+                                                input_recovery_backoff.attempts,
+                                                if is_permanent { "permanent" } else { "transient" },
+                                                input_recovery_backoff.next_delay_secs(),
+                                                e
+                                            );
+                                        }
                                     }
                                 }
                             }
                         } else {
-                            no_input_retry_count = 0;
+                            input_recovery_backoff.reset();
                         }
                     }
 
@@ -1474,11 +1490,11 @@ mod tests {
         assert!(cd.record_restart()); // still exhausted
     }
 
-    // --- OutputRecoveryBackoff tests ---
+    // --- DeviceRecoveryBackoff tests ---
 
     #[test]
     fn test_backoff_initial_state() {
-        let b = OutputRecoveryBackoff::new();
+        let b = DeviceRecoveryBackoff::for_output();
         assert_eq!(b.attempts, 0);
         assert!(!b.is_permanent);
         assert_eq!(b.next_delay_secs(), 0); // no delay on first try
@@ -1486,7 +1502,7 @@ mod tests {
 
     #[test]
     fn test_backoff_transient_capped_at_8s() {
-        let mut b = OutputRecoveryBackoff::new();
+        let mut b = DeviceRecoveryBackoff::for_output();
         // Simulate transient failures
         b.record_failure(false); // attempt 1 → 2^1 = 2s
         assert_eq!(b.next_delay_secs(), 2);
@@ -1500,7 +1516,7 @@ mod tests {
 
     #[test]
     fn test_backoff_permanent_capped_at_120s() {
-        let mut b = OutputRecoveryBackoff::new();
+        let mut b = DeviceRecoveryBackoff::for_output();
         b.record_failure(true); // 2s
         assert_eq!(b.next_delay_secs(), 2);
         b.record_failure(true); // 4s
@@ -1520,8 +1536,17 @@ mod tests {
     }
 
     #[test]
+    fn test_input_backoff_permanent_capped_at_30s() {
+        let mut b = DeviceRecoveryBackoff::for_input();
+        for _ in 0..10 {
+            b.record_failure(true);
+        }
+        assert_eq!(b.next_delay_secs(), 30);
+    }
+
+    #[test]
     fn test_backoff_reset_clears_state() {
-        let mut b = OutputRecoveryBackoff::new();
+        let mut b = DeviceRecoveryBackoff::for_output();
         b.record_failure(true);
         b.record_failure(true);
         b.record_failure(true);
@@ -1536,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_backoff_transient_then_permanent_escalates() {
-        let mut b = OutputRecoveryBackoff::new();
+        let mut b = DeviceRecoveryBackoff::for_output();
         b.record_failure(false); // transient
         b.record_failure(false); // transient, 4s
         assert_eq!(b.next_delay_secs(), 4); // capped at transient max
@@ -1561,6 +1586,15 @@ mod tests {
 
         let other = anyhow::anyhow!("some random error");
         assert!(!is_permanent_output_error(&other));
+    }
+
+    #[test]
+    fn test_is_permanent_input_error() {
+        let permanent = anyhow::anyhow!("No default input device detected");
+        assert!(is_permanent_input_error(&permanent));
+
+        let transient = anyhow::anyhow!("failed to query default input device: timeout");
+        assert!(!is_permanent_input_error(&transient));
     }
 
     #[test]

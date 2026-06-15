@@ -5,6 +5,7 @@ import { Env, RequestBody } from '../types';
 import { createProvider, resolveModelAlias } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
+import { isFlexEligible } from '../utils/latency';
 import { captureException } from '@sentry/cloudflare';
 
 // Auto model waterfall — open-weight Vertex MaaS picks ordered by quality
@@ -445,16 +446,20 @@ export async function handleChatCompletions(
 
   body = ensureScreenpipeHint(body);
 
-  // Background (latency-tolerant) traffic gets the flex Gemini lane.
-  const flexEligible = latency === 'background';
+  // Flex (Vertex's 50%-off, cache-read-discounted Gemini lane) now applies to
+  // interactive Gemini too, not just background — see isFlexEligible. tryModel
+  // scopes it to Gemini attempts; a flex 429 cascades to a standard sibling.
+  const flexEligible = isFlexEligible(latency, env);
 
-  // Auto model: smart waterfall through curated chain. Background swaps to the
-  // flex-first chain; vision already leads with gemini-3.5-flash, so flex is
-  // applied to it via flexEligible without a separate chain.
+  // Chain selection stays keyed on latency: interactive 'auto' still leads with
+  // glm-5 (free MaaS), background swaps to the flex-first Gemini chain. Flex is
+  // applied to whichever Gemini entries the chosen chain hits, via flexEligible.
+  const useBackgroundChain = latency === 'background';
+
   if (body.model === 'auto') {
     const chain = hasImages(body)
       ? AUTO_WATERFALL_VISION
-      : (flexEligible ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL);
+      : (useBackgroundChain ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL);
     const result = await runChain(chain, body, env, 'auto', flexEligible);
     if ('response' in result) {
       return addCorsHeaders(addModelHeader(result.response, result.model));
