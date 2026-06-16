@@ -168,10 +168,15 @@ lto = "thin"
 codegen-units = 16
 incremental = true
 
-# Faster dev builds - optimize dependencies but keep local code debuggable
+# Faster dev builds
 [profile.dev]
 opt-level = 0
+codegen-units = 256
+incremental = false
+debug = false
 
 [profile.dev.package."*"]
-opt-level = 2      # Optimize all dependencies (faster runtime, same compile time)
-debug = false      # deps don't need debug symbols — keeps target/ from ballooning
+opt-level = 0
+codegen-units = 256
+incremental = false
+debug = false
