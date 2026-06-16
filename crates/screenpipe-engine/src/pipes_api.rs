@@ -224,7 +224,14 @@ pub async fn run_pipe_now(
 pub async fn stop_pipe(State(pm): State<SharedPipeManager>, Path(id): Path<String>) -> Json<Value> {
     let mgr = pm.lock().await;
     match mgr.stop_pipe(&id).await {
-        Ok(()) => Json(json!({ "success": true })),
+        Ok(status) => Json(json!({
+            "success": matches!(
+                status,
+                screenpipe_core::pipes::PipeStopStatus::Stopping
+                    | screenpipe_core::pipes::PipeStopStatus::StopPending
+            ),
+            "status": status,
+        })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
 }

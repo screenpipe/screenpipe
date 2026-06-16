@@ -91,8 +91,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/use-toast";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
+import { requestPipeStop } from "@/lib/pipe-stop";
 
 interface ChatSidebarProps {
   className?: string;
@@ -528,9 +530,14 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   // confirms the stop.
   const handleStopRun = async (pipeName: string) => {
     try {
-      await localFetch(`/pipes/${encodeURIComponent(pipeName)}/stop`, {
-        method: "POST",
-      });
+      const result = await requestPipeStop(pipeName);
+      if (!result.ok && result.status !== "not_running") {
+        toast({
+          title: "pipe stop failed",
+          description: result.error,
+          variant: "destructive",
+        });
+      }
     } catch {
       // best-effort — the user can retry; if the pipe already finished
       // the next poll will remove the row anyway.

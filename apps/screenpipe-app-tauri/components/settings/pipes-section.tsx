@@ -121,6 +121,7 @@ import posthog from "posthog-js";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch } from "lucide-react";
+import { requestPipeStop } from "@/lib/pipe-stop";
 
 const PIPE_CREATION_PROMPT = `create a screenpipe pipe that does the following.
 
@@ -1650,13 +1651,21 @@ export function PipesSection() {
     posthog.capture("pipe_stopped", { pipe: name });
     setStoppingPipe(name);
     try {
-      await fetch(`${apiBase}/pipes/${name}/stop`, {
-        method: "POST",
-      });
+      const result = await requestPipeStop(name, { apiBase });
+      if (!result.ok && result.status !== "not_running") {
+        throw new Error(result.error);
+      }
       if (expanded === name) {
         fetchLogs(name);
         fetchExecutions(name);
       }
+    } catch (error) {
+      toast({
+        title: "pipe stop failed",
+        description:
+          error instanceof Error ? error.message : `could not stop "${name}"`,
+        variant: "destructive",
+      });
     } finally {
       setStoppingPipe(null);
       fetchPipes();

@@ -148,6 +148,7 @@ import {
   isQueuedItemSteerShortcut,
   normalizeQueueEventPayload,
 } from "@/lib/chat-queue-controls";
+import { requestPipeStop } from "@/lib/pipe-stop";
 
 const MermaidDiagram = React.lazy(() =>
   import("@/components/rewind/mermaid-diagram").then((mod) => ({
@@ -8040,6 +8041,26 @@ export function StandaloneChat({
   };
 
   const handleStop = async () => {
+    if (activePipeExecution) {
+      const result = await requestPipeStop(activePipeExecution.name);
+      if (!result.ok && result.status !== "not_running") {
+        toast({
+          title: "pipe stop failed",
+          description: result.error,
+          variant: "destructive",
+        });
+      } else if (result.ok) {
+        toast({
+          title: "stopping pipe",
+          description:
+            result.status === "stop_pending"
+              ? `${activePipeExecution.name} will stop as soon as the agent subprocess finishes spawning`
+              : `${activePipeExecution.name} is shutting down`,
+        });
+      }
+      return;
+    }
+
     piActiveStopRequestedRef.current = true;
     try {
       await commands.piAbortActive(piSessionIdRef.current);
