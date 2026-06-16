@@ -10,9 +10,11 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { commands } from "@/lib/utils/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Loader2, Lock, LogOut, Plus, Table2 } from "lucide-react";
+import { AlertTriangle, Loader2, Lock, LogOut, Plus, Table2 } from "lucide-react";
 import posthog from "posthog-js";
 import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
+
+const GOOGLE_SHEETS_TEMPORARILY_DISABLED = true;
 
 interface SheetsAccount {
   instance: string | null;
@@ -120,6 +122,24 @@ export function GoogleSheetsCard({
               create, and update spreadsheets.
             </p>
 
+            {GOOGLE_SHEETS_TEMPORARILY_DISABLED && !connected && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <div className="space-y-1">
+                    <p className="font-medium text-amber-100">
+                      Google Sheets connection is temporarily unavailable
+                    </p>
+                    <p>
+                      The current OAuth configuration still requests a Sheets scope
+                      that is not on the approved consent screen. This entry stays
+                      disabled until the verification scope set is updated.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {accounts.length > 0 && (
               <div className="space-y-2 mb-3">
                 {accounts.map((account) => {
@@ -167,7 +187,7 @@ export function GoogleSheetsCard({
                   variant="outline"
                   size="sm"
                   onClick={handleConnect}
-                  disabled={isConnecting}
+                  disabled={isConnecting || GOOGLE_SHEETS_TEMPORARILY_DISABLED}
                   className="text-xs"
                 >
                   {isConnecting ? (
@@ -181,9 +201,11 @@ export function GoogleSheetsCard({
                     ? "Waiting for Google..."
                     : connected
                     ? "Add another account"
+                    : GOOGLE_SHEETS_TEMPORARILY_DISABLED
+                    ? "Temporarily disabled"
                     : "Connect Google Sheets"}
                 </Button>
-                {!connected && <GoogleOAuthUnverifiedAppHint />}
+                {!connected && !GOOGLE_SHEETS_TEMPORARILY_DISABLED && <GoogleOAuthUnverifiedAppHint />}
               </div>
             )}
           </div>
