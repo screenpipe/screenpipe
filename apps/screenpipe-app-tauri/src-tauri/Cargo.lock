@@ -87,7 +87,7 @@ dependencies = [
  "mime",
  "percent-encoding",
  "pin-project-lite",
- "smallvec 1.15.1",
+ "smallvec",
  "tokio",
  "tokio-util",
  "tracing",
@@ -186,7 +186,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "smallvec 1.15.1",
+ "smallvec",
  "socket2 0.6.3",
  "time",
  "tracing",
@@ -424,7 +424,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -435,13 +435,13 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/divanshu-go/audiopipe.git?rev=2fd5c360651157a5df504394066e509ad4d1bdc9#2fd5c360651157a5df504394066e509ad4d1bdc9"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "cc",
 ]
@@ -495,7 +495,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -938,13 +938,13 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/divanshu-go/audiopipe.git?rev=2fd5c360651157a5df504394066e509ad4d1bdc9#2fd5c360651157a5df504394066e509ad4d1bdc9"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "antirez-asr-sys",
  "half",
  "hf-hub 0.4.3",
  "mlx-rs",
- "ndarray",
+ "ndarray 0.17.2",
  "ort",
  "ort-sys",
  "qwen3-asr-sys",
@@ -1834,7 +1834,7 @@ version = "0.15.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d067ad48b8650848b989a59a86c6c36a995d02d2bf778d45c3c5d57bc2718f02"
 dependencies = [
- "smallvec 1.15.1",
+ "smallvec",
  "target-lexicon 0.12.16",
 ]
 
@@ -1844,7 +1844,7 @@ version = "0.20.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c6b04e07d8080154ed4ac03546d9a2b303cc2fe1901ba0b35b301516e289368"
 dependencies = [
- "smallvec 1.15.1",
+ "smallvec",
  "target-lexicon 0.13.3",
 ]
 
@@ -2190,7 +2190,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2796,7 +2796,7 @@ dependencies = [
  "phf 0.10.1",
  "proc-macro2",
  "quote",
- "smallvec 1.15.1",
+ "smallvec",
  "syn 1.0.109",
 ]
 
@@ -2810,7 +2810,7 @@ dependencies = [
  "dtoa-short",
  "itoa",
  "phf 0.13.1",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -3335,7 +3335,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3367,7 +3367,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -3842,7 +3842,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3954,7 +3954,7 @@ dependencies = [
  "lebe",
  "miniz_oxide",
  "rayon-core",
- "smallvec 1.15.1",
+ "smallvec",
  "zune-inflate",
 ]
 
@@ -4981,7 +4981,7 @@ dependencies = [
  "libc",
  "once_cell",
  "pin-project-lite",
- "smallvec 1.15.1",
+ "smallvec",
  "thiserror 1.0.69",
 ]
 
@@ -5008,7 +5008,7 @@ dependencies = [
  "gobject-sys 0.21.5",
  "libc",
  "system-deps 7.0.7",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5050,7 +5050,7 @@ dependencies = [
  "libc",
  "memchr",
  "once_cell",
- "smallvec 1.15.1",
+ "smallvec",
  "thiserror 1.0.69",
 ]
 
@@ -5072,7 +5072,7 @@ dependencies = [
  "gobject-sys 0.21.5",
  "libc",
  "memchr",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -5450,6 +5450,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hmac-sha256"
+version = "1.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
+
+[[package]]
 name = "home"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5635,7 +5641,7 @@ dependencies = [
  "itoa",
  "pin-project-lite",
  "pin-utils",
- "smallvec 1.15.1",
+ "smallvec",
  "tokio",
  "want",
 ]
@@ -5690,7 +5696,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -5779,7 +5785,7 @@ dependencies = [
  "icu_normalizer_data",
  "icu_properties",
  "icu_provider",
- "smallvec 1.15.1",
+ "smallvec",
  "zerovec",
 ]
 
@@ -5843,7 +5849,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
 dependencies = [
  "idna_adapter",
- "smallvec 1.15.1",
+ "smallvec",
  "utf8_iter",
 ]
 
@@ -6169,7 +6175,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6341,6 +6347,15 @@ dependencies = [
 
 [[package]]
 name = "keccak"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+dependencies = [
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "keccak"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e24a010dd405bd7ed803e5253182815b41bf2e6a80cc3bfc066658e03a198aa"
@@ -6408,7 +6423,7 @@ checksum = "15ebe7cf9eae245a44ab76cabdd06c0b3769972fd06050ed9aea6a22ff0d682f"
 dependencies = [
  "eyre",
  "knf-rs-sys",
- "ndarray",
+ "ndarray 0.16.1",
 ]
 
 [[package]]
@@ -6461,7 +6476,7 @@ checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
 dependencies = [
  "arrayvec",
  "euclid",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -6598,6 +6613,16 @@ name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if 1.0.4",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if 1.0.4",
  "windows-link 0.2.1",
@@ -6838,6 +6863,12 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lzma-rust2"
+version = "0.15.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e20f57f9918e5bd7bc58c22cdd70a6afc7375d4dd9683af5f2b34bd3d2bba619"
 
 [[package]]
 name = "lzma-sys"
@@ -7208,7 +7239,7 @@ dependencies = [
  "kem",
  "module-lattice",
  "rand_core 0.10.1",
- "sha3",
+ "sha3 0.11.0",
 ]
 
 [[package]]
@@ -7257,7 +7288,7 @@ dependencies = [
  "parking_lot",
  "paste",
  "safetensors 0.6.2",
- "smallvec 1.15.1",
+ "smallvec",
  "strum",
  "thiserror 2.0.18",
 ]
@@ -7299,7 +7330,7 @@ dependencies = [
  "futures-util",
  "parking_lot",
  "portable-atomic",
- "smallvec 1.15.1",
+ "smallvec",
  "tagptr",
  "uuid",
 ]
@@ -7374,7 +7405,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7440,6 +7471,21 @@ name = "ndarray"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rawpointer",
+]
+
+[[package]]
+name = "ndarray"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "520080814a7a6b4a6e9070823bb24b4531daac8c4627e08ba5de8c5ef2f2752d"
 dependencies = [
  "matrixmultiply",
  "num-complex",
@@ -7678,7 +7724,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7717,7 +7763,7 @@ dependencies = [
  "num-iter",
  "num-traits",
  "rand 0.8.5",
- "smallvec 1.15.1",
+ "smallvec",
  "zeroize",
 ]
 
@@ -7815,7 +7861,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7948,6 +7994,21 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core",
+]
+
+[[package]]
+name = "objc2-authentication-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee6d6f7dab884a28adaec1012eb3889257a49cc145724e35f93ece2d209f8b25"
+dependencies = [
+ "bitflags 2.11.0",
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-security",
 ]
 
 [[package]]
@@ -8531,28 +8592,27 @@ dependencies = [
 
 [[package]]
 name = "ort"
-version = "2.0.0-rc.10"
+version = "2.0.0-rc.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa7e49bd669d32d7bc2a15ec540a527e7764aec722a45467814005725bcd721"
+checksum = "d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133"
 dependencies = [
  "half",
- "libloading 0.8.9",
- "ndarray",
+ "libloading 0.9.0",
+ "ndarray 0.17.2",
  "ort-sys",
- "smallvec 2.0.0-alpha.10",
+ "smallvec",
  "tracing",
+ "ureq 3.3.0",
 ]
 
 [[package]]
 name = "ort-sys"
-version = "2.0.0-rc.10"
+version = "2.0.0-rc.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2aba9f5c7c479925205799216e7e5d07cc1d4fa76ea8058c60a9a30f6a4e890"
+checksum = "d7b497d21a8b6fbb4b5a544f8fadb77e801a09ae0add9e411d31c6f89e3c1e90"
 dependencies = [
- "flate2",
- "pkg-config",
- "sha2 0.10.9",
- "tar",
+ "hmac-sha256",
+ "lzma-rust2",
  "ureq 3.3.0",
 ]
 
@@ -8579,7 +8639,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8739,7 +8799,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "libc",
  "redox_syscall 0.5.18",
- "smallvec 1.15.1",
+ "smallvec",
  "windows-link 0.2.1",
 ]
 
@@ -8825,6 +8885,14 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "permission-flow"
+version = "0.1.40"
+source = "git+https://github.com/divanshu-go/permission-flow?rev=38a64e3704aa32e692bab95cffe704859e191a51#38a64e3704aa32e692bab95cffe704859e191a51"
+dependencies = [
+ "swift-rs",
+]
 
 [[package]]
 name = "phf"
@@ -9614,7 +9682,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.37",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9652,9 +9720,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9675,7 +9743,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/divanshu-go/audiopipe.git?rev=2fd5c360651157a5df504394066e509ad4d1bdc9#2fd5c360651157a5df504394066e509ad4d1bdc9"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
 dependencies = [
  "cc",
  "cmake",
@@ -10331,7 +10399,7 @@ dependencies = [
  "fallible-streaming-iterator",
  "hashlink",
  "libsqlite3-sys",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -10375,7 +10443,7 @@ dependencies = [
  "inout 0.1.4",
  "internal-russh-forked-ssh-key",
  "internal-russh-num-bigint",
- "keccak",
+ "keccak 0.2.0",
  "log",
  "md5",
  "ml-kem",
@@ -10402,7 +10470,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.10.9",
  "sha2 0.11.0",
- "sha3",
+ "sha3 0.11.0",
  "signature 3.0.0",
  "spki 0.8.0-rc.4",
  "ssh-encoding",
@@ -10537,7 +10605,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10550,7 +10618,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10638,7 +10706,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10700,7 +10768,7 @@ dependencies = [
  "bytemuck",
  "core_maths",
  "log",
- "smallvec 1.15.1",
+ "smallvec",
  "ttf-parser",
  "unicode-bidi-mirroring",
  "unicode-ccc",
@@ -10886,18 +10954,20 @@ dependencies = [
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "evdev",
  "libc",
  "objc2-app-kit",
  "parking_lot",
  "regex",
  "rusqlite",
+ "screenpipe-config",
  "screenpipe-core",
  "screenpipe-db",
  "serde",
  "serde_json",
  "tracing",
+ "url",
  "windows 0.58.0",
  "windows-core 0.58.0",
  "zbus",
@@ -10905,7 +10975,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.19"
+version = "2.5.36"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -10916,6 +10986,7 @@ dependencies = [
  "axum 0.6.20",
  "base64 0.22.1",
  "block",
+ "block2 0.6.2",
  "cbc 0.1.2",
  "cc",
  "chrono",
@@ -10924,6 +10995,7 @@ dependencies = [
  "core-graphics-helmer-fork",
  "dark-light",
  "dirs 5.0.1",
+ "dispatch2",
  "eventkit-rs",
  "fix-path-env",
  "freedesktop-desktop-entry",
@@ -10942,6 +11014,9 @@ dependencies = [
  "notify",
  "objc",
  "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-authentication-services",
+ "objc2-foundation 0.3.2",
  "once_cell",
  "pbkdf2 0.12.2",
  "plist",
@@ -10988,6 +11063,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-os",
+ "tauri-plugin-permission-flow",
  "tauri-plugin-process",
  "tauri-plugin-sentry",
  "tauri-plugin-shell",
@@ -11020,18 +11096,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "screenpipe-apple-intelligence"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "screenpipe-audio"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11043,7 +11109,7 @@ dependencies = [
  "cpal",
  "crossbeam",
  "dashmap",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "env_logger",
  "futures",
  "hf-hub 0.3.2",
@@ -11056,7 +11122,7 @@ dependencies = [
  "log",
  "mlx-rs",
  "mp3lame-encoder",
- "ndarray",
+ "ndarray 0.17.2",
  "oasgen",
  "objc",
  "once_cell",
@@ -11106,7 +11172,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11118,7 +11184,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11157,7 +11223,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11172,7 +11238,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "cron",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "ffmpeg-sidecar",
  "futures",
  "hex",
@@ -11183,7 +11249,7 @@ dependencies = [
  "objc",
  "objc-foundation",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.9.2",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-events",
@@ -11201,14 +11267,14 @@ dependencies = [
  "tracing",
  "uiautomation",
  "uuid",
- "which 6.0.3",
+ "which 7.0.3",
  "windows-sys 0.59.0",
  "zeroize",
 ]
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11218,7 +11284,7 @@ dependencies = [
  "libsqlite3-sys",
  "oasgen",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.9.2",
  "regex",
  "screenpipe-config",
  "serde",
@@ -11233,7 +11299,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11247,7 +11313,7 @@ dependencies = [
  "colored",
  "crossbeam",
  "dashmap",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "fastrand",
  "futures",
  "hostname",
@@ -11266,7 +11332,6 @@ dependencies = [
  "reqwest 0.13.3",
  "rpassword",
  "screenpipe-a11y",
- "screenpipe-apple-intelligence",
  "screenpipe-audio",
  "screenpipe-capture",
  "screenpipe-config",
@@ -11288,7 +11353,6 @@ dependencies = [
  "tempfile",
  "tinfoil",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tower-http 0.5.2",
  "tracing",
@@ -11298,11 +11362,12 @@ dependencies = [
  "url",
  "uuid",
  "windows 0.58.0",
+ "zbus",
 ]
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11318,16 +11383,17 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "image 0.25.10",
  "moka",
- "ndarray",
+ "ndarray 0.17.2",
  "once_cell",
  "opf",
  "ort",
@@ -11337,6 +11403,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sha3 0.10.9",
  "sqlx",
  "thiserror 1.0.69",
  "tinfoil",
@@ -11347,7 +11414,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -11358,7 +11425,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11401,7 +11468,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "keyring",
- "rand 0.8.5",
+ "rand 0.9.2",
  "serde",
  "serde_json",
  "sqlx",
@@ -11411,14 +11478,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
  "chacha20poly1305",
  "hex",
- "rand 0.8.5",
+ "rand 0.9.2",
  "reqwest 0.13.3",
  "serde",
  "serde_json",
@@ -11431,11 +11498,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.8"
+version = "0.4.19"
 dependencies = [
  "argon2",
  "chacha20poly1305",
- "rand 0.8.5",
+ "rand 0.9.2",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -11575,7 +11642,7 @@ dependencies = [
  "phf_codegen 0.8.0",
  "precomputed-hash",
  "servo_arc 0.2.0",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -11594,7 +11661,7 @@ dependencies = [
  "precomputed-hash",
  "rustc-hash 2.1.1",
  "servo_arc 0.4.3",
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -12174,12 +12241,22 @@ dependencies = [
 
 [[package]]
 name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest 0.10.7",
+ "keccak 0.1.6",
+]
+
+[[package]]
+name = "sha3"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
  "digest 0.11.2",
- "keccak",
+ "keccak 0.2.0",
 ]
 
 [[package]]
@@ -12330,12 +12407,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "smallvec"
-version = "2.0.0-alpha.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d44cfb396c3caf6fbfd0ab422af02631b69ddd96d2eff0b0f0724f9024051b"
-
-[[package]]
 name = "smart-default"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12363,7 +12434,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12578,7 +12649,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "smallvec 1.15.1",
+ "smallvec",
  "sqlformat",
  "thiserror 1.0.69",
  "tokio",
@@ -12662,7 +12733,7 @@ dependencies = [
  "serde",
  "sha1 0.10.6",
  "sha2 0.10.9",
- "smallvec 1.15.1",
+ "smallvec",
  "sqlx-core",
  "stringprep",
  "thiserror 1.0.69",
@@ -12702,7 +12773,7 @@ dependencies = [
  "serde_json",
  "sha1 0.10.6",
  "sha2 0.10.9",
- "smallvec 1.15.1",
+ "smallvec",
  "sqlx-core",
  "stringprep",
  "thiserror 1.0.69",
@@ -12778,7 +12849,6 @@ dependencies = [
  "cfg-if 1.0.4",
  "libc",
  "psm",
- "windows-sys 0.52.0",
  "windows-sys 0.59.0",
 ]
 
@@ -13698,6 +13768,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-permission-flow"
+version = "0.1.40"
+source = "git+https://github.com/divanshu-go/permission-flow?rev=38a64e3704aa32e692bab95cffe704859e191a51#38a64e3704aa32e692bab95cffe704859e191a51"
+dependencies = [
+ "permission-flow",
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tauri-plugin-process"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14024,7 +14106,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14759,7 +14841,7 @@ dependencies = [
  "once_cell",
  "regex-automata",
  "sharded-slab",
- "smallvec 1.15.1",
+ "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
@@ -14795,7 +14877,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14867,7 +14949,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -15023,7 +15105,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43f613e4fa046e69818dd287fdc4bc78175ff20331479dab6e1b0f98d57062de"
 dependencies = [
- "smallvec 1.15.1",
+ "smallvec",
 ]
 
 [[package]]
@@ -15261,10 +15343,10 @@ dependencies = [
 [[package]]
 name = "vad-rs"
 version = "0.2.0"
-source = "git+https://github.com/divanshu-go/vad-rs-1.git?rev=b14b26ec7093f5398ef6658020259cd7c130ea6c#b14b26ec7093f5398ef6658020259cd7c130ea6c"
+source = "git+https://github.com/screenpipe/vad-rs-1.git?rev=260252c122c752c8c2da7e86caff7e706aace025#260252c122c752c8c2da7e86caff7e706aace025"
 dependencies = [
  "eyre",
- "ndarray",
+ "ndarray 0.17.2",
  "ort",
  "ort-sys",
  "ringbuffer",
@@ -15513,7 +15595,7 @@ dependencies = [
  "downcast-rs",
  "rustix 1.1.4",
  "scoped-tls",
- "smallvec 1.15.1",
+ "smallvec",
  "wayland-sys",
 ]
 
@@ -15859,7 +15941,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

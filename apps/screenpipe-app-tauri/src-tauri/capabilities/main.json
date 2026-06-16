@@ -408,7 +408,7 @@
       "identifier": "http:default",
       "allow": [
         {
-          "url": "http://**/*",
+          "url": "http://localhost:*/*",
           "methods": [
             "GET",
             "POST",
@@ -420,7 +420,103 @@
           ]
         },
         {
-          "url": "https://**/*",
+          "url": "http://127.0.0.1:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://10.*:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://172.*:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://192.168.*:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://localhost:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://127.0.0.1:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://10.*:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://172.*:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://192.168.*:*/*",
           "methods": [
             "GET",
             "POST",
