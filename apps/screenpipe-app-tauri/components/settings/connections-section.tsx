@@ -38,7 +38,6 @@ import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
-import { GoogleSheetsCard } from "./google-sheets-card";
 import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
@@ -3290,7 +3289,6 @@ export function ConnectionsSection({
   const [appleCalendarConnected, setAppleCalendarConnected] = useState(false);
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
   const [googleDocsConnected, setGoogleDocsConnected] = useState(false);
-  const [googleSheetsConnected, setGoogleSheetsConnected] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
   const [customMcpServerCount, setCustomMcpServerCount] = useState(0);
@@ -3332,9 +3330,6 @@ export function ConnectionsSection({
     }).catch(() => {});
     commands.oauthStatus("google-docs", null).then(res => {
       setGoogleDocsConnected(res.status === "ok" && res.data.connected);
-    }).catch(() => {});
-    commands.oauthStatus("google-sheets", null).then(res => {
-      setGoogleSheetsConnected(res.status === "ok" && res.data.connected);
     }).catch(() => {});
     commands.oauthStatus("gmail", null).then(res => {
       setGmailConnected(res.status === "ok" && res.data.connected);
@@ -3478,7 +3473,7 @@ export function ConnectionsSection({
     // embedded sidebar, no user-facing controls.
     const hardcodedIds = new Set(hardcoded.map(h => h.id));
     const apiTiles: ConnectionTile[] = integrations
-      .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default")
+      .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default" && i.id !== "google-sheets")
       .map(i => ({
         id: i.id,
         name: i.name,
@@ -3498,8 +3493,6 @@ export function ConnectionsSection({
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     const googleDocsTile = hardcoded.find(h => h.id === "google-docs");
     if (googleDocsTile) googleDocsTile.connected = googleDocsConnected;
-    const googleSheetsTile = hardcoded.find(h => h.id === "google-sheets");
-    if (googleSheetsTile) googleSheetsTile.connected = googleSheetsConnected;
     const gmailTile = hardcoded.find(h => h.id === "gmail");
     if (gmailTile) gmailTile.connected = gmailConnected;
     // Custom MCP tile shows the dot when any user-registered MCP server is enabled.
@@ -3514,7 +3507,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -3594,7 +3587,6 @@ export function ConnectionsSection({
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
-      case "google-sheets": return <GoogleSheetsCard onConnectionChange={fetchIntegrations} />;
       case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
       case "openclaw": return <OpenClawCard />;
