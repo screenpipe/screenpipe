@@ -7,8 +7,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 51
-- Declared test blocks: 177
-- Weighted coverage points: 139.0
+- Declared test blocks: 176
+- Weighted coverage points: 138.0
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 44 | 166 | 135.6 | 15 | 52 | 92% |
-| macos | 48 | 143 | 111.6 | 15 | 52 | 89% |
-| linux | 38 | 131 | 108.0 | 13 | 49 | 86% |
+| windows | 44 | 165 | 134.6 | 15 | 52 | 92% |
+| macos | 48 | 142 | 110.6 | 15 | 52 | 89% |
+| linux | 38 | 130 | 107.0 | 13 | 49 | 86% |
 
 ## Runtime Results
 
@@ -37,13 +37,13 @@ pass/fail/skip counts.
 | billing | 2 specs / 2 tests / 1.7 pts | 2 specs / 2 tests / 1.7 pts | 2 specs / 2 tests / 1.7 pts |
 | capture-ocr | 2 specs / 13 tests / 5.2 pts | 2 specs / 3 tests / 1.2 pts | 1 specs / 2 tests / 0.8 pts |
 | chat-ai | 8 specs / 8 tests / 4.9 pts | 10 specs / 11 tests / 5.8 pts | 8 specs / 8 tests / 4.9 pts |
-| local-api | 12 specs / 89 tests / 75.0 pts | 11 specs / 64 tests / 56.0 pts | 10 specs / 63 tests / 55.6 pts |
+| local-api | 12 specs / 88 tests / 74.0 pts | 11 specs / 63 tests / 55.0 pts | 10 specs / 62 tests / 54.6 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts |
 | os-integration | 3 specs / 16 tests / 15.1 pts | 3 specs / 3 tests / 0.9 pts | - |
 | performance | 2 specs / 43 tests / 43.0 pts | 4 specs / 33 tests / 29.5 pts | 1 specs / 28 tests / 28.0 pts |
-| pipes | 2 specs / 12 tests / 12.0 pts | 2 specs / 12 tests / 12.0 pts | 2 specs / 12 tests / 12.0 pts |
-| real-ui-e2e | 25 specs / 90 tests / 73.9 pts | 26 specs / 77 tests / 63.4 pts | 22 specs / 71 tests / 61.5 pts |
+| pipes | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts |
+| real-ui-e2e | 25 specs / 89 tests / 72.9 pts | 26 specs / 76 tests / 62.4 pts | 22 specs / 70 tests / 60.5 pts |
 | settings | 10 specs / 27 tests / 24.9 pts | 10 specs / 20 tests / 17.2 pts | 9 specs / 19 tests / 16.9 pts |
 | storage-privacy | 6 specs / 20 tests / 19.1 pts | 5 specs / 12 tests / 11.1 pts | 4 specs / 12 tests / 11.1 pts |
 | tauri-command | 8 specs / 17 tests / 10.3 pts | 9 specs / 19 tests / 10.8 pts | 8 specs / 17 tests / 10.3 pts |
@@ -122,7 +122,7 @@ pass/fail/skip counts.
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
 | permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for missing TCC permissions. |
 | pipes-mcp-connections.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes, connections | high | strong | real-user-flow | 3 | Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies the mcp:<id> allowlist persists. |
-| pipes.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes | high | strong | real-user-flow | 9 | Pipes discover, install failure, connection modal, install, list, play, and stop. |
+| pipes.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes | high | strong | real-user-flow | 8 | Pipes discover, install failure, connection modal, install, list, play, and stop. |
 | privacy-api-auth-enforcement.spec.ts | windows, macos, linux | settings, local-api, storage-privacy | settings-privacy-api-auth, local-api-auth, restart-flow | high | conditional | mixed | 1 | Opt-in restart smoke toggles API auth and verifies backend behavior. |
 | privacy-api-auth.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-api-auth, local-api-auth | high | strong | real-user-flow | 1 | Privacy settings reveal/copy local API key flow. |
 | privacy-installed-apps.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-filters, installed-apps | medium | strong | real-user-flow | 1 | Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism). |
