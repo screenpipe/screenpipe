@@ -9,9 +9,10 @@ use super::store::{self, NotificationHistoryEntry};
 use crate::server::{ApiResponse, ServerState};
 use crate::store::SettingsStore;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use tauri::AppHandle;
+use tauri::Emitter;
 use tracing::{debug, error, info};
 
 /// Read `notificationPrefs.pipeNotifications` from the settings store.
@@ -46,18 +47,21 @@ fn pipe_notifications_enabled_from_extra(
 /// `POST /notify` — show a notification panel and persist to disk.
 pub async fn send_notification(
     State(state): State<ServerState>,
+    headers: HeaderMap,
     Json(payload): Json<NotifyPayload>,
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
     info!("Received notification request: {:?}", payload);
 
     let panel_id = payload
         .id
+        .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let dismiss_ms = payload.auto_dismiss_ms.or(payload.timeout).unwrap_or(20000);
     let resolved_type = payload
         .notification_type
         .clone()
         .unwrap_or_else(|| "pipe".to_string());
+    let source = resolve_notification_source_metadata(&payload, &headers, &panel_id);
 
     // Gate pipe-typed alerts behind the `Pipe notifications` toggle.
     // Other types (`system`, `captureStalls`, …) self-gate upstream
@@ -85,6 +89,10 @@ pub async fn send_notification(
         "body": body,
         "actions": payload.actions,
         "autoDismissMs": dismiss_ms,
+        "pipe_name": source.pipe_name.clone(),
+        "source_session_id": source.source_session_id.clone(),
+        "source_message_id": source.source_message_id.clone(),
+        "source_url": source.source_url.clone(),
     });
 
     // Persist to disk before attempting to show — survives crashes/restarts
@@ -93,10 +101,22 @@ pub async fn send_notification(
         notification_type: panel_payload["type"].as_str().unwrap_or("pipe").to_string(),
         title: payload.title.clone(),
         body: body.clone(),
-        pipe_name: None,
+        pipe_name: source.pipe_name.clone(),
+        source_session_id: source.source_session_id.clone(),
+        source_message_id: source.source_message_id.clone(),
+        source_url: source.source_url.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         read: false,
     });
+    emit_notification_source_marker(
+        &state.app_handle,
+        source.source_session_id.as_deref(),
+        source.source_message_id.as_deref(),
+        &panel_id,
+        &payload.title,
+        &body,
+        source.source_url.as_deref(),
+    );
 
     let panel_json = panel_payload.to_string();
 
@@ -115,6 +135,111 @@ pub async fn send_notification(
                 format!("Failed to show notification: {}", e),
             ))
         }
+    }
+}
+
+fn notification_source_session_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-screenpipe-session")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NotificationSourceMetadata {
+    source_session_id: Option<String>,
+    source_message_id: Option<String>,
+    source_url: Option<String>,
+    pipe_name: Option<String>,
+}
+
+fn resolve_notification_source_metadata(
+    payload: &NotifyPayload,
+    headers: &HeaderMap,
+    panel_id: &str,
+) -> NotificationSourceMetadata {
+    let source_session_id = payload
+        .source_session_id
+        .clone()
+        .or_else(|| notification_source_session_from_headers(headers));
+    let source_message_id = payload.source_message_id.clone().or_else(|| {
+        source_session_id
+            .as_ref()
+            .map(|_| format!("notification-{panel_id}"))
+    });
+    let source_url = payload.source_url.clone().or_else(|| {
+        source_session_id.as_ref().map(|session_id| {
+            let encoded_session = urlencoding::encode(session_id);
+            if let Some(message_id) = &source_message_id {
+                format!(
+                    "screenpipe://chat/{}?message={}",
+                    encoded_session,
+                    urlencoding::encode(message_id)
+                )
+            } else {
+                format!("screenpipe://chat/{}", encoded_session)
+            }
+        })
+    });
+    let pipe_name = payload.pipe_name.clone().or_else(|| {
+        source_session_id
+            .as_deref()
+            .and_then(pipe_name_from_session_id)
+    });
+
+    NotificationSourceMetadata {
+        source_session_id,
+        source_message_id,
+        source_url,
+        pipe_name,
+    }
+}
+
+fn pipe_name_from_session_id(session_id: &str) -> Option<String> {
+    let rest = session_id.strip_prefix("pipe:")?;
+    let (pipe_name, _) = rest.rsplit_once(':')?;
+    if pipe_name.trim().is_empty() {
+        None
+    } else {
+        Some(pipe_name.to_string())
+    }
+}
+
+fn emit_notification_source_marker(
+    app: &AppHandle,
+    source_session_id: Option<&str>,
+    source_message_id: Option<&str>,
+    notification_id: &str,
+    title: &str,
+    body: &str,
+    source_url: Option<&str>,
+) {
+    let Some(session_id) = source_session_id else {
+        return;
+    };
+    if !session_id.starts_with("pipe:") {
+        return;
+    }
+    let message_id = source_message_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("notification-{notification_id}"));
+    let event = serde_json::json!({
+        "source": "pipe",
+        "sessionId": session_id,
+        "event": {
+            "type": "notification_sent",
+            "id": message_id,
+            "notification_id": notification_id,
+            "title": title,
+            "body": body,
+            "source_url": source_url,
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+        },
+    });
+    if let Err(e) = app.emit("agent_event", event) {
+        debug!("notify: failed to emit notification source marker: {}", e);
     }
 }
 
@@ -169,6 +294,8 @@ pub struct NotifyPayload {
     pub title: String,
     pub body: String,
     pub id: Option<String>,
+    #[serde(default, alias = "pipeName")]
+    pub pipe_name: Option<String>,
     #[serde(rename = "type")]
     pub notification_type: Option<String>,
     #[serde(rename = "autoDismissMs")]
@@ -176,6 +303,12 @@ pub struct NotifyPayload {
     pub timeout: Option<u64>,
     #[serde(default)]
     pub actions: Vec<serde_json::Value>,
+    #[serde(default, alias = "sourceSessionId")]
+    pub source_session_id: Option<String>,
+    #[serde(default, alias = "sourceMessageId")]
+    pub source_message_id: Option<String>,
+    #[serde(default, alias = "sourceUrl")]
+    pub source_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -230,5 +363,52 @@ mod tests {
             "pipeNotifications": true,
         }));
         assert!(pipe_notifications_enabled_from_extra(&extra));
+    }
+
+    #[test]
+    fn parses_pipe_name_from_session_id_with_colons() {
+        assert_eq!(
+            pipe_name_from_session_id("pipe:daily:research:42"),
+            Some("daily:research".to_string())
+        );
+        assert_eq!(pipe_name_from_session_id("chat-123"), None);
+        assert_eq!(pipe_name_from_session_id("pipe:no-exec"), None);
+    }
+
+    #[test]
+    fn derives_source_metadata_from_pipe_session_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-screenpipe-session",
+            "pipe:long-notification-source-test:389".parse().unwrap(),
+        );
+        let payload = NotifyPayload {
+            title: "Research Rabbit".to_string(),
+            body: "long notification body".to_string(),
+            id: None,
+            pipe_name: None,
+            notification_type: None,
+            auto_dismiss_ms: None,
+            timeout: None,
+            actions: vec![],
+            source_session_id: None,
+            source_message_id: None,
+            source_url: None,
+        };
+
+        let source = resolve_notification_source_metadata(&payload, &headers, "abc123");
+
+        assert_eq!(
+            source,
+            NotificationSourceMetadata {
+                source_session_id: Some("pipe:long-notification-source-test:389".to_string()),
+                source_message_id: Some("notification-abc123".to_string()),
+                source_url: Some(
+                    "screenpipe://chat/pipe%3Along-notification-source-test%3A389?message=notification-abc123"
+                        .to_string()
+                ),
+                pipe_name: Some("long-notification-source-test".to_string()),
+            }
+        );
     }
 }

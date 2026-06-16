@@ -2739,6 +2739,7 @@ export function StandaloneChat({
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
   const queuedScrollRef = useRef<HTMLDivElement | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   // Cursor-style inline edit: click a sent user message to tweak and resend
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -2866,6 +2867,35 @@ export function StandaloneChat({
   // so we use this ref's visibility to ignore drops meant for another view
   // (e.g. a meeting note) that would otherwise also stage into the composer.
   const dropRootRef = useRef<HTMLDivElement>(null);
+
+  const focusMessageById = useCallback((messageId: string) => {
+    let attempts = 0;
+    const findAndFocus = () => {
+      const container = scrollContainerRef.current;
+      const target = container
+        ? Array.from(container.querySelectorAll<HTMLElement>("[data-message-id]"))
+            .find((el) => el.dataset.messageId === messageId)
+        : null;
+
+      if (target) {
+        stickToBottomRef.current = false;
+        setIsUserScrolledUp(true);
+        target.scrollIntoView({ behavior: attempts > 1 ? "smooth" : "auto", block: "center" });
+        setHighlightedMessageId(messageId);
+        window.setTimeout(() => {
+          setHighlightedMessageId((current) => (current === messageId ? null : current));
+        }, 2400);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts <= 24) {
+        window.requestAnimationFrame(findAndFocus);
+      }
+    };
+
+    window.requestAnimationFrame(findAndFocus);
+  }, []);
 
   const [scheduleDialogMessage, setScheduleDialogMessage] = useState<{ prompt: string; response: string } | null>(null);
   const [prefillContext, setPrefillContext] = useState<string | null>(null);
@@ -3851,7 +3881,7 @@ export function StandaloneChat({
 
   useEffect(() => {
     const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
-      const { conversationId: convId, targetWindow } = event.payload;
+      const { conversationId: convId, targetWindow, focusMessageId } = event.payload;
       const windowLabel = getCurrentWindow().label;
       if (!shouldHandleChatLoadConversationForWindow(
         { conversationId: convId, targetWindow },
@@ -3860,10 +3890,13 @@ export function StandaloneChat({
         return;
       }
       await openConversationLocally(convId);
+      if (focusMessageId) {
+        focusMessageById(focusMessageId);
+      }
     });
     return () => { unlisten.then((fn) => fn()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openConversationLocally]);
+  }, [openConversationLocally, focusMessageById]);
 
   // Cmd+N / Ctrl+N from home/page emits this so the user can immediately type
   // after a new chat is created without having to click into the textarea.
@@ -9007,8 +9040,9 @@ export function StandaloneChat({
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
               className={cn(
-                "relative flex min-w-0",
-                message.role === "user" ? "justify-end" : "justify-start"
+                "relative flex min-w-0 transition-[background-color,box-shadow] duration-150",
+                message.role === "user" ? "justify-end" : "justify-start",
+                message.id === highlightedMessageId && "bg-muted/30 ring-1 ring-foreground/30"
               )}
               data-testid={`chat-message-${message.role}`}
               data-message-id={message.id}

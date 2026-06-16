@@ -17,6 +17,7 @@ import {
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import localforage from "localforage";
 import { localFetch } from "@/lib/api";
+import { Bell, Check, Copy, ExternalLink } from "lucide-react";
 
 interface NotificationAction {
   label: string;
@@ -44,6 +45,9 @@ interface NotificationPayload {
   actions: NotificationAction[];
   autoDismissMs?: number;
   pipe_name?: string;
+  source_session_id?: string;
+  source_message_id?: string;
+  source_url?: string;
 }
 
 function windowForDeeplink(url: string) {
@@ -78,6 +82,10 @@ async function openNotificationLink(href: string) {
   await open(raw);
 }
 
+function notificationClipboardText(payload: NotificationPayload): string {
+  return `${payload.title}\n\n${payload.body}`.trim();
+}
+
 export default function NotificationPanelPage() {
   const [payload, setPayload] = useState<NotificationPayload | null>(null);
   const [visible, setVisible] = useState(false);
@@ -89,9 +97,11 @@ export default function NotificationPanelPage() {
   >("idle");
   const [restartError, setRestartError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoDismissMsRef = useRef(20000);
   const hoveredRef = useRef(false);
   const pausedProgressRef = useRef<number | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const hide = useCallback(
     async (auto: boolean) => {
@@ -312,6 +322,48 @@ export default function NotificationPanelPage() {
     },
     [payload?.type, payload?.id, payload?.pipe_name, hide]
   );
+
+  const openSource = useCallback(async () => {
+    if (!payload?.source_url) return;
+    const url = payload.source_url;
+    if (url.startsWith("screenpipe://")) {
+      await commands.showWindowActivated(windowForDeeplink(url));
+      await new Promise((r) => setTimeout(r, 150));
+      await emit("deep-link-received", url);
+      await hide(false);
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+      await hide(false);
+    } catch (e) {
+      console.error("notification source open failed:", e);
+    }
+  }, [payload?.source_url, hide]);
+
+  const copyNotification = useCallback(async () => {
+    if (!payload) return;
+    try {
+      await commands.copyTextToClipboard(notificationClipboardText(payload));
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+      setCopied(true);
+      copyResetRef.current = setTimeout(() => setCopied(false), 1400);
+      posthog.capture("notification_copied", {
+        type: payload.type,
+        id: payload.id,
+      });
+    } catch (e) {
+      console.error("notification copy failed:", e);
+    }
+  }, [payload]);
+
+  useEffect(() => {
+    setCopied(false);
+    return () => {
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    };
+  }, [payload?.id]);
 
   // Listen for notification payloads from Rust
   useEffect(() => {
@@ -536,11 +588,14 @@ export default function NotificationPanelPage() {
         {/* Body */}
         <div className="notif-body" style={{ padding: "8px 14px", flex: 1, overflow: "auto", minHeight: 0 }}>
           <div
+            onClick={payload.source_url ? openSource : undefined}
+            title={payload.source_url ? "open source chat" : undefined}
             style={{
               fontSize: "12px",
               fontWeight: 500,
               marginBottom: "4px",
               color: "rgba(0, 0, 0, 0.9)",
+              cursor: payload.source_url ? "pointer" : "default",
             }}
           >
             {payload.title}
@@ -551,6 +606,7 @@ export default function NotificationPanelPage() {
               fontSize: "11px",
               lineHeight: "1.4",
               color: "rgba(0, 0, 0, 0.5)",
+              userSelect: "text",
             }}
           >
             <ReactMarkdown
@@ -698,66 +754,95 @@ export default function NotificationPanelPage() {
           </div>
         )}
 
-        {/* Manage / Mute footer */}
+        {/* Popup utility footer */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
             padding: "4px 14px 8px 14px",
-            gap: "8px",
+            gap: "12px",
             borderTop: "1px solid rgba(0, 0, 0, 0.06)",
           }}
         >
-          <span
+          <button
+            onClick={copyNotification}
+            title="copy notification"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              padding: 0,
+              border: "none",
+              background: "none",
+              flexShrink: 0,
+              fontSize: "9px",
+              lineHeight: 1,
+              color: "rgba(0, 0, 0, 0.3)",
+              cursor: "pointer",
+              fontFamily: '"IBM Plex Mono", monospace',
+              whiteSpace: "nowrap",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")}
+          >
+            {copied ? <Check size={12} strokeWidth={1.8} /> : <Copy size={12} strokeWidth={1.8} />}
+            {copied ? "copied" : "copy"}
+          </button>
+          {payload.source_url && (
+            <button
+              onClick={openSource}
+              title="open source chat"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: 0,
+                border: "none",
+                background: "none",
+                flexShrink: 0,
+                fontSize: "9px",
+                lineHeight: 1,
+                color: "rgba(0, 0, 0, 0.3)",
+                cursor: "pointer",
+                fontFamily: '"IBM Plex Mono", monospace',
+                whiteSpace: "nowrap",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")}
+            >
+              <ExternalLink size={12} strokeWidth={1.8} />
+              source
+            </button>
+          )}
+          <button
             onClick={async () => {
               await hide(false);
               await emit("navigate", { url: "/home?section=notifications" });
               try { await commands.showWindow({ Home: { page: null } }); } catch {}
             }}
+            title="manage notification settings"
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              marginLeft: "auto",
+              padding: 0,
+              border: "none",
+              background: "none",
+              flexShrink: 0,
               fontSize: "9px",
+              lineHeight: 1,
               color: "rgba(0, 0, 0, 0.3)",
               cursor: "pointer",
               fontFamily: '"IBM Plex Mono", monospace',
+              whiteSpace: "nowrap",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")}
             onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")}
           >
-            ⚙ manage
-          </span>
-          {payload.pipe_name && (
-            <>
-              <span style={{ fontSize: "9px", color: "rgba(0, 0, 0, 0.15)" }}>·</span>
-              <span
-                onClick={async () => {
-                  try {
-                    const raw = await localforage.getItem<string>("screenpipe-settings");
-                    const settings = raw ? JSON.parse(raw) : {};
-                    const prefs = settings.notificationPrefs || {
-                      captureStalls: true, appUpdates: true,
-                      pipeSuggestions: true, pipeNotifications: true, mutedPipes: [],
-                    };
-                    if (!prefs.mutedPipes.includes(payload.pipe_name!)) {
-                      prefs.mutedPipes.push(payload.pipe_name!);
-                    }
-                    settings.notificationPrefs = prefs;
-                    await localforage.setItem("screenpipe-settings", JSON.stringify(settings));
-                  } catch {}
-                  await hide(false);
-                }}
-                style={{
-                  fontSize: "9px",
-                  color: "rgba(0, 0, 0, 0.3)",
-                  cursor: "pointer",
-                  fontFamily: '"IBM Plex Mono", monospace',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")}
-                onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")}
-              >
-                mute {payload.pipe_name}
-              </span>
-            </>
-          )}
+            <Bell size={12} strokeWidth={1.8} />
+            manage
+          </button>
         </div>
 
         {/* Progress bar */}

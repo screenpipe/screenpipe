@@ -86,6 +86,7 @@ export type ChatTargetWindow = "home" | "chat";
 export interface ChatLoadConversationPayload {
   conversationId: string;
   targetWindow?: ChatTargetWindow;
+  focusMessageId?: string;
 }
 
 export const RECENT_CHAT_SEARCH_HANDOFF_EVENT = "recent-chat-search-handoff";

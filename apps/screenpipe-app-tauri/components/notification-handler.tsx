@@ -105,6 +105,9 @@ const NotificationHandler: React.FC = () => {
           title: data.title,
           body: data.body,
           pipe_name: data.pipe_name,
+          source_session_id: data.source_session_id,
+          source_message_id: data.source_message_id,
+          source_url: data.source_url,
           timestamp: new Date().toISOString(),
           read: false,
         };
