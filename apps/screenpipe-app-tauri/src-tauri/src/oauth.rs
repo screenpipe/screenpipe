@@ -89,6 +89,32 @@ pub async fn oauth_connect(
         return Err("OAuth integrations require a Pro subscription. Please upgrade to connect third-party services.".to_string());
     }
 
+    // Per-account providers (Zendesk) host OAuth on the customer's own subdomain,
+    // so the authorization + token endpoints are per-account. When the auth_url
+    // carries a `{subdomain}` placeholder, the subdomain arrives as `instance`
+    // and is templated in here. Validate up front — before registering the
+    // pending callback — so a bad subdomain fails fast, and so we never build a
+    // request to an attacker-controlled host.
+    let needs_subdomain = config.auth_url.contains("{subdomain}");
+    let auth_url_str = if needs_subdomain {
+        let sub = instance.as_deref().map(str::trim).unwrap_or("");
+        if sub.is_empty() {
+            return Err(format!(
+                "{} needs your subdomain — enter it before connecting",
+                integration_id
+            ));
+        }
+        if !sub.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(format!(
+                "invalid subdomain '{}' — use only letters, numbers and hyphens (e.g. 'acme' for acme.zendesk.com)",
+                sub
+            ));
+        }
+        config.auth_url.replace("{subdomain}", sub)
+    } else {
+        config.auth_url.to_string()
+    };
+
     let state = uuid::Uuid::new_v4().simple().to_string();
     let (tx, rx) = oneshot::channel::<String>();
     {
@@ -105,7 +131,7 @@ pub async fn oauth_connect(
     let redirect_uri = config.redirect_uri_override.unwrap_or(OAUTH_REDIRECT_URI);
 
     let mut auth_url =
-        reqwest::Url::parse(config.auth_url).map_err(|e| format!("bad auth_url: {}", e))?;
+        reqwest::Url::parse(&auth_url_str).map_err(|e| format!("bad auth_url: {}", e))?;
     {
         let mut pairs = auth_url.query_pairs_mut();
         pairs
@@ -167,12 +193,33 @@ pub async fn oauth_connect(
         .build()
         .map_err(|e| format!("http client: {}", e))?;
 
-    let mut token_data = oauth::exchange_code(&client, &integration_id, &code, redirect_uri)
-        .await
-        .map_err(|e| {
-            error!("token exchange failed for {}: {}", integration_id, e);
-            format!("token exchange failed: {}", e)
-        })?;
+    // Per-account providers (Zendesk) must tell the proxy which subdomain to hit
+    // for the token exchange — its token endpoint lives on that subdomain.
+    let exchange_extra: Option<serde_json::Map<String, serde_json::Value>> = if needs_subdomain {
+        instance.as_deref().map(|sub| {
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "subdomain".to_string(),
+                serde_json::Value::String(sub.to_string()),
+            );
+            m
+        })
+    } else {
+        None
+    };
+
+    let mut token_data = oauth::exchange_code(
+        &client,
+        &integration_id,
+        &code,
+        redirect_uri,
+        exchange_extra.as_ref(),
+    )
+    .await
+    .map_err(|e| {
+        error!("token exchange failed for {}: {}", integration_id, e);
+        format!("token exchange failed: {}", e)
+    })?;
 
     // Merge extra callback params (e.g. realmId for QuickBooks) into the stored token data.
     if let Some(ref extras) = callback_extras {
@@ -282,6 +329,19 @@ pub async fn oauth_connect(
                         e
                     ));
                 }
+            }
+        }
+    }
+
+    // Zendesk: the access token alone carries no subdomain, but every API call
+    // (and the proxy's {subdomain} base_url) needs it. Stamp the subdomain the
+    // user connected with, and use it as the workspace display name + the
+    // per-account instance key (oauth:zendesk:{subdomain}).
+    if integration_id == "zendesk" {
+        if let Some(sub) = instance.as_deref() {
+            token_data["subdomain"] = serde_json::Value::String(sub.to_string());
+            if token_data["workspace_name"].is_null() {
+                token_data["workspace_name"] = serde_json::Value::String(sub.to_string());
             }
         }
     }
