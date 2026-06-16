@@ -380,13 +380,6 @@ describe('Pipes: discover → install → play', function () {
     };
 
     if (!(await isOnPage())) {
-      // Default sub-tab is "scheduled"; the installed pipe may be classified
-      // as manual or triggered. Click the Manual sub-tab if the row isn't
-      // visible. The sub-tabs (pipes-section.tsx:1525-1543) don't carry a
-      // testid, so we walk visible buttons inside the pipes section and
-      // match the literal "manual" label. Done in one execute() to avoid
-      // wdio's text-match selector syntax (`button*=manual`), which is not
-      // valid CSS and chokes when concatenated into a comma-list.
       const subTabs: ('manual' | 'triggered')[] = ['manual', 'triggered'];
       for (const label of subTabs) {
         const clicked = (await browser.execute((labelArg: string) => {
@@ -395,7 +388,6 @@ describe('Pipes: discover → install → play', function () {
           const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('button'));
           const tab = buttons.find((b) => {
             const txt = (b.textContent || '').trim().toLowerCase();
-            // sub-tabs render as "manual (3)" / "triggered (0)" etc.
             return txt === labelArg || txt.startsWith(`${labelArg} (`);
           });
           if (tab) {
@@ -422,93 +414,7 @@ describe('Pipes: discover → install → play', function () {
 
   // ─── Step 5: hover the row to reveal play button, click it ───────────────
 
-  it('plays and stops a manual pipe from My Pipes', async () => {
-    const targetPipeName = await browser.executeAsync((preferredName: string, done: (value: string | null) => void) => {
-      fetch('http://localhost:3030/pipes/list')
-        .then((r) => r.ok ? r.json() : [])
-        .then((json) => {
-          const list: any[] = Array.isArray(json) ? json : (json.data || json.pipes || []);
-
-          const isManual = (p: any) => {
-            const schedule = p?.config?.schedule ?? p?.schedule ?? null;
-            const trigger = p?.config?.trigger ?? null;
-            const enabled = p?.enabled ?? p?.config?.enabled ?? true;
-            return enabled && (!schedule || schedule === 'manual') && !trigger;
-          };
-
-          const byName = (name: string) =>
-            list.find((p: any) => (p?.name || p?.config?.name || p?.id || p?.slug) === name);
-
-          const preferred = byName(preferredName);
-          if (preferred && isManual(preferred)) {
-            done(preferredName);
-            return;
-          }
-
-          const manualPreferred = [
-            'time-breakdown',
-            'day-recap',
-            'meeting-summary',
-            'standup-update',
-            'ai-habits',
-            'video-export',
-          ].find((name) => {
-            const pipe = byName(name);
-            return pipe && isManual(pipe);
-          });
-
-          if (manualPreferred) {
-            done(manualPreferred);
-            return;
-          }
-
-          const fallback = list.find((p: any) => isManual(p));
-          done(fallback ? (fallback?.name || fallback?.config?.name || fallback?.id || fallback?.slug) : null);
-        })
-        .catch(() => done(null));
-    }, installedPipeName);
-
-    if (!targetPipeName) {
-      throw new Error('No enabled manual pipe found in My Pipes for play/stop assertions');
-    }
-
-    const ensurePipeVisible = async (name: string): Promise<boolean> => {
-      const isOnPage = async (): Promise<boolean> =>
-        (await browser.execute((pipeName: string) => {
-          return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-            .some((b) => b.textContent?.trim() === pipeName);
-        }, name)) as boolean;
-
-      if (await isOnPage()) return true;
-
-      const clickedManual = (await browser.execute(() => {
-        const root = document.querySelector('[data-testid="section-pipes"]');
-        if (!root) return false;
-        const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('button'));
-        const tab = buttons.find((b) => {
-          const txt = (b.textContent || '').trim().toLowerCase();
-          return txt === 'manual' || txt.startsWith('manual (');
-        });
-        if (!tab) return false;
-        tab.click();
-        return true;
-      })) as boolean;
-
-      if (clickedManual) {
-        await browser.pause(500);
-      }
-
-      return isOnPage();
-    };
-
-    await browser.waitUntil(
-      async () => ensurePipeVisible(targetPipeName),
-      {
-        timeout: 8_000,
-        timeoutMsg: `Pipe name button "${targetPipeName}" not found`,
-      }
-    );
-
+  it('plays and stops the installed pipe', async () => {
     // Walk visible buttons inside the pipes section and find the row by
     // text content, then scroll it into view. wdio's `$('button=NAME')`
     // text-match selector is recognised by its own parser but the
@@ -525,11 +431,11 @@ describe('Pipes: discover → install → play', function () {
           if (!btn) return false;
           btn.scrollIntoView({ block: 'center', inline: 'center' });
           return true;
-        }, targetPipeName)) as boolean,
-      { timeout: 8_000, timeoutMsg: `Pipe name button "${targetPipeName}" not found` }
+        }, installedPipeName)) as boolean,
+      { timeout: 8_000, timeoutMsg: `Pipe name button "${installedPipeName}" not found` }
     );
     await browser.pause(400);
-    const pipeNameBtn = await $(`button=${targetPipeName}`);
+    const pipeNameBtn = await $(`button=${installedPipeName}`);
     // Hover to trigger group-hover CSS → opacity-0 → opacity-100 on play button
     await pipeNameBtn.moveTo();
     await browser.pause(400);
@@ -546,7 +452,7 @@ describe('Pipes: discover → install → play', function () {
         }
       }
       return false;
-    }, targetPipeName);
+    }, installedPipeName);
 
     // No fallback — if we can't find the play button for the installed pipe, fail explicitly
     expect(played).toBe(true);
@@ -575,7 +481,7 @@ describe('Pipes: discover → install → play', function () {
         }
       }
       return false;
-    }, targetPipeName);
+    }, installedPipeName);
     expect(stopped).toBe(true);
 
     await browser.waitUntil(
@@ -590,7 +496,7 @@ describe('Pipes: discover → install → play', function () {
             return !hasStop && hasRun;
           }
           return false;
-        }, targetPipeName)) as boolean,
+        }, installedPipeName)) as boolean,
       {
         timeout: 30_000,
         timeoutMsg: 'Pipe did not leave running state after clicking stop',
