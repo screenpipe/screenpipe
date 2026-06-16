@@ -369,6 +369,45 @@ describe('Pipes: discover → install → play', function () {
     }
   });
 
+  // ─── Step 3c: force manual schedule so stop assertions are deterministic ─
+  // Store pipes like digital-clone can ship enabled with a real schedule
+  // (e.g. every 4h). On slower CI lanes the scheduler can re-queue the pipe
+  // immediately after we click Stop, which makes the row look "still running"
+  // even though the stop request itself succeeded. For the play/stop flow we
+  // only want the explicit user-triggered run under test.
+  it('forces the installed pipe to manual schedule before play/stop assertions', async () => {
+    if (!installedPipeName) throw new Error('no installed pipe to reconfigure');
+
+    const result = await browser.executeAsync((name: string, done: (value: any) => void) => {
+      const encoded = encodeURIComponent(name);
+      fetch(`http://localhost:3030/pipes/${encoded}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: 'manual' }),
+      })
+        .then(async (res) => {
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json?.error) {
+            done({ ok: false, error: json?.error || `HTTP ${res.status}` });
+            return;
+          }
+
+          const verifyRes = await fetch(`http://localhost:3030/pipes/${encoded}`);
+          const verifyJson = await verifyRes.json().catch(() => ({}));
+          const schedule =
+            verifyJson?.data?.config?.schedule ??
+            verifyJson?.config?.schedule ??
+            verifyJson?.schedule ??
+            null;
+          done({ ok: true, schedule });
+        })
+        .catch((error) => done({ ok: false, error: String(error) }));
+    }, installedPipeName) as { ok: boolean; schedule?: string | null; error?: string };
+
+    expect(result.ok, result.error || 'failed to update pipe schedule').toBe(true);
+    expect(result.schedule).toBe('manual');
+  });
+
   // ─── Step 4: confirm pipe row is visible in My Pipes ─────────────────────
 
   it('shows the installed pipe in My Pipes list', async () => {
