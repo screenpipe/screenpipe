@@ -471,7 +471,11 @@ jobs:
           } else {
             $arch = 'x64'
           }
-          $version = '1.22.0'
+          # ort rc.12 requests ONNX Runtime API 24, which needs onnxruntime >= 1.24.
+          # 1.22.0 only provides API 22 → "API version 24 not available" panic at
+          # runtime (ONNX init fails: VAD/diarization/PII broken). Match ci.yml's
+          # 1.24.2. See #4173/#4176.
+          $version = '1.24.2'
           $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-$arch-$version.zip"
           $zipFile = "onnxruntime-win-$arch-$version.zip"
           $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-$arch-$version"
