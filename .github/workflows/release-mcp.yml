@@ -71,16 +71,21 @@ jobs:
           jq --arg v "$VER" '.version = $v | .packages |= map(.version = $v)' server.json > server.tmp && mv server.tmp server.json
           echo "synced server.json version to $VER"
 
+      # continue-on-error: this is a new step — a first-run hiccup (OIDC, asset URL)
+      # must not abort the npm publish / mcpb bundle / GitHub release that surround it.
       - name: Install mcp-publisher
+        continue-on-error: true
         working-directory: packages/screenpipe-mcp
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Authenticate to MCP Registry (GitHub OIDC)
+        continue-on-error: true
         working-directory: packages/screenpipe-mcp
         run: ./mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
+        continue-on-error: true
         working-directory: packages/screenpipe-mcp
         run: ./mcp-publisher publish
 
