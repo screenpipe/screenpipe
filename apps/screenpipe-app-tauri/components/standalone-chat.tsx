@@ -148,6 +148,7 @@ import {
   isQueuedItemSteerShortcut,
   normalizeQueueEventPayload,
 } from "@/lib/chat-queue-controls";
+import { dispatchStopRequest } from "@/lib/chat-stop";
 import { requestPipeStop } from "@/lib/pipe-stop";
 
 const MermaidDiagram = React.lazy(() =>
@@ -8041,8 +8042,27 @@ export function StandaloneChat({
   };
 
   const handleStop = async () => {
-    if (activePipeExecution) {
-      const result = await requestPipeStop(activePipeExecution.name);
+    if (!activePipeExecution) {
+      piActiveStopRequestedRef.current = true;
+    }
+
+    let stopAction;
+    try {
+      stopAction = await dispatchStopRequest(
+        activePipeExecution,
+        requestPipeStop,
+        () => commands.piAbortActive(piSessionIdRef.current),
+      );
+    } catch (e) {
+      if (activePipeExecution) {
+        throw e;
+      }
+      console.warn("[Pi] Failed to abort:", e);
+      stopAction = { kind: "pi" } as const;
+    }
+
+    if (stopAction.kind === "pipe") {
+      const result = stopAction.result;
       if (!result.ok && result.status !== "not_running") {
         toast({
           title: "pipe stop failed",
@@ -8054,19 +8074,13 @@ export function StandaloneChat({
           title: "stopping pipe",
           description:
             result.status === "stop_pending"
-              ? `${activePipeExecution.name} will stop as soon as the agent subprocess finishes spawning`
-              : `${activePipeExecution.name} is shutting down`,
+              ? `${stopAction.pipeName} will stop as soon as the agent subprocess finishes spawning`
+              : `${stopAction.pipeName} is shutting down`,
         });
       }
       return;
     }
 
-    piActiveStopRequestedRef.current = true;
-    try {
-      await commands.piAbortActive(piSessionIdRef.current);
-    } catch (e) {
-      console.warn("[Pi] Failed to abort:", e);
-    }
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];

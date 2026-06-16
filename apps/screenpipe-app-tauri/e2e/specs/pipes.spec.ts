@@ -422,7 +422,7 @@ describe('Pipes: discover → install → play', function () {
 
   // ─── Step 5: hover the row to reveal play button, click it ───────────────
 
-  it('plays the installed pipe', async () => {
+  it('plays and stops the installed pipe', async () => {
     // Walk visible buttons inside the pipes section and find the row by
     // text content, then scroll it into view. wdio's `$('button=NAME')`
     // text-match selector is recognised by its own parser but the
@@ -476,5 +476,42 @@ describe('Pipes: discover → install → play', function () {
 
     const filepath = await saveScreenshot('pipes-running');
     expect(existsSync(filepath)).toBe(true);
+
+    const stopped = await browser.execute((name: string) => {
+      for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
+        if (nameBtn.textContent?.trim() !== name) continue;
+        const row = nameBtn.closest<HTMLElement>('div.group');
+        if (!row) continue;
+        const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
+        if (stopBtn && !stopBtn.disabled) {
+          stopBtn.click();
+          return true;
+        }
+      }
+      return false;
+    }, installedPipeName);
+    expect(stopped).toBe(true);
+
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute((name: string) => {
+          for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
+            if (nameBtn.textContent?.trim() !== name) continue;
+            const row = nameBtn.closest<HTMLElement>('div.group');
+            if (!row) continue;
+            const hasStop = !!row.querySelector('button[title="stop pipe"]');
+            const hasRun = !!row.querySelector('button[title="run pipe"]');
+            return !hasStop && hasRun;
+          }
+          return false;
+        }, installedPipeName)) as boolean,
+      {
+        timeout: 30_000,
+        timeoutMsg: 'Pipe did not leave running state after clicking stop',
+      }
+    );
+
+    const stoppedFilepath = await saveScreenshot('pipes-stopped');
+    expect(existsSync(stoppedFilepath)).toBe(true);
   });
 });

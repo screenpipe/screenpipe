@@ -673,6 +673,9 @@ fn spawn_pid_watcher(
     pipes_dir: PathBuf,
 ) {
     tokio::spawn(async move {
+        // Poll for up to ~10s (400 * 25ms): long enough to cover slow agent
+        // subprocess spawn on developer machines without persisting the
+        // stop-pending sentinel as if it were a real child PID.
         for _ in 0..400 {
             let pid = shared_pid.load(std::sync::atomic::Ordering::SeqCst);
             if pid != 0 && pid != STOP_REQUESTED_PID {
@@ -5417,6 +5420,44 @@ mod tests {
 
         let status = pm.stop_pipe("done").await.unwrap();
         assert_eq!(status, PipeStopStatus::NotRunning);
+    }
+
+    #[test]
+    fn execution_handle_current_pid_hides_stop_pending_sentinel() {
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(STOP_REQUESTED_PID));
+        let handle = ExecutionHandle::new(shared_pid);
+        assert_eq!(handle.current_pid(), 0);
+    }
+
+    #[tokio::test]
+    async fn pid_watcher_ignores_stop_pending_sentinel_until_real_pid_arrives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "watcher";
+        std::fs::create_dir_all(tmp.path().join(pipe_name)).unwrap();
+
+        let running = Arc::new(Mutex::new(HashMap::new()));
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(STOP_REQUESTED_PID));
+        let handle = ExecutionHandle::new(shared_pid.clone());
+        running.lock().await.insert(pipe_name.to_string(), handle);
+
+        spawn_pid_watcher(
+            running.clone(),
+            None,
+            pipe_name.to_string(),
+            None,
+            shared_pid.clone(),
+            tmp.path().to_path_buf(),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert_eq!(read_pid_file(tmp.path(), pipe_name), None);
+
+        shared_pid.store(4242, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        assert_eq!(read_pid_file(tmp.path(), pipe_name), Some(4242));
+        let running = running.lock().await;
+        assert_eq!(running.get(pipe_name).map(|h| h.pid), Some(4242));
     }
 
     #[tokio::test]
