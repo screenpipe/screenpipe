@@ -50,6 +50,30 @@ interface TranscriptPanelProps {
 
 const AUTO_FOLLOW_THRESHOLD_PX = 48;
 
+// User-chosen transcript panel height persists across meetings/sessions so the
+// drawer stays at the size you dragged it to. Stored in px; absent → fall back
+// to the responsive default class (`h-[min(42vh,360px)]`).
+const PANEL_HEIGHT_STORAGE_KEY = "screenpipe-meeting-transcript-height";
+const MIN_PANEL_HEIGHT_PX = 120;
+// Cap so the drawer can never swallow the whole window and bury the note.
+const MAX_PANEL_HEIGHT_FRACTION = 0.7;
+
+function clampPanelHeight(height: number): number {
+  const max =
+    typeof window !== "undefined"
+      ? Math.round(window.innerHeight * MAX_PANEL_HEIGHT_FRACTION)
+      : 600;
+  return Math.max(MIN_PANEL_HEIGHT_PX, Math.min(height, Math.max(max, MIN_PANEL_HEIGHT_PX)));
+}
+
+function loadStoredPanelHeight(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(PANEL_HEIGHT_STORAGE_KEY);
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? clampPanelHeight(n) : null;
+}
+
 function isNearBottom(el: HTMLDivElement): boolean {
   return (
     el.scrollHeight - el.scrollTop - el.clientHeight <=
@@ -276,7 +300,97 @@ export function TranscriptPanel({
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // User-dragged height in px (null = responsive default). Drag the top grip to
+  // shrink/grow the drawer so it takes less of the window.
+  const [panelHeight, setPanelHeight] = useState<number | null>(() =>
+    loadStoredPanelHeight(),
+  );
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(
+    null,
+  );
   const { health } = useHealthCheck();
+
+  const handleResizeMove = useCallback((e: PointerEvent) => {
+    const state = resizeStateRef.current;
+    if (!state) return;
+    // The drawer is docked above the control row and grows upward, so dragging
+    // the grip up (smaller clientY) makes it taller.
+    setPanelHeight(clampPanelHeight(state.startHeight + (state.startY - e.clientY)));
+  }, []);
+
+  const handleResizeEnd = useCallback(() => {
+    resizeStateRef.current = null;
+    setIsResizing(false);
+    window.removeEventListener("pointermove", handleResizeMove);
+    window.removeEventListener("pointerup", handleResizeEnd);
+    if (typeof document !== "undefined") {
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+    setPanelHeight((h) => {
+      if (h != null && typeof window !== "undefined") {
+        window.localStorage.setItem(PANEL_HEIGHT_STORAGE_KEY, String(h));
+      }
+      return h;
+    });
+  }, [handleResizeMove]);
+
+  const handleResizeStart = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      // First drag from the default class height: measure the rendered panel so
+      // resizing starts from where the eye sees it, not a guess.
+      const startHeight =
+        panelHeight ??
+        panelRef.current?.getBoundingClientRect().height ??
+        360;
+      resizeStateRef.current = { startY: e.clientY, startHeight };
+      setIsResizing(true);
+      window.addEventListener("pointermove", handleResizeMove);
+      window.addEventListener("pointerup", handleResizeEnd);
+      if (typeof document !== "undefined") {
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "ns-resize";
+      }
+    },
+    [panelHeight, handleResizeMove, handleResizeEnd],
+  );
+
+  const handleResizeReset = useCallback(() => {
+    setPanelHeight(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(PANEL_HEIGHT_STORAGE_KEY);
+    }
+  }, []);
+
+  const handleResizeKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const base =
+        panelHeight ??
+        panelRef.current?.getBoundingClientRect().height ??
+        360;
+      const step = e.shiftKey ? 40 : 16;
+      const next = clampPanelHeight(base + (e.key === "ArrowUp" ? step : -step));
+      setPanelHeight(next);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(PANEL_HEIGHT_STORAGE_KEY, String(next));
+      }
+    },
+    [panelHeight],
+  );
+
+  // Tear down window listeners if the panel unmounts mid-drag.
+  useEffect(
+    () => () => {
+      window.removeEventListener("pointermove", handleResizeMove);
+      window.removeEventListener("pointerup", handleResizeEnd);
+    },
+    [handleResizeMove, handleResizeEnd],
+  );
 
   // Time bounds for the meeting. Live meetings extend to "now" so newly
   // captured chunks are included on each refetch.
@@ -653,6 +767,9 @@ export function TranscriptPanel({
   ]);
   const compactEmptyState =
     Boolean(emptyCopy) && !loading && !hasTranscriptContent;
+  // Honor the user-dragged height only once there's real content — the empty
+  // state stays compact (108px) so it isn't a tall blank box.
+  const useCustomHeight = isOpen && !compactEmptyState && panelHeight != null;
   const showSearch = displayBlocks.length > 0 || Boolean(query.trim());
   const showFollowButton =
     isLive && !query.trim() && hasTranscriptContent && !isFollowingLive;
@@ -673,19 +790,43 @@ export function TranscriptPanel({
           user can read transcript and edit the note simultaneously. Esc still
           closes via the keyboard handler below. */}
       <div
+        ref={panelRef}
         className={cn(
-          "mb-3 flex flex-col border border-border bg-background transition-all duration-200 ease-out",
+          "mb-3 flex flex-col border border-border bg-background",
+          // No transition while dragging so height tracks the pointer 1:1.
+          !isResizing && "transition-all duration-200 ease-out",
           !isOpen && "hidden",
+          isOpen && compactEmptyState && "min-h-[108px] translate-y-0 opacity-100",
           isOpen &&
-            (compactEmptyState
-              ? "min-h-[108px] translate-y-0 opacity-100"
-              : "h-[min(42vh,360px)] min-h-[220px] translate-y-0 opacity-100"),
+            !compactEmptyState &&
+            !useCustomHeight &&
+            "h-[min(42vh,360px)] min-h-[220px] translate-y-0 opacity-100",
+          isOpen &&
+            !compactEmptyState &&
+            useCustomHeight &&
+            "min-h-0 translate-y-0 opacity-100",
         )}
+        style={useCustomHeight ? { height: panelHeight ?? undefined } : undefined}
         aria-hidden={!isOpen}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
         }}
       >
+        {!compactEmptyState && (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="resize transcript panel"
+            tabIndex={0}
+            title="drag to resize · double-click to reset"
+            onPointerDown={handleResizeStart}
+            onDoubleClick={handleResizeReset}
+            onKeyDown={handleResizeKeyDown}
+            className="group flex h-2.5 shrink-0 cursor-ns-resize touch-none items-center justify-center bg-background hover:bg-muted/60 focus:outline-none focus-visible:bg-muted/60"
+          >
+            <span className="h-0.5 w-8 rounded-full bg-border transition-colors group-hover:bg-muted-foreground/40" />
+          </div>
+        )}
         <header className="flex items-center gap-2 px-4 py-1.5 border-b border-border shrink-0">
           {showSearch && (searchOpen || Boolean(query.trim())) ? (
             <input

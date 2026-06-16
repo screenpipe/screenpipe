@@ -6,6 +6,7 @@ exclude = [
     "apps/screenpipe-app-tauri/src-tauri",
     "crates/screenpipe-integrations",
     "ee/sdk",
+    "ci/ort-smoke",
 ]
 resolver = "2"
 

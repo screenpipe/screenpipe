@@ -21,6 +21,7 @@ use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    routes::search::is_screenpipe_app,
     server::AppState,
     video_cache::{AudioEntry, DeviceFrame, FrameMetadata, TimeSeriesFrame},
 };
@@ -169,7 +170,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
         .ocr_entries
         .into_iter()
         // Filter out screenpipe frames at display time
-        .filter(|device_data| !device_data.app_name.to_lowercase().contains("screenpipe"))
+        .filter(|device_data| !is_screenpipe_app(&device_data.app_name))
         .map(|device_data| DeviceFrame {
             device_id: device_data.device_name,
             frame_id: chunk.frame_id,
@@ -516,7 +517,7 @@ async fn handle_stream_frames_socket(
                             drop(sent);
 
                             // Skip screenpipe's own frames
-                            if hot_frame.app_name.to_lowercase().contains("screenpipe") {
+                            if is_screenpipe_app(&hot_frame.app_name) {
                                 continue;
                             }
 

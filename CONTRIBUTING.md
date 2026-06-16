@@ -9,6 +9,7 @@ btw, we prefer that you don't contribute if you are not using or will use the pr
 before you begin:
 - try to run the [pre-built app](https://docs.screenpi.pe) to get familiar with the project
 - familiarize yourself with the project structure and architecture.
+- new to contributing? the [beginner's onboarding guide](ONBOARDING.md) walks you from zero to a merged pr step by step (this file is the reference; that one is the walkthrough).
 
 ## installation and build guide
 
@@ -220,6 +221,30 @@ it will avoid conflicts with the port and avoid conflicts with the data dir
 especially useful if you've done new database migrations and want to avoid breaking your previous months of data :)
 
 on macos, prefer `$TMPDIR` (a per-user temp dir) over `/tmp` — the system periodically sweeps `/tmp` and can wipe your dev data-dir mid-session, while `$TMPDIR` sticks around for the session. the `${TMPDIR:-/tmp}` form above uses it when set and falls back to `/tmp` otherwise.
+
+### macos: keeping screen/mic/accessibility permissions across dev rebuilds
+
+macos ties tcc permissions — screen recording, microphone, accessibility — to the app's *code signature*. an unsigned or ad-hoc-signed build gets a fresh signature on every rebuild, so macos sees each rebuild as a new app and re-prompts — or silently drops the permission, which shows up as "capture suddenly returns nothing" after a rebuild.
+
+`apps/screenpipe-app-tauri/scripts/build_macos.sh` already signs the app (with an `Apple Development:` cert). if you don't have an apple developer cert, you can get the same permission-persistence with a **self-signed** code-signing cert:
+
+1. create the cert once — in Keychain Access: Certificate Assistant → Create a Certificate → name it e.g. `screenpipe dev`, Identity Type: **Self-Signed Root**, Certificate Type: **Code Signing** → Create. confirm it's usable:
+
+   ```bash
+   security find-identity -v -p codesigning
+   ```
+
+2. build, then sign with your identity — same flow as `scripts/build_macos.sh`, just your cert:
+
+   ```bash
+   cd apps/screenpipe-app-tauri
+   bun tauri build --no-sign --features metal
+   APP="src-tauri/target/release/bundle/macos/screenpipe - Development.app"
+   xattr -cr "$APP"
+   codesign --force --deep --sign "screenpipe dev" "$APP"
+   ```
+
+3. grant the permissions once. since the signature is stable across rebuilds, macos won't re-prompt and capture won't silently break — as long as you keep signing with the same identity.
 
 ### debugging github action
 

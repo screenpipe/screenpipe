@@ -102,7 +102,8 @@ pub struct WindowsTreeWalker {
 unsafe impl Send for WindowsTreeWalker {}
 
 impl WindowsTreeWalker {
-    pub fn new(config: TreeWalkerConfig) -> Self {
+    pub fn new(mut config: TreeWalkerConfig) -> Self {
+        config.compile_patterns();
         Self {
             config,
             state: UnsafeCell::new(WalkerState {
@@ -239,9 +240,9 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Apply user-configured ignored windows. Supports both legacy
         // unscoped patterns ("Slack") and scoped `App::Title` patterns.
         let window_lower = window_name.to_lowercase();
-        let ignored_patterns = WindowPattern::parse_list(&self.config.ignored_windows);
-        let included_patterns = WindowPattern::parse_list(&self.config.included_windows);
-        if window_pattern::matches_any(&ignored_patterns, &app_lower, &window_lower) {
+        let ignored_patterns = self.config.resolved_ignored();
+        let included_patterns = self.config.resolved_included();
+        if window_pattern::matches_any(ignored_patterns.as_ref(), &app_lower, &window_lower) {
             debug!(
                 app = %app_name,
                 title = %window_name,
@@ -253,7 +254,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         // Scoped includes act as per-app whitelists; other apps fall back to
         // global semantics — see `window_pattern::passes_includes`.
-        if !window_pattern::passes_includes(&included_patterns, &app_lower, &window_lower) {
+        if !window_pattern::passes_includes(included_patterns.as_ref(), &app_lower, &window_lower) {
             debug!(
                 app = %app_name,
                 title = %window_name,
@@ -301,7 +302,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             &mut browser_url,
             &monitor_rect,
             &window_rect,
-            &ignored_patterns,
+            ignored_patterns.as_ref(),
             &app_lower,
             &mut hit_ignored_extension,
         );

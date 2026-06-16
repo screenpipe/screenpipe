@@ -295,7 +295,8 @@ pub struct MacosTreeWalker {
 }
 
 impl MacosTreeWalker {
-    pub fn new(config: TreeWalkerConfig) -> Self {
+    pub fn new(mut config: TreeWalkerConfig) -> Self {
+        config.compile_patterns();
         Self {
             config,
             incognito_detector: crate::incognito::create_detector(),
@@ -350,9 +351,9 @@ impl MacosTreeWalker {
         // Apply user-configured ignored windows (app-name pre-check).
         // Scoped patterns (`App::Title`) defer to the post-title check below
         // since the window title isn't known yet — see `window_pattern`.
-        let ignored_patterns = WindowPattern::parse_list(&self.config.ignored_windows);
-        let included_patterns = WindowPattern::parse_list(&self.config.included_windows);
-        if window_pattern::matches_any(&ignored_patterns, &app_lower, "") {
+        let ignored_patterns = self.config.resolved_ignored();
+        let included_patterns = self.config.resolved_included();
+        if window_pattern::matches_any(ignored_patterns.as_ref(), &app_lower, "") {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
@@ -450,14 +451,14 @@ impl MacosTreeWalker {
         // Full app + title check — scoped patterns (`App::Title`) and any
         // legacy pattern matching the title are evaluated here.
         let window_lower = window_name.to_lowercase();
-        if window_pattern::matches_any(&ignored_patterns, &app_lower, &window_lower) {
+        if window_pattern::matches_any(ignored_patterns.as_ref(), &app_lower, &window_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // Apply user-configured included windows. Scoped includes act as
         // per-app whitelists; apps without a scoped include rule fall back to
         // global semantics — see `window_pattern::passes_includes`.
-        if !window_pattern::passes_includes(&included_patterns, &app_lower, &window_lower) {
+        if !window_pattern::passes_includes(included_patterns.as_ref(), &app_lower, &window_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
 
@@ -465,7 +466,7 @@ impl MacosTreeWalker {
         let mut state = WalkState::new(
             &self.config,
             start,
-            ignored_patterns.clone(),
+            ignored_patterns.to_vec(),
             app_lower.clone(),
         );
 

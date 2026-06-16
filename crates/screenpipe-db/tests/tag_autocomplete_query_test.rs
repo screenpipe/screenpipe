@@ -4,8 +4,8 @@
 
 //! Regression coverage for the chat tag autocomplete SQL.
 //!
-//! This mirrors the raw SQL query in:
-//! `apps/screenpipe-app-tauri/lib/hooks/use-sql-autocomplete.tsx`.
+//! This covers the bounded DB helper used by:
+//! `GET /tags/autocomplete`.
 //!
 //! The query intentionally spans three tag stores:
 //! - screen/frame tags through `tags` + `vision_tags`
@@ -15,55 +15,6 @@
 use std::{collections::HashMap, time::Instant};
 
 use screenpipe_db::DatabaseManager;
-
-const TAG_AUTOCOMPLETE_QUERY: &str = r#"
-SELECT
-  name,
-  SUM(count) as count,
-  SUM(frame_count) as frame_count,
-  SUM(audio_count) as audio_count,
-  SUM(memory_count) as memory_count
-FROM (
-  SELECT
-    t.name as name,
-    COUNT(DISTINCT vt.vision_id) as count,
-    COUNT(DISTINCT vt.vision_id) as frame_count,
-    0 as audio_count,
-    0 as memory_count
-  FROM tags t
-  JOIN vision_tags vt ON t.id = vt.tag_id
-  WHERE t.name IS NOT NULL AND t.name != ''
-  GROUP BY t.name
-
-  UNION ALL
-
-  SELECT
-    t.name as name,
-    COUNT(DISTINCT audio_tag_rows.audio_chunk_id) as count,
-    0 as frame_count,
-    COUNT(DISTINCT audio_tag_rows.audio_chunk_id) as audio_count,
-    0 as memory_count
-  FROM tags t
-  JOIN audio_tags audio_tag_rows ON t.id = audio_tag_rows.tag_id
-  WHERE t.name IS NOT NULL AND t.name != ''
-  GROUP BY t.name
-
-  UNION ALL
-
-  SELECT
-    json_tags.value as name,
-    COUNT(DISTINCT memories.id) as count,
-    0 as frame_count,
-    0 as audio_count,
-    COUNT(DISTINCT memories.id) as memory_count
-  FROM memories, json_each(memories.tags) json_tags
-  WHERE json_tags.value IS NOT NULL AND json_tags.value != ''
-  GROUP BY json_tags.value
-)
-GROUP BY name
-ORDER BY count DESC
-LIMIT 100
-"#;
 
 type TagRow = (String, i64, i64, i64, i64);
 
@@ -86,10 +37,20 @@ async fn exec(db: &DatabaseManager, sql: &str) {
 }
 
 async fn tag_rows(db: &DatabaseManager) -> Vec<TagRow> {
-    sqlx::query_as::<_, TagRow>(TAG_AUTOCOMPLETE_QUERY)
-        .fetch_all(&db.pool)
+    db.autocomplete_tags("", 100, 0)
         .await
         .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.name,
+                row.count,
+                row.frame_count,
+                row.audio_count,
+                row.memory_count,
+            )
+        })
+        .collect()
 }
 
 fn by_name(rows: Vec<TagRow>) -> HashMap<String, TagRow> {
@@ -194,6 +155,33 @@ async fn tag_autocomplete_query_survives_large_mixed_sources() {
     assert_eq!(rows["bucket:0"].2, 0);
     assert_eq!(rows["bucket:0"].3, 0);
     assert_eq!(rows["bucket:0"].4, 1_000);
+}
+
+#[tokio::test]
+async fn tag_autocomplete_query_is_bounded_and_searchable_at_scale() {
+    let db = migrated_db().await;
+    seed_large_autocomplete_db(&db, 5_000, 200_000, 60_000, 50_000).await;
+
+    let first_page = db.autocomplete_tags("", 20, 0).await.unwrap();
+    assert_eq!(first_page.len(), 20);
+
+    let second_page = db.autocomplete_tags("", 20, 20).await.unwrap();
+    assert_eq!(second_page.len(), 20);
+    assert_ne!(
+        first_page
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        second_page
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+    );
+
+    let targeted = db.autocomplete_tags("tag:4999", 10, 0).await.unwrap();
+    assert_eq!(targeted.len(), 1);
+    assert_eq!(targeted[0].name, "tag:4999");
+    assert!(targeted[0].count > 0);
 }
 
 #[tokio::test]

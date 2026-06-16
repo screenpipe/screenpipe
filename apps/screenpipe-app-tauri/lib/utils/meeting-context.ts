@@ -531,6 +531,7 @@ export function buildMeetingSummarizeInstructions(
     `meeting id: ${meetingId}`,
     `primary transcript source: GET "http://localhost:3030/meetings/${meetingId}/transcript" and use each row's "transcript", "speakerName", "capturedAt", and "source" fields. sort rows by capturedAt before summarizing.`,
     `fallback transcript source: /search?content_type=audio for the meeting time window. audio rows use content.transcription (not content.text); content.text may be missing for audio and should not be treated as an empty transcript.`,
+    `also read the screenpipe-api skill and query the screen for what was *shown* during the meeting: GET /search?content_type=ocr for the meeting window (this returns the frame's on-screen text — accessibility tree + OCR merged, not just OCR) — shared slides, docs, code, demos, and the on-screen name tags video-call apps render for participants. fold anything useful into the summary, and use on-screen names to fill in attendees who never spoke.`,
     `if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:`,
     `  curl -s -X PATCH "http://localhost:3030/meetings/${meetingId}" \\`,
     `    -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \\`,

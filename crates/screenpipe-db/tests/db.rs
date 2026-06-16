@@ -1552,6 +1552,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_search_speakers_limited_returns_more_than_legacy_picker_cap() {
+        let db = setup_test_db().await;
+
+        for i in 0..25 {
+            let speaker = db.insert_speaker(&vec![i as f32; 512]).await.unwrap();
+            db.update_speaker_name(speaker.id, &format!("person {i:02}"))
+                .await
+                .unwrap();
+        }
+
+        let speakers = db.search_speakers_limited("", 50, 0, false).await.unwrap();
+
+        assert_eq!(speakers.len(), 25);
+        assert_eq!(speakers[0].name, "person 00");
+        assert!(speakers.iter().all(|speaker| speaker.metadata == "{}"));
+    }
+
+    #[tokio::test]
     async fn test_delete_speaker() {
         let db = setup_test_db().await;
 

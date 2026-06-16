@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, watch, RwLock};
 use tracing::{info, warn};
 
+use crate::routes::search::is_screenpipe_app;
 use crate::video_cache::{AudioEntry, DeviceFrame, FrameMetadata, TimeSeriesFrame};
 
 /// Cached frame from the capture pipeline.
@@ -226,7 +227,7 @@ impl HotFrameCache {
                     // Convert FrameData to HotFrames
                     for ocr_entry in &frame_data.ocr_entries {
                         // Skip screenpipe's own frames
-                        if ocr_entry.app_name.to_lowercase().contains("screenpipe") {
+                        if is_screenpipe_app(&ocr_entry.app_name) {
                             continue;
                         }
                         let hot = HotFrame {

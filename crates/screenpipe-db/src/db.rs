@@ -36,8 +36,8 @@ use crate::{
     FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord,
     MeetingTranscriptSegment, MemoryRecord, MemorySyncRow, NewDiarizationSegment, OCREntry,
     OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order, ReplacementAudioTranscription,
-    SearchMatch, SearchMatchGroup, SearchResult, Speaker, TagContentType, TextBounds, TextPosition,
-    TimeSeriesChunk, UiContent, UiEventRecord, UiEventRow, VideoMetadata,
+    SearchMatch, SearchMatchGroup, SearchResult, Speaker, TagAutocompleteItem, TagContentType,
+    TextBounds, TextPosition, TimeSeriesChunk, UiContent, UiEventRecord, UiEventRow, VideoMetadata,
     MAX_TRANSCRIPTION_ATTEMPTS,
 };
 
@@ -6137,6 +6137,41 @@ impl DatabaseManager {
     }
 
     pub async fn search_speakers(&self, name_prefix: &str) -> Result<Vec<Speaker>, sqlx::Error> {
+        self.search_speakers_limited(name_prefix, 100, 0, true)
+            .await
+    }
+
+    pub async fn search_speakers_limited(
+        &self,
+        name_prefix: &str,
+        limit: i64,
+        offset: i64,
+        include_samples: bool,
+    ) -> Result<Vec<Speaker>, sqlx::Error> {
+        let limit = limit.clamp(1, 100);
+        let offset = offset.max(0);
+
+        if !include_samples {
+            return sqlx::query_as::<_, Speaker>(
+                r#"
+                SELECT MIN(id) as id, name, '{}' as metadata
+                FROM speakers
+                WHERE name LIKE ? || '%' COLLATE NOCASE
+                  AND hallucination = 0
+                  AND name IS NOT NULL
+                  AND name != ''
+                GROUP BY name
+                ORDER BY name COLLATE NOCASE
+                LIMIT ? OFFSET ?
+                "#,
+            )
+            .bind(name_prefix)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await;
+        }
+
         // Group by name so duplicate names (e.g. multiple "Louis" rows from
         // separate voice embeddings) appear as a single entry in the dropdown.
         // Pick the lowest id per name so reassignment targets a stable speaker.
@@ -6148,6 +6183,8 @@ impl DatabaseManager {
                 FROM speakers
                 WHERE name LIKE ? || '%' AND hallucination = 0 AND name IS NOT NULL AND name != ''
                 GROUP BY name
+                ORDER BY name COLLATE NOCASE
+                LIMIT ? OFFSET ?
             ),
             RecentAudioPaths AS (
                 SELECT DISTINCT
@@ -6195,6 +6232,8 @@ impl DatabaseManager {
             "#,
         )
         .bind(name_prefix)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await
     }
@@ -10520,6 +10559,102 @@ LIMIT ? OFFSET ?
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn autocomplete_tags(
+        &self,
+        query: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TagAutocompleteItem>, SqlxError> {
+        let limit = limit.clamp(1, 100);
+        let offset = offset.max(0);
+        let candidate_limit = (limit + offset).clamp(1, 200);
+        let search = query.trim();
+
+        sqlx::query_as::<_, TagAutocompleteItem>(
+            r#"
+            WITH candidates AS (
+              SELECT name
+              FROM (
+                SELECT name
+                FROM (
+                  SELECT t.name as name
+                  FROM tags t
+                  WHERE t.name IS NOT NULL
+                    AND t.name != ''
+                    AND (? = '' OR t.name LIKE '%' || ? || '%' COLLATE NOCASE)
+                  GROUP BY t.name
+                  ORDER BY t.name COLLATE NOCASE
+                  LIMIT ?
+                )
+
+                UNION
+
+                SELECT name
+                FROM (
+                  SELECT json_tags.value as name
+                  FROM memories, json_each(memories.tags) json_tags
+                  WHERE json_tags.value IS NOT NULL
+                    AND json_tags.value != ''
+                    AND (? = '' OR json_tags.value LIKE '%' || ? || '%' COLLATE NOCASE)
+                  GROUP BY json_tags.value
+                  ORDER BY json_tags.value COLLATE NOCASE
+                  LIMIT ?
+                )
+              )
+              GROUP BY name
+              ORDER BY name COLLATE NOCASE
+              LIMIT ? OFFSET ?
+            )
+            SELECT
+              candidates.name,
+              (
+                SELECT COUNT(DISTINCT vt.vision_id)
+                FROM tags t
+                JOIN vision_tags vt ON t.id = vt.tag_id
+                WHERE t.name = candidates.name
+              ) + (
+                SELECT COUNT(DISTINCT audio_tag_rows.audio_chunk_id)
+                FROM tags t
+                JOIN audio_tags audio_tag_rows ON t.id = audio_tag_rows.tag_id
+                WHERE t.name = candidates.name
+              ) + (
+                SELECT COUNT(DISTINCT memories.id)
+                FROM memories, json_each(memories.tags) memory_tags
+                WHERE memory_tags.value = candidates.name
+              ) as count,
+              (
+                SELECT COUNT(DISTINCT vt.vision_id)
+                FROM tags t
+                JOIN vision_tags vt ON t.id = vt.tag_id
+                WHERE t.name = candidates.name
+              ) as frame_count,
+              (
+                SELECT COUNT(DISTINCT audio_tag_rows.audio_chunk_id)
+                FROM tags t
+                JOIN audio_tags audio_tag_rows ON t.id = audio_tag_rows.tag_id
+                WHERE t.name = candidates.name
+              ) as audio_count,
+              (
+                SELECT COUNT(DISTINCT memories.id)
+                FROM memories, json_each(memories.tags) memory_tags
+                WHERE memory_tags.value = candidates.name
+              ) as memory_count
+            FROM candidates
+            ORDER BY count DESC, candidates.name COLLATE NOCASE
+            "#,
+        )
+        .bind(search)
+        .bind(search)
+        .bind(candidate_limit)
+        .bind(search)
+        .bind(search)
+        .bind(candidate_limit)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
     }
 
     // ========================================================================

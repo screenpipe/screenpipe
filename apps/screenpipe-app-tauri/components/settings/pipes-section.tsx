@@ -22,6 +22,7 @@ import {
   Check,
   MoreHorizontal,
   Plus,
+  ArrowRight,
   Search,
   Share2,
   Link,
@@ -244,6 +245,28 @@ function buildCreatePipeDisplayLabel(prompt: string): string {
   const compact = normalized.length > 60 ? `${normalized.slice(0, 57).trimEnd()}...` : normalized;
   return `Create pipe: ${compact}`;
 }
+
+// Starter prompts shown next to the create-pipe box. A concrete, named example
+// people can build in one click beats a blank input — analytics + onboarding
+// calls show users stall on "what would i even create?", not on the typing.
+// Each `prompt` is sent straight into the create flow (autoSend).
+const PIPE_EXAMPLES: { label: string; prompt: string }[] = [
+  {
+    label: "📋 daily recap",
+    prompt:
+      "every day at 6pm, summarize what i worked on today and send me a notification",
+  },
+  {
+    label: "🧠 track people i meet",
+    prompt:
+      "keep a running note of the people i talk to and what we discussed, updated every hour",
+  },
+  {
+    label: "⏱ where my time goes",
+    prompt:
+      "every evening, break down how i spent my time across apps and projects today",
+  },
+];
 
 function buildOptimizePrompt(pipeName: string): string {
   // Screenpipe's isolated pi agent dir (legacy sessions before the isolation
@@ -987,6 +1010,47 @@ export function PipesSection() {
     !!p.config.schedule && p.config.schedule !== "manual" && !isTriggeredPipe(p);
   const isManualPipe = (p: PipeStatus) =>
     (!p.config.schedule || p.config.schedule === "manual") && !isTriggeredPipe(p);
+
+  // Single create-pipe entry point shared by the create box and the example
+  // chips. Marks the generation attempt (so standalone-chat can fire
+  // `pipe_generation_completed` when a new pipe lands), captures the north-star
+  // `pipe_generation_started` event with a `source` for funnel attribution,
+  // then hands the prompt to the chat agent with the pipe-authoring context.
+  const startPipeGeneration = (prompt: string, source: string) => {
+    const value = prompt.trim();
+    if (!value) return;
+
+    const generationId = crypto.randomUUID();
+    // Baseline the installed list so we can detect the new pipe even if the
+    // user already has pipes installed.
+    const baseline = pipes.map((p: any) => p?.config?.name).filter(Boolean);
+    try {
+      sessionStorage.setItem(
+        "pipeGenerationContext",
+        JSON.stringify({
+          generation_id: generationId,
+          started_at: Date.now(),
+          prompt_length: value.length,
+          baseline_pipes: baseline,
+        })
+      );
+    } catch {
+      // sessionStorage unavailable — funnel will miss this attempt, not fatal
+    }
+    posthog.capture("pipe_generation_started", {
+      generation_id: generationId,
+      prompt_length: value.length,
+      baseline_pipe_count: baseline.length,
+      source,
+    });
+
+    navigateHomeAndPrefill({
+      context: PIPE_CREATION_PROMPT,
+      prompt: value,
+      displayLabel: buildCreatePipeDisplayLabel(value),
+      autoSend: true,
+    });
+  };
 
   const filteredPipes = React.useMemo(
     () =>
@@ -1992,32 +2056,34 @@ export function PipesSection() {
                 <div>
                   <p className="text-foreground font-medium text-base">no pipes installed yet</p>
                   <p className="text-sm mt-1">
-                    pipes are AI automations that run on your screen data — summarize your day, track time, sync notes, and more.
+                    pipes are AI agents that run on a schedule over your screen data — they summarize your day, track your time, sync your notes, and more.
                   </p>
                 </div>
-                <div className="flex flex-col gap-2 text-sm text-left max-w-sm mx-auto">
-                  <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-                    <span>🧠</span>
-                    <span><strong>digital clone</strong> — builds a persistent AI memory of you</span>
-                  </div>
-                  <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-                    <span>📋</span>
-                    <span><strong>day recap</strong> — summarizes what you accomplished today</span>
-                  </div>
-                  <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
-                    <span>🧘‍♂</span>
-                    <span><strong>focus assistant</strong> — notifies you when you get distracted</span>
+                <div className="space-y-2 max-w-md mx-auto text-left">
+                  <p className="text-xs text-muted-foreground">
+                    create one in seconds — pick an example to build it, or describe your own below.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {PIPE_EXAMPLES.map((ex) => (
+                      <button
+                        key={ex.label}
+                        onClick={() => startPipeGeneration(ex.prompt, "empty_state_example")}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-border bg-muted/50 text-xs hover:bg-muted transition-colors"
+                      >
+                        {ex.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 <button
                   onClick={() => {
-                    window.dispatchEvent(new CustomEvent('switch-pipes-tab', { 
+                    window.dispatchEvent(new CustomEvent('switch-pipes-tab', {
                       detail: { tab: 'discover' }
                     }));
                   }}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-foreground text-background text-sm font-medium hover:bg-foreground/90 transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-border text-sm font-medium hover:bg-muted transition-colors"
                 >
-                  browse the pipe store →
+                  or browse the pipe store →
                 </button>
               </div>
             )}
@@ -3224,57 +3290,41 @@ export function PipesSection() {
         </div>
       )}
 
-      {/* Create new pipe — at bottom */}
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const form = e.currentTarget;
-          const input = form.querySelector("input") as HTMLInputElement;
-          const value = input?.value?.trim();
-          if (!value) return;
-          input.value = "";
-
-          // North-star funnel: mark the generation attempt so standalone-chat
-          // can fire `pipe_generation_completed` when a new pipe lands.
-          // Baseline captures the current installed list so we can detect the
-          // delta even if the user already has pipes installed.
-          const generationId = crypto.randomUUID();
-          const baseline = pipes.map((p: any) => p?.config?.name).filter(Boolean);
-          try {
-            sessionStorage.setItem(
-              "pipeGenerationContext",
-              JSON.stringify({
-                generation_id: generationId,
-                started_at: Date.now(),
-                prompt_length: value.length,
-                baseline_pipes: baseline,
-              })
-            );
-          } catch {
-            // sessionStorage unavailable — funnel will miss this attempt, not fatal
-          }
-          posthog.capture("pipe_generation_started", {
-            generation_id: generationId,
-            prompt_length: value.length,
-            baseline_pipe_count: baseline.length,
-          });
-
-          navigateHomeAndPrefill({
-            context: PIPE_CREATION_PROMPT,
-            prompt: value,
-            displayLabel: buildCreatePipeDisplayLabel(value),
-            autoSend: true,
-          });
-        }}
-      >
+      {/* Create your own pipe — at bottom */}
+      <div className="space-y-2 pt-2">
         <div className="flex items-center gap-2">
-          <Plus className="h-4 w-4 text-muted-foreground shrink-0" />
-          <Input
-            placeholder="describe a pipe to create..."
-            className="font-mono text-sm"
-          />
+          <Sparkles className="h-4 w-4 text-muted-foreground shrink-0" />
+          <p className="text-sm font-medium text-foreground">create your own pipe</p>
         </div>
-      </form>
+        <p className="text-xs text-muted-foreground">
+          describe what you want in plain english — screenpipe builds, installs, and schedules it for you.
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const form = e.currentTarget;
+            const input = form.querySelector("input") as HTMLInputElement;
+            const value = input?.value?.trim();
+            if (!value) return;
+            input.value = "";
+            startPipeGeneration(value, "create_box");
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="e.g. every morning, list the people i still need to reply to"
+              className="font-mono text-sm"
+            />
+            <button
+              type="submit"
+              aria-label="create pipe"
+              className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </form>
+      </div>
 
       {connectionModal && (
         <PostInstallConnectionsModal

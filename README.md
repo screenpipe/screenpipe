@@ -86,7 +86,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 ## install
 
-[download the desktop app](https://screenpi.pe/onboarding) — one-time purchase, all features, auto-updates
+[download the desktop app](https://screenpi.pe/onboarding) — all features, auto-updates
 
 or run the CLI:
 

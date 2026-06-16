@@ -244,7 +244,11 @@ pub fn truncate_middle(text: &str, max_chars: usize) -> String {
 /// Case-insensitive check for whether an app row should be filtered out
 /// because it belongs to screenpipe itself.
 pub fn is_screenpipe_app(app_name: &str) -> bool {
-    app_name.to_lowercase().contains("screenpipe")
+    const SCREENPIPE_APP_NEEDLE: &[u8] = b"screenpipe";
+    app_name
+        .as_bytes()
+        .windows(SCREENPIPE_APP_NEEDLE.len())
+        .any(|window| window.eq_ignore_ascii_case(SCREENPIPE_APP_NEEDLE))
 }
 
 /// Convert a `SearchResult` row into the public `ContentItem` shape used by
@@ -772,7 +776,7 @@ pub(crate) async fn keyword_search_handler(
 
         let filtered: Vec<_> = matches
             .into_iter()
-            .filter(|m| !m.app_name.to_lowercase().contains("screenpipe"))
+            .filter(|m| !is_screenpipe_app(&m.app_name))
             .collect();
 
         let groups = DatabaseManager::cluster_search_matches(filtered, 120);
@@ -802,7 +806,7 @@ pub(crate) async fn keyword_search_handler(
 
         let filtered: Vec<_> = matches
             .into_iter()
-            .filter(|m| !m.app_name.to_lowercase().contains("screenpipe"))
+            .filter(|m| !is_screenpipe_app(&m.app_name))
             .collect();
 
         Ok(JsonResponse(json!(filtered)))
@@ -1104,6 +1108,14 @@ mod tests {
     fn test_truncate_middle_short_text() {
         assert_eq!(truncate_middle("hello", 10), "hello");
         assert_eq!(truncate_middle("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_is_screenpipe_app_case_insensitive() {
+        assert!(is_screenpipe_app("screenpipe"));
+        assert!(is_screenpipe_app("ScreenPipe Desktop"));
+        assert!(is_screenpipe_app("com.screenpipe.capture"));
+        assert!(!is_screenpipe_app("pipe viewer"));
     }
 
     #[test]

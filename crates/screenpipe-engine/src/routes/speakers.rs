@@ -27,6 +27,9 @@ pub struct UpdateSpeakerRequest {
 #[derive(OaSchema, Serialize, Deserialize, Debug)]
 pub struct SearchSpeakersRequest {
     pub name: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub include_samples: Option<bool>,
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Debug)]
@@ -182,9 +185,12 @@ pub(crate) async fn search_speakers_handler(
     Query(request): Query<SearchSpeakersRequest>,
 ) -> Result<JsonResponse<Vec<Speaker>>, (StatusCode, JsonResponse<Value>)> {
     let search_prefix = request.name.unwrap_or_default();
+    let limit = request.limit.unwrap_or(50).clamp(1, 100) as i64;
+    let offset = request.offset.unwrap_or(0) as i64;
+    let include_samples = request.include_samples.unwrap_or(true);
     let speakers = state
         .db
-        .search_speakers(&search_prefix)
+        .search_speakers_limited(&search_prefix, limit, offset, include_samples)
         .await
         .map_err(|e| {
             (

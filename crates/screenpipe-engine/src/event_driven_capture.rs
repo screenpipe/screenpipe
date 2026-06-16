@@ -30,6 +30,30 @@ use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, warn};
 
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
+
+fn warm_visual_wait_duration(elapsed: Duration) -> Duration {
+    WARM_VISUAL_CHECK_INTERVAL
+        .saturating_sub(elapsed)
+        .min(WARM_FOCUS_BACKSTOP_INTERVAL)
+}
+
+async fn wait_for_warm_focus_or_timeout(
+    focus_controller: &Arc<crate::focus_aware_controller::FocusAwareController>,
+    monitor_id: u32,
+    duration: Duration,
+) {
+    if duration.is_zero() {
+        return;
+    }
+
+    let notify = focus_controller.notify_for(monitor_id);
+    tokio::select! {
+        _ = notify.notified() => {}
+        _ = tokio::time::sleep(duration) => {}
+    }
+}
 
 /// Stable configuration for a single capture invocation.
 ///
@@ -43,6 +67,7 @@ pub struct CaptureParams<'a> {
     pub snapshot_writer: &'a SnapshotWriter,
     pub tree_walker_config: &'a TreeWalkerConfig,
     pub window_filters: WindowFilters,
+    pub ignored_patterns: Vec<WindowPattern>,
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
     pub languages: &'a [screenpipe_core::Language],
@@ -668,6 +693,7 @@ pub async fn event_driven_capture_loop(
             &tree_walker_config.included_windows,
             &tree_walker_config.ignored_urls,
         ),
+        ignored_patterns: WindowPattern::parse_list(&tree_walker_config.ignored_windows),
         use_pii_removal,
         pause_on_drm_content,
         languages: &languages,
@@ -813,8 +839,10 @@ pub async fn event_driven_capture_loop(
                     // The full-rate Active path costs far more (OCR + DB +
                     // a11y tree walk) — Warm does a screenshot + 15×15 sample
                     // diff and only progresses if the diff crosses threshold.
-                    if last_warm_visual_check.elapsed() < Duration::from_secs(5) {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    let warm_wait = warm_visual_wait_duration(last_warm_visual_check.elapsed());
+                    if !warm_wait.is_zero() {
+                        wait_for_warm_focus_or_timeout(&focus_controller, monitor_id, warm_wait)
+                            .await;
                         continue;
                     }
                     last_warm_visual_check = Instant::now();
@@ -822,7 +850,12 @@ pub async fn event_driven_capture_loop(
                     // Without a comparer (visual_check disabled globally),
                     // we can't cheaply detect change — idle.
                     let Some(ref mut comparer) = frame_comparer else {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        wait_for_warm_focus_or_timeout(
+                            &focus_controller,
+                            monitor_id,
+                            warm_visual_wait_duration(Duration::ZERO),
+                        )
+                        .await;
                         continue;
                     };
 
@@ -844,13 +877,23 @@ pub async fn event_driven_capture_loop(
                                 // Fall through to normal capture path with
                                 // warm_trigger_override set.
                             } else {
-                                tokio::time::sleep(Duration::from_millis(250)).await;
+                                wait_for_warm_focus_or_timeout(
+                                    &focus_controller,
+                                    monitor_id,
+                                    warm_visual_wait_duration(Duration::ZERO),
+                                )
+                                .await;
                                 continue;
                             }
                         }
                         Err(e) => {
                             debug!("warm visual check failed on monitor {}: {}", monitor_id, e);
-                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            wait_for_warm_focus_or_timeout(
+                                &focus_controller,
+                                monitor_id,
+                                warm_visual_wait_duration(Duration::ZERO),
+                            )
+                            .await;
                             continue;
                         }
                     }
@@ -1639,22 +1682,11 @@ fn resolve_capture_metadata(
 /// Returns `true` if this capture should be skipped (too recent).
 fn terminal_ocr_throttled(app_name: &str) -> bool {
     const INTERVAL: Duration = Duration::from_secs(30);
-    let n = app_name.to_lowercase();
-    // Mirror the app_prefers_ocr list in paired_capture.rs: terminals whose
-    // AX tree is raw buffer / window chrome and OCR is the only useful source.
-    let is_ocr_only = n.contains("wezterm")
-        || n.contains("alacritty")
-        || n.contains("kitty")
-        || n.contains("hyper")
-        || n.contains("warp");
-    // Electron editors whose AX tree is frequently empty/thin. OCR would run
-    // as a fallback on every capture otherwise — prohibitively expensive on a
-    // fullscreen Obsidian editor.
-    let is_electron_editor = n == "obsidian";
-    if !is_ocr_only && !is_electron_editor {
+    if !is_ocr_heavy_app(app_name) {
         return false;
     }
 
+    let app_key = app_name.to_lowercase();
     static LAST_CAPTURE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
     let map = LAST_CAPTURE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = match map.lock() {
@@ -1663,13 +1695,40 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
         Err(_) => return false,
     };
     let now = Instant::now();
-    match guard.get(&n) {
+    match guard.get(&app_key) {
         Some(&last) if now.duration_since(last) < INTERVAL => true,
         _ => {
-            guard.insert(n, now);
+            guard.insert(app_key, now);
             false
         }
     }
+}
+
+/// Apps whose accessibility tree tends to be thin, making OCR fallback expensive.
+fn is_ocr_heavy_app(app_name: &str) -> bool {
+    contains_ascii_case_insensitive(app_name, "wezterm")
+        || contains_ascii_case_insensitive(app_name, "alacritty")
+        || contains_ascii_case_insensitive(app_name, "kitty")
+        || contains_ascii_case_insensitive(app_name, "hyper")
+        || contains_ascii_case_insensitive(app_name, "warp")
+        || app_name.eq_ignore_ascii_case("obsidian")
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn is_lock_screen_app(app_name: &str) -> bool {
+    app_name.eq_ignore_ascii_case("loginwindow")
+        || app_name.eq_ignore_ascii_case("screensaverengine")
+        || app_name.eq_ignore_ascii_case("lockscreen")
 }
 
 /// Decide whether content dedup applies to this capture attempt.
@@ -1898,17 +1957,14 @@ async fn do_capture(
     // matches an ignored-window pattern, bail out now to prevent OCR from
     // capturing text from an excluded window (e.g. startup capture while
     // Bitwarden is focused but AX hadn't initialized yet).
-    // Parse ignored-window patterns once per capture — the two gates below
-    // (tree-missing fallback + post-resolution final gate) share this slice.
-    let ignored_patterns = WindowPattern::parse_list(&params.tree_walker_config.ignored_windows);
-
+    // Reuse the ignored-window patterns parsed at capture-loop startup.
     if tree_snapshot.is_none() {
         if let Some(ref app) = trigger_app {
             let app_lower = app.to_lowercase();
             // Without window title we can only fire legacy unscoped patterns;
             // scoped `App::Title` patterns defer to the post-resolution gate
             // below where the full pair is known.
-            if window_pattern::matches_any(&ignored_patterns, &app_lower, "") {
+            if window_pattern::matches_any(&params.ignored_patterns, &app_lower, "") {
                 debug!(
                     "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
                     app, params.monitor_id
@@ -1958,11 +2014,7 @@ async fn do_capture(
     // Also update the global SCREEN_IS_LOCKED flag so subsequent loop iterations
     // skip the screenshot entirely (saves CPU).
     if let Some(ref app) = app_name_owned {
-        let app_lower = app.to_lowercase();
-        if app_lower == "loginwindow"
-            || app_lower == "screensaverengine"
-            || app_lower == "lockscreen"
-        {
+        if is_lock_screen_app(app) {
             warn!(
                 "skipping capture: lock screen app '{}' on monitor {}",
                 app, params.monitor_id
@@ -2008,7 +2060,7 @@ async fn do_capture(
             .as_deref()
             .unwrap_or_default()
             .to_lowercase();
-        if window_pattern::matches_any(&ignored_patterns, &check_app, &check_win) {
+        if window_pattern::matches_any(&params.ignored_patterns, &check_app, &check_win) {
             debug!(
                 "skipping capture: resolved app='{}' / window='{}' matches ignored pattern on monitor {}",
                 check_app, check_win, params.monitor_id
@@ -2192,6 +2244,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn warm_visual_wait_duration_tracks_remaining_cadence_with_backstop() {
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(0)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(2)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_millis(4_750)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(5)),
+            Duration::from_secs(0)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(8)),
+            Duration::from_secs(0)
+        );
+    }
+
+    #[test]
     fn test_capture_trigger_as_str() {
         assert_eq!(
             CaptureTrigger::AppSwitch {
@@ -2327,6 +2403,36 @@ mod tests {
         let config = EventDrivenCaptureConfig::default();
         assert!(config.capture_on_keystroke);
         assert!(config.capture_on_clipboard);
+    }
+
+    #[test]
+    fn ascii_contains_matches_case_insensitively() {
+        assert!(contains_ascii_case_insensitive("Warp", "warp"));
+        assert!(contains_ascii_case_insensitive(
+            "com.github.wezterm",
+            "WEZTERM"
+        ));
+        assert!(contains_ascii_case_insensitive("Alacritty", "acrit"));
+        assert!(!contains_ascii_case_insensitive(
+            "Visual Studio Code",
+            "warp"
+        ));
+    }
+
+    #[test]
+    fn ocr_heavy_app_detection_is_case_insensitive() {
+        assert!(is_ocr_heavy_app("WezTerm"));
+        assert!(is_ocr_heavy_app("com.mitchellh.ghostty.WARP"));
+        assert!(is_ocr_heavy_app("Obsidian"));
+        assert!(!is_ocr_heavy_app("Chrome"));
+    }
+
+    #[test]
+    fn lock_screen_app_detection_is_case_insensitive() {
+        assert!(is_lock_screen_app("loginwindow"));
+        assert!(is_lock_screen_app("ScreenSaverEngine"));
+        assert!(is_lock_screen_app("LOCKSCREEN"));
+        assert!(!is_lock_screen_app("Finder"));
     }
 
     #[test]

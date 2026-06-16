@@ -3,6 +3,7 @@
 //! Lives here because the dependency direction is screen → a11y: an ignored
 //! URL must produce neither frames nor accessibility snapshots.
 
+use std::borrow::Cow;
 use url::Url;
 
 /// Check if a URL should be filtered out for privacy.
@@ -21,28 +22,49 @@ pub fn is_url_blocked(url: &str, blocked_patterns: &[String]) -> bool {
         return false;
     }
 
+    let normalized_patterns = normalize_blocked_patterns(blocked_patterns);
+    is_url_blocked_by_normalized_patterns(url, &normalized_patterns)
+}
+
+/// Lowercase ignored URL patterns once before entering repeated match loops.
+pub(crate) fn normalize_blocked_patterns(blocked_patterns: &[String]) -> Vec<String> {
+    blocked_patterns
+        .iter()
+        .map(|blocked| blocked.to_lowercase())
+        .collect()
+}
+
+/// Check if a URL should be filtered using already-lowercased patterns.
+pub(crate) fn is_url_blocked_by_normalized_patterns(
+    url: &str,
+    blocked_patterns_lower: &[String],
+) -> bool {
+    if blocked_patterns_lower.is_empty() {
+        return false;
+    }
+
     // Normalize so bare hosts ("wellsfargo.com") parse too.
     let url_to_parse = if !url.starts_with("http://") && !url.starts_with("https://") {
-        format!("https://{}", url)
+        Cow::Owned(format!("https://{}", url))
     } else {
-        url.to_string()
+        Cow::Borrowed(url)
     };
 
-    if let Ok(parsed) = Url::parse(&url_to_parse) {
+    if let Ok(parsed) = Url::parse(url_to_parse.as_ref()) {
         if let Some(host) = parsed.host_str() {
             let host_lower = host.to_lowercase();
-            return blocked_patterns
+            return blocked_patterns_lower
                 .iter()
-                .any(|blocked| host_matches_pattern(&host_lower, &blocked.to_lowercase()));
+                .any(|blocked| host_matches_pattern(&host_lower, blocked));
         }
     }
 
     // Fallback to simple contains check if URL parsing fails.
     // Less precise, but ensures we don't miss obvious matches.
     let url_lower = url.to_lowercase();
-    blocked_patterns
+    blocked_patterns_lower
         .iter()
-        .any(|blocked| url_lower.contains(&blocked.to_lowercase()))
+        .any(|blocked| url_lower.contains(blocked))
 }
 
 /// Domain-boundary match of one lowercased host against one lowercased pattern.
@@ -53,7 +75,10 @@ fn host_matches_pattern(host_lower: &str, blocked: &str) -> bool {
     }
 
     // Subdomain match: host ends with ".blocked"
-    if host_lower.ends_with(&format!(".{}", blocked)) {
+    if host_lower.len() > blocked.len()
+        && host_lower.ends_with(blocked)
+        && host_lower.as_bytes()[host_lower.len() - blocked.len() - 1] == b'.'
+    {
         return true;
     }
 
@@ -136,5 +161,24 @@ mod tests {
         assert!(is_url_blocked("https://chase.com/login", &b));
         assert!(is_url_blocked("https://www.bankofamerica.com", &b));
         assert!(!is_url_blocked("https://google.com", &b));
+    }
+
+    #[test]
+    fn test_normalized_patterns_match_public_api() {
+        let b = blocked(&["WellsFargo.com", "CHASE"]);
+        let normalized = normalize_blocked_patterns(&b);
+
+        assert!(is_url_blocked_by_normalized_patterns(
+            "https://www.wellsfargo.com/login",
+            &normalized
+        ));
+        assert!(is_url_blocked_by_normalized_patterns(
+            "https://online.chase.co.uk",
+            &normalized
+        ));
+        assert!(!is_url_blocked_by_normalized_patterns(
+            "https://purchase.com",
+            &normalized
+        ));
     }
 }
