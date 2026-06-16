@@ -2103,7 +2103,8 @@ pub async fn pi_start_inner(
                 }
             }
             if !is_stdout_text_delta {
-                if let Err(e) = app_handle.emit("pi_output", &line) {
+                let event_name = format!("pi_output:{}", sid_clone);
+                if let Err(e) = app_handle.emit(&event_name, &line) {
                     error!("Failed to emit pi_output: {}", e);
                 }
             }
@@ -2171,7 +2172,8 @@ pub async fn pi_start_inner(
                     if let Err(e) = app_handle.emit("agent_event", &unified) {
                         error!("Failed to emit agent_event from stderr: {}", e);
                     }
-                    if let Err(e) = app_handle.emit("pi_output", &line) {
+                    let event_name = format!("pi_output:{}", sid_stderr);
+                    if let Err(e) = app_handle.emit(&event_name, &line) {
                         error!("Failed to emit pi_output from stderr: {}", e);
                     }
                 } else {
@@ -2633,6 +2635,113 @@ pub async fn pi_set_model(
         .await?;
     rx.await
         .map_err(|_| "Pi command queue dropped".to_string())?
+}
+
+fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
+    let settings_path = get_pi_config_dir()?.join("settings.json");
+    let s = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(&settings_path, s)
+        .map_err(|e| format!("Failed to write settings.json: {}", e))
+}
+
+fn read_pi_settings() -> Result<serde_json::Value, String> {
+    let settings_path = get_pi_config_dir()?.join("settings.json");
+    if !settings_path.exists() {
+        return Ok(json!({}));
+    }
+    let content = std::fs::read_to_string(&settings_path)
+        .map_err(|e| format!("Failed to read settings.json: {}", e))?;
+    match serde_json::from_str(&content) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            warn!("Pi settings.json is malformed, treating as empty: {}", e);
+            Ok(json!({}))
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_set_thinking_level(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    level: String,
+) -> Result<(), String> {
+    let valid_levels = ["low", "medium", "high"];
+    if !valid_levels.contains(&level.as_str()) {
+        return Err(format!(
+            "Invalid thinking level '{}'. Valid values: {:?}",
+            level, valid_levels
+        ));
+    }
+
+    info!("pi_set_thinking_level: session={:?} level={}", session_id, level);
+
+    // Always persist — Pi reads this on startup, so changing before a conversation works.
+    // Pi also re-writes the clamped value after handling the RPC, which wins.
+    let mut settings = read_pi_settings()?;
+    if let Some(obj) = settings.as_object_mut() {
+        obj.insert("defaultThinkingLevel".to_string(), json!(level));
+    }
+    write_pi_settings(&settings)?;
+
+    // If a live session is specified, also push via RPC for immediate effect
+    if let Some(ref sid) = session_id {
+        let queue_opt = {
+            let mut pool = state.0.lock().await;
+            pool.sessions
+                .get_mut(sid.as_str())
+                .and_then(|m| if m.is_running() { m.queue_handle.clone() } else { None })
+        };
+        if let Some(queue) = queue_opt {
+            let cmd = json!({ "type": "set_thinking_level", "level": &level });
+            match queue.send_immediate(cmd).await {
+                Ok(()) => info!("pi_set_thinking_level RPC sent ok: session={} level={}", sid, level),
+                Err(e) => warn!("pi_set_thinking_level RPC failed: session={} level={} err={}", sid, level, e),
+            }
+        } else {
+            info!("pi_set_thinking_level: session {} not running, saved to settings.json only", sid);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_request_state(
+    state: State<'_, PiState>,
+    session_id: String,
+) -> Result<(), String> {
+    info!("pi_request_state: session={}", session_id);
+    let queue = {
+        let mut pool = state.0.lock().await;
+        pool.sessions
+            .get_mut(session_id.as_str())
+            .and_then(|m| if m.is_running() { m.queue_handle.clone() } else { None })
+            .ok_or_else(|| format!("pi_request_state: session {} not found or not running", session_id))?
+    };
+    match queue.send_immediate(json!({ "type": "get_state" })).await {
+        Ok(()) => { info!("pi_request_state RPC sent ok: session={}", session_id); Ok(()) }
+        Err(e) => { warn!("pi_request_state RPC failed: session={} err={}", session_id, e); Err(e) }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_get_thinking_level() -> Result<String, String> {
+    let settings = read_pi_settings()?;
+    let raw = settings
+        .get("defaultThinkingLevel")
+        .and_then(|l| l.as_str())
+        .unwrap_or("medium");
+    // Clamp to supported values — settings.json may have stale levels from old versions
+    let level = match raw {
+        "low" | "medium" | "high" => raw,
+        _ => "medium",
+    };
+    Ok(level.to_string())
 }
 
 /// Update Pi config and restart the chat session so the new model takes effect.

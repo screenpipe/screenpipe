@@ -63,7 +63,7 @@ impl AnalyticsManager {
             posthog_api_key,
             distinct_id,
             email,
-            interval: Duration::from_secs(interval_hours * 36),
+            interval: Duration::from_secs(interval_hours * 3600),
             enabled: Arc::new(Mutex::new(analytics_enabled)),
             api_host: "https://us.i.posthog.com".to_string(),
             local_api_base_url,
@@ -253,8 +253,10 @@ impl AnalyticsManager {
 
         let response = self.client.post(posthog_url).json(&payload).send().await?;
 
-        if !response.status().is_success() {
-            return Err(format!("PostHog API error: {}", response.status()).into());
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("PostHog API error: {} — {}", status, body).into());
         }
 
         Ok(())
@@ -262,6 +264,9 @@ impl AnalyticsManager {
 
     pub async fn start_periodic_event(&self) {
         let mut interval = interval(self.interval);
+        // Don't let missed ticks (e.g. after the machine resumes from a long
+        // sleep) fire back-to-back in a burst — coalesce them into one.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             interval.tick().await;

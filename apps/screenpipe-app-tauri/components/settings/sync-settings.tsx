@@ -983,7 +983,11 @@ export function SyncSettings() {
         });
 
         if (hasSubscription) {
-          if (settings.user && !settings.user.cloud_subscribed) {
+          // Require a session token before persisting cloud_subscribed — never
+          // bake a { cloud_subscribed: true, token: null } user (the early
+          // return above already guarantees a token here; this keeps the
+          // invariant explicit and local).
+          if (settings.user?.token && !settings.user.cloud_subscribed) {
             const engineUpdate: Record<string, any> = {
               user: { ...settings.user, cloud_subscribed: true },
             };

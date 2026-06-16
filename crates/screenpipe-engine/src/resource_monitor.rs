@@ -274,9 +274,9 @@ impl ResourceMonitor {
             debug!("Telemetry disabled, will not send performance data to PostHog");
         }
 
-        // Use env-provided analytics/support IDs or generate a random UUID.
-        let distinct_id = TelemetryContext::distinct_id_from_env()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // Launcher-provided id when present, else the stable per-machine id —
+        // a fresh UUID per process start counted each run as a new user.
+        let distinct_id = TelemetryContext::distinct_id();
 
         // Collect host info once (OS, CPU, GPU names) — never panics
         let hw_info = HardwareInfo::collect();

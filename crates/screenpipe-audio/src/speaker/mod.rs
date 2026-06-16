@@ -8,25 +8,39 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 pub fn create_session<P: AsRef<Path>>(path: P) -> Result<ort::session::Session> {
-    let path = path.as_ref();
+    let path = path.as_ref().to_path_buf();
     // ort 2.0.0-rc.10 panics from inside its global OnceLock when the ONNX
     // Runtime API can't be initialized (Windows DLL/version mismatch hits
     // `expect("Failed to initialize ORT API")` at lib.rs:188). That panic
-    // bubbles up the tokio worker and Sentry — convert it to a normal error
-    // so callers fall back gracefully instead of crashing the runtime.
-    catch_panic_into_error("ort session init", || {
-        // ort rc.12: builder ops return `Error<SessionBuilder>` (recovery
-        // payload, not Send+Sync) — convert via Display for anyhow.
-        let oe = |e: &dyn std::fmt::Display| anyhow!("ort: {e}");
-        let b = ort::session::Session::builder().map_err(|e| oe(&e))?;
-        let b = b
-            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
-            .map_err(|e| oe(&e))?;
-        let b = b.with_intra_threads(1).map_err(|e| oe(&e))?;
-        let mut b = b.with_inter_threads(1).map_err(|e| oe(&e))?;
-        let session = b.commit_from_file(path).map_err(|e| oe(&e))?;
-        Ok(session)
-    })
+    // bubbles up the tokio worker and Sentry — `catch_panic_into_error`
+    // converts it to a normal error so callers fall back gracefully.
+    //
+    // ort rc.12 added a second, worse failure mode on the same global init: it
+    // can *hang* instead of panicking, which panic-catching cannot recover.
+    // This is the first ort call on the audio boot path, so a hang here freezes
+    // the `building_audio` phase forever and the engine never binds its port.
+    // Run the (blocking) session build under a watchdog so a hung runtime
+    // degrades to an error and the caller falls back (diarization off) instead
+    // of bricking startup. See `utils::ort_watchdog`.
+    crate::utils::ort_watchdog::run_with_timeout(
+        "ort session init",
+        crate::utils::ort_watchdog::ORT_INIT_TIMEOUT,
+        move || {
+            catch_panic_into_error("ort session init", || {
+                // ort rc.12: builder ops return `Error<SessionBuilder>` (recovery
+                // payload, not Send+Sync) — convert via Display for anyhow.
+                let oe = |e: &dyn std::fmt::Display| anyhow!("ort: {e}");
+                let b = ort::session::Session::builder().map_err(|e| oe(&e))?;
+                let b = b
+                    .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
+                    .map_err(|e| oe(&e))?;
+                let b = b.with_intra_threads(1).map_err(|e| oe(&e))?;
+                let mut b = b.with_inter_threads(1).map_err(|e| oe(&e))?;
+                let session = b.commit_from_file(&path).map_err(|e| oe(&e))?;
+                Ok(session)
+            })
+        },
+    )
 }
 
 /// Run `f`, converting any panic it unwinds into an error tagged with

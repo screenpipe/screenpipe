@@ -2219,7 +2219,7 @@ impl PipeManager {
             });
 
             let mcp_server_allowlist = selected_mcp_server_ids(&config);
-            let session_owner = format!("pipe:{pipe_name}");
+            let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
             if let Some(ref registry) = mcp_session_access {
                 if mcp_server_allowlist.is_empty() {
                     registry.clear_session(&session_owner).await;
@@ -2243,10 +2243,10 @@ impl PipeManager {
                     history_enabled,
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
                     Some(session_owner.as_str()),
                 ),
             )
@@ -2727,7 +2727,7 @@ impl PipeManager {
             });
 
             let mcp_server_allowlist = selected_mcp_server_ids(&config);
-            let session_owner = format!("pipe:{name}");
+            let session_owner = format!("pipe:{name}:{}", exec_id.unwrap_or(0));
             if let Some(ref registry) = self.mcp_session_access {
                 if mcp_server_allowlist.is_empty() {
                     registry.clear_session(&session_owner).await;
@@ -2751,10 +2751,10 @@ impl PipeManager {
                     history_enabled,
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
                     Some(session_owner.as_str()),
                 ),
             )
@@ -3984,7 +3984,7 @@ impl PipeManager {
                             }
                         });
 
-                        let session_owner = format!("pipe:{pipe_name}");
+                        let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
                         if let Some(ref registry) = mcp_session_access_ref {
                             if mcp_server_allowlist.is_empty() {
                                 registry.clear_session(&session_owner).await;
@@ -4011,7 +4011,8 @@ impl PipeManager {
                                 history_enabled,
                                 Some(&pipe_system_prompt),
                                 mcp_allowlist_arg(&mcp_server_allowlist),
-                                // Owner tag — see run_pipe_with_trigger.
+                                // Owner tag — must match pipeSessionId() on the
+                                // frontend. See run_pipe_with_trigger.
                                 Some(session_owner.as_str()),
                             ),
                         )

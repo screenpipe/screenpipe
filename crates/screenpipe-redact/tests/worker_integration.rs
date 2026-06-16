@@ -128,6 +128,7 @@ async fn worker_redacts_all_six_targets() {
         idle_between_batches: Duration::from_millis(1),
         poll_interval: Duration::from_millis(20),
         tables: ALL_TARGET_TABLES.to_vec(),
+        ..Default::default()
     };
     let worker = Worker::new(pool.clone(), redactor, cfg);
     let handle = worker.clone().spawn();

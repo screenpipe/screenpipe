@@ -35,7 +35,7 @@
           },
           {
             "group": "use cases",
-            "pages": ["search-screen-history", "meeting-intelligence", "meeting-transcription", "ai-memory", "for-developers"]
+            "pages": ["search-screen-history", "meeting-intelligence", "meeting-transcription", "ai-memory", "second-brain", "for-developers"]
           },
           {
             "group": "integrations",

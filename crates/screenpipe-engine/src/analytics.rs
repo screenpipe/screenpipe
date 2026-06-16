@@ -25,10 +25,9 @@ pub struct Analytics {
 
 impl Analytics {
     fn new() -> Self {
-        // Try env-provided analytics/support IDs first, then fall back to a
-        // random UUID for standalone CLI usage.
-        let distinct_id = TelemetryContext::distinct_id_from_env()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // Launcher-provided id when present, else the stable per-machine id —
+        // a fresh UUID per process start counted each run as a new user.
+        let distinct_id = TelemetryContext::distinct_id();
 
         debug!("Analytics initialized with distinct_id: {}", distinct_id);
 

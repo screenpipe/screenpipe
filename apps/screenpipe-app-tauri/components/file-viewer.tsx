@@ -339,12 +339,18 @@ export function ViewerFileContent({
               ),
               code: ({ className: codeClassName, children, ...rest }) => {
                 const match = /language-(\w+)/.exec(codeClassName || "");
-                const lang = match?.[1] ?? "";
                 const value = String(children).replace(/\n$/, "");
-                if (!match) {
+                // react-markdown v9 no longer passes an `inline` flag, so detect
+                // a code *block* by either a language class OR the presence of
+                // newlines. Without the newline check, fenced/indented blocks
+                // that carry no language hint (e.g. an AI-generated chapter list)
+                // fell back to inline-chip styling and rendered as faint,
+                // box-fragmented text instead of a real, legible code block.
+                const isBlock = !!match || value.includes("\n");
+                if (!isBlock) {
                   return (
                     <code
-                      className="font-mono text-[12px] bg-foreground/5 px-1 py-[1px] border border-border"
+                      className="font-mono text-[12px] text-foreground bg-foreground/10 px-1 py-[1px] border border-border"
                       {...rest}
                     >
                       {children}
@@ -353,7 +359,7 @@ export function ViewerFileContent({
                 }
                 return (
                   <SyntaxHighlighter
-                    language={lang}
+                    language={match?.[1] ?? "text"}
                     style={codeStyle as never}
                     PreTag="div"
                     customStyle={{

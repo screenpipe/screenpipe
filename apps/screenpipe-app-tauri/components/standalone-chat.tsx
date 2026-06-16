@@ -29,6 +29,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
+import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
@@ -101,6 +102,11 @@ import {
   buildInvalidatedAuthTokenMessage,
   isInvalidatedAuthTokenError,
 } from "@/lib/chat/auth-errors";
+import {
+  buildNoResponseMessage,
+  buildProviderErrorMessage,
+  preflightChatProvider,
+} from "@/lib/chat/provider-errors";
 import { buildSystemPrompt, buildConnectionsContext } from "@/lib/chat/system-prompt";
 import {
   classifyCurl,
@@ -2811,6 +2817,10 @@ export function StandaloneChat({
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
+  // Mirrors of streaming-relevant state so the unmount-snapshot effect (which
+  // runs with `[]` deps) can read the latest values instead of stale closures.
+  const isLoadingRef = useRef(false);
+  const messagesRef = useRef<Message[]>([]);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -4126,6 +4136,50 @@ export function StandaloneChat({
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Snapshot the in-flight chat session into the store on unmount.
+  //
+  // The foreground panel keeps streaming tokens in local React state / refs
+  // (piStreamingTextRef, piContentBlocksRef, messages) — NOT live-mirrored to
+  // the chat-store, for render perf. When the panel unmounts mid-stream because
+  // the user navigated into the standalone /settings route (which tears down
+  // the whole home page), those local tokens would be lost and the background
+  // pi-event router — which takes over once foreground unregisters — would
+  // resume accumulating from a stale store point, leaving a gap in the reply.
+  //
+  // Mirrors the snapshot-on-switch in `loadConversation`: persist the current
+  // messages + streaming cursor so the router continues seamlessly and the
+  // return path (`loadConversation`) rehydrates the full content. Refs (not the
+  // closure values) so the `[]`-deps cleanup reads the latest state. Skipped for
+  // pipe-watch sessions, which are owned by `pipe-watch-writer` (snapshotting
+  // the panel's mirrored copy back would be a lossy round-trip).
+  useEffect(() => {
+    return () => {
+      const sid = piSessionIdRef.current;
+      if (!sid) return;
+      if (!isStreamingRef.current && !isLoadingRef.current) return;
+      const store = useChatStore.getState();
+      const existing = store.sessions[sid];
+      if (!existing || existing.kind === "pipe-watch") return;
+      store.actions.snapshotSession(sid, {
+        messages: messagesRef.current as any,
+        streamingText: piStreamingTextRef.current,
+        streamingMessageId: piMessageIdRef.current,
+        contentBlocks: [...piContentBlocksRef.current],
+        isStreaming: isStreamingRef.current,
+        isLoading: isLoadingRef.current,
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
   // clicks a chat), `activePipeExecution` would otherwise stay set
@@ -4800,6 +4854,21 @@ export function StandaloneChat({
     };
   }, [settings.user?.token]);
 
+  // After Pi starts, immediately push the saved thinking level via RPC so the
+  // running session is in sync from moment zero — not just on the next user action.
+  // Also calls piRequestState so the hook always learns the model's actual
+  // capabilities (e.g. disables button when model doesn't support thinking),
+  // even when the level didn't change and Pi emits no thinking_level_changed event.
+  const syncThinkingLevelAfterStart = useCallback(async (sessionId: string) => {
+    try {
+      const r = await commands.piGetThinkingLevel();
+      if (r.status === "ok") {
+        await commands.piSetThinkingLevel(sessionId, r.data).catch(() => {});
+      }
+    } catch { /* fire-and-forget */ }
+    commands.piRequestState(sessionId).catch(() => {});
+  }, []);
+
   const restartCurrentPiSession = useCallback(async (providerConfig: NonNullable<ReturnType<typeof buildProviderConfig>>) => {
     let currentPid = piInfo?.pid;
     if (typeof currentPid !== "number") {
@@ -4833,7 +4902,8 @@ export function StandaloneChat({
     setPiInfo(result.data);
     piSessionSyncedRef.current = false;
     setRunningConfigFromProviderConfig(providerConfig);
-  }, [piInfo?.pid, piInfo?.running, setRunningConfigFromProviderConfig, settings.user?.token]);
+    syncThinkingLevelAfterStart(piSessionIdRef.current);
+  }, [piInfo?.pid, piInfo?.running, setRunningConfigFromProviderConfig, settings.user?.token, syncThinkingLevelAfterStart]);
 
   // When connections change (e.g., user connected Google Calendar in Settings),
   // silently restart Pi if the system prompt changed and no message is in-flight.
@@ -4942,6 +5012,12 @@ export function StandaloneChat({
         try {
           await commands.piSetModel(piSessionIdRef.current, providerConfig);
           setRunningConfigFromProviderConfig(providerConfig);
+          // Re-sync thinking-level capability after model swap: the new model
+          // may not support thinking (or may support different levels), and
+          // Pi only emits thinking_level_changed when the effective level
+          // actually changes — so without an explicit get_state the Brain
+          // icon's enabled/disabled state can be stale for the new model.
+          commands.piRequestState(piSessionIdRef.current).catch(() => {});
         } catch (e) {
           console.error("[Pi] Hot-swap failed, falling back to full restart:", e);
           try {
@@ -5285,6 +5361,16 @@ export function StandaloneChat({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade." } : m)
               );
             }
+          } else {
+            const providerError = buildProviderErrorMessage(errorStr, activePreset);
+            if (providerError && piMessageIdRef.current) {
+              const msgId = piMessageIdRef.current;
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId
+                  ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                  : m)
+              );
+            }
           }
         } else if (data.type === "message_update" && data.assistantMessageEvent?.type === "error") {
           // Pi's LLM returned an error (e.g. rate limit, overloaded)
@@ -5314,17 +5400,26 @@ export function StandaloneChat({
                 );
               }
             } else if (fullError.includes("model_not_allowed")) {
-                setMessages((prev) =>
+              setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade." } : m)
               );
-            } else if (fullError.includes("already processing")) {
-              // Transient error — Pi was still busy when the prompt arrived.
-              // Don't show it; Pi will process the message once it's free.
-              console.warn("[Pi] Agent busy, waiting for it to finish:", fullError);
             } else {
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${fullError || "Something went wrong"}` } : m)
-              );
+              const providerError = buildProviderErrorMessage(fullError, activePreset);
+              if (providerError) {
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId
+                    ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                    : m)
+                );
+              } else if (fullError.includes("already processing")) {
+                // Transient error — Pi was still busy when the prompt arrived.
+                // Don't show it; Pi will process the message once it's free.
+                console.warn("[Pi] Agent busy, waiting for it to finish:", fullError);
+              } else {
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${fullError || "Something went wrong"}` } : m)
+                );
+              }
             }
           }
         } else if (data.type === "message_start" && data.message?.role === "user") {
@@ -5493,6 +5588,7 @@ export function StandaloneChat({
             const msgId = piMessageIdRef.current;
 
             const quotaErrorType = classifyQuotaError(errMsg);
+            const providerError = buildProviderErrorMessage(errMsg, activePreset);
             if (authTokenInvalidated) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
@@ -5508,6 +5604,12 @@ export function StandaloneChat({
             } else if (quotaErrorType === "rate") {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildRateLimitMessage(errMsg) } : m)
+              );
+            } else if (providerError) {
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId
+                  ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                  : m)
               );
             } else {
               setMessages((prev) =>
@@ -5576,7 +5678,7 @@ export function StandaloneChat({
               } else if (errStr.includes("model_not_allowed")) {
                 content = "This model requires an upgrade.";
               } else {
-                content = errStr;
+                content = buildProviderErrorMessage(errStr, activePreset) || errStr;
               }
             }
 
@@ -5627,15 +5729,10 @@ export function StandaloneChat({
                 } else if (lastErr && lastErrKind === "rate") {
                   content = buildRateLimitMessage(lastErr);
                 } else if (lastErr) {
-                  content = `Error: ${lastErr}`;
+                  content = buildProviderErrorMessage(lastErr, activePreset) || `Error: ${lastErr}`;
                   emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
                 } else {
-                  const provider = activePreset?.provider;
-                  if (provider === "native-ollama") {
-                    content = "No response — is Ollama running? Start it with `ollama serve` and make sure the model is pulled.";
-                  } else {
-                    content = "No response from model — try again or check your AI preset in settings.";
-                  }
+                  content = buildNoResponseMessage(activePreset);
                   emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
                 }
               }
@@ -5752,31 +5849,40 @@ export function StandaloneChat({
                 );
               }
             } else if (errorStr.includes("model_not_allowed")) {
-                setMessages((prev) =>
+              setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade." } : m)
               );
-            } else if (errorStr.includes("already processing")) {
-              console.warn("[Pi] already-processing race in response event:", errorStr);
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? {
-                  ...m,
-                  content: "The AI was mid-response when your message arrived.",
-                  retryPrompt: lastUserMessageRef.current || undefined,
-                } : m)
-              );
-            } else if (errorStr.includes("api_error") || errorStr.includes("Internal server error") || /\b5\d\d\b/.test(errorStr)) {
-              // Upstream API 5xx — SDK already exhausted its auto-retry attempts
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? {
-                  ...m,
-                  content: "Something went wrong on the server.",
-                  retryPrompt: lastUserMessageRef.current || undefined,
-                } : m)
-              );
             } else {
-              setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${errorStr}` } : m)
-              );
+              const providerError = buildProviderErrorMessage(errorStr, activePreset);
+              if (providerError) {
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId
+                    ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                    : m)
+                );
+              } else if (errorStr.includes("already processing")) {
+                console.warn("[Pi] already-processing race in response event:", errorStr);
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId ? {
+                    ...m,
+                    content: "The AI was mid-response when your message arrived.",
+                    retryPrompt: lastUserMessageRef.current || undefined,
+                  } : m)
+                );
+              } else if (errorStr.includes("api_error") || errorStr.includes("Internal server error") || /\b5\d\d\b/.test(errorStr)) {
+                // Upstream API 5xx — SDK already exhausted its auto-retry attempts
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId ? {
+                    ...m,
+                    content: "Something went wrong on the server.",
+                    retryPrompt: lastUserMessageRef.current || undefined,
+                  } : m)
+                );
+              } else {
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${errorStr}` } : m)
+                );
+              }
             }
           }
           const quotaErrorType = classifyQuotaError(errorStr);
@@ -6038,6 +6144,7 @@ export function StandaloneChat({
         if (result.status === "ok") {
           setPiInfo(result.data);
           piSessionSyncedRef.current = false;
+          syncThinkingLevelAfterStart(piSessionIdRef.current);
         }
       } catch (e) {
         console.warn("[Pi] reauth restart skipped:", e);
@@ -6053,10 +6160,19 @@ export function StandaloneChat({
       unlistenLog?.();
       unlistenReauth?.();
       unlistenQueue?.();
-      // Abort any in-flight Pi request when navigating away from chat.
-      // Without this, Pi keeps streaming in the background and rejects
-      // new messages with "already processing" when the user returns.
-      commands.piAbort(piSessionIdRef.current).catch(() => {});
+      // Deliberately do NOT abort the Pi session here. Unmount happens when
+      // the user navigates away from chat (e.g. into the standalone /settings
+      // route, which unmounts the whole home page). Aborting would kill an
+      // in-flight response — the exact regression users hit ("opening Settings
+      // stops the current chat"). Instead we let the session keep streaming:
+      //   - the app-lifetime pi-event router (registerDefault) takes over once
+      //     this panel releases its foreground registration and accumulates
+      //     tokens into the chat-store while we're away;
+      //   - on return, `loadConversation` rehydrates that background-streamed
+      //     state and re-registers foreground, resuming exactly where we left.
+      // The old "already processing" hazard this guarded against is now handled
+      // by the Rust command queue (pi_command_queue.rs), which serializes/queues
+      // prompts instead of rejecting them.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -6532,6 +6648,7 @@ export function StandaloneChat({
             if (providerConfig) {
               setRunningConfigFromProviderConfig(providerConfig);
             }
+            syncThinkingLevelAfterStart(piSessionIdRef.current);
           } else {
             const providerLabel = providerConfig?.provider || "AI";
             toast({ title: `failed to start AI assistant (${providerLabel})`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
@@ -6788,6 +6905,37 @@ export function StandaloneChat({
         }
       }
 
+      const providerPreflight = await preflightChatProvider(activePreset);
+      if (!providerPreflight.ok) {
+        piStreamingTextRef.current = "";
+        piMessageIdRef.current = null;
+        piContentBlocksRef.current = [];
+        setMessages((prev) =>
+          prev.map((m) => m.id === assistantMessageId
+            ? { ...m, content: providerPreflight.message, retryPrompt: userMessage }
+            : m)
+        );
+        if (sidNow) {
+          const storeState = useChatStore.getState();
+          storeState.actions.patchMessage(sidNow, assistantMessageId, (m: any) => ({
+            ...m,
+            content: providerPreflight.message,
+            retryPrompt: userMessage,
+          }));
+          storeState.actions.setStreaming(sidNow, {
+            streamingMessageId: null,
+            streamingText: "",
+            contentBlocks: [],
+            isLoading: false,
+            isStreaming: false,
+          });
+        }
+        forceQueueModeRef.current = false;
+        setIsLoading(false);
+        setIsStreaming(false);
+        return;
+      }
+
       // Send prompt — abort/new_session now await completion, so no retry needed
       let result = await commands.piPrompt(
         piSessionIdRef.current,
@@ -6816,6 +6964,7 @@ export function StandaloneChat({
             if (providerConfig) {
               setRunningConfigFromProviderConfig(providerConfig);
             }
+            syncThinkingLevelAfterStart(piSessionIdRef.current);
             result = await commands.piPrompt(
               piSessionIdRef.current,
               promptMessage,
@@ -6835,6 +6984,7 @@ export function StandaloneChat({
         const rawError = result.error;
         let errorMsg: string;
         let retryPrompt: string | undefined;
+        const providerError = buildProviderErrorMessage(rawError, activePreset);
 
         if (rawError.includes("already processing")) {
           errorMsg = "The AI was mid-response when your message arrived.";
@@ -6844,6 +6994,9 @@ export function StandaloneChat({
           errorMsg = provider === "native-ollama"
             ? "Ollama isn't running. Start it with: `ollama serve`"
             : "AI agent crashed — restarting automatically...";
+          retryPrompt = userMessage;
+        } else if (providerError) {
+          errorMsg = providerError;
           retryPrompt = userMessage;
         } else if (rawError.includes("not found")) {
           errorMsg = `Model "${activePreset?.model}" not found. Check your AI preset in settings.`;
@@ -6865,10 +7018,12 @@ export function StandaloneChat({
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       piMessageIdRef.current = null;
+      const rawError = error instanceof Error ? error.message : "Unknown error";
+      const providerError = buildProviderErrorMessage(rawError, activePreset);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMessageId
-            ? { ...m, content: `Error: ${error instanceof Error ? error.message : "Unknown error"}` }
+            ? { ...m, content: providerError || `Error: ${rawError}` }
             : m
         )
       );
@@ -9493,6 +9648,14 @@ export function StandaloneChat({
                 if (!activePipeExecution) handlePiRestart(match);
               }}
             />
+            {/* Selector is shown for every preset. The Brain icon self-disables
+             *  (via `piThinkingUnsupported` from use-pi-thinking-level) when the
+             *  active model has no reasoning capability — Pi clamps to "off" and
+             *  emits thinking_level_changed/get_state with level="off".
+             *  Works for screenpipe-cloud, openai BYOK (gpt-5 / o-series),
+             *  openai-chatgpt (ChatGPT subscription via codex wire), anthropic,
+             *  native-ollama (thinking-capable models), and custom OpenAI-compat. */}
+            <ThinkingLevelSelector streaming={isLoading || isStreaming} sessionId={currentQueueSessionId} />
             {(() => {
               const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
               const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);

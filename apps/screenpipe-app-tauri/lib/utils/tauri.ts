@@ -1159,6 +1159,14 @@ async piCheck() : Promise<Result<PiCheckResult, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async piGetThinkingLevel() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_get_thinking_level") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Get Pi info
  */
@@ -1233,6 +1241,14 @@ async piQueuePrompt(sessionId: string | null, message: string, images: PiImageCo
     else return { status: "error", error: e  as any };
 }
 },
+async piRequestState(sessionId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_request_state", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Hot-swap Pi's active model without killing the subprocess. Preserves the
  * full conversation state in-place — the user can switch haiku ↔ sonnet ↔ opus
@@ -1247,6 +1263,14 @@ async piQueuePrompt(sessionId: string | null, message: string, images: PiImageCo
 async piSetModel(sessionId: string | null, providerConfig: PiProviderConfig) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_set_model", { sessionId, providerConfig }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async piSetThinkingLevel(sessionId: string | null, level: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_set_thinking_level", { sessionId, level }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

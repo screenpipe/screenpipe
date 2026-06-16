@@ -212,14 +212,14 @@ cargo test
 one command i keep using to avoid having to kill my main "production" process is:
 
 ```bash
-./target/release/screenpipe --port 3035 --data-dir /tmp/sp
+./target/release/screenpipe --port 3035 --data-dir "${TMPDIR:-/tmp}/sp"
 ```
 
 it will avoid conflicts with the port and avoid conflicts with the data dir
 
 especially useful if you've done new database migrations and want to avoid breaking your previous months of data :)
 
-on macos the /tmp dir keeps being cleaned up by the system fyi
+on macos, prefer `$TMPDIR` (a per-user temp dir) over `/tmp` — the system periodically sweeps `/tmp` and can wipe your dev data-dir mid-session, while `$TMPDIR` sticks around for the session. the `${TMPDIR:-/tmp}` form above uses it when set and falls back to `/tmp` otherwise.
 
 ### debugging github action
 

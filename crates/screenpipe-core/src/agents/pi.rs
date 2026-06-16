@@ -1352,7 +1352,8 @@ impl PiExecutor {
             cmd.env("SCREENPIPE_SESSION_ID", owner);
             // Expose the bare pipe name for extensions (e.g. register-artifact)
             // that need it without the "pipe:" routing prefix.
-            if let Some(name) = owner.strip_prefix("pipe:") {
+            if let Some(rest) = owner.strip_prefix("pipe:") {
+                let name = rest.rsplit_once(':').map_or(rest, |(n, _)| n);
                 cmd.env("SCREENPIPE_PIPE_NAME", name);
             }
         }

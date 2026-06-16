@@ -74,6 +74,18 @@ impl TelemetryContext {
         first_env(DISTINCT_ID_ENV_VARS)
     }
 
+    /// Stable telemetry distinct_id.
+    ///
+    /// Prefers a launcher-provided id (the desktop app's analytics id, or an
+    /// enterprise support/telemetry id). For a bare `screenpipe` CLI run — none
+    /// of those set — it falls back to the persistent per-machine id instead of
+    /// a fresh random UUID. Minting a new UUID on every process start made each
+    /// invocation look like a brand-new user, badly inflating PostHog user
+    /// counts for the CLI / Linux / Windows populations.
+    pub fn distinct_id() -> String {
+        Self::distinct_id_from_env().unwrap_or_else(screenpipe_core::sync::get_or_create_machine_id)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.pairs().is_empty()
     }
@@ -224,6 +236,27 @@ mod tests {
                 TelemetryContext::distinct_id_from_env(),
                 Some("spcust_acme_123".to_string())
             );
+        });
+    }
+
+    #[test]
+    fn distinct_id_falls_back_to_stable_machine_id() {
+        with_env(&[], || {
+            // Bare-CLI run (no launcher id): must reuse the persistent
+            // per-machine id, so it's identical across calls — i.e. across
+            // process restarts — instead of a fresh UUID each time (which made
+            // every invocation look like a brand-new user).
+            let first = TelemetryContext::distinct_id();
+            let second = TelemetryContext::distinct_id();
+            assert!(!first.is_empty());
+            assert_eq!(first, second);
+        });
+    }
+
+    #[test]
+    fn distinct_id_prefers_launcher_id_over_machine_id() {
+        with_env(&[("SCREENPIPE_ANALYTICS_ID", "analytics-user")], || {
+            assert_eq!(TelemetryContext::distinct_id(), "analytics-user");
         });
     }
 

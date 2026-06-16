@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasAppEntitlement,
   hasCloudEntitlement,
+  isSignedInCloudSubscriber,
   needsAppEntitlementRefresh,
   normalizeAppUser,
 } from "@/lib/app-entitlement";
@@ -149,5 +150,33 @@ describe("app entitlement", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("isSignedInCloudSubscriber", () => {
+  // Gates the account "active" plan card. Must require BOTH a token and
+  // cloud_subscribed so a token-hydration failure can't render the active card
+  // under the "not logged in" header.
+  it("is true only with both a token and cloud_subscribed", () => {
+    expect(isSignedInCloudSubscriber(user({ token: "t", cloud_subscribed: true }))).toBe(true);
+  });
+
+  it("is false for a tokenless stale shell even when cloud_subscribed and id survive", () => {
+    // The exact bug: store.bin kept cloud_subscribed:true (+ id) but the token
+    // failed to hydrate from the encrypted secret store. id must NOT rescue it.
+    expect(
+      isSignedInCloudSubscriber(
+        user({ token: null, id: "u1", cloud_subscribed: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when logged in without a cloud subscription", () => {
+    expect(isSignedInCloudSubscriber(user({ token: "t", cloud_subscribed: false }))).toBe(false);
+  });
+
+  it("is false for a missing user", () => {
+    expect(isSignedInCloudSubscriber(null)).toBe(false);
+    expect(isSignedInCloudSubscriber(undefined)).toBe(false);
   });
 });
