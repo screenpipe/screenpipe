@@ -35,6 +35,21 @@ describe("parsePipeNdjsonToMessages", () => {
     expect(msgs[1].content).toBe("I'll help you sync screenpipe");
   });
 
+  it("preserves notification source markers alongside agent_end messages", () => {
+    const stdout = [
+      '{"type":"message_start","message":{"role":"assistant","content":[]}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"draft"}}',
+      '{"type":"notification_sent","id":"notification-abc","title":"Report ready","body":"open the report","timestamp":1772387604000}',
+      '{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"run pipe"}]},{"role":"assistant","content":[{"type":"text","text":"final answer"}]}]}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs.map((m) => m.id)).toContain("notification-abc");
+    const marker = msgs.find((m) => m.id === "notification-abc");
+    expect(marker?.content).toContain("Report ready");
+    expect(marker?.content).toContain("open the report");
+  });
+
   // ─── user message extraction ──────────────────────────────────────
 
   it("extracts user message content from message_start", () => {

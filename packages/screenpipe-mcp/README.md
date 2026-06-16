@@ -221,8 +221,9 @@ captures is retained according to your Screenpipe storage configuration
 and is deletable at any time (`rm -rf ~/.screenpipe` removes everything).
 
 ### Source code
-The Screenpipe MCP server is MIT-licensed and the entire source is
-public at <https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp>.
+The Screenpipe MCP server is source-available under the Screenpipe
+Commercial License and the entire source is public at
+<https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp>.
 Every line is auditable.
 
 ### Contact

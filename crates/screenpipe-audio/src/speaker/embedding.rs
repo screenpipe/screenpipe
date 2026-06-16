@@ -5,6 +5,23 @@ use anyhow::{Context, Result};
 use ndarray::Array2;
 use std::path::Path;
 
+/// knf-rs computes fbank features with a 25 ms analysis window, which is 400
+/// samples at the 16 kHz the embedder runs at. Given fewer samples than one
+/// full window it produces zero frames and then panics on an internal
+/// `Option::unwrap` inside `OnlineGenericBaseFeature::InputFinished` — the
+/// `compute_fbank failed` crash (SCREENPIPE-CLI-3S, recurring in Sentry).
+/// We reject sub-window input up front so the segment is skipped cleanly
+/// instead of unwinding the audio worker and logging a panic.
+const MIN_FBANK_SAMPLES: usize = 400;
+
+/// True when `num_samples` is too short for knf-rs to yield even one fbank
+/// frame (and would therefore panic). Pulled out as a free function so the
+/// threshold contract is unit-testable without loading the ONNX model.
+#[inline]
+fn fbank_input_too_short(num_samples: usize) -> bool {
+    num_samples < MIN_FBANK_SAMPLES
+}
+
 #[derive(Debug)]
 pub struct EmbeddingExtractor {
     session: ort::session::Session,
@@ -24,6 +41,16 @@ impl EmbeddingExtractor {
         })
     }
     pub fn compute(&mut self, samples: &[f32]) -> Result<impl Iterator<Item = f32>> {
+        // Sub-window input makes knf-rs panic (see MIN_FBANK_SAMPLES). Reject it
+        // before calling in so we skip the segment cleanly rather than relying
+        // on the catch_panic guard below to unwind a panic on the hot path.
+        if fbank_input_too_short(samples.len()) {
+            anyhow::bail!(
+                "audio too short for speaker embedding: {} samples (< {} = one 25ms fbank window @ 16kHz)",
+                samples.len(),
+                MIN_FBANK_SAMPLES
+            );
+        }
         // knf-rs exposes ndarray 0.16 types; the workspace is on 0.17 for
         // ort rc.12 — rebuild the array in our ndarray version via raw parts.
         //
@@ -61,5 +88,21 @@ impl EmbeddingExtractor {
 
         // Return an iterator over the Vec
         Ok(embeddings.into_iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_sub_window_audio_before_knf() {
+        // One 25 ms window at 16 kHz is 400 samples; anything shorter is the
+        // panic case we guard against, anything >= is allowed through.
+        assert_eq!(MIN_FBANK_SAMPLES, 400);
+        assert!(fbank_input_too_short(0));
+        assert!(fbank_input_too_short(399));
+        assert!(!fbank_input_too_short(400));
+        assert!(!fbank_input_too_short(16_000));
     }
 }

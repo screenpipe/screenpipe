@@ -1133,6 +1133,17 @@ impl DatabaseManager {
         Ok(id.unwrap_or(0))
     }
 
+    /// Returns the audio_chunks row id for a given file path, or `None` if no
+    /// row exists yet. Read-only; used by the audio reconciliation sweep to
+    /// recover chunks whose initial insert was dropped under write-pool
+    /// saturation (see the pending-chunk recovery path in screenpipe-audio).
+    pub async fn find_audio_chunk_id(&self, file_path: &str) -> Result<Option<i64>, sqlx::Error> {
+        sqlx::query_scalar::<_, i64>("SELECT id FROM audio_chunks WHERE file_path = ?1")
+            .bind(file_path)
+            .fetch_optional(&self.pool)
+            .await
+    }
+
     pub async fn get_or_insert_audio_chunk(
         &self,
         file_path: &str,
@@ -5622,17 +5633,41 @@ impl DatabaseManager {
                 }
             }
 
-            // Fallback: If still no frames matched, assign to closest frame
+            // Fallback: no frame within the padded window of this audio. This is the
+            // static-screen-meeting case — on a video call the screen barely changes,
+            // so screenshots are deduped away for minutes and the speech has no frame
+            // to ride on. The old fallback dumped the transcript onto the nearest
+            // DISTANT frame (so the audio's OWN moment stayed blank on the timeline and
+            // there was nothing to scrub to there), and dropped the audio ENTIRELY when
+            // the range had no frames at all (e.g. screen capture off / audio-only).
+            //
+            // Instead, synthesize an audio-only entry at the audio's own timestamp:
+            // create_time_series_frame turns a FrameData that has audio but no OCR into
+            // an "audio-only" device frame, so the stretch becomes a scrubbable,
+            // transcript-bearing segment instead of an invisible gap.
             if matching_keys.is_empty() {
-                if let Some((&key, _)) = frames_map
-                    .range(..=(audio_timestamp, i64::MAX))
-                    .next_back()
-                    .or_else(|| frames_map.iter().next())
-                {
-                    if let Some(frame_data) = frames_map.get_mut(&key) {
-                        frame_data.audio_entries.push(audio_entry);
-                    }
-                }
+                // Sentinel offset_index so synthetic frames never collide with a real
+                // frame's (timestamp, offset_index) key; rows that share an exact
+                // timestamp merge into one entry. A later audio row whose ±pad window
+                // covers this timestamp will match the synthetic frame above and
+                // cluster onto it — the same behaviour as real frames, so a long gap
+                // yields a bar roughly every pad-window rather than one per segment.
+                // The negative frame_id keeps synthetic frames clear of real
+                // (positive, autoincrement) frame ids for client-side dedup.
+                const SYNTHETIC_AUDIO_OFFSET: i64 = i64::MIN;
+                frames_map
+                    .entry((audio_timestamp, SYNTHETIC_AUDIO_OFFSET))
+                    .or_insert_with(|| FrameData {
+                        frame_id: -audio_timestamp.timestamp_millis(),
+                        timestamp: audio_timestamp,
+                        offset_index: SYNTHETIC_AUDIO_OFFSET,
+                        fps: 0.0,
+                        machine_id: None,
+                        ocr_entries: Vec::new(),
+                        audio_entries: Vec::new(),
+                    })
+                    .audio_entries
+                    .push(audio_entry);
             }
         }
 

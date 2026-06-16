@@ -415,11 +415,42 @@ impl AnalyticsManager {
             "pipeline_frames_captured": pipeline["frames_captured"].as_u64(),
             "pipeline_frames_dropped": pipeline["frames_dropped"].as_u64(),
             "pipeline_frame_drop_rate": pipeline["frame_drop_rate"].as_f64(),
+            // Silent-vision-loss diagnostics: distinguish a write/DB-pool stall
+            // (timeout) from a capture failure (error) from trigger starvation
+            // (capture_attempts flat while uptime climbs). frame_drop_rate alone
+            // read 0 fleet-wide because frames_captured was only bumped on writes.
+            "pipeline_frames_dropped_timeout": pipeline["frames_dropped_timeout"].as_u64(),
+            "pipeline_frames_dropped_error": pipeline["frames_dropped_error"].as_u64(),
+            "pipeline_silent_loss": pipeline["silent_loss"].as_u64(),
+            "pipeline_silent_loss_rate": pipeline["silent_loss_rate"].as_f64(),
+            "pipeline_capture_attempts": pipeline["capture_attempts"].as_u64(),
+            "pipeline_dedup_skips": pipeline["dedup_skips"].as_u64(),
+            "pipeline_last_capture_attempt_ts": pipeline["last_capture_attempt_ts"].as_u64(),
             "pipeline_capture_fps": pipeline["capture_fps_actual"].as_f64(),
             "pipeline_avg_ocr_latency_ms": pipeline["avg_ocr_latency_ms"].as_f64(),
             "pipeline_avg_db_latency_ms": pipeline["avg_db_latency_ms"].as_f64(),
             "pipeline_stall_count": pipeline["pipeline_stall_count"].as_u64(),
-            "pipeline_ocr_cache_hit_rate": pipeline["ocr_cache_hit_rate"].as_f64(),
+            // NOTE: dropped pipeline_ocr_cache_hit_rate — no OCR cache exists
+            // (both production record_ocr call sites pass cache_hits=0), so the
+            // rate is structurally always 0.0 and only misleads a dashboard.
+            // Recording-coverage reliability metric: what % of the user's
+            // working time (recent input) had healthy screen capture. Idle and
+            // asleep time are excluded from the denominator.
+            "recording_coverage_ratio": health["recording_coverage"]["coverage_ratio"].as_f64(),
+            "recording_secs": health["recording_coverage"]["recording_secs"].as_u64(),
+            "recording_active_secs": health["recording_coverage"]["active_secs"].as_u64(),
+            "recording_active_stalled_secs": health["recording_coverage"]["active_stalled_secs"].as_u64(),
+            "recording_active_paused_secs": health["recording_coverage"]["active_paused_secs"].as_u64(),
+            "recording_idle_secs": health["recording_coverage"]["idle_secs"].as_u64(),
+            // DB write-queue wedge signals — the recording-stall root cause.
+            // These live in /health but were never forwarded to analytics, so
+            // the fleet's write-pool degradation / db-write stalls were invisible.
+            "recording_write_queue_degraded": health["write_queue_degraded"].as_bool(),
+            "recording_write_queue_consecutive_fatal": health["write_queue_consecutive_fatal"].as_u64(),
+            "recording_write_pool_reopens": health["write_pool_reopens"].as_u64(),
+            "recording_persistent_failure_signals": health["persistent_failure_signals"].as_u64(),
+            "recording_vision_db_write_stalled": health["vision_db_write_stalled"].as_bool(),
+            "recording_audio_db_write_stalled": health["audio_db_write_stalled"].as_bool(),
             // Audio pipeline quality
             "audio_chunks_sent": audio_pipeline["chunks_sent"].as_u64(),
             "audio_chunks_received": audio_pipeline["chunks_received"].as_u64(),

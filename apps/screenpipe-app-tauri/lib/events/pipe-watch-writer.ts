@@ -115,6 +115,15 @@ function apply(sid: string, payload: AgentInnerEvent): void {
     | { type?: string; delta?: string; content?: string }
     | undefined;
 
+  if (t === "notification_sent") {
+    store.actions.appendMessage(sid, notificationEventToMessage(payload));
+    store.actions.patch(sid, {
+      draft: false,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
+
   // ── text_delta (flat) and message_update wrapping text_delta ────────
   const isTextDelta =
     (t === "text_delta" ||
@@ -312,8 +321,11 @@ function apply(sid: string, payload: AgentInnerEvent): void {
     const messages = (payload as any).messages;
     if (Array.isArray(messages) && messages.length > 0) {
       const reconstructed = reconstructFromAgentEnd(messages);
-      if (reconstructed.length > 0) {
-        store.actions.setMessages(sid, reconstructed as any);
+      const notificationMarkers = ((useChatStore.getState().sessions[sid]?.messages as any[]) ?? [])
+        .filter(isNotificationMessage);
+      const merged = appendUniqueNotificationMessages(reconstructed, notificationMarkers);
+      if (merged.length > 0) {
+        store.actions.setMessages(sid, merged as any);
       }
     }
     store.actions.endTurn(sid);
@@ -323,6 +335,39 @@ function apply(sid: string, payload: AgentInnerEvent): void {
   // Anything else — status events, raw_line, etc. — is handled by the
   // pi-event-router for sidebar status mirroring. We intentionally
   // don't duplicate that here.
+}
+
+function notificationEventToMessage(payload: AgentInnerEvent): any {
+  const evt = payload as any;
+  const title = typeof evt.title === "string" ? evt.title.trim() : "notification";
+  const body = typeof evt.body === "string" ? evt.body.trim() : "";
+  const timestamp =
+    typeof evt.timestamp === "number"
+      ? evt.timestamp
+      : typeof evt.timestamp === "string"
+        ? new Date(evt.timestamp).getTime()
+        : Date.now();
+  const content = [`notification sent`, title ? `**${title}**` : "", body]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    id: typeof evt.id === "string" && evt.id ? evt.id : `notification-${Date.now()}`,
+    role: "assistant",
+    content,
+    timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+    contentBlocks: [{ type: "text", text: content }],
+  };
+}
+
+function isNotificationMessage(message: any): boolean {
+  return typeof message?.id === "string" && message.id.startsWith("notification-");
+}
+
+function appendUniqueNotificationMessages(messages: any[], notifications: any[]): any[] {
+  if (notifications.length === 0) return messages;
+  const seen = new Set(messages.map((m) => m.id));
+  const unique = notifications.filter((m) => !seen.has(m.id));
+  return unique.length > 0 ? [...messages, ...unique] : messages;
 }
 
 /** Reconstruct ChatMessage[] from an `agent_end` event's `messages`

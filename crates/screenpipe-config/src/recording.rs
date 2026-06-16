@@ -62,6 +62,18 @@ pub struct RecordingSettings {
     #[serde(rename = "transcriptionMode")]
     pub transcription_mode: String,
 
+    // "always" = continuous 24/7 capture; "meetings_only" = only persist +
+    // transcribe audio while a meeting is detected (audio outside meetings is
+    // dropped — cutting cloud-transcription cost, disk, and the PII/transcription
+    // CPU pipeline; requires the meeting detector, else falls back to continuous);
+    // "disabled" maps to `disableAudio = true`. Defaults to "always" so existing
+    // config files and the CLI never switch silently; new desktop installs opt
+    // into "meetings_only" via first-run defaults (existing app users migrate to
+    // "always"). Detail in `default_audio_capture_mode`.
+    /// When to capture audio: "always" (default), "meetings_only", or "disabled".
+    #[serde(rename = "audioCaptureMode", default = "default_audio_capture_mode")]
+    pub audio_capture_mode: String,
+
     /// Stream live notes only for manually-started live meetings. This is
     /// separate from 24/7 background transcription: the recorder still writes
     /// durable chunks, while this powers the low-latency meeting note UI.
@@ -546,6 +558,7 @@ impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
             disable_audio: false,
+            audio_capture_mode: default_audio_capture_mode(),
             audio_transcription_engine: crate::best_engine_for_platform(crate::detect_tier())
                 .to_string(),
             transcription_mode: "batch".to_string(),
@@ -623,6 +636,14 @@ impl Default for RecordingSettings {
 
 fn default_true() -> bool {
     true
+}
+
+/// Default audio capture mode. "always" = continuous capture, the historical
+/// behavior. Kept as the deserialization default so existing config files and
+/// the CLI never silently switch to meetings-only; the desktop app opts new
+/// installs into "meetings_only" through its first-run defaults.
+fn default_audio_capture_mode() -> String {
+    "always".to_string()
 }
 
 /// Default `false` — the Process Tap can't see audio rendered through
@@ -783,6 +804,7 @@ mod tests {
         assert_eq!(settings.transcription_mode, "batch"); // default, wasn't in JSON
         assert_eq!(settings.power_mode, None); // default
         assert!(settings.vocabulary.is_empty()); // default
+        assert_eq!(settings.audio_capture_mode, "always"); // backward-compatible default
     }
 
     #[test]

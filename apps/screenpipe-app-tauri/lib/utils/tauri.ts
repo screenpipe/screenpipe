@@ -2423,6 +2423,10 @@ audioTranscriptionEngine: string;
  */
 transcriptionMode: string;
 /**
+ * When to capture audio: "always" (default), "meetings_only", or "disabled".
+ */
+audioCaptureMode?: string;
+/**
  * Stream live notes only for manually-started live meetings. This is
  * separate from 24/7 background transcription: the recorder still writes
  * durable chunks, while this powers the low-latency meeting note UI.

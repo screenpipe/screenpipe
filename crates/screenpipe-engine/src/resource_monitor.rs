@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use sysinfo::{CpuExt, PidExt, ProcessExt, System, SystemExt};
+use sysinfo::{CpuExt, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 use tracing::debug;
 use tracing::trace;
 use tracing::{error, info, warn};
@@ -49,7 +49,14 @@ impl HardwareInfo {
             .unwrap_or_default();
 
         let cpu_arch = std::env::consts::ARCH.to_string();
-        let cpu_count = sys.cpus().len();
+        // `available_parallelism()` is the deterministic source for logical
+        // core count. sysinfo's `cpus()` can still be empty right after a
+        // single `refresh_cpu()` — that flake reported cpu_count=0 on ~99% of
+        // hosts, which made per-core CPU normalization impossible downstream.
+        // Fall back to `cpus().len()` only if the std call fails.
+        let cpu_count = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or_else(|_| sys.cpus().len());
         let os_name = sys.name().unwrap_or_default();
         let os_version = sys.os_version().unwrap_or_default();
         let kernel_version = sys.kernel_version().unwrap_or_default();
@@ -509,7 +516,10 @@ impl ResourceMonitor {
             // Only load process + CPU info — skip disks, networks, components.
             let mut sys = System::new();
             sys.refresh_cpu();
-            sys.refresh_processes();
+            // Refresh per-process CPU only (memory/parent are always collected).
+            // Skipping per-process disk-usage and user lookups avoids the extra
+            // per-PID syscalls that make a full refresh costly on Windows.
+            sys.refresh_processes_specifics(ProcessRefreshKind::new().with_cpu());
             sys.refresh_memory();
 
             loop {
@@ -519,7 +529,9 @@ impl ResourceMonitor {
                         // CPU + process list + system memory totals.
                         // Skips disks, networks, components — saves allocations.
                         sys.refresh_cpu();
-                        sys.refresh_processes();
+                        // CPU-only process refresh: skip per-PID disk/user
+                        // syscalls (the expensive part on Windows).
+                        sys.refresh_processes_specifics(ProcessRefreshKind::new().with_cpu());
                         sys.refresh_memory();
 
                         // Tell the system allocator to return freed pages to the OS.

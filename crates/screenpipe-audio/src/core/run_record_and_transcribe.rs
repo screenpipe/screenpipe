@@ -386,6 +386,10 @@ async fn recv_audio_chunk(
             Ok(Some(chunk))
         }
         Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+            // The recorder fell behind the capture broadcast and the OS frames
+            // in between are gone — record the count so this silent loss is
+            // visible in /health and analytics instead of only a debug log.
+            metrics.record_chunks_lagged(n);
             debug!(
                 "audio channel lagged by {} messages for {}, continuing",
                 n, device_name

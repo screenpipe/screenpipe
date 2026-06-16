@@ -77,6 +77,20 @@ pub enum TranscriptionMode {
     Batch,
 }
 
+/// Controls *when* audio is captured (persisted + transcribed).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum AudioCaptureMode {
+    /// Capture continuously, 24/7. Historical behavior and engine default.
+    #[default]
+    Always,
+    /// Capture only while a meeting / audio session is detected. Audio outside
+    /// meetings is dropped before it is persisted or transcribed — saving cloud
+    /// transcription cost, disk, and the PII/transcription CPU pipeline.
+    /// Requires the meeting detector; if it is disabled this mode falls back to
+    /// `Always` so it can never silently drop *all* audio.
+    MeetingsOnly,
+}
+
 #[derive(Clone)]
 pub struct AudioManagerOptions {
     pub transcription_engine: Arc<AudioTranscriptionEngine>,
@@ -112,6 +126,9 @@ pub struct AudioManagerOptions {
     /// Controls when local Whisper transcription runs.
     /// `Realtime` = immediate (default), `Batch` = accumulate longer chunks for quality.
     pub transcription_mode: TranscriptionMode,
+    /// Controls when audio is captured. `Always` (default) = continuous 24/7.
+    /// `MeetingsOnly` = drop audio outside detected meetings.
+    pub audio_capture_mode: AudioCaptureMode,
     /// Meeting detector for batch mode — used for metadata/summaries.
     /// Shared with UI recorder which feeds app switch events into it.
     pub meeting_detector: Option<Arc<MeetingDetector>>,
@@ -157,6 +174,7 @@ impl Default for AudioManagerOptions {
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
             transcription_mode: TranscriptionMode::default(),
+            audio_capture_mode: AudioCaptureMode::default(),
             meeting_detector: None,
             meeting_streaming: MeetingStreamingConfig::default(),
             vocabulary: vec![],
@@ -273,6 +291,11 @@ impl AudioManagerBuilder {
 
     pub fn transcription_mode(mut self, transcription_mode: TranscriptionMode) -> Self {
         self.options.transcription_mode = transcription_mode;
+        self
+    }
+
+    pub fn audio_capture_mode(mut self, audio_capture_mode: AudioCaptureMode) -> Self {
+        self.options.audio_capture_mode = audio_capture_mode;
         self
     }
 

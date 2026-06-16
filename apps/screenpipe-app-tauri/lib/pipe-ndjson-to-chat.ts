@@ -51,6 +51,7 @@ function extractToolCalls(content: any[], msgIndex: number): any[] {
  */
 export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
   let agentEndMessages: any[] | null = null;
+  const notificationMessages: ChatMessage[] = [];
   let messageCounter = 0;
   const ts = Date.now();
 
@@ -62,6 +63,9 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
       const evt = JSON.parse(trimmed);
       if (evt.type === "agent_end" && Array.isArray(evt.messages)) {
         agentEndMessages = evt.messages;
+      }
+      if (evt.type === "notification_sent") {
+        notificationMessages.push(notificationEventToMessage(evt, notificationMessages.length, ts));
       }
     } catch {
       continue;
@@ -184,7 +188,7 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
     flushPendingAssistant();
 
     if (messages.some((m) => m.role === "assistant" && (m.content?.trim() || (m.contentBlocks?.length ?? 0) > 0))) {
-      return messages;
+      return appendUniqueNotificationMessages(messages, notificationMessages);
     }
   }
 
@@ -255,6 +259,12 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
     let evt: any;
     try { evt = JSON.parse(trimmed); } catch { continue; }
     const evtType = evt.type;
+
+    if (evtType === "notification_sent") {
+      flushAssistant();
+      messages.push(notificationEventToMessage(evt, messageCounter++, ts));
+      continue;
+    }
 
     if (evtType === "message_start" && evt.message?.role === "user") {
       flushAssistant();
@@ -372,6 +382,37 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
   }
 
   return messages;
+}
+
+function appendUniqueNotificationMessages(
+  messages: ChatMessage[],
+  notifications: ChatMessage[],
+): ChatMessage[] {
+  if (notifications.length === 0) return messages;
+  const seen = new Set(messages.map((m) => m.id));
+  const unique = notifications.filter((m) => !seen.has(m.id));
+  return unique.length > 0 ? [...messages, ...unique] : messages;
+}
+
+function notificationEventToMessage(evt: any, idx: number, fallbackTs: number): ChatMessage {
+  const title = typeof evt.title === "string" ? evt.title.trim() : "notification";
+  const body = typeof evt.body === "string" ? evt.body.trim() : "";
+  const timestamp =
+    typeof evt.timestamp === "number"
+      ? evt.timestamp
+      : typeof evt.timestamp === "string"
+        ? new Date(evt.timestamp).getTime()
+        : fallbackTs;
+  const content = [`notification sent`, title ? `**${title}**` : "", body]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    id: typeof evt.id === "string" && evt.id ? evt.id : `notification-${idx}`,
+    role: "assistant",
+    content,
+    timestamp: Number.isFinite(timestamp) ? timestamp : fallbackTs,
+    contentBlocks: [{ type: "text", text: content }],
+  };
 }
 
 function isToolReturnMessage(message: any, text: string): boolean {

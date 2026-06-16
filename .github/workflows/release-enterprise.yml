@@ -164,8 +164,13 @@ jobs:
       - name: Set ORT env vars
         shell: bash
         run: |
-          echo "ORT_STRATEGY=system" >> $GITHUB_ENV
-          echo "ORT_LIB_LOCATION=${{ github.workspace }}/ort-system-lib" >> $GITHUB_ENV
+          # Windows x64 must link ONNX Runtime via ort's download-binaries (its
+          # default) — NOT system linking. ort-sys rc.12's system path needs
+          # static libs the Microsoft dynamic zip doesn't ship, so setting
+          # ORT_STRATEGY=system + ORT_LIB_LOCATION makes the build fail with
+          # "ort-sys could not link to the ONNX Runtime build in .../ort-system-lib".
+          # The runtime onnxruntime.dll is still bundled via the download step
+          # above. Mirrors the consumer release-app.yml x64 fix (11566613b).
           echo "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" >> $GITHUB_ENV
 
       - name: Use enterprise config

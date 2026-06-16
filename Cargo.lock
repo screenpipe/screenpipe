@@ -277,7 +277,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=cc64e7c49a4ba8dbefd169a58e7ee7b160d8086c#cc64e7c49a4ba8dbefd169a58e7ee7b160d8086c"
 dependencies = [
  "cc",
 ]
@@ -644,7 +644,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=cc64e7c49a4ba8dbefd169a58e7ee7b160d8086c#cc64e7c49a4ba8dbefd169a58e7ee7b160d8086c"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -1617,7 +1617,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -7009,7 +7009,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7175,7 +7175,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=7e75d67a64143b9b990549e30043921107781f31#7e75d67a64143b9b990549e30043921107781f31"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=cc64e7c49a4ba8dbefd169a58e7ee7b160d8086c#cc64e7c49a4ba8dbefd169a58e7ee7b160d8086c"
 dependencies = [
  "cc",
  "cmake",
@@ -8176,7 +8176,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8238,7 +8238,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8276,7 +8276,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -8289,7 +8289,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8330,7 +8330,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8382,7 +8382,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8408,7 +8408,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8483,7 +8483,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8501,7 +8501,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "anyhow",
  "clap",
@@ -8513,7 +8513,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -8546,7 +8546,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "image",
  "mlx-rs",
@@ -8557,7 +8557,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -8615,7 +8615,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8637,7 +8637,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -8646,7 +8646,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -11501,7 +11501,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

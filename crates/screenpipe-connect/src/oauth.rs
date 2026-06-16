@@ -925,13 +925,23 @@ pub async fn refresh_token_instance(
     let mut attempt = 0u8;
     let resp: Value = loop {
         attempt += 1;
+        let mut refresh_body = serde_json::json!({
+            "integration_id": integration_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_tok,
+        });
+        // Per-account providers (Zendesk) host their token endpoint on the
+        // customer's subdomain. Echo the stored routing field so the proxy can
+        // rebuild that URL on refresh; harmless for every other provider.
+        if let (Some(sub), Some(obj)) = (
+            stored.get("subdomain").and_then(|v| v.as_str()),
+            refresh_body.as_object_mut(),
+        ) {
+            obj.insert("subdomain".to_string(), Value::from(sub));
+        }
         let raw = client
             .post(EXCHANGE_PROXY_URL)
-            .json(&serde_json::json!({
-                "integration_id": integration_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_tok,
-            }))
+            .json(&refresh_body)
             .send()
             .await?;
         let status = raw.status();
@@ -2094,14 +2104,24 @@ pub async fn exchange_code(
     integration_id: &str,
     code: &str,
     redirect_uri: &str,
+    extra: Option<&serde_json::Map<String, Value>>,
 ) -> Result<Value> {
+    // `extra` carries provider-specific routing fields the proxy needs to build
+    // the token URL — e.g. Zendesk's `subdomain`, whose token endpoint lives on
+    // the customer's own subdomain rather than a central host.
+    let mut payload = serde_json::json!({
+        "integration_id": integration_id,
+        "code":           code,
+        "redirect_uri":   redirect_uri,
+    });
+    if let (Some(extra), Some(obj)) = (extra, payload.as_object_mut()) {
+        for (k, v) in extra {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
     let resp = client
         .post(EXCHANGE_PROXY_URL)
-        .json(&serde_json::json!({
-            "integration_id": integration_id,
-            "code":           code,
-            "redirect_uri":   redirect_uri,
-        }))
+        .json(&payload)
         .send()
         .await?;
     let status = resp.status();

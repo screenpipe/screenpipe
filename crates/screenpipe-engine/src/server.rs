@@ -417,6 +417,15 @@ impl SCServer {
         let analytics_enabled = analytics::is_enabled();
         let api_usage_counter = analytics_enabled.then(|| api_request_count.clone());
 
+        // Recording-coverage sampler: accumulates working-time-vs-healthy-capture
+        // seconds every 5s. Spawned UNCONDITIONALLY (accumulation is cheap, local,
+        // and feeds /health regardless of analytics consent); only the 60s emit
+        // below is telemetry-gated.
+        crate::recording_coverage::start_coverage_sampler(
+            self.vision_metrics.clone(),
+            std::time::Instant::now(),
+        );
+
         if analytics_enabled {
             // Spawn periodic API usage reporter (every 5 minutes)
             let counter_clone = api_request_count.clone();
@@ -442,6 +451,11 @@ impl SCServer {
                     let snap = metrics_for_posthog.snapshot();
                     // Only report if the pipeline has captured any frames
                     if snap.frames_captured > 0 {
+                        // Recording-coverage reliability metric: what % of the
+                        // user's working time had healthy capture. Sampled
+                        // independently (5s sampler); snapshotted here so the
+                        // fleet sees coverage alongside raw pipeline counters.
+                        let cov = crate::recording_coverage::coverage_snapshot();
                         analytics::capture_event_nonblocking(
                             "vision_pipeline_health",
                             json!({
@@ -462,6 +476,13 @@ impl SCServer {
                                 "ocr_queue_depth": snap.ocr_queue_depth,
                                 "video_queue_depth": snap.video_queue_depth,
                                 "pipeline_stall_count": snap.pipeline_stall_count,
+                                // Recording-coverage reliability metric.
+                                "recording_coverage_ratio": cov.coverage_ratio,
+                                "recording_secs": cov.recording_secs,
+                                "active_secs": cov.active_secs,
+                                "recording_active_stalled_secs": cov.active_stalled_secs,
+                                "recording_active_paused_secs": cov.active_paused_secs,
+                                "recording_idle_secs": cov.idle_secs,
                             }),
                         );
                     }
@@ -492,6 +513,7 @@ impl SCServer {
                                 "chunks_received": snap.chunks_received,
                                 "chunks_channel_full": snap.chunks_channel_full,
                                 "stream_timeouts": snap.stream_timeouts,
+                                "chunks_lagged": snap.chunks_lagged,
                                 "process_errors": snap.process_errors,
                                 "vad_passed": snap.vad_passed,
                                 "vad_rejected": snap.vad_rejected,

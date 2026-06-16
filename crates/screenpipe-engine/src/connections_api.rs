@@ -1775,6 +1775,13 @@ fn resolve_auth(
             username_key,
             password_key,
         } => {
+            // An OAuth access token (Zendesk's multi-tenant flow) authenticates
+            // as Bearer and takes precedence over the manual email/token Basic
+            // credentials. Zendesk is currently the only integration pairing a
+            // BasicAuth proxy with OAuth, so this is inert for every other one.
+            if let Some(token) = oauth_token {
+                return ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", token));
+            }
             if let Some(c) = creds {
                 let user = c
                     .get(*username_key)
@@ -3448,6 +3455,44 @@ mod tests {
             resolve_auth(&auth_cfg, Some(&creds), None, None),
             ResolvedAuth::None
         ));
+    }
+
+    #[test]
+    fn test_resolve_auth_basic_oauth_token_takes_precedence() {
+        // Zendesk: manual mode is email/token Basic, OAuth mode is Bearer. When
+        // an OAuth token is present it must win over any manual Basic creds so a
+        // single proxy config serves both modes.
+        let auth_cfg = ProxyAuth::BasicAuth {
+            username_key: "email",
+            password_key: "api_token",
+        };
+        let mut creds = Map::new();
+        creds.insert("email".into(), json!("user@example.com"));
+        creds.insert("api_token".into(), json!("secret123"));
+        match resolve_auth(&auth_cfg, Some(&creds), Some("oauth-access-token"), None) {
+            ResolvedAuth::Header(name, value) => {
+                assert_eq!(name, "Authorization");
+                assert_eq!(value, "Bearer oauth-access-token");
+            }
+            _ => panic!("expected Bearer header from OAuth token"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_auth_basic_oauth_only_no_creds() {
+        // An OAuth-only Zendesk connection has no manual Basic creds — the OAuth
+        // token alone must still authenticate.
+        let auth_cfg = ProxyAuth::BasicAuth {
+            username_key: "email",
+            password_key: "api_token",
+        };
+        match resolve_auth(&auth_cfg, None, Some("oauth-access-token"), None) {
+            ResolvedAuth::Header(name, value) => {
+                assert_eq!(name, "Authorization");
+                assert_eq!(value, "Bearer oauth-access-token");
+            }
+            _ => panic!("expected Bearer header from OAuth token"),
+        }
     }
 
     #[test]

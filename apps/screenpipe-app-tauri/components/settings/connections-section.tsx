@@ -2063,6 +2063,11 @@ function OAuthPanel({
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   // Ref guard so a cancelled or timed-out connect attempt doesn't update state after cancel.
   const connectingRef = useRef(false);
+  // Zendesk (and any future per-account provider) authorizes against the
+  // customer's own subdomain, so collect it up front and pass it as the OAuth
+  // instance. The token is then stored under oauth:zendesk:{subdomain}.
+  const isSubdomainProvider = integrationId === "zendesk";
+  const [subdomain, setSubdomain] = useState("");
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -2093,10 +2098,12 @@ function OAuthPanel({
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
   const handleConnect = async () => {
+    const instanceArg = isSubdomainProvider ? subdomain.trim() : null;
+    if (isSubdomainProvider && !instanceArg) return;
     setStatus("loading");
     connectingRef.current = true;
     try {
-      const res = await commands.oauthConnect(integrationId, null);
+      const res = await commands.oauthConnect(integrationId, instanceArg);
       if (!connectingRef.current) return; // cancelled — handleCancel owns the UI
       if (res.status === "ok" && res.data.connected) {
         await fetchStatus();
@@ -2174,6 +2181,21 @@ function OAuthPanel({
           })}
         </div>
       )}
+      {isSubdomainProvider && (isPro || connected) && (
+        <div className="space-y-1">
+          <label className="text-[11px] text-muted-foreground">Zendesk subdomain</label>
+          <div className="flex items-center gap-1">
+            <Input
+              value={subdomain}
+              onChange={(e) => setSubdomain(e.target.value.trim())}
+              placeholder="yourcompany"
+              className="h-8 text-xs"
+              onKeyDown={(e) => { if (e.key === "Enter" && subdomain.trim() && status !== "loading") handleConnect(); }}
+            />
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">.zendesk.com</span>
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {!isPro && !connected ? (
           <div className="flex flex-col gap-1.5">
@@ -2197,7 +2219,7 @@ function OAuthPanel({
             </Button>
           </div>
         ) : (
-          <Button onClick={handleConnect} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
+          <Button onClick={handleConnect} disabled={isSubdomainProvider && !subdomain.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
             {connected
               ? (<><Plus className="h-3 w-3" />add another account</>)
               : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}

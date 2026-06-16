@@ -13,7 +13,7 @@ import posthog from "posthog-js";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
-import { normalizeAppUser } from "@/lib/app-entitlement";
+import { hasAppEntitlement, normalizeAppUser } from "@/lib/app-entitlement";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
@@ -492,8 +492,13 @@ const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
 
 const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
 
+// "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
+// OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
+// every paying user — not just Cloud Sync subscribers — gets Screenpipe Cloud
+// transcription on by default. Still requires a token/id so the cloud engine can
+// authenticate against api.screenpipe.com.
 const isLoggedInProUser = (user: User | null | undefined) =>
-	user?.cloud_subscribed === true && Boolean(user.token || user.id);
+	hasAppEntitlement(user as any) && Boolean(user?.token || user?.id);
 
 const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	if (!isLoggedInProUser(settings.user)) return settings;
@@ -502,8 +507,14 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	// If the user picked a non-default, non-cloud engine, they've configured audio
 	// themselves — don't flip live-meeting on or rewrite the provider behind their back.
 	// V2 marker is intentionally left unset so a later switch back to default re-evaluates.
+	// Both platform defaults count as "untouched": macOS seeds whisper-turbo, while
+	// Windows/Linux seed parakeet — without the latter, paid users on those platforms
+	// would never be auto-switched to cloud.
+	const isPlatformDefaultEngine =
+		settings.audioTranscriptionEngine === DEFAULT_AUDIO_ENGINE ||
+		settings.audioTranscriptionEngine === "parakeet";
 	const userChoseCustomEngine =
-		settings.audioTranscriptionEngine !== DEFAULT_AUDIO_ENGINE &&
+		!isPlatformDefaultEngine &&
 		settings.audioTranscriptionEngine !== "screenpipe-cloud";
 	if (userChoseCustomEngine) return settings;
 
@@ -538,6 +549,11 @@ let DEFAULT_SETTINGS: Settings = {
 			port: 3030,
 			dataDir: "default",
 			disableAudio: false,
+			// New installs capture audio only during detected meetings (saves cloud
+			// transcription cost, disk, and CPU). Existing installs are NOT backfilled
+			// — they have no stored value, so the serde/UI "always" fallback keeps them
+			// on continuous capture without rewriting their settings.
+			audioCaptureMode: "meetings-only",
 			ignoredWindows: [
 			],
 			includedWindows: [],
@@ -790,6 +806,13 @@ function createSettingsStore() {
 			settings.appendTypedTextToMeetingNote = true;
 			needsUpdate = true;
 		}
+
+		// NOTE: audioCaptureMode is intentionally NOT backfilled for existing
+		// installs. Their stored settings have no value for it, so the engine's
+		// serde default ("always") and the UI's `?? "always"` fallback keep them on
+		// continuous capture — without writing anything to their store. Only brand-new
+		// installs default to "meetings-only" (via createDefaultSettingsObject, which
+		// get() returns directly when there are no stored settings).
 
 		// Migration: Add default presets if user has none
 		if (!settings.aiPresets || settings.aiPresets.length === 0) {

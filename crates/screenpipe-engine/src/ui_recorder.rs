@@ -231,17 +231,160 @@ pub struct TreeWalkerSnapshot {
     pub total_text_chars: u64,
 }
 
-/// Global shared tree walker metrics — updated every 60s by the walker thread,
-/// readable from the health endpoint. Uses the same global-static pattern as
-/// `LAST_AUDIO_CAPTURE` in screenpipe-audio.
-static TREE_WALKER_METRICS: std::sync::LazyLock<std::sync::Mutex<TreeWalkerSnapshot>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(TreeWalkerSnapshot::default()));
+/// Outcome of a single production accessibility tree walk, recorded by the
+/// capture loop via [`record_tree_walk`]. Keeps the metrics layer decoupled
+/// from `screenpipe_a11y::tree::TreeWalkResult` — callers translate their
+/// per-walk result into one of these so this crate doesn't depend on the walk
+/// internals.
+#[derive(Debug, Clone, Copy)]
+pub enum TreeWalkOutcome {
+    /// Walk produced a snapshot that was stored (content differed from the
+    /// previous frame). Carries the per-walk cost metrics.
+    Stored {
+        duration_ms: u64,
+        node_count: u64,
+        max_depth: u64,
+        text_chars: u64,
+        truncated: bool,
+        truncated_timeout: bool,
+        truncated_max_nodes: bool,
+    },
+    /// Walk produced a snapshot whose content matched the previous frame
+    /// (content dedup). Still a real walk attempt — counts toward totals.
+    Deduped {
+        duration_ms: u64,
+        node_count: u64,
+        max_depth: u64,
+        text_chars: u64,
+        truncated: bool,
+        truncated_timeout: bool,
+        truncated_max_nodes: bool,
+    },
+    /// Walk completed but returned no text (games, AX-hostile apps).
+    Empty,
+    /// Walk failed — no focused window / AX error (`TreeWalkResult::NotFound`).
+    Error,
+}
 
-/// Read the latest tree walker metrics snapshot.
+/// Internal cumulative accumulator behind [`TREE_WALKER_METRICS`]. Stores
+/// running sums + maxes so [`tree_walker_snapshot`] can derive averages on
+/// read (avg = sum / total). Kept module-private; the public surface is the
+/// derived [`TreeWalkerSnapshot`].
+#[derive(Default)]
+struct TreeWalkerAccumulator {
+    walks_total: u64,
+    walks_stored: u64,
+    walks_deduped: u64,
+    walks_empty: u64,
+    walks_error: u64,
+    walks_truncated: u64,
+    walks_truncated_timeout: u64,
+    walks_truncated_max_nodes: u64,
+    sum_walk_duration_ms: u64,
+    max_walk_duration_ms: u64,
+    sum_nodes: u64,
+    max_depth_reached: u64,
+    total_text_chars: u64,
+}
+
+impl TreeWalkerAccumulator {
+    /// Derive the point-in-time snapshot (averages + rates) from the running
+    /// sums. `walks_total` is the denominator for per-walk averages.
+    fn snapshot(&self) -> TreeWalkerSnapshot {
+        let total = self.walks_total;
+        let avg = |sum: u64| if total > 0 { sum / total } else { 0 };
+        TreeWalkerSnapshot {
+            walks_total: total,
+            walks_stored: self.walks_stored,
+            walks_deduped: self.walks_deduped,
+            walks_empty: self.walks_empty,
+            walks_error: self.walks_error,
+            walks_truncated: self.walks_truncated,
+            walks_truncated_timeout: self.walks_truncated_timeout,
+            walks_truncated_max_nodes: self.walks_truncated_max_nodes,
+            truncation_rate: if total > 0 {
+                self.walks_truncated as f64 / total as f64
+            } else {
+                0.0
+            },
+            avg_walk_duration_ms: avg(self.sum_walk_duration_ms),
+            max_walk_duration_ms: self.max_walk_duration_ms,
+            avg_nodes_per_walk: avg(self.sum_nodes),
+            max_depth_reached: self.max_depth_reached,
+            total_text_chars: self.total_text_chars,
+        }
+    }
+}
+
+/// Global shared tree walker metrics — a cumulative accumulator updated on
+/// every production walk via [`record_tree_walk`], readable from the health
+/// endpoint. Uses the same global-static pattern as `LAST_AUDIO_CAPTURE` in
+/// screenpipe-audio.
+static TREE_WALKER_METRICS: std::sync::LazyLock<std::sync::Mutex<TreeWalkerAccumulator>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(TreeWalkerAccumulator::default()));
+
+/// Record the outcome of one production accessibility tree walk. Called from
+/// the event-driven capture loop for every walk attempt so the health endpoint
+/// and analytics surface real `ax_*` counters instead of zeros. Cheap: one
+/// mutex acquisition that updates a handful of integers.
+pub fn record_tree_walk(outcome: TreeWalkOutcome) {
+    let Ok(mut acc) = TREE_WALKER_METRICS.lock() else {
+        return;
+    };
+    acc.walks_total += 1;
+    match outcome {
+        TreeWalkOutcome::Stored {
+            duration_ms,
+            node_count,
+            max_depth,
+            text_chars,
+            truncated,
+            truncated_timeout,
+            truncated_max_nodes,
+        }
+        | TreeWalkOutcome::Deduped {
+            duration_ms,
+            node_count,
+            max_depth,
+            text_chars,
+            truncated,
+            truncated_timeout,
+            truncated_max_nodes,
+        } => {
+            if matches!(outcome, TreeWalkOutcome::Stored { .. }) {
+                acc.walks_stored += 1;
+            } else {
+                acc.walks_deduped += 1;
+            }
+            acc.sum_walk_duration_ms += duration_ms;
+            acc.max_walk_duration_ms = acc.max_walk_duration_ms.max(duration_ms);
+            acc.sum_nodes += node_count;
+            acc.max_depth_reached = acc.max_depth_reached.max(max_depth);
+            acc.total_text_chars += text_chars;
+            if truncated {
+                acc.walks_truncated += 1;
+            }
+            if truncated_timeout {
+                acc.walks_truncated_timeout += 1;
+            }
+            if truncated_max_nodes {
+                acc.walks_truncated_max_nodes += 1;
+            }
+        }
+        TreeWalkOutcome::Empty => {
+            acc.walks_empty += 1;
+        }
+        TreeWalkOutcome::Error => {
+            acc.walks_error += 1;
+        }
+    }
+}
+
+/// Read the latest tree walker metrics snapshot (averages derived on read).
 pub fn tree_walker_snapshot() -> TreeWalkerSnapshot {
     TREE_WALKER_METRICS
         .lock()
-        .map(|g| g.clone())
+        .map(|acc| acc.snapshot())
         .unwrap_or_default()
 }
 
@@ -1786,5 +1929,115 @@ mod tests {
         // boundaries — it must be Send.
         fn assert_send<T: Send>() {}
         assert_send::<UiRecorderHandle>();
+    }
+
+    /// Apply one outcome to a local accumulator the same way `record_tree_walk`
+    /// does, without touching the global static (so tests don't race).
+    fn apply(acc: &mut TreeWalkerAccumulator, outcome: TreeWalkOutcome) {
+        acc.walks_total += 1;
+        match outcome {
+            TreeWalkOutcome::Stored {
+                duration_ms,
+                node_count,
+                max_depth,
+                text_chars,
+                truncated,
+                truncated_timeout,
+                truncated_max_nodes,
+            }
+            | TreeWalkOutcome::Deduped {
+                duration_ms,
+                node_count,
+                max_depth,
+                text_chars,
+                truncated,
+                truncated_timeout,
+                truncated_max_nodes,
+            } => {
+                if matches!(outcome, TreeWalkOutcome::Stored { .. }) {
+                    acc.walks_stored += 1;
+                } else {
+                    acc.walks_deduped += 1;
+                }
+                acc.sum_walk_duration_ms += duration_ms;
+                acc.max_walk_duration_ms = acc.max_walk_duration_ms.max(duration_ms);
+                acc.sum_nodes += node_count;
+                acc.max_depth_reached = acc.max_depth_reached.max(max_depth);
+                acc.total_text_chars += text_chars;
+                if truncated {
+                    acc.walks_truncated += 1;
+                }
+                if truncated_timeout {
+                    acc.walks_truncated_timeout += 1;
+                }
+                if truncated_max_nodes {
+                    acc.walks_truncated_max_nodes += 1;
+                }
+            }
+            TreeWalkOutcome::Empty => acc.walks_empty += 1,
+            TreeWalkOutcome::Error => acc.walks_error += 1,
+        }
+    }
+
+    #[test]
+    fn tree_walker_accumulator_derives_averages_and_rates() {
+        let mut acc = TreeWalkerAccumulator::default();
+        // stored: 100ms, 50 nodes, depth 5, 200 chars, truncated by timeout
+        apply(
+            &mut acc,
+            TreeWalkOutcome::Stored {
+                duration_ms: 100,
+                node_count: 50,
+                max_depth: 5,
+                text_chars: 200,
+                truncated: true,
+                truncated_timeout: true,
+                truncated_max_nodes: false,
+            },
+        );
+        // deduped: 200ms, 150 nodes, depth 9, 800 chars, not truncated
+        apply(
+            &mut acc,
+            TreeWalkOutcome::Deduped {
+                duration_ms: 200,
+                node_count: 150,
+                max_depth: 9,
+                text_chars: 800,
+                truncated: false,
+                truncated_timeout: false,
+                truncated_max_nodes: false,
+            },
+        );
+        apply(&mut acc, TreeWalkOutcome::Empty);
+        apply(&mut acc, TreeWalkOutcome::Error);
+
+        let snap = acc.snapshot();
+        assert_eq!(snap.walks_total, 4);
+        assert_eq!(snap.walks_stored, 1);
+        assert_eq!(snap.walks_deduped, 1);
+        assert_eq!(snap.walks_empty, 1);
+        assert_eq!(snap.walks_error, 1);
+        assert_eq!(snap.walks_truncated, 1);
+        assert_eq!(snap.walks_truncated_timeout, 1);
+        assert_eq!(snap.walks_truncated_max_nodes, 0);
+        // truncation_rate = 1 truncated / 4 total
+        assert!((snap.truncation_rate - 0.25).abs() < 1e-9);
+        // averages divide cumulative sums by walks_total (= 4), integer division:
+        // avg_walk_duration_ms = (100 + 200) / 4 = 75
+        assert_eq!(snap.avg_walk_duration_ms, 75);
+        assert_eq!(snap.max_walk_duration_ms, 200);
+        // avg_nodes_per_walk = (50 + 150) / 4 = 50
+        assert_eq!(snap.avg_nodes_per_walk, 50);
+        assert_eq!(snap.max_depth_reached, 9);
+        assert_eq!(snap.total_text_chars, 1000);
+    }
+
+    #[test]
+    fn tree_walker_accumulator_empty_is_all_zero() {
+        let snap = TreeWalkerAccumulator::default().snapshot();
+        assert_eq!(snap.walks_total, 0);
+        assert_eq!(snap.truncation_rate, 0.0);
+        assert_eq!(snap.avg_walk_duration_ms, 0);
+        assert_eq!(snap.avg_nodes_per_walk, 0);
     }
 }

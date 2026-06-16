@@ -105,6 +105,9 @@ const NotificationHandler: React.FC = () => {
           title: data.title,
           body: data.body,
           pipe_name: data.pipe_name,
+          source_session_id: data.source_session_id,
+          source_message_id: data.source_message_id,
+          source_url: data.source_url,
           timestamp: new Date().toISOString(),
           read: false,
         };
@@ -197,6 +200,18 @@ const NotificationHandler: React.FC = () => {
                 body: "Capturing this meeting at high frame rate. Stops automatically when the call ends.",
               }),
             }).catch(() => {});
+
+            // "open note + HD": the started-meeting HD button carries the
+            // live-note deeplink so a single click both starts HD and opens
+            // the note. Routes the same way as the standalone "open note"
+            // deeplink action below. No-op for the prewarm "+ HD" (no url).
+            const noteUrl = action.deeplinkUrl || action.deeplink_url;
+            if (typeof noteUrl === "string" && noteUrl.startsWith("screenpipe://")) {
+              await commands.showWindowActivated(windowForDeeplink(noteUrl));
+              await new Promise((r) => setTimeout(r, 150));
+              const { emit } = await import("@tauri-apps/api/event");
+              await emit("deep-link-received", noteUrl);
+            }
           }
           return;
         }

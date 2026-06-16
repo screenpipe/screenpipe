@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # OIDC auth for the MCP Registry (io.github.screenpipe namespace)
 
 env:
   GIT_LFS_SKIP_SMUDGE: 1
@@ -58,6 +59,30 @@ jobs:
           else
             npm publish --access public
           fi
+
+      # Publish to the official MCP Registry (registry.modelcontextprotocol.io).
+      # Feeds downstream directories (Glama, mcp.so, PulseMCP). OIDC auth needs no
+      # secrets for the io.github.screenpipe namespace. Runs after npm publish so the
+      # package being referenced already carries the matching mcpName.
+      - name: Sync server.json version from package.json
+        working-directory: packages/screenpipe-mcp
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          jq --arg v "$VER" '.version = $v | .packages |= map(.version = $v)' server.json > server.tmp && mv server.tmp server.json
+          echo "synced server.json version to $VER"
+
+      - name: Install mcp-publisher
+        working-directory: packages/screenpipe-mcp
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        working-directory: packages/screenpipe-mcp
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        working-directory: packages/screenpipe-mcp
+        run: ./mcp-publisher publish
 
       - name: Sync manifest.json version from package.json
         working-directory: packages/screenpipe-mcp

@@ -3,7 +3,7 @@
 #
 # CI for the enterprise SDK in ee/sdk. The SDK is source-available under the
 # Screenpipe Enterprise License and intentionally kept outside the root Cargo
-# workspace so the MIT core build stays unchanged.
+# workspace so the core build stays unchanged.
 
 name: SDK
 

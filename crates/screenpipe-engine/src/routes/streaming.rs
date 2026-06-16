@@ -29,6 +29,7 @@ use crate::{
 use super::websocket::{try_acquire_ws_connection, WsConnectionGuard};
 
 use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::time::Instant as TokioInstant;
 
 #[derive(Deserialize)]
 pub struct StreamFramesRequest {
@@ -45,6 +46,8 @@ pub struct StreamFramesRequest {
 
 const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
 const DEFAULT_STREAM_FRAME_LIMIT: usize = MAX_STREAM_FRAME_LIMIT;
+const STREAM_BATCH_CAPACITY: usize = 100;
+const STREAM_BATCH_FLUSH_DELAY: Duration = Duration::from_millis(100);
 
 fn stream_frame_limit(requested: Option<usize>) -> usize {
     requested
@@ -457,8 +460,8 @@ async fn handle_stream_frames_socket(
 
     // Send frames to the client with batching + live cache subscription
     let send_handle = tokio::spawn(async move {
-        let mut frame_buffer = Vec::with_capacity(100);
-        let mut buffer_timer = tokio::time::interval(Duration::from_millis(100));
+        let mut frame_buffer = Vec::with_capacity(STREAM_BATCH_CAPACITY);
+        let mut next_batch_flush_at: Option<TokioInstant> = None;
         let mut keepalive_timer = tokio::time::interval(Duration::from_secs(30));
 
         // Subscribe to live frame updates from the hot cache
@@ -484,12 +487,17 @@ async fn handle_stream_frames_socket(
                                     .await;
                                 continue;
                             }
-                            frame_buffer.push(StreamTimeSeriesResponse::from(tsf));
-                            if frame_buffer.len() >= 100 {
+                            push_stream_batch(
+                                &mut frame_buffer,
+                                StreamTimeSeriesResponse::from(tsf),
+                                &mut next_batch_flush_at,
+                            );
+                            if frame_buffer.len() >= STREAM_BATCH_CAPACITY {
                                 if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
                                     error!("failed to send batch: {}", e);
                                     break;
                                 }
+                                next_batch_flush_at = None;
                             }
                         }
                         None => {
@@ -558,12 +566,17 @@ async fn handle_stream_frames_socket(
                                 }],
                             };
 
-                            frame_buffer.push(response);
-                            if frame_buffer.len() >= 100 {
+                            push_stream_batch(
+                                &mut frame_buffer,
+                                response,
+                                &mut next_batch_flush_at,
+                            );
+                            if frame_buffer.len() >= STREAM_BATCH_CAPACITY {
                                 if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
                                     error!("failed to send live batch: {}", e);
                                     break;
                                 }
+                                next_batch_flush_at = None;
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -619,13 +632,12 @@ async fn handle_stream_frames_socket(
                 }
 
                 // Flush partial batches
-                _ = buffer_timer.tick() => {
-                    if !frame_buffer.is_empty() {
-                        if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
-                            error!("failed to send batch: {}", e);
-                            break;
-                        }
+                _ = pending_batch_flush(next_batch_flush_at) => {
+                    if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                        error!("failed to send batch: {}", e);
+                        break;
                     }
+                    next_batch_flush_at = None;
                 }
 
                 // Keep-alive
@@ -701,6 +713,24 @@ async fn fetch_and_process_frames_with_tracking(
     Ok(latest_timestamp)
 }
 
+async fn pending_batch_flush(next_flush_at: Option<TokioInstant>) {
+    match next_flush_at {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+fn push_stream_batch(
+    buffer: &mut Vec<StreamTimeSeriesResponse>,
+    response: StreamTimeSeriesResponse,
+    next_flush_at: &mut Option<TokioInstant>,
+) {
+    buffer.push(response);
+    if buffer.len() == 1 {
+        *next_flush_at = Some(TokioInstant::now() + STREAM_BATCH_FLUSH_DELAY);
+    }
+}
+
 // Helper function to send batched frames
 async fn send_batch(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
@@ -756,6 +786,13 @@ mod tests {
             machine_id: None,
             ocr_entries,
             audio_entries,
+        }
+    }
+
+    fn test_stream_response() -> StreamTimeSeriesResponse {
+        StreamTimeSeriesResponse {
+            timestamp: chrono::Utc::now(),
+            devices: Vec::new(),
         }
     }
 
@@ -840,6 +877,48 @@ mod tests {
             stream_frame_limit(Some(MAX_STREAM_FRAME_LIMIT + 1)),
             MAX_STREAM_FRAME_LIMIT
         );
+    }
+
+    #[test]
+    fn test_create_time_series_frame_filters_screenpipe_app_names() {
+        let mut frame_data = create_test_frame_data(2, 0);
+        frame_data.ocr_entries[0].app_name = "SCREENPIPE Desktop".to_string();
+        frame_data.ocr_entries[1].app_name = "Notion".to_string();
+
+        let result = create_time_series_frame(frame_data);
+
+        assert_eq!(result.frame_data.len(), 1);
+        assert_eq!(result.frame_data[0].metadata.app_name, "Notion");
+    }
+
+    #[test]
+    fn test_stream_batch_deadline_is_armed_once() {
+        let mut buffer = Vec::with_capacity(STREAM_BATCH_CAPACITY);
+        let mut next_flush_at = None;
+
+        push_stream_batch(&mut buffer, test_stream_response(), &mut next_flush_at);
+
+        let first_deadline = next_flush_at.expect("first frame should arm flush deadline");
+        assert_eq!(buffer.len(), 1);
+
+        push_stream_batch(&mut buffer, test_stream_response(), &mut next_flush_at);
+
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(next_flush_at, Some(first_deadline));
+    }
+
+    #[tokio::test]
+    async fn test_pending_batch_flush_only_waits_when_armed() {
+        let idle_result =
+            tokio::time::timeout(Duration::from_millis(10), pending_batch_flush(None)).await;
+        assert!(idle_result.is_err());
+
+        tokio::time::timeout(
+            Duration::from_millis(10),
+            pending_batch_flush(Some(TokioInstant::now())),
+        )
+        .await
+        .expect("armed flush should complete");
     }
 
     /// TEST: Audio entries with no OCR entries should create a placeholder frame

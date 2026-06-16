@@ -573,6 +573,11 @@ impl ServerCore {
                 let mut sub =
                     screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
                 while let Some(event) = sub.next().await {
+                    // Clear the event-tracked meeting flag so the capture loop
+                    // stops bypassing dedup for visual changes once the call ends.
+                    // (This controller has no detector handle in the app, so the
+                    // flag is the only meeting signal it has — see set_in_meeting.)
+                    controller.set_in_meeting(false);
                     let meeting_id = event
                         .data
                         .get("meeting_id")
@@ -602,6 +607,11 @@ impl ServerCore {
                         .and_then(|v| v.as_i64())
                         .or_else(|| event.data.get("id").and_then(|v| v.as_i64()));
                     let Some(id) = meeting_id else { continue };
+
+                    // Mark the call active so the capture loop bypasses AX-hash
+                    // dedup for visual changes (slides, screen-share) for its
+                    // duration. Independent of the HD-session default mode below.
+                    controller.set_in_meeting(true);
 
                     controller.try_upgrade_pending_to_meeting(id);
 

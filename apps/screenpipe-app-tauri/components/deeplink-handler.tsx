@@ -193,6 +193,28 @@ export function DeeplinkHandler() {
         }
       }
 
+      // Handle chat deep links:
+      //   screenpipe://chat/<conversationId>?message=<messageId>
+      //   screenpipe://chat?conversation=<conversationId>&message=<messageId>
+      if (parsedUrl.host === "chat" || parsedUrl.pathname?.startsWith("/chat/")) {
+        const pathId =
+          parsedUrl.host === "chat"
+            ? parsedUrl.pathname.replace(/^\/+/, "").split("/")[0]
+            : parsedUrl.pathname.replace(/^\/chat\/?/, "").split("/")[0];
+        const conversationId = parsedUrl.searchParams.get("conversation") || pathId;
+        if (conversationId) {
+          const decodedConversationId = decodeURIComponent(conversationId);
+          const messageId = parsedUrl.searchParams.get("message") || undefined;
+          await commands.showWindowActivated({ Home: { page: "home" } });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          await emit("chat-load-conversation", {
+            conversationId: decodedConversationId,
+            targetWindow: "home",
+            ...(messageId ? { focusMessageId: decodeURIComponent(messageId) } : {}),
+          });
+        }
+      }
+
       // Handle in-app file viewer: screenpipe://view?path=<encoded-path>
       // Notification bodies with markdown links to local files are rewritten
       // to this scheme by the /notify route in src-tauri/src/notifications/rewrite.rs

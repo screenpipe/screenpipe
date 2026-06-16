@@ -71,7 +71,9 @@ async fn run_stream(
     device_type: String,
     mut rx: mpsc::Receiver<MeetingAudioFrame>,
 ) -> Result<()> {
-    let mut session = selected_engine_session(&engine_ref).await?;
+    // Bias the local live transcriber toward this meeting's keyterms (user
+    // vocabulary + calendar attendee names) by seeding the session vocabulary.
+    let mut session = selected_engine_session(&engine_ref, &config.keyterms).await?;
     let model = selected_engine_model(&session);
     let mut buffer = LiveChunkBuffer::default();
     let mut resampler: Option<StreamResampler> = None;
@@ -118,6 +120,7 @@ async fn run_stream(
 
 async fn selected_engine_session(
     engine_ref: &Arc<RwLock<Option<TranscriptionEngine>>>,
+    keyterms: &[String],
 ) -> Result<TranscriptionSession> {
     let engine = engine_ref
         .read()
@@ -131,7 +134,7 @@ async fn selected_engine_session(
         ));
     }
 
-    engine.create_session()
+    engine.create_session_with_keyterms(keyterms)
 }
 
 fn selected_engine_model(session: &TranscriptionSession) -> Option<String> {

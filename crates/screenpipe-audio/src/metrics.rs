@@ -18,6 +18,10 @@ pub struct AudioPipelineMetrics {
     pub chunks_channel_full: AtomicU64,
     /// Device stream timeouts (no audio data received for >30s)
     pub stream_timeouts: AtomicU64,
+    /// Audio buffers skipped because the recorder consumer fell behind the
+    /// capture broadcast channel. This is otherwise-silent audio loss under
+    /// CPU contention — previously invisible to telemetry.
+    pub chunks_lagged: AtomicU64,
 
     // --- VAD stage ---
     /// Chunks that passed VAD (speech_ratio > threshold)
@@ -83,6 +87,7 @@ impl AudioPipelineMetrics {
             chunks_sent: AtomicU64::new(0),
             chunks_channel_full: AtomicU64::new(0),
             stream_timeouts: AtomicU64::new(0),
+            chunks_lagged: AtomicU64::new(0),
             vad_passed: AtomicU64::new(0),
             vad_rejected: AtomicU64::new(0),
             speech_ratio_sum_x1000: AtomicU64::new(0),
@@ -119,6 +124,14 @@ impl AudioPipelineMetrics {
 
     pub fn record_stream_timeout(&self) {
         self.stream_timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record `n` audio buffers skipped because the recorder consumer fell
+    /// behind the capture broadcast channel (broadcast `Lagged(n)`). This is
+    /// otherwise-silent audio loss — surfaced so the health endpoint and
+    /// analytics can see contention-induced gaps.
+    pub fn record_chunks_lagged(&self, n: u64) {
+        self.chunks_lagged.fetch_add(n, Ordering::Relaxed);
     }
 
     // --- Consumer stage ---
@@ -281,6 +294,7 @@ impl AudioPipelineMetrics {
             chunks_sent,
             chunks_channel_full: self.chunks_channel_full.load(Ordering::Relaxed),
             stream_timeouts: self.stream_timeouts.load(Ordering::Relaxed),
+            chunks_lagged: self.chunks_lagged.load(Ordering::Relaxed),
             // Consumer
             chunks_received: self.chunks_received.load(Ordering::Relaxed),
             process_errors: self.process_errors.load(Ordering::Relaxed),
@@ -342,6 +356,9 @@ pub struct AudioMetricsSnapshot {
     pub chunks_sent: u64,
     pub chunks_channel_full: u64,
     pub stream_timeouts: u64,
+    /// Audio buffers skipped because the recorder lagged the capture channel
+    /// (silent loss under CPU contention).
+    pub chunks_lagged: u64,
 
     // Consumer stage
     pub chunks_received: u64,

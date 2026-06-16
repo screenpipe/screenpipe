@@ -110,6 +110,40 @@ pub enum TranscriptionEngine {
     Disabled,
 }
 
+/// Merge extra keyterm phrases (e.g. live-meeting attendee names) into a
+/// vocabulary as biasing-only entries (no replacement), de-duplicated against
+/// words already present. Returns the base unchanged when `extra` is empty.
+fn merge_keyterms(base: &[VocabularyEntry], extra: &[String]) -> Vec<VocabularyEntry> {
+    if extra.is_empty() {
+        return base.to_vec();
+    }
+    let existing: std::collections::HashSet<&str> = base.iter().map(|v| v.word.as_str()).collect();
+    let mut out = base.to_vec();
+    for w in extra {
+        let w = w.trim();
+        if !w.is_empty() && !existing.contains(w) {
+            out.push(VocabularyEntry {
+                word: w.to_string(),
+                replacement: None,
+            });
+        }
+    }
+    out
+}
+
+/// Build keyterm phrases from the configured vocabulary for Parakeet contextual
+/// biasing (audiopipe shallow fusion). Prefers the replacement spelling when set
+/// and caps at 100, matching the Deepgram keyterm path.
+#[cfg(any(feature = "parakeet", feature = "parakeet-mlx"))]
+fn parakeet_keyterms(vocabulary: &[VocabularyEntry]) -> Vec<String> {
+    vocabulary
+        .iter()
+        .map(|v| v.replacement.clone().unwrap_or_else(|| v.word.clone()))
+        .filter(|w| !w.trim().is_empty())
+        .take(100)
+        .collect()
+}
+
 impl TranscriptionEngine {
     /// Factory that only loads the model needed for the configured engine.
     pub async fn new(
@@ -387,6 +421,17 @@ impl TranscriptionEngine {
     /// `TranscriptionSession` holds `WhisperState` which is `!Send`, so it must
     /// stay on the thread that created it.
     pub fn create_session(&self) -> Result<TranscriptionSession> {
+        self.create_session_with_keyterms(&[])
+    }
+
+    /// Like [`Self::create_session`], but appends `extra_keyterms` (e.g. a live
+    /// meeting's calendar attendee names) to the session's vocabulary so they
+    /// bias transcription on top of the user's configured vocabulary — across
+    /// every engine (Whisper initial_prompt, Parakeet/Deepgram keyterms).
+    pub fn create_session_with_keyterms(
+        &self,
+        extra_keyterms: &[String],
+    ) -> Result<TranscriptionSession> {
         match self {
             Self::Whisper {
                 context,
@@ -402,23 +447,23 @@ impl TranscriptionEngine {
                     context: context.clone(),
                     config: config.clone(),
                     languages: languages.clone(),
-                    vocabulary: vocabulary.clone(),
+                    vocabulary: merge_keyterms(vocabulary, extra_keyterms),
                 })
             }
             #[cfg(feature = "qwen3-asr")]
             Self::Qwen3Asr { model, vocabulary } => Ok(TranscriptionSession::Qwen3Asr {
                 model: model.clone(),
-                vocabulary: vocabulary.clone(),
+                vocabulary: merge_keyterms(vocabulary, extra_keyterms),
             }),
             #[cfg(feature = "parakeet")]
             Self::Parakeet { model, vocabulary } => Ok(TranscriptionSession::Parakeet {
                 model: model.clone(),
-                vocabulary: vocabulary.clone(),
+                vocabulary: merge_keyterms(vocabulary, extra_keyterms),
             }),
             #[cfg(feature = "parakeet-mlx")]
             Self::ParakeetMlx { model, vocabulary } => Ok(TranscriptionSession::ParakeetMlx {
                 model: model.clone(),
-                vocabulary: vocabulary.clone(),
+                vocabulary: merge_keyterms(vocabulary, extra_keyterms),
             }),
             Self::Deepgram {
                 config,
@@ -427,7 +472,7 @@ impl TranscriptionEngine {
             } => Ok(TranscriptionSession::Deepgram {
                 config: config.clone(),
                 languages: languages.clone(),
-                vocabulary: vocabulary.clone(),
+                vocabulary: merge_keyterms(vocabulary, extra_keyterms),
             }),
             Self::OpenAICompatible {
                 endpoint,
@@ -444,7 +489,7 @@ impl TranscriptionEngine {
                 model: model.clone(),
                 client: client.clone(),
                 languages: languages.clone(),
-                vocabulary: vocabulary.clone(),
+                vocabulary: merge_keyterms(vocabulary, extra_keyterms),
                 headers: headers.clone(),
                 raw_audio: *raw_audio,
             }),
@@ -647,15 +692,23 @@ impl TranscriptionSession {
             }
 
             #[cfg(feature = "parakeet")]
-            Self::Parakeet { model, .. } => {
+            Self::Parakeet { model, vocabulary } => {
                 let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
+                // Contextual biasing: feed the vocabulary as keyterms so Parakeet
+                // prefers known names/products (audiopipe shallow-fusion; measured
+                // proper-name WER 21%→7%). The default boost (6) is the safe
+                // optimum — see audiopipe::TranscribeOptions.
+                let keyterms = parakeet_keyterms(vocabulary);
                 // parakeet's ONNX encoder supports up to ~50s but quality is best at <=30s.
                 // benchmarked: 30s hard chunks with no overlap gives 33.9% WER vs 34.5%
                 // with 1s overlap+LCS (the dedup algorithm eats correct words).
                 // this is a safety net — the reconciler already caps batches at 45s.
                 let chunk_samples = (sample_rate as usize) * 30;
                 if audio.len() <= chunk_samples {
-                    let opts = audiopipe::TranscribeOptions::default();
+                    let opts = audiopipe::TranscribeOptions {
+                        keyterms: keyterms.clone(),
+                        ..Default::default()
+                    };
                     let result = engine
                         .transcribe_with_sample_rate(audio, sample_rate, opts)
                         .map_err(|e| anyhow!("{}", e))?;
@@ -663,7 +716,10 @@ impl TranscriptionSession {
                 } else {
                     let mut texts = Vec::new();
                     for chunk in audio.chunks(chunk_samples) {
-                        let opts = audiopipe::TranscribeOptions::default();
+                        let opts = audiopipe::TranscribeOptions {
+                            keyterms: keyterms.clone(),
+                            ..Default::default()
+                        };
                         let result = engine
                             .transcribe_with_sample_rate(chunk, sample_rate, opts)
                             .map_err(|e| anyhow!("{}", e))?;
@@ -677,33 +733,75 @@ impl TranscriptionSession {
             }
 
             #[cfg(feature = "parakeet-mlx")]
-            Self::ParakeetMlx { model, .. } => {
+            Self::ParakeetMlx { model, vocabulary } => {
                 // GPU serialization is handled by audiopipe's Model::GPU_LOCK.
                 // The per-model mutex here just prevents concurrent Rust access
                 // to the same Model instance.
                 let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
-                // Clear GPU cache before transcription to reduce Metal command buffer
-                // errors from GPU memory pressure (prevents abort in MLX completion handler)
-                mlx_memory::clear_cache();
-                let opts = audiopipe::TranscribeOptions::default();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    engine.transcribe_with_sample_rate(audio, sample_rate, opts)
-                }))
-                .map_err(|panic| {
-                    // Clear cache after panic to release any held GPU resources
+                // Keyterms for contextual biasing — honored by the MLX decoder
+                // as of audiopipe#14 (shallow fusion, same as the ONNX path).
+                let keyterms = parakeet_keyterms(vocabulary);
+
+                // Chunk to 30s like the CPU Parakeet path above. The Metal backend
+                // panics with command-buffer / GPU-memory-pressure errors on long
+                // variable-length tensors — historically the top transcription crash
+                // in the field (~61 hits/2wk, "mlx transcription panic"). Bounding
+                // each transcribe to a fixed 30s tensor removes that pressure, and
+                // isolating the panic guard *per chunk* means a single bad chunk drops
+                // only its own ~30s instead of the entire batch's transcript.
+                let chunk_samples = (sample_rate as usize) * 30;
+                let chunks: Vec<&[f32]> = if audio.len() <= chunk_samples {
+                    vec![audio]
+                } else {
+                    audio.chunks(chunk_samples).collect()
+                };
+
+                let mut texts = Vec::new();
+                let mut had_success = false;
+                let mut last_err: Option<anyhow::Error> = None;
+                for chunk in chunks {
+                    // Clear GPU cache before/after each chunk to reduce Metal command
+                    // buffer errors from memory pressure (prevents abort in the MLX
+                    // completion handler) and to release resources held by a panic.
                     mlx_memory::clear_cache();
-                    let msg = panic
-                        .downcast_ref::<String>()
-                        .map(|s| s.as_str())
-                        .or_else(|| panic.downcast_ref::<&str>().copied())
-                        .unwrap_or("unknown panic");
-                    anyhow!("mlx transcription panic (likely Metal GPU error): {}", msg)
-                })?
-                .map_err(|e| anyhow!("{}", e))?;
-                // Free cached Metal buffers after each transcription to prevent
-                // unbounded GPU memory growth from variable-length audio tensors
-                mlx_memory::clear_cache();
-                Ok(result.text)
+                    let opts = audiopipe::TranscribeOptions {
+                        keyterms: keyterms.clone(),
+                        ..Default::default()
+                    };
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        engine.transcribe_with_sample_rate(chunk, sample_rate, opts)
+                    }));
+                    mlx_memory::clear_cache();
+                    match outcome {
+                        Ok(Ok(result)) => {
+                            had_success = true;
+                            let text = result.text.trim().to_string();
+                            if !text.is_empty() {
+                                texts.push(text);
+                            }
+                        }
+                        Ok(Err(e)) => last_err = Some(anyhow!("{}", e)),
+                        Err(panic) => {
+                            let msg = panic
+                                .downcast_ref::<String>()
+                                .map(|s| s.as_str())
+                                .or_else(|| panic.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            last_err = Some(anyhow!(
+                                "mlx transcription panic (likely Metal GPU error): {}",
+                                msg
+                            ));
+                        }
+                    }
+                }
+
+                // Any successful chunk yields a (possibly partial) transcript rather
+                // than discarding the whole batch. Only error if every chunk failed.
+                if had_success {
+                    Ok(texts.join(" "))
+                } else {
+                    Err(last_err.unwrap_or_else(|| anyhow!("mlx transcription produced no output")))
+                }
             }
 
             Self::Whisper {
@@ -776,5 +874,31 @@ impl TranscriptionSession {
             }
             err => err,
         }
+    }
+}
+
+#[cfg(test)]
+mod merge_keyterms_tests {
+    use super::*;
+
+    fn v(word: &str) -> VocabularyEntry {
+        VocabularyEntry {
+            word: word.to_string(),
+            replacement: None,
+        }
+    }
+
+    #[test]
+    fn appends_new_keyterms_and_dedups() {
+        let base = vec![v("Screenpipe"), v("Whisper")];
+        let merged = merge_keyterms(&base, &["Arvind".into(), "Whisper".into(), "  ".into()]);
+        let words: Vec<&str> = merged.iter().map(|e| e.word.as_str()).collect();
+        assert_eq!(words, vec!["Screenpipe", "Whisper", "Arvind"]); // Whisper not duped, blank dropped
+    }
+
+    #[test]
+    fn empty_extra_returns_base_unchanged() {
+        let base = vec![v("Screenpipe")];
+        assert_eq!(merge_keyterms(&base, &[]).len(), 1);
     }
 }

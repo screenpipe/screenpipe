@@ -340,12 +340,26 @@ impl Default for EventDrivenCaptureConfig {
 /// Idle detection still polls the ActivityFeed at ~50ms intervals;
 /// typing-pause / scroll-stop bursts now flow through the UI recorder
 /// so the resulting frame can be linked back to the originating row.
+/// Idle-capture interval cap while a meeting is active. Outside meetings the
+/// idle fallback is 30s (a slide can sit uncaptured that long if the visual
+/// detector's pixel threshold doesn't trip); during a call we force a capture
+/// at least this often so shared screens / slides are covered on a *guaranteed*
+/// floor rather than only when `VisualChange` happens to fire. Idle captures
+/// bypass content dedup (they're a workflow-checkpoint trigger), so this also
+/// writes through an unchanged AX-text hash. ~12 frames/min — bounded, and only
+/// during meetings.
+const MEETING_IDLE_CAPTURE_INTERVAL_MS: u64 = 5_000;
+
 pub struct EventDrivenCapture {
     config: EventDrivenCaptureConfig,
     /// Time of last capture
     last_capture: Instant,
     /// Time reference for periodic idle captures.
     last_idle_reference: Instant,
+    /// Whether a meeting is currently active (mirrors the HD snapshot's
+    /// `meeting`). Caps the idle-capture interval to
+    /// `MEETING_IDLE_CAPTURE_INTERVAL_MS` while true.
+    in_meeting: bool,
 }
 
 impl EventDrivenCapture {
@@ -355,6 +369,20 @@ impl EventDrivenCapture {
             config,
             last_capture: now,
             last_idle_reference: now,
+            in_meeting: false,
+        }
+    }
+
+    /// Effective idle-capture interval, capped while in a meeting. Uses `min`
+    /// so it never *raises* an already-shorter interval set by HD or an
+    /// aggressive power profile.
+    fn effective_idle_capture_interval_ms(&self) -> u64 {
+        if self.in_meeting {
+            self.config
+                .idle_capture_interval_ms
+                .min(MEETING_IDLE_CAPTURE_INTERVAL_MS)
+        } else {
+            self.config.idle_capture_interval_ms
         }
     }
 
@@ -372,7 +400,7 @@ impl EventDrivenCapture {
 
     /// Phase the next idle capture without changing the normal debounce clock.
     pub fn phase_next_idle_capture(&mut self, delay: Duration) {
-        let idle_interval = Duration::from_millis(self.config.idle_capture_interval_ms);
+        let idle_interval = Duration::from_millis(self.effective_idle_capture_interval_ms());
         let now = Instant::now();
         self.last_idle_reference = if delay >= idle_interval {
             now
@@ -384,7 +412,7 @@ impl EventDrivenCapture {
     /// Check if we need an idle capture (no capture for too long).
     pub fn needs_idle_capture(&self) -> bool {
         self.last_idle_reference.elapsed()
-            >= Duration::from_millis(self.config.idle_capture_interval_ms)
+            >= Duration::from_millis(self.effective_idle_capture_interval_ms())
     }
 
     /// Poll timer-driven state and return a trigger if a capture should happen.
@@ -680,6 +708,11 @@ pub async fn event_driven_capture_loop(
     // the video / slide-flip / demo-replay case the AX-text dedup otherwise
     // suppresses. Stays false when no controller is wired.
     let mut hd_active = false;
+    // Whether the meeting detector currently reports an active call. Read from
+    // the same per-tick HD snapshot as `hd_active`. Lets visual-change frames
+    // (slides, screen-share, demos) bypass AX-hash dedup during meetings even
+    // when no HD session is running. Stays false when no controller is wired.
+    let mut in_meeting = false;
 
     let capture_params = CaptureParams {
         db: &db,
@@ -724,6 +757,7 @@ pub async fn event_driven_capture_loop(
                 &mut walk_budget,
                 false, // screenshot enabled on startup
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
+                false, // not in a meeting at startup
             ),
         )
         .await
@@ -743,6 +777,13 @@ pub async fn event_driven_capture_loop(
                     }
                     vision_metrics.record_capture();
                     vision_metrics.record_db_write(Duration::from_millis(result.duration_ms));
+                    // OCR metrics: record once per OCR run (each run = cache miss).
+                    if let Some(ocr_ms) = result.ocr_duration_ms {
+                        vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
+                        if result.ocr_was_empty {
+                            vision_metrics.record_ocr_empty();
+                        }
+                    }
                     if let Some(ref cache) = hot_frame_cache {
                         push_to_hot_cache(cache, result, &device_name, &CaptureTrigger::Manual)
                             .await;
@@ -1055,6 +1096,11 @@ pub async fn event_driven_capture_loop(
             // Source of truth for dedup-bypass this tick. Read from the same
             // snapshot as the interval install so the two can't disagree.
             hd_active = snap.active;
+            in_meeting = snap.meeting.unwrap_or(false);
+            // Cap the idle-capture interval while in a meeting so the shared
+            // screen is captured on a guaranteed floor, not just when the
+            // visual detector trips.
+            state.in_meeting = in_meeting;
             if let Some(new_ms) = high_fps.on_controller_state(
                 snap.effective_interval_ms(),
                 state.config.min_capture_interval_ms,
@@ -1334,6 +1380,7 @@ pub async fn event_driven_capture_loop(
                         &mut walk_budget,
                         screenshot_disabled,
                         hd_active,
+                        in_meeting,
                     ),
                 )
                 .await;
@@ -1375,6 +1422,15 @@ pub async fn event_driven_capture_loop(
                             vision_metrics.record_capture();
                             vision_metrics
                                 .record_db_write(Duration::from_millis(result.duration_ms));
+                            // OCR metrics: record once per OCR run. Each run is a
+                            // cache miss (no OCR result cache exists). `ocr_duration_ms`
+                            // is Some only when OCR actually ran for this frame.
+                            if let Some(ocr_ms) = result.ocr_duration_ms {
+                                vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
+                                if result.ocr_was_empty {
+                                    vision_metrics.record_ocr_empty();
+                                }
+                            }
 
                             if let Some(ref cache) = hot_frame_cache {
                                 push_to_hot_cache(cache, result, &device_name, &trigger).await;
@@ -1461,6 +1517,11 @@ pub async fn event_driven_capture_loop(
                         // (e.g. Wayland without ZwlrScreencopy).
                         state.mark_captured();
 
+                        // Count the lost frame so telemetry can see it. Without
+                        // this the error path was invisible — `frames_dropped`
+                        // stayed 0 fleet-wide and the only signal was a log line.
+                        vision_metrics.record_drop_error();
+
                         if consecutive_capture_errors == 1 {
                             // First failure — log at error level (shows in Sentry)
                             error!(
@@ -1504,8 +1565,15 @@ pub async fn event_driven_capture_loop(
                     Err(_timeout) => {
                         consecutive_capture_errors += 1;
                         state.mark_captured();
+
+                        // Count the lost frame. This path drops a frame whose
+                        // JPEG may already be on disk (orphaned, no DB row) —
+                        // it is the silent-vision-loss path and was previously
+                        // uncounted, so `frames_dropped` read 0 fleet-wide.
+                        vision_metrics.record_drop_timeout();
                         warn!(
-                            "event capture timed out (trigger={}, monitor={}) — DB pool may be saturated",
+                            "event capture timed out after {:?} (trigger={}, monitor={}) — frame dropped; likely a stuck DB write / saturated write pool or a slow a11y/OCR step",
+                            CAPTURE_OPERATION_TIMEOUT,
                             trigger.as_str(),
                             monitor_id
                         );
@@ -1745,8 +1813,24 @@ fn is_lock_screen_app(app_name: &str) -> bool {
 ///   clipboard actions, and shortcut keypresses must leave a durable checkpoint
 ///   even when visible text is unchanged.
 /// - the 30s time-floor has elapsed: forces a write even if the hash matches.
-fn dedup_applies(trigger: &CaptureTrigger, hd_active: bool, since_last_db_write: Duration) -> bool {
+/// - `in_meeting` + a `VisualChange` trigger: while a meeting is detected, a
+///   visual change means the shared screen / slide / video moved pixels even
+///   though the AX-tree text is unchanged — exactly the content the meeting
+///   summary needs. Hash dedup keyed on AX text would otherwise drop it, so we
+///   let these through at the visual-change cadence. This is a lighter-weight,
+///   meeting-scoped version of HD's full dedup bypass: it only fires while the
+///   detector reports `is_in_meeting()` AND only for visual-change triggers, so
+///   it can't bloat normal-desktop capture (a playing video on the desktop is
+///   still deduped; the same video shared in a call is not).
+fn dedup_applies(
+    trigger: &CaptureTrigger,
+    hd_active: bool,
+    in_meeting: bool,
+    since_last_db_write: Duration,
+) -> bool {
+    let meeting_visual_change = in_meeting && matches!(trigger, CaptureTrigger::VisualChange);
     !hd_active
+        && !meeting_visual_change
         && !is_workflow_checkpoint_trigger(trigger)
         && since_last_db_write < Duration::from_secs(30)
 }
@@ -1785,8 +1869,8 @@ fn bypasses_capture_throttles(trigger: &CaptureTrigger) -> bool {
 /// `CaptureOutput.result` will be `None` in that case — the caller should still
 /// update the frame comparer with the image but skip DB/metrics work.
 ///
-/// `hd_active` bypasses content dedup entirely for this capture — see
-/// [`dedup_applies`].
+/// `hd_active` bypasses content dedup entirely for this capture; `in_meeting`
+/// bypasses it only for visual-change triggers — see [`dedup_applies`].
 #[allow(clippy::too_many_arguments)]
 async fn do_capture(
     params: &CaptureParams<'_>,
@@ -1797,6 +1881,7 @@ async fn do_capture(
     walk_budget: &mut screenpipe_a11y::budget::AppWalkBudget,
     screenshot_disabled: bool,
     hd_active: bool,
+    in_meeting: bool,
 ) -> Result<CaptureOutput> {
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
@@ -1920,20 +2005,76 @@ async fn do_capture(
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
 
-    // Record walk cost for adaptive budget before consuming the result
-    if let TreeWalkResult::Found(ref snap) = tree_walk_result {
-        walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
-        if snap.walk_duration > std::time::Duration::from_millis(100) {
-            let next = walk_budget.should_walk(&snap.app_name);
-            debug!(
-                "walk budget: {}ms for {} → tier={:?} (next: max_nodes={}, timeout={}ms)",
-                snap.walk_duration.as_millis(),
-                snap.app_name,
-                next.tier,
-                next.max_nodes,
-                next.timeout.as_millis(),
-            );
+    // Record walk cost for adaptive budget before consuming the result, and
+    // feed the a11y health/analytics accumulator (ax_* counters) for EVERY
+    // walk outcome. Found → stored/deduped/empty (deduped when the content
+    // hash matches the previous frame under the same dedup gate used below);
+    // NotFound → error. Skipped windows are intentionally NOT counted as walk
+    // attempts — they're user/incognito filters, not real walks.
+    match tree_walk_result {
+        TreeWalkResult::Found(ref snap) => {
+            walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
+            if snap.walk_duration > std::time::Duration::from_millis(100) {
+                let next = walk_budget.should_walk(&snap.app_name);
+                debug!(
+                    "walk budget: {}ms for {} → tier={:?} (next: max_nodes={}, timeout={}ms)",
+                    snap.walk_duration.as_millis(),
+                    snap.app_name,
+                    next.tier,
+                    next.max_nodes,
+                    next.timeout.as_millis(),
+                );
+            }
+
+            use screenpipe_a11y::tree::TruncationReason;
+            if snap.text_content.is_empty() {
+                crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Empty);
+            } else {
+                let duration_ms = snap.walk_duration.as_millis() as u64;
+                let node_count = snap.node_count as u64;
+                let max_depth = snap.max_depth_reached as u64;
+                // UTF-8 byte length (O(1)) as a cheap text-volume proxy —
+                // avoids an O(n) char-count scan on the capture path.
+                let text_chars = snap.text_content.len() as u64;
+                let truncated = snap.truncated;
+                let truncated_timeout = matches!(snap.truncation_reason, TruncationReason::Timeout);
+                let truncated_max_nodes =
+                    matches!(snap.truncation_reason, TruncationReason::MaxNodes);
+                // Mirror the downstream content-dedup gate: a non-empty walk
+                // whose hash matches the previous frame (and which is dedup
+                // eligible) won't be stored — count it as deduped.
+                let is_dedup = dedup_applies(trigger, hd_active, last_db_write.elapsed())
+                    && previous_content_hash
+                        .is_some_and(|prev| prev == snap.content_hash as i64 && prev != 0);
+                let outcome = if is_dedup {
+                    crate::ui_recorder::TreeWalkOutcome::Deduped {
+                        duration_ms,
+                        node_count,
+                        max_depth,
+                        text_chars,
+                        truncated,
+                        truncated_timeout,
+                        truncated_max_nodes,
+                    }
+                } else {
+                    crate::ui_recorder::TreeWalkOutcome::Stored {
+                        duration_ms,
+                        node_count,
+                        max_depth,
+                        text_chars,
+                        truncated,
+                        truncated_timeout,
+                        truncated_max_nodes,
+                    }
+                };
+                crate::ui_recorder::record_tree_walk(outcome);
+            }
         }
+        TreeWalkResult::NotFound => {
+            crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Error);
+        }
+        // Skipped: user filter / incognito — not a walk attempt, don't count.
+        TreeWalkResult::Skipped(_) => {}
     }
 
     let tree_snapshot = match tree_walk_result {
@@ -1981,7 +2122,7 @@ async fn do_capture(
     // Content dedup: skip capture if accessibility text hasn't changed.
     // Never dedup Idle/Manual triggers, bypass entirely during HD sessions, and
     // force a write every 30s even if the hash matches — see `dedup_applies`.
-    let dedup_eligible = dedup_applies(trigger, hd_active, last_db_write.elapsed());
+    let dedup_eligible = dedup_applies(trigger, hd_active, in_meeting, last_db_write.elapsed());
     if dedup_eligible {
         if let Some(ref snap) = tree_snapshot {
             if !snap.text_content.is_empty() {
@@ -2328,10 +2469,17 @@ mod tests {
         let recent = Duration::from_secs(5);
         let stale = Duration::from_secs(31);
 
-        // Baseline: a change-driven trigger within the 30s floor → dedup applies.
-        assert!(dedup_applies(&CaptureTrigger::VisualChange, false, recent));
+        // Baseline (not in a meeting): a change-driven trigger within the 30s
+        // floor → dedup applies.
+        assert!(dedup_applies(
+            &CaptureTrigger::VisualChange,
+            false,
+            false,
+            recent
+        ));
         assert!(dedup_applies(
             &CaptureTrigger::Click { x: 10, y: 20 },
+            false,
             false,
             recent
         ));
@@ -2341,6 +2489,7 @@ mod tests {
                 target: None,
             },
             false,
+            false,
             recent
         ));
         assert!(!dedup_applies(
@@ -2349,29 +2498,69 @@ mod tests {
                 target: None,
             },
             false,
+            false,
             recent
         ));
-        assert!(!dedup_applies(&CaptureTrigger::TypingPause, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::ScrollStop, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::KeyPress, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Clipboard, false, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::TypingPause,
+            false,
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::ScrollStop,
+            false,
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(&CaptureTrigger::KeyPress, false, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::Clipboard, false, false, recent));
 
         // HD active → dedup is bypassed even for an otherwise-eligible trigger.
         // This is the fix: video/demo replay moves pixels but not AX text, so
         // the hash would dedup it away without this bypass.
-        assert!(!dedup_applies(&CaptureTrigger::VisualChange, true, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::VisualChange,
+            true,
+            false,
+            recent
+        ));
         assert!(!dedup_applies(
             &CaptureTrigger::Click { x: 10, y: 20 },
+            true,
+            false,
+            recent
+        ));
+
+        // In a meeting (no HD session): a VisualChange bypasses AX-hash dedup so
+        // slides / screen-share / shared video get captured at the visual-change
+        // cadence instead of being dropped when the AX text is unchanged.
+        assert!(!dedup_applies(
+            &CaptureTrigger::VisualChange,
+            false,
+            true,
+            recent
+        ));
+        // …but the meeting bypass is scoped to visual changes only — a Click in
+        // a meeting whose AX text is unchanged still dedups (no flood).
+        assert!(dedup_applies(
+            &CaptureTrigger::Click { x: 10, y: 20 },
+            false,
             true,
             recent
         ));
 
         // Idle/Manual are always dedup-exempt (timeline floor), HD or not.
-        assert!(!dedup_applies(&CaptureTrigger::Idle, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Manual, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::Idle, false, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::Manual, false, false, recent));
 
         // 30s time-floor: once it elapses, write through regardless.
-        assert!(!dedup_applies(&CaptureTrigger::VisualChange, false, stale));
+        assert!(!dedup_applies(
+            &CaptureTrigger::VisualChange,
+            false,
+            false,
+            stale
+        ));
     }
 
     #[test]
@@ -2482,6 +2671,37 @@ mod tests {
 
         state.mark_captured();
         assert!(!state.needs_idle_capture());
+    }
+
+    #[test]
+    fn meeting_caps_the_idle_capture_interval() {
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 30_000, // normal 30s floor
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+
+        // ~6s since the last capture — past the meeting cap, well under 30s.
+        let six_s_ago = Instant::now()
+            .checked_sub(Duration::from_millis(MEETING_IDLE_CAPTURE_INTERVAL_MS + 1_000))
+            .unwrap_or(Instant::now());
+
+        // Not in a meeting: 6s < 30s → no idle capture yet.
+        state.last_idle_reference = six_s_ago;
+        assert!(!state.needs_idle_capture());
+
+        // In a meeting: the interval is capped to MEETING_IDLE_CAPTURE_INTERVAL_MS,
+        // so 6s > 5s → fire a guaranteed idle capture.
+        state.in_meeting = true;
+        assert!(state.needs_idle_capture());
+
+        // The cap only ever shortens: an already-tighter interval (HD / power
+        // profile) is left alone, not raised to 5s.
+        state.config.idle_capture_interval_ms = 1_000;
+        state.last_idle_reference = Instant::now()
+            .checked_sub(Duration::from_millis(1_200))
+            .unwrap_or(Instant::now());
+        assert!(state.needs_idle_capture());
     }
 
     #[test]

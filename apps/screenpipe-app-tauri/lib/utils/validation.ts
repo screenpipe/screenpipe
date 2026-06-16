@@ -74,6 +74,7 @@ export const settingsStoreSchema = z.object({
   meetingLiveTranscriptionProvider: z.string().optional(),
   audioDevices: z.array(z.string()),
   disableAudio: z.boolean(),
+  audioCaptureMode: z.enum(["always", "meetings-only", "disabled"]).optional(),
   languages: z.array(z.string()),
   
   // Video Settings
