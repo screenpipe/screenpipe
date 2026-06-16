@@ -2119,7 +2119,11 @@ pub async fn exchange_code(
             obj.insert(k.clone(), v.clone());
         }
     }
-    let resp = client.post(EXCHANGE_PROXY_URL).json(&payload).send().await?;
+    let resp = client
+        .post(EXCHANGE_PROXY_URL)
+        .json(&payload)
+        .send()
+        .await?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {

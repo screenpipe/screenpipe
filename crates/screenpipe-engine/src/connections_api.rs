@@ -1780,10 +1780,7 @@ fn resolve_auth(
             // credentials. Zendesk is currently the only integration pairing a
             // BasicAuth proxy with OAuth, so this is inert for every other one.
             if let Some(token) = oauth_token {
-                return ResolvedAuth::Header(
-                    "Authorization".into(),
-                    format!("Bearer {}", token),
-                );
+                return ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", token));
             }
             if let Some(c) = creds {
                 let user = c
