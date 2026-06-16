@@ -22,6 +22,7 @@ import {
   Check,
   MoreHorizontal,
   Plus,
+  ArrowRight,
   Search,
   Share2,
   Link,
@@ -3301,11 +3302,17 @@ export function PipesSection() {
           }}
         >
           <div className="flex items-center gap-2">
-            <Plus className="h-4 w-4 text-muted-foreground shrink-0" />
             <Input
               placeholder="e.g. every morning, list the people i still need to reply to"
               className="font-mono text-sm"
             />
+            <button
+              type="submit"
+              aria-label="create pipe"
+              className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </div>
         </form>
       </div>
