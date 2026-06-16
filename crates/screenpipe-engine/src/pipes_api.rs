@@ -604,8 +604,7 @@ mod tests {
     async fn stop_api_returns_stopping_for_running_pipe_with_real_pid() {
         let dir = TempDir::new().unwrap();
         let live_pid = std::process::id();
-        let executor =
-            std::sync::Arc::new(FakeExecutor::new(FakePublishMode::Immediate, live_pid));
+        let executor = std::sync::Arc::new(FakeExecutor::new(FakePublishMode::Immediate, live_pid));
         let mut executors: HashMap<String, std::sync::Arc<dyn AgentExecutor>> = HashMap::new();
         executors.insert("fake".to_string(), executor.clone());
         let pm = std::sync::Arc::new(Mutex::new(PipeManager::new(
