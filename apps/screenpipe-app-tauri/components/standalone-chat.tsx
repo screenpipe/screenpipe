@@ -2833,6 +2833,11 @@ export function StandaloneChat({
   const [tagSearchSuggestions, setTagSearchSuggestions] = useState<MentionSuggestion[]>([]);
   const [isLoadingTagSearch, setIsLoadingTagSearch] = useState(false);
   const [appFilterOpen, setAppFilterOpen] = useState(false);
+  const [filterSearch, setFilterSearch] = useState("");
+  const [filterTagResults, setFilterTagResults] = useState<MentionSuggestion[]>([]);
+  const [filterSpeakerResults, setFilterSpeakerResults] = useState<MentionSuggestion[]>([]);
+  const [isLoadingFilterSearch, setIsLoadingFilterSearch] = useState(false);
+  const [selectedFilterResultIndex, setSelectedFilterResultIndex] = useState(0);
   const [recentSpeakers, setRecentSpeakers] = useState<MentionSuggestion[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -4341,6 +4346,26 @@ export function StandaloneChat({
     [activeFilters]
   );
 
+  const filterSearchGroups = React.useMemo(() => {
+    const groups: { label: string; suggestions: MentionSuggestion[] }[] = [];
+    if (filterTagResults.length > 0) {
+      groups.push({ label: "tags", suggestions: filterTagResults });
+    }
+    if (filterSpeakerResults.length > 0) {
+      groups.push({ label: "speakers", suggestions: filterSpeakerResults });
+    }
+    return groups;
+  }, [filterTagResults, filterSpeakerResults]);
+
+  const filterSearchResults = React.useMemo(
+    () => filterSearchGroups.flatMap((group) => group.suggestions),
+    [filterSearchGroups]
+  );
+
+  useEffect(() => {
+    setSelectedFilterResultIndex(0);
+  }, [filterSearch, filterSearchResults.length]);
+
   // Remove a specific @mention from input
   const removeFilter = (filterType: "time" | "content" | "app" | "speaker" | "tag", label?: string) => {
     let newInput = input;
@@ -4381,6 +4406,43 @@ export function StandaloneChat({
     // Clean up extra spaces
     newInput = newInput.replace(/\s+/g, " ").trim();
     setInput(newInput);
+  };
+
+  const getFilterSuggestionState = (suggestion: MentionSuggestion) => {
+    const tagName = suggestion.tag.slice(1);
+    const speakerName = suggestion.tag.startsWith('@"')
+      ? suggestion.tag.slice(2, -1)
+      : tagName;
+    const isActive =
+      suggestion.category === "tag"
+        ? activeFilters.tagNames.includes(tagName)
+        : suggestion.category === "speaker"
+          ? activeFilters.speakerName === speakerName
+          : false;
+
+    return { tagName, speakerName, isActive };
+  };
+
+  const applyFilterSuggestion = (suggestion: MentionSuggestion) => {
+    const { tagName, speakerName, isActive } = getFilterSuggestionState(suggestion);
+
+    if (suggestion.category === "tag") {
+      if (isActive) {
+        removeFilter("tag", tagName);
+      } else {
+        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+      }
+    } else if (suggestion.category === "speaker") {
+      if (isActive) {
+        removeFilter("speaker");
+      } else {
+        if (activeFilters.speakerName) removeFilter("speaker");
+        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+      }
+    }
+
+    setAppFilterOpen(false);
+    setFilterSearch("");
   };
 
   // Fetch speakers dynamically
@@ -4459,6 +4521,70 @@ export function StandaloneChat({
     const debounceTimeout = setTimeout(searchTags, 200);
     return () => clearTimeout(debounceTimeout);
   }, [mentionFilter, mentionTrigger]);
+
+  useEffect(() => {
+    const query = filterSearch.trim();
+    if (!appFilterOpen || !query) {
+      setFilterTagResults([]);
+      setFilterSpeakerResults([]);
+      setIsLoadingFilterSearch(false);
+      return;
+    }
+
+    let cancelled = false;
+    const searchFilters = async () => {
+      setIsLoadingFilterSearch(true);
+      try {
+        const [tagResponse, speakerResponse] = await Promise.all([
+          localFetch(`/tags/autocomplete?q=${encodeURIComponent(query)}&limit=${TAG_AUTOCOMPLETE_LIMIT}`),
+          localFetch(`/speakers/search?name=${encodeURIComponent(query)}&limit=${SPEAKER_SUGGESTION_LIMIT}&include_samples=false`),
+        ]);
+        if (cancelled) return;
+
+        if (tagResponse.ok) {
+          const tags = await tagResponse.json();
+          setFilterTagResults(
+            Array.isArray(tags)
+              ? buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT)
+              : []
+          );
+        } else {
+          setFilterTagResults([]);
+        }
+
+        if (speakerResponse.ok) {
+          const speakers: Speaker[] = await speakerResponse.json();
+          setFilterSpeakerResults(
+            Array.isArray(speakers)
+              ? speakers
+                  .filter((speaker) => speaker.name)
+                  .map((speaker) => ({
+                    tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
+                    description: "speaker",
+                    category: "speaker" as const,
+                  }))
+              : []
+          );
+        } else {
+          setFilterSpeakerResults([]);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setFilterTagResults([]);
+          setFilterSpeakerResults([]);
+          console.error("Error searching filters:", error);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingFilterSearch(false);
+      }
+    };
+
+    const debounceTimeout = setTimeout(searchFilters, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(debounceTimeout);
+    };
+  }, [appFilterOpen, filterSearch]);
 
   const filteredMentions = React.useMemo(() => {
     if (mentionTrigger === "#") {
@@ -8100,6 +8226,31 @@ export function StandaloneChat({
       "past hour": "last hour",
       "this morning": "this morning",
     };
+    const filterQuery = filterSearch.trim();
+
+    const renderFilterSearchButton = (suggestion: MentionSuggestion, resultIndex: number) => {
+      const { isActive } = getFilterSuggestionState(suggestion);
+      const isSelected = resultIndex === selectedFilterResultIndex;
+      return (
+        <button
+          key={`${suggestion.category}-${suggestion.tag}`}
+          type="button"
+          onMouseEnter={() => setSelectedFilterResultIndex(resultIndex)}
+          onClick={() => applyFilterSuggestion(suggestion)}
+          className={cn(
+            "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+            isSelected && "bg-muted/70",
+            isActive && "bg-muted"
+          )}
+        >
+          <span className="truncate">{suggestion.tag}</span>
+          <span className="text-[10px] text-muted-foreground truncate shrink-0 max-w-[9rem]">
+            {isActive ? "selected" : suggestion.description}
+          </span>
+        </button>
+      );
+    };
+    let filterSearchResultIndex = 0;
 
     return (
       <>
@@ -8125,6 +8276,91 @@ export function StandaloneChat({
             <span className="ml-auto text-foreground">{activeFilterCount}</span>
           )}
         </div>
+
+        <div className="sticky top-0 z-10 p-2 border-b border-border/50 bg-background">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={filterSearch}
+              onChange={(event) => setFilterSearch(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setSelectedFilterResultIndex((index) =>
+                    filterSearchResults.length === 0
+                      ? 0
+                      : (index + 1) % filterSearchResults.length
+                  );
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSelectedFilterResultIndex((index) =>
+                    filterSearchResults.length === 0
+                      ? 0
+                      : (index - 1 + filterSearchResults.length) % filterSearchResults.length
+                  );
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  const selectedSuggestion = filterSearchResults[selectedFilterResultIndex];
+                  if (selectedSuggestion) applyFilterSuggestion(selectedSuggestion);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  if (filterSearch) {
+                    setFilterSearch("");
+                  } else {
+                    setAppFilterOpen(false);
+                  }
+                }
+              }}
+              placeholder="search tags or speakers"
+              className="h-8 pl-7 pr-7 text-xs"
+              autoComplete="off"
+            />
+            {filterSearch && (
+              <button
+                type="button"
+                onClick={() => setFilterSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear filter search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {filterQuery && (
+          <>
+            <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 flex items-center gap-1.5">
+              <Search className="h-3 w-3" />
+              <span>matching filters</span>
+              {isLoadingFilterSearch && (
+                <Loader2 className="ml-auto h-3 w-3 animate-spin text-muted-foreground" />
+              )}
+            </div>
+            {filterSearchResults.length === 0 && !isLoadingFilterSearch ? (
+              <div className="px-3 py-2 text-[10px] text-muted-foreground">
+                no matching tags or speakers
+              </div>
+            ) : (
+              <>
+                {filterSearchGroups.map((group) => (
+                  <React.Fragment key={group.label}>
+                    <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80 bg-muted/20 border-b border-border/40">
+                      {group.label}
+                    </div>
+                    {group.suggestions.map((suggestion) =>
+                      renderFilterSearchButton(suggestion, filterSearchResultIndex++)
+                    )}
+                  </React.Fragment>
+                ))}
+              </>
+            )}
+          </>
+        )}
+
+        {!filterQuery && (
+          <>
 
         <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
           time
@@ -8328,6 +8564,8 @@ export function StandaloneChat({
                 </button>
               );
             })}
+          </>
+        )}
           </>
         )}
       </>
@@ -9618,7 +9856,13 @@ export function StandaloneChat({
           </div>
           {/* Controls row — sits below the input box, not inside it */}
           <div className="flex items-center gap-1.5 px-1 pt-2">
-            <Popover open={appFilterOpen} onOpenChange={setAppFilterOpen}>
+            <Popover
+              open={appFilterOpen}
+              onOpenChange={(open) => {
+                setAppFilterOpen(open);
+                if (!open) setFilterSearch("");
+              }}
+            >
               <PopoverTrigger asChild>
                 <Button
                   type="button"
