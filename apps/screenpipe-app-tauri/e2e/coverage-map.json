@@ -410,7 +410,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Pipes discover, install failure, connection modal, install, list, and play."
+      "notes": "Pipes discover, install failure, connection modal, install, list, play, and stop."
     },
     {
       "spec": "pipes-mcp-connections.spec.ts",
