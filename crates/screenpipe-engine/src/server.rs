@@ -23,8 +23,8 @@ use crate::{
             stop_audio, stop_audio_device,
         },
         content::{
-            add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
-            remove_tags, validate_media_handler,
+            add_tags, add_to_database, autocomplete_tags, execute_raw_sql, get_tags_batch,
+            merge_frames_handler, remove_tags, validate_media_handler,
         },
         data::{
             backup_handler, checkpoint_handler, delete_device_data_handler,
@@ -651,6 +651,7 @@ impl SCServer {
             .get("/search", search)
             .get("/audio/list", api_list_audio_devices)
             .get("/vision/list", api_list_monitors)
+            .get("/tags/autocomplete", autocomplete_tags)
             .post("/tags/vision/batch", get_tags_batch)
             .post("/tags/:content_type/:id", add_tags)
             .delete("/tags/:content_type/:id", remove_tags)

@@ -180,6 +180,8 @@ interface MentionSuggestion {
 
 const APP_SUGGESTION_LIMIT = 10;
 const TAG_SUGGESTION_LIMIT = 10;
+const TAG_AUTOCOMPLETE_LIMIT = 50;
+const SPEAKER_SUGGESTION_LIMIT = 50;
 const STREAM_RENDER_THROTTLE_MS = 80;
 const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
@@ -2828,6 +2830,8 @@ export function StandaloneChat({
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
   const [isLoadingSpeakers, setIsLoadingSpeakers] = useState(false);
+  const [tagSearchSuggestions, setTagSearchSuggestions] = useState<MentionSuggestion[]>([]);
+  const [isLoadingTagSearch, setIsLoadingTagSearch] = useState(false);
   const [appFilterOpen, setAppFilterOpen] = useState(false);
   const [recentSpeakers, setRecentSpeakers] = useState<MentionSuggestion[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -4403,13 +4407,12 @@ export function StandaloneChat({
       setIsLoadingSpeakers(true);
       try {
         const response = await localFetch(
-          `/speakers/search?name=${encodeURIComponent(mentionFilter)}`
+          `/speakers/search?name=${encodeURIComponent(mentionFilter)}&limit=${SPEAKER_SUGGESTION_LIMIT}&include_samples=false`
         );
         if (response.ok) {
           const speakers: Speaker[] = await response.json();
           const suggestions: MentionSuggestion[] = speakers
             .filter(s => s.name)
-            .slice(0, 5)
             .map(s => ({
               tag: s.name.includes(" ") ? `@"${s.name}"` : `@${s.name}`,
               description: `speaker`,
@@ -4428,14 +4431,45 @@ export function StandaloneChat({
     return () => clearTimeout(debounceTimeout);
   }, [mentionFilter, mentionTrigger, baseMentionSuggestions]);
 
+  useEffect(() => {
+    if (mentionTrigger !== "#" || !mentionFilter.trim()) {
+      setTagSearchSuggestions([]);
+      return;
+    }
+
+    const searchTags = async () => {
+      setIsLoadingTagSearch(true);
+      try {
+        const response = await localFetch(
+          `/tags/autocomplete?q=${encodeURIComponent(mentionFilter.trim())}&limit=${TAG_AUTOCOMPLETE_LIMIT}`
+        );
+        if (response.ok) {
+          const tags = await response.json();
+          if (Array.isArray(tags)) {
+            setTagSearchSuggestions(buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT));
+          }
+        }
+      } catch (error) {
+        console.error("Error searching tags:", error);
+      } finally {
+        setIsLoadingTagSearch(false);
+      }
+    };
+
+    const debounceTimeout = setTimeout(searchTags, 200);
+    return () => clearTimeout(debounceTimeout);
+  }, [mentionFilter, mentionTrigger]);
+
   const filteredMentions = React.useMemo(() => {
     if (mentionTrigger === "#") {
       const tagSuggestions = !mentionFilter
         ? tagMentionSuggestions
-        : allTagMentionSuggestions.filter(
-            s => s.tag.toLowerCase().includes(mentionFilter.toLowerCase()) ||
-                 s.description.toLowerCase().includes(mentionFilter.toLowerCase())
-          );
+        : tagSearchSuggestions.length > 0
+          ? tagSearchSuggestions
+          : allTagMentionSuggestions.filter(
+              s => s.tag.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+                   s.description.toLowerCase().includes(mentionFilter.toLowerCase())
+            );
       return tagSuggestions;
     }
 
@@ -4457,6 +4491,7 @@ export function StandaloneChat({
     appMentionSuggestions,
     tagMentionSuggestions,
     allTagMentionSuggestions,
+    tagSearchSuggestions,
   ]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -4784,13 +4819,14 @@ export function StandaloneChat({
     if (!appFilterOpen || recentSpeakers.length > 0) return;
     (async () => {
       try {
-        const response = await localFetch("/speakers/search?name=");
+        const response = await localFetch(
+          `/speakers/search?name=&limit=${SPEAKER_SUGGESTION_LIMIT}&include_samples=false`
+        );
         if (response.ok) {
           const speakers: Speaker[] = await response.json();
           setRecentSpeakers(
             speakers
               .filter((s) => s.name)
-              .slice(0, 5)
               .map((s) => ({
                 tag: s.name.includes(" ") ? `@"${s.name}"` : `@${s.name}`,
                 description: "speaker",
@@ -9567,6 +9603,12 @@ export function StandaloneChat({
                       <div className="px-3 py-2 text-[10px] text-muted-foreground flex items-center gap-2">
                         <Loader2 className="h-3 w-3 animate-spin" />
                         <span>Searching speakers...</span>
+                      </div>
+                    )}
+                    {isLoadingTagSearch && (
+                      <div className="px-3 py-2 text-[10px] text-muted-foreground flex items-center gap-2">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <span>Searching tags...</span>
                       </div>
                     )}
                   </motion.div>

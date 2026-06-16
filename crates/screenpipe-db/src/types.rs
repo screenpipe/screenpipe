@@ -197,6 +197,15 @@ pub struct Speaker {
     pub metadata: String,
 }
 
+#[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct TagAutocompleteItem {
+    pub name: String,
+    pub count: i64,
+    pub frame_count: i64,
+    pub audio_count: i64,
+    pub memory_count: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewDiarizationSegment {
     pub provider_speaker_label: String,
