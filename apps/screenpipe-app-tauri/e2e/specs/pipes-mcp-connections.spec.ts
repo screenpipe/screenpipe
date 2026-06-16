@@ -201,6 +201,15 @@ async function waitForPipeRow(): Promise<void> {
   );
 }
 
+function pipeGroupHasConnectionPicker(pipeName: string): boolean {
+  const root = document.querySelector('[data-testid="section-pipes"]');
+  const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+    (button) => button.textContent?.trim() === pipeName
+  );
+  const group = nameButton?.closest<HTMLElement>('div.group');
+  return Boolean(group?.querySelector('[data-testid="pipe-connection-add"]'));
+}
+
 async function expandPipeConfig(): Promise<void> {
   const clicked = (await browser.execute((pipeName: string) => {
     const root = document.querySelector('[data-testid="section-pipes"]');
@@ -210,7 +219,9 @@ async function expandPipeConfig(): Promise<void> {
     );
     const group = nameButton?.closest<HTMLElement>('div.group');
     if (!nameButton || !group) return false;
-    if (group.textContent?.toLowerCase().includes('connections')) return true;
+    // Prompt copy in the advanced tab also contains "connections" — wait for
+    // the real picker test id instead of matching substring text.
+    if (group.querySelector('[data-testid="pipe-connection-add"]')) return true;
     nameButton.click();
     return true;
   }, PIPE_NAME)) as boolean;
@@ -218,18 +229,10 @@ async function expandPipeConfig(): Promise<void> {
   expect(clicked).toBe(true);
 
   await browser.waitUntil(
-    async () =>
-      (await browser.execute((pipeName: string) => {
-        const root = document.querySelector('[data-testid="section-pipes"]');
-        const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
-          (button) => button.textContent?.trim() === pipeName
-        );
-        const group = nameButton?.closest<HTMLElement>('div.group');
-        return Boolean(group?.textContent?.toLowerCase().includes('connections'));
-      }, PIPE_NAME)) as boolean,
+    async () => (await browser.execute(pipeGroupHasConnectionPicker, PIPE_NAME)) as boolean,
     {
-      timeout: t(8_000),
-      timeoutMsg: `fixture pipe "${PIPE_NAME}" did not expand to show config`,
+      timeout: t(10_000),
+      timeoutMsg: `fixture pipe "${PIPE_NAME}" did not expand to show connection picker`,
     }
   );
 }
@@ -241,11 +244,7 @@ async function clickConnectionsAdd(): Promise<void> {
       (button) => button.textContent?.trim() === pipeName
     );
     const group = nameButton?.closest<HTMLElement>('div.group');
-    const connectionsLabel = Array.from(group?.querySelectorAll<HTMLLabelElement>('label') ?? []).find(
-      (label) => label.textContent?.trim().toLowerCase() === 'connections'
-    );
-    const connectionsBlock = connectionsLabel?.parentElement;
-    const addButton = connectionsBlock?.querySelector<HTMLButtonElement>(
+    const addButton = group?.querySelector<HTMLButtonElement>(
       '[data-testid="pipe-connection-add"]'
     );
     if (!addButton) return false;
@@ -257,7 +256,7 @@ async function clickConnectionsAdd(): Promise<void> {
 }
 
 describe('Pipes: custom MCP connection picker', function () {
-  this.timeout(90_000);
+  this.timeout(120_000);
 
   before(async () => {
     await waitForAppReady();
@@ -418,7 +417,8 @@ describe('Pipes: custom MCP connection picker', function () {
         });
       },
       {
-        timeout: t(45_000),
+        // Pipe scheduler ticks every 30s locally — allow two ticks + DB flush.
+        timeout: t(90_000),
         interval: 1_000,
         timeoutMsg: 'scheduled missing-connection pipe did not create a visible failed execution',
       }

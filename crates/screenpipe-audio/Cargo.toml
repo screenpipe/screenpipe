@@ -107,7 +107,6 @@ windows = { workspace = true, features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_Storage_FileSystem",
-    "Win32_Security",
 ] }
 
 # Bundle ONNX Runtime at build time on Windows x86_64 (same as Linux/macOS-arm64).
