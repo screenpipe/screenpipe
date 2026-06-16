@@ -1796,8 +1796,8 @@ async fn main() -> anyhow::Result<()> {
     // Start calendar-assisted speaker identification
     let _speaker_id_handle = start_speaker_identification(db.clone(), config.user_name.clone());
 
-    // Periodic WAL checkpoint to prevent unbounded WAL growth
-    db.start_wal_maintenance();
+    // WAL checkpoint maintenance now starts inside DatabaseManager::new(), so
+    // every caller (CLI + in-process desktop app) gets it — no explicit call here.
 
     let server_future = server.start();
     pin_mut!(server_future);

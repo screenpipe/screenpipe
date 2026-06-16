@@ -18,4 +18,6 @@ pub use db::{
 };
 pub use text_normalizer::{expand_search_query, sanitize_fts5_query};
 pub use types::*;
-pub use write_queue::{request_write_pause, request_write_resume, SyncTable};
+pub use write_queue::{
+    request_write_pause, request_write_resume, PersistentFailureHook, SyncTable, WriteQueueHealth,
+};

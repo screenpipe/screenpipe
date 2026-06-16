@@ -463,13 +463,37 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		const targetDate = new Date(targetTimestamp);
 		if (isNaN(targetDate.getTime())) return;
 
+		// Pause playback so the jump settles on a still moment. Preserves the
+		// prior cross-day behavior (handleDateChange paused; navigateDirectToDate
+		// does not). resetFilters still runs via the pending-navigation effect.
+		pausePlayback();
 		setSeekingTimestamp(targetTimestamp);
 		pendingNavigationRef.current = targetDate;
 
-		if (!isSameDay(targetDate, currentDate)) {
-			await handleDateChange(targetDate);
+		// Same-day with the day's frames already loaded: jump in place instantly.
+		// The "process pending navigation" effect only re-runs when frames/
+		// currentDate change, so without this fast path a same-day jump (the
+		// common case: searching today while viewing today) never moves.
+		if (isSameDay(targetDate, currentDate)) {
+			const hasTargetDayFrames = frames.some((f) =>
+				isSameDay(new Date(f.timestamp), targetDate)
+			);
+			if (hasTargetDayFrames) {
+				jumpToTime(targetDate);
+				pendingNavigationRef.current = null;
+				setSeekingTimestamp(null);
+				return;
+			}
 		}
-	}, [currentDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+		// Cross-day, or same-day with stale/empty frames (e.g. the window was
+		// hidden): fetch around the exact moment and let the pending-navigation
+		// effect jump once frames arrive. Use navigateDirectToDate, not
+		// handleDateChange — the latter overwrites pendingNavigationRef with the
+		// nearest *day* (local midnight), landing the jump at the start of the
+		// day instead of the captured moment.
+		await navigateDirectToDate(targetDate);
+	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Listen for navigate-to-timestamp events from search window / deep links
 	useEffect(() => {

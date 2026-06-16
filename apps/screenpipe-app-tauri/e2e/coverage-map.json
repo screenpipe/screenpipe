@@ -611,6 +611,16 @@
       "confidence": "strong",
       "ux": "synthetic",
       "notes": "Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx."
+    },
+    {
+      "spec": "zz-account-stale-subscription.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "settings", "billing"],
+      "features": ["account-card", "billing-gate"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Account 'active' plan card is gated on the session token (token AND cloud_subscribed) like the header, so a tokenless-but-subscribed stale shell (post-#3943 secret-store token desync) renders 'not logged in' with the active card gone. Mocks /api/user across all windows and clears set_cloud_token to reproduce the desync deterministically."
     }
   ]
 }

@@ -167,6 +167,17 @@ impl WriteQueueHealth {
 /// to restart the engine (rebuilding every pool + the shared WAL-index).
 pub type PersistentFailureHook = Arc<dyn Fn() + Send + Sync>;
 
+/// A slot the app fills (after `DatabaseManager` is built) with the
+/// persistent-failure hook. Shared so the drain loop reads whatever the app
+/// last set; empty until wired.
+pub(crate) type PersistentFailureSlot = Arc<std::sync::Mutex<Option<PersistentFailureHook>>>;
+
+pub(crate) fn persistent_failure_slot(
+    hook: Option<PersistentFailureHook>,
+) -> PersistentFailureSlot {
+    Arc::new(std::sync::Mutex::new(hook))
+}
+
 /// Rebuilds the write pool from the same options used at startup, so the drain
 /// loop can drop poisoned connections in-process without a full restart.
 #[derive(Clone)]
@@ -206,7 +217,7 @@ impl WritePoolRebuilder {
 /// existing tests — behaviour unchanged).
 pub(crate) struct WriteDrainOpts {
     pub rebuilder: Option<WritePoolRebuilder>,
-    pub on_persistent_failure: Option<PersistentFailureHook>,
+    pub on_persistent_failure: PersistentFailureSlot,
     pub health: WriteQueueHealth,
     /// Reopen the write pool every N consecutive fatal batches.
     pub reopen_every: u64,
@@ -220,7 +231,7 @@ impl Default for WriteDrainOpts {
     fn default() -> Self {
         Self {
             rebuilder: None,
-            on_persistent_failure: None,
+            on_persistent_failure: persistent_failure_slot(None),
             health: WriteQueueHealth::default(),
             reopen_every: WRITE_POOL_REOPEN_EVERY,
             degraded_after: DEGRADED_AFTER,
@@ -690,7 +701,8 @@ async fn drain_loop(
                         "write_queue: persistent write failure ({} consecutive fatal batches) — requesting engine restart to rebuild all pools + WAL-index",
                         consecutive_fatal
                     );
-                    if let Some(hook) = &on_persistent_failure {
+                    let hook = on_persistent_failure.lock().unwrap().clone();
+                    if let Some(hook) = hook {
                         hook();
                     }
                 }

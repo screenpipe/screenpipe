@@ -165,7 +165,7 @@ export function MarkdownBlock({
         pre({ children, ...props }) {
           return (
             <pre
-              className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-neutral-950 p-3 my-2 text-xs max-w-full not-prose"
+              className="overflow-x-auto rounded-lg border border-border bg-neutral-100 dark:bg-neutral-900 p-3 my-2 text-xs max-w-full not-prose"
               {...props}
             >
               {children}

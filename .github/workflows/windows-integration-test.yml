@@ -118,8 +118,12 @@ jobs:
     - name: Build CLI
       env:
         RUSTFLAGS: "-C link-arg=/LTCG"
-        ORT_STRATEGY: system
-        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+        # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
+        # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
+        # static-linking, which needs onnxruntime_common.lib + the static _deps tree
+        # the dynamic MS prebuilt doesn't ship -> "ort-sys could not link" (#4173
+        # fallout, after Windows x86_64 moved off load-dynamic). The MS zip staged
+        # above still provides the runtime DLL.
         OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
         # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
         AWS_LC_SYS_PREBUILT_NASM: "1"
@@ -130,8 +134,12 @@ jobs:
       timeout-minutes: 10
       env:
         RUSTFLAGS: "-C link-arg=/LTCG"
-        ORT_STRATEGY: system
-        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
+        # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
+        # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
+        # static-linking, which needs onnxruntime_common.lib + the static _deps tree
+        # the dynamic MS prebuilt doesn't ship -> "ort-sys could not link" (#4173
+        # fallout, after Windows x86_64 moved off load-dynamic). The MS zip staged
+        # above still provides the runtime DLL.
         OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
         AWS_LC_SYS_PREBUILT_NASM: "1"
       run: |

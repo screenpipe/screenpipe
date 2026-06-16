@@ -776,6 +776,7 @@ async fn main() {
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
         cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(None))),
+        db_wedge_breaker: recording::new_db_wedge_breaker(),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -1456,6 +1457,10 @@ async fn main() {
                 let capture_arc = recording_state.capture.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
                 let cloud_token_arc = recording_state.cloud_token.clone();
+                // DB-wedge auto-recovery hook wiring — captured into the server
+                // thread so the freshly-built `ServerCore`'s DB gets the hook.
+                let app_for_db_wedge = app_handle.clone();
+                let db_wedge_breaker = recording_state.db_wedge_breaker.clone();
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
@@ -1601,6 +1606,16 @@ async fn main() {
                                     return;
                                 }
                             };
+
+                            // Wire the persistent-failure hook so a wedged DB
+                            // auto-restarts recording (rebuilding every pool +
+                            // the shared WAL-index).
+                            server.db.set_persistent_failure_hook(
+                                crate::recording::make_db_wedge_recovery_hook(
+                                    app_for_db_wedge.clone(),
+                                    db_wedge_breaker.clone(),
+                                ),
+                            );
 
                             // Phase 2: Start capture session
                             let capture = match capture_session::CaptureSession::start(&server, &config, true).await {

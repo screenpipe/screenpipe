@@ -1501,6 +1501,20 @@ pub async fn get_disk_usage(
 
 const LOGIN_URL: &str = "https://screenpipe.com/login";
 
+/// The custom URL scheme this build registers for deep links. The enterprise
+/// build uses a distinct scheme so it does not collide with the consumer app's
+/// `screenpipe://` on machines that have both installed (see #3890). Login
+/// URLs pass a `return_scheme` query param so the website can redirect back
+/// to the right build; until the website supports the param it is ignored and
+/// redirects stay on `screenpipe://`, matching the consumer path.
+pub fn deep_link_scheme() -> &'static str {
+    if cfg!(feature = "enterprise-build") {
+        "screenpipe-enterprise"
+    } else {
+        "screenpipe"
+    }
+}
+
 /// Open the screenpi.pe login page.
 /// Windows: system browser + registered deep-link scheme handles the redirect.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
@@ -1515,13 +1529,20 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         use tauri_plugin_opener::OpenerExt;
         app_handle
             .opener()
-            .open_url(LOGIN_URL, None::<&str>)
+            .open_url(
+                format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme()),
+                None::<&str>,
+            )
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     #[cfg(target_os = "macos")]
     {
+        // ASWebAuthenticationSession intercepts the redirect itself (no OS
+        // scheme routing), so the consumer `screenpipe` scheme cannot collide
+        // with another installed build here (#3890) and stays correct until
+        // the website honours `return_scheme`.
         let callback_url = match crate::auth_session::start_session(
             LOGIN_URL.to_string(),
             "screenpipe".to_string(),
@@ -1560,17 +1581,18 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
+        let login_url = format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
-            WebviewUrl::External(LOGIN_URL.parse().unwrap()),
+            WebviewUrl::External(login_url.parse().unwrap()),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
         .focused(true);
 
         builder = builder.on_navigation(move |url| {
-            if url.scheme() == "screenpipe" {
+            if url.scheme() == deep_link_scheme() {
                 info!("login window intercepted deep link callback");
                 let _ = app_for_nav.emit("deep-link-received", url.to_string());
                 if let Some(w) = app_for_nav.get_webview_window("login-browser") {
@@ -1585,7 +1607,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
             .build()
             .map(crate::window::finalize_webview_window)
             .map_err(|e| {
-                log_webview_build_failure(label, LOGIN_URL, &e);
+                log_webview_build_failure(label, &login_url, &e);
                 e.to_string()
             })?;
 
@@ -1629,7 +1651,7 @@ pub async fn open_google_calendar_auth_window(
     }
 
     builder = builder.on_navigation(move |url| {
-        if url.scheme() == "screenpipe" {
+        if url.scheme() == deep_link_scheme() {
             info!("google calendar auth window intercepted deep link: {}", url);
             let _ = app_for_nav.emit("deep-link-received", url.to_string());
             if let Some(w) = app_for_nav.get_webview_window("google-calendar-auth") {

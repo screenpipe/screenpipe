@@ -223,6 +223,9 @@ pub struct DatabaseManager {
     /// Shared health for the write queue (disk-I/O wedge detection + recovery).
     /// Polled by the app to surface degradation and trigger an engine restart.
     write_queue_health: crate::write_queue::WriteQueueHealth,
+    /// Slot for the persistent-failure hook, wired by the app after construction.
+    /// Shared with the drain loop so a late `set_persistent_failure_hook` takes effect.
+    persistent_failure_hook: crate::write_queue::PersistentFailureSlot,
 }
 
 /// One level-0 OCR element row, buffered for bulk insertion.
@@ -371,13 +374,14 @@ impl DatabaseManager {
             1,
             Duration::from_secs(10),
         );
+        let persistent_failure_hook = crate::write_queue::persistent_failure_slot(None);
         let write_queue = crate::write_queue::spawn_write_drain_with(
             write_pool.clone(),
             Arc::clone(&write_semaphore),
             Arc::from(database_path),
             crate::write_queue::WriteDrainOpts {
                 rebuilder: Some(write_pool_rebuilder),
-                on_persistent_failure: None,
+                on_persistent_failure: persistent_failure_hook.clone(),
                 health: write_queue_health.clone(),
                 ..Default::default()
             },
@@ -389,6 +393,7 @@ impl DatabaseManager {
             heavy_read_semaphore: Arc::new(Semaphore::new(2)),
             write_queue,
             write_queue_health,
+            persistent_failure_hook,
         };
 
         // Checkpoint any stale WAL before running migrations or starting captures.
@@ -419,6 +424,16 @@ impl DatabaseManager {
         // instead of only discovering it later via worker query errors
         // (which used to spin a CPU core retrying a malformed DB).
         db_manager.spawn_startup_integrity_check(Arc::from(database_path));
+
+        // Periodic WAL checkpoint so the write-ahead log can't grow unbounded
+        // when passive auto-checkpoint is blocked by long-lived readers. An
+        // oversized WAL (observed at 650MB on a heavy 24/7 install) is the main
+        // driver of the WAL-index / `-shm` desync that corrupts the DB. Started
+        // here in `new()` — next to the integrity check — so EVERY caller gets
+        // it: the desktop app runs the engine in-process and previously never
+        // started it (only the standalone `screenpipe-engine` CLI did), so app
+        // users got no periodic checkpointing at all.
+        db_manager.start_wal_maintenance();
 
         Ok(db_manager)
     }
@@ -771,6 +786,13 @@ impl DatabaseManager {
     /// disk-I/O write wedge that an in-process reopen can't clear.
     pub fn write_queue_health(&self) -> crate::write_queue::WriteQueueHealth {
         self.write_queue_health.clone()
+    }
+
+    /// Set the hook fired when writes fail persistently (a process-wide WAL-index
+    /// desync that only a full engine restart can clear). The app wires this to a
+    /// recording restart. Safe to call after construction and to overwrite.
+    pub fn set_persistent_failure_hook(&self, hook: crate::write_queue::PersistentFailureHook) {
+        *self.persistent_failure_hook.lock().unwrap() = Some(hook);
     }
 
     /// Check if the error indicates a stuck/nested transaction on the connection.

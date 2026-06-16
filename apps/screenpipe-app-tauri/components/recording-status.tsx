@@ -35,6 +35,8 @@ interface RecordingStatusProps {
   meetingLoading: boolean;
   onToggleMeeting: () => void;
   isTranslucent?: boolean;
+  /** buttons float over full-bleed video (timeline, sidebar collapsed) */
+  floatingOverMedia?: boolean;
 }
 
 const KIND_ICONS: Record<
@@ -61,6 +63,7 @@ export function RecordingStatus({
   meetingLoading,
   onToggleMeeting,
   isTranslucent,
+  floatingOverMedia,
 }: RecordingStatusProps) {
   const [open, setOpen] = React.useState(false);
 
@@ -125,7 +128,9 @@ export function RecordingStatus({
               data-testid="recording-status-trigger"
               className={cn(
                 "flex items-center justify-center h-5 w-5 rounded-md transition-colors",
-                isTranslucent ? "hover:bg-white/10" : "hover:bg-muted/60"
+                floatingOverMedia
+                  ? "backdrop-blur-sm bg-background/80 shadow-sm hover:bg-background"
+                  : isTranslucent ? "hover:bg-white/10" : "hover:bg-muted/60"
               )}
             >
               <span
