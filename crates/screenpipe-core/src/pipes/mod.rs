@@ -3447,12 +3447,16 @@ impl PipeManager {
         };
 
         if handle.is_finished() {
+            self.running.lock().await.remove(name);
+            self.running_execution_ids.lock().await.remove(name);
             return Ok(PipeStopStatus::NotRunning);
         }
 
         let current_pid = handle.current_pid();
         if current_pid != 0 && !is_process_alive(current_pid) {
             handle.mark_finished();
+            self.running.lock().await.remove(name);
+            self.running_execution_ids.lock().await.remove(name);
             return Ok(PipeStopStatus::NotRunning);
         }
 
@@ -3461,6 +3465,8 @@ impl PipeManager {
             if !is_process_alive(pid) {
                 handle.clear_stop_request();
                 handle.mark_finished();
+                self.running.lock().await.remove(name);
+                self.running_execution_ids.lock().await.remove(name);
                 return Ok(PipeStopStatus::NotRunning);
             }
             let pipes = self.pipes.lock().await;
