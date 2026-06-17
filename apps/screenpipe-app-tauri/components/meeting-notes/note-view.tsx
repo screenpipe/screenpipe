@@ -803,10 +803,10 @@ export function NoteView({
         attendees: attendees || null,
         note: note || null,
       };
-      // Always re-fetch context + transcript on copy so the clipboard reflects
-      // what the user sees right now (live meetings update; speaker rename can
+      // Re-fetch context + transcript so the clipboard reflects what the
+      // user sees right now (live meetings update; speaker rename can
       // happen without re-rendering ReplayStrip).
-      const [ctx, transcript] = await Promise.all([
+      const [ctx, allTranscript] = await Promise.all([
         fetchMeetingContext(fresh),
         fetchMeetingAudio(
           new Date(meeting.meeting_start).toISOString(),
@@ -820,12 +820,27 @@ export function NoteView({
       ]);
       setMeetingCtx(ctx);
 
+      // Prefer meeting-routed (live) transcript over background search noise.
+      // For manual meetings (no routed audio), fall back to input-device-only
+      // entries (the user's mic) to avoid including YouTube/podcast noise.
+      const liveChunks = allTranscript.filter((c) => c.source === "live");
+      const inputChunks = allTranscript.filter((c) => c.isInput);
+      const transcript = liveChunks.length > 0
+        ? liveChunks
+        : inputChunks.length > 0
+          ? inputChunks
+          : allTranscript;
+
       const md = buildMeetingMarkdown({
         meeting: fresh,
         context: ctx,
         transcript,
       });
-      await navigator.clipboard.writeText(md);
+      // Use Tauri's native clipboard API (arboard) instead of
+      // navigator.clipboard.writeText which fails after async operations
+      // due to WebKit's user-activation timeout.
+      const res = await commands.copyTextToClipboard(md);
+      if (res.status === "error") throw new Error(res.error);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied to clipboard" });

@@ -53,6 +53,7 @@
 
 ## news
 
+- 06/10 - **we updated our license to keep screenpipe sustainable** — more funding, more shipping, better product
 - 05/29 - **we released an [alpha version of our AI PII model](https://screenpipe.github.io/screenleak/) outperforming Google, Microsoft, and OpenAI models** on computer recording data and running at 9ms on consumer device
 - 05/14 - **we joined YC S26** 
 
@@ -109,7 +110,7 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 - 5-10% cpu usage
 - 0.5-3gb ram
 - ~20gb storage/month
-- filters (window, app, chrome extensions, passwords, PII)
+- filters (window, app, chrome extensions, passwords, proprietary AI PII model)
 - optional encryption at rest
 - works offline
 

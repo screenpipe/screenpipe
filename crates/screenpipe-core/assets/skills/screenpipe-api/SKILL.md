@@ -369,15 +369,23 @@ real browser). Password fields are stripped from snapshot output.
 
 ---
 
-## 9. Meetings — `GET /meetings`
+## 9. Meetings — `GET /meetings`, `PUT /meetings/:id`
 
 ```bash
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings?start_time=1d%20ago&end_time=now&limit=10&offset=0"
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings?q=alice%40acme.com"
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/meetings/42"
+
+# Update mutable fields. This is a partial update body: omitted fields stay as-is.
+curl -X PUT http://localhost:3030/meetings/42 \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Q3 planning", "note":"<existing note>\n\n## Summary\n<summary>"}'
 ```
 
 Returns detected meetings (from calendar, app detection, window titles, UI elements, multi-speaker audio). `q` is a case-insensitive substring filter against title, attendees, and notes.
+
+Meeting updates use `PUT /meetings/:id`, not PATCH. Before appending an AI-generated summary, read the current meeting first and include the existing `note` text in the new note body so user-written notes are preserved.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -387,6 +395,7 @@ Returns detected meetings (from calendar, app detection, window titles, UI eleme
 | `meeting_app` | string | App (zoom, teams, meet, etc.) |
 | `title` | string? | Meeting title |
 | `attendees` | string? | Attendees |
+| `note` | string? | User notes / appended AI summaries |
 | `detection_source` | string | How detected (`app`, `calendar`, `ui`, etc.) |
 
 Also available via raw SQL: `SELECT * FROM meetings WHERE meeting_start > datetime('now', '-24 hours') LIMIT 20`
