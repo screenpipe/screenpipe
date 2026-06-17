@@ -21,6 +21,17 @@ export interface RegistrySkillLike {
   source: string;
   repo: string;
   path: string;
+  /** App-name keywords this skill is relevant to (for usage-based ranking). */
+  apps?: string[];
+  /** Curated "recommended" flag. */
+  featured?: boolean;
+}
+
+/** A recently-used app, as returned by the local `app` autocomplete query
+ *  (ordered most-used first). Only `name` is required for ranking. */
+export interface UsageApp {
+  name: string;
+  count?: number;
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -87,4 +98,76 @@ export function filterSkills<T extends RegistrySkillLike>(
       `${s.name} ${s.description} ${sourceLabel(s.source)} ${s.repo} ${s.path}`.toLowerCase();
     return terms.every((t) => hay.includes(t));
   });
+}
+
+// ---------------------------------------------------------------------------
+// Relevance ranking — surface the skills the user is most likely to want
+// first, based on their recent app usage, with a curated `featured` flag as a
+// gentle prior. Pure + deterministic so it's unit-testable; the browser feeds
+// it best-effort usage data and always degrades to the plain sort when there
+// is no signal.
+// ---------------------------------------------------------------------------
+
+// How many of the user's top apps to consider, and how the two signals weigh
+// up: any usage match dominates the curated flag, and a more-used app beats a
+// less-used one. With no usage signal at all, ordering collapses to
+// featured-first then `sortSkills`.
+const USAGE_APPS_CONSIDERED = 15;
+const USAGE_FACTOR = 10;
+const FEATURED_BONUS = 3;
+
+/** Does a skill's app keyword set overlap an app name (either contains the other)? */
+function appMatches(apps: string[], appName: string): boolean {
+  const a = appName.trim().toLowerCase();
+  if (a.length < 2) return false;
+  return apps.some((kw) => {
+    const k = kw.trim().toLowerCase();
+    return k.length >= 2 && (a.includes(k) || k.includes(a));
+  });
+}
+
+/** Relevance score for one skill given the user's most-used apps (most-used
+ *  first). Higher = surfaced earlier. Pure. */
+export function skillScore(skill: RegistrySkillLike, topApps: UsageApp[]): number {
+  let usage = 0;
+  const apps = skill.apps ?? [];
+  if (apps.length) {
+    const horizon = Math.min(topApps.length, USAGE_APPS_CONSIDERED);
+    for (let i = 0; i < horizon; i++) {
+      if (appMatches(apps, topApps[i]?.name ?? "")) {
+        // topApps is most-used first, so the first match is the strongest.
+        usage = USAGE_APPS_CONSIDERED - i;
+        break;
+      }
+    }
+  }
+  return usage * USAGE_FACTOR + (skill.featured ? FEATURED_BONUS : 0);
+}
+
+/** Order skills by relevance (usage match, then featured), falling back to the
+ *  stable `sortSkills` order for ties. Never throws; an empty `topApps` just
+ *  yields featured-first. */
+export function rankSkills<T extends RegistrySkillLike>(
+  skills: T[],
+  topApps: UsageApp[],
+): T[] {
+  // Stable base order first, then a stable sort by score keeps ties in that order.
+  return sortSkills(skills).sort(
+    (a, b) => skillScore(b, topApps) - skillScore(a, topApps),
+  );
+}
+
+/** True when a skill's apps overlap the user's recent apps (within the ranking
+ *  horizon) — drives the "Recommended for you" vs "Recommended" label. */
+export function hasUsageMatch(
+  skill: RegistrySkillLike,
+  topApps: UsageApp[],
+): boolean {
+  const apps = skill.apps ?? [];
+  if (!apps.length) return false;
+  const horizon = Math.min(topApps.length, USAGE_APPS_CONSIDERED);
+  for (let i = 0; i < horizon; i++) {
+    if (appMatches(apps, topApps[i]?.name ?? "")) return true;
+  }
+  return false;
 }

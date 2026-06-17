@@ -24,8 +24,49 @@ import {
   X,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { localFetch } from "@/lib/api";
 import { commands, type RegistrySkill } from "@/lib/utils/tauri";
-import { filterSkills, skillKey, sortSkills, sourceLabel } from "@/lib/skills-registry";
+import {
+  type UsageApp,
+  filterSkills,
+  hasUsageMatch,
+  rankSkills,
+  skillKey,
+  sourceLabel,
+} from "@/lib/skills-registry";
+
+// How many skills sit under the "Recommended" header before "All skills".
+const RECOMMENDED_COUNT = 4;
+
+/**
+ * Best-effort: the user's most-used apps over the last 7 days, to personalize
+ * ordering. Same query the app-name autocomplete uses; any failure (recording
+ * off, engine down, empty DB) resolves to [] and ordering stays featured-first.
+ */
+async function fetchTopApps(): Promise<UsageApp[]> {
+  try {
+    const query = `
+      SELECT app_name as name, COUNT(*) as count
+      FROM frames
+      WHERE datetime(timestamp) > datetime('now', '-7 days')
+        AND app_name IS NOT NULL AND app_name != ''
+        AND app_name NOT IN ('screenpipe', 'screenpipe-app')
+      GROUP BY app_name
+      ORDER BY count DESC
+      LIMIT 100
+    `;
+    const res = await localFetch("/raw_sql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) return [];
+    const rows = await res.json();
+    return Array.isArray(rows) ? (rows as UsageApp[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Browse + search the curated skills registry, then install a chosen skill.
@@ -54,6 +95,7 @@ export function SkillsBrowser({
   const [installed, setInstalled] = useState<Set<string>>(new Set());
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [topApps, setTopApps] = useState<UsageApp[]>([]);
 
   const seedInstalled = useMemo(
     () => new Set(installedNames.map((n) => skillKey(n))),
@@ -74,13 +116,18 @@ export function SkillsBrowser({
     setLoading(true);
     setError(null);
     try {
-      const res = await commands.fetchSkillsRegistry();
+      // Usage is best-effort and must never block or fail the catalog.
+      const [res, apps] = await Promise.all([
+        commands.fetchSkillsRegistry(),
+        fetchTopApps(),
+      ]);
+      setTopApps(apps);
       if (res.status === "error") {
         setError(res.error);
         setSkills([]);
         return;
       }
-      setSkills(sortSkills(res.data));
+      setSkills(res.data);
       const seen = new Set(seedInstalled);
       for (const s of res.data) if (s.imported) seen.add(skillKey(s.name));
       setInstalled(seen);
@@ -123,7 +170,25 @@ export function SkillsBrowser({
     [onInstalled],
   );
 
-  const visible = useMemo(() => filterSkills(skills, query), [skills, query]);
+  const ranked = useMemo(
+    () => rankSkills(filterSkills(skills, query), topApps),
+    [skills, query, topApps],
+  );
+  // "Recommended for you" only when their app usage actually moved something up.
+  const personalized = useMemo(
+    () => topApps.length > 0 && ranked.some((s) => hasUsageMatch(s, topApps)),
+    [ranked, topApps],
+  );
+
+  const renderRow = (s: RegistrySkill) => (
+    <SkillRow
+      key={`${s.repo}/${s.path}`}
+      skill={s}
+      installed={installed.has(skillKey(s.name))}
+      busy={busyKey === skillKey(s.name)}
+      onInstall={() => install(s)}
+    />
+  );
 
   return (
     <Dialog
@@ -193,7 +258,7 @@ export function SkillsBrowser({
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span className="break-all">{error}</span>
             </div>
-          ) : visible.length === 0 ? (
+          ) : ranked.length === 0 ? (
             <div className="text-xs text-muted-foreground bg-muted/30 rounded-md px-3 py-6 text-center">
               {query.trim() ? (
                 <>no skills match “{query.trim()}”.</>
@@ -201,17 +266,20 @@ export function SkillsBrowser({
                 <>no skills in the catalog yet.</>
               )}
             </div>
+          ) : query.trim() ? (
+            <div className="space-y-1.5">{ranked.map(renderRow)}</div>
           ) : (
             <div className="space-y-1.5">
-              {visible.map((s) => (
-                <SkillRow
-                  key={`${s.repo}/${s.path}`}
-                  skill={s}
-                  installed={installed.has(skillKey(s.name))}
-                  busy={busyKey === skillKey(s.name)}
-                  onInstall={() => install(s)}
-                />
-              ))}
+              <SectionLabel>
+                {personalized ? "Recommended for you" : "Recommended"}
+              </SectionLabel>
+              {ranked.slice(0, RECOMMENDED_COUNT).map(renderRow)}
+              {ranked.length > RECOMMENDED_COUNT && (
+                <>
+                  <SectionLabel className="pt-2">All skills</SectionLabel>
+                  {ranked.slice(RECOMMENDED_COUNT).map(renderRow)}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -222,6 +290,22 @@ export function SkillsBrowser({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SectionLabel({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <p
+      className={`px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground ${className}`}
+    >
+      {children}
+    </p>
   );
 }
 

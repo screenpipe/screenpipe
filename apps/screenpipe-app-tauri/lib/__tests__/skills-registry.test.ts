@@ -5,8 +5,12 @@
 import { describe, expect, it } from "vitest";
 import {
   type RegistrySkillLike,
+  type UsageApp,
   filterSkills,
+  hasUsageMatch,
+  rankSkills,
   skillKey,
+  skillScore,
   sortSkills,
   sourceLabel,
   sourceRank,
@@ -101,5 +105,75 @@ describe("filterSkills", () => {
       "Excel",
     ]);
     expect(filterSkills(all, "anthropic audio")).toHaveLength(0);
+  });
+});
+
+const apps = (names: string[]): UsageApp[] =>
+  names.map((name, i) => ({ name, count: 100 - i }));
+
+describe("skillScore", () => {
+  it("is 0 with no signal and no featured flag", () => {
+    expect(skillScore(skill({ apps: ["excel"] }), [])).toBe(0);
+    expect(skillScore(skill({}), apps(["Microsoft Excel"]))).toBe(0);
+  });
+  it("adds a small bonus for featured", () => {
+    expect(skillScore(skill({ featured: true }), [])).toBe(3);
+  });
+  it("rewards a usage match, more for a more-used app", () => {
+    const s = skill({ apps: ["excel"] });
+    const top = skillScore(s, apps(["Microsoft Excel", "Chrome"])); // match at idx 0
+    const low = skillScore(s, apps(["Chrome", "Microsoft Excel"])); // match at idx 1
+    expect(top).toBeGreaterThan(low);
+    expect(low).toBeGreaterThan(0);
+  });
+  it("lets any usage match outrank a featured-but-unused skill", () => {
+    const used = skill({ name: "Excel", apps: ["excel"] });
+    const featuredUnused = skill({ name: "PDF", featured: true, apps: ["acrobat"] });
+    expect(
+      skillScore(used, apps(["Microsoft Excel"])),
+    ).toBeGreaterThan(skillScore(featuredUnused, apps(["Microsoft Excel"])));
+  });
+});
+
+describe("hasUsageMatch", () => {
+  it("matches a keyword as a substring of an app name (either direction)", () => {
+    expect(hasUsageMatch(skill({ apps: ["excel"] }), apps(["Microsoft Excel"]))).toBe(true);
+    expect(hasUsageMatch(skill({ apps: ["arc"] }), apps(["Arc"]))).toBe(true);
+    expect(hasUsageMatch(skill({ apps: ["figma"] }), apps(["Chrome"]))).toBe(false);
+  });
+  it("ignores too-short keywords and apps, and empty app lists", () => {
+    expect(hasUsageMatch(skill({ apps: ["a"] }), apps(["A"]))).toBe(false);
+    expect(hasUsageMatch(skill({ apps: [] }), apps(["Chrome"]))).toBe(false);
+    expect(hasUsageMatch(skill({ apps: ["chrome"] }), [])).toBe(false);
+  });
+  it("only considers the top 15 most-used apps", () => {
+    const many = apps([...Array(20)].map((_, i) => `App${i}`).concat("Notion"));
+    // "Notion" sits at index 20, outside the 15-app horizon → no match.
+    expect(hasUsageMatch(skill({ apps: ["notion"] }), many)).toBe(false);
+  });
+});
+
+describe("rankSkills", () => {
+  const catalog = [
+    skill({ name: "Sentry", source: "openai", apps: ["sentry"] }),
+    skill({ name: "PDF", source: "anthropic", featured: true, apps: ["acrobat"] }),
+    skill({ name: "Excel", source: "anthropic", apps: ["excel"] }),
+    skill({ name: "Canvas", source: "anthropic", apps: ["figma"] }),
+  ];
+
+  it("floats skills matching the user's most-used apps to the top", () => {
+    const out = rankSkills(catalog, apps(["Microsoft Excel", "Google Chrome"]));
+    expect(out[0].name).toBe("Excel");
+  });
+
+  it("falls back to featured-first then base sort with no usage signal", () => {
+    const out = rankSkills(catalog, []);
+    expect(out[0].name).toBe("PDF"); // the only featured one
+  });
+
+  it("does not mutate its input", () => {
+    const before = catalog.map((s) => s.name);
+    rankSkills(catalog, apps(["Sentry"]));
+    expect(catalog.map((s) => s.name)).toEqual(before);
   });
 });

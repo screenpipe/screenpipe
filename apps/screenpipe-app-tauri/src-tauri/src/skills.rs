@@ -77,6 +77,13 @@ pub struct RegistrySkill {
     /// Optional docs / homepage link.
     #[serde(default)]
     pub homepage: Option<String>,
+    /// App-name keywords this skill is relevant to — used to rank skills the
+    /// user is more likely to want first, against their recent app usage.
+    #[serde(default)]
+    pub apps: Vec<String>,
+    /// Curated "recommended" flag — surfaced first before any usage signal.
+    #[serde(default)]
+    pub featured: bool,
     /// True when a skill of the same normalized name is already in the store.
     #[serde(default)]
     pub imported: bool,

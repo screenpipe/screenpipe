@@ -2326,7 +2326,7 @@ path: string }
  * (the directory containing `SKILL.md`) from a public GitHub repo into the
  * store, reusing the same store the device/folder importers write to.
  */
-export type RegistrySkill = { name: string; description: string; repo: string; git_ref: string; path: string; source: string; repo_url: string | null; homepage: string | null; imported: boolean }
+export type RegistrySkill = { name: string; description: string; repo: string; git_ref: string; path: string; source: string; repo_url: string | null; homepage: string | null; apps: string[]; featured: boolean; imported: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }

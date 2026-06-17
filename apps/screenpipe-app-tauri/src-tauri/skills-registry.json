@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated agent-skills catalog for the in-app skills browser. Each entry points at a folder containing a SKILL.md in a public GitHub repo; the app downloads that folder into the skills store on install. This file is bundled into the app (include_str!) AND fetched at runtime from raw.githubusercontent.com/screenpipe/screenpipe/main/... so the catalog can grow without an app release. Keep entries high-signal and verified.",
+  "_comment": "Curated agent-skills catalog for the in-app skills browser. Each entry points at a folder containing a SKILL.md in a public GitHub repo; the app downloads that folder into the skills store on install. This file is bundled into the app (include_str!) AND fetched at runtime from raw.githubusercontent.com/screenpipe/screenpipe/main/... so the catalog can grow without an app release. `featured` surfaces a skill in the Recommended row; `apps` are case-insensitive app-name keywords used to rank skills against the user's recent app usage. Keep entries high-signal and verified.",
   "skills": [
     {
       "name": "PDF",
@@ -8,7 +8,9 @@
       "git_ref": "main",
       "path": "skills/pdf",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/pdf"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/pdf",
+      "featured": true,
+      "apps": ["preview", "acrobat", "adobe", "pdf"]
     },
     {
       "name": "Excel",
@@ -17,7 +19,9 @@
       "git_ref": "main",
       "path": "skills/xlsx",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/xlsx"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/xlsx",
+      "featured": true,
+      "apps": ["excel", "numbers", "sheets"]
     },
     {
       "name": "Word",
@@ -26,7 +30,9 @@
       "git_ref": "main",
       "path": "skills/docx",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/docx"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/docx",
+      "featured": true,
+      "apps": ["word", "pages", "docs"]
     },
     {
       "name": "PowerPoint",
@@ -35,7 +41,9 @@
       "git_ref": "main",
       "path": "skills/pptx",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/pptx"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/pptx",
+      "featured": true,
+      "apps": ["powerpoint", "keynote", "slides"]
     },
     {
       "name": "MCP Builder",
@@ -44,7 +52,8 @@
       "git_ref": "main",
       "path": "skills/mcp-builder",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/mcp-builder"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/mcp-builder",
+      "apps": ["cursor", "code", "terminal", "iterm", "claude"]
     },
     {
       "name": "Skill Creator",
@@ -53,7 +62,8 @@
       "git_ref": "main",
       "path": "skills/skill-creator",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/skill-creator"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/skill-creator",
+      "apps": ["cursor", "code", "terminal", "claude"]
     },
     {
       "name": "Webapp Testing",
@@ -62,7 +72,8 @@
       "git_ref": "main",
       "path": "skills/webapp-testing",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/webapp-testing"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/webapp-testing",
+      "apps": ["chrome", "safari", "arc", "firefox", "cursor", "code"]
     },
     {
       "name": "Frontend Design",
@@ -71,7 +82,8 @@
       "git_ref": "main",
       "path": "skills/frontend-design",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/frontend-design"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+      "apps": ["figma", "cursor", "code", "chrome", "arc"]
     },
     {
       "name": "Canvas Design",
@@ -80,7 +92,8 @@
       "git_ref": "main",
       "path": "skills/canvas-design",
       "source": "anthropic",
-      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/canvas-design"
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/canvas-design",
+      "apps": ["figma", "photoshop", "illustrator", "canva"]
     },
     {
       "name": "Playwright",
@@ -89,7 +102,8 @@
       "git_ref": "main",
       "path": "skills/.curated/playwright",
       "source": "openai",
-      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/playwright"
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/playwright",
+      "apps": ["chrome", "safari", "arc", "firefox", "cursor", "code"]
     },
     {
       "name": "Sentry",
@@ -98,7 +112,8 @@
       "git_ref": "main",
       "path": "skills/.curated/sentry",
       "source": "openai",
-      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/sentry"
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/sentry",
+      "apps": ["sentry", "chrome", "arc"]
     },
     {
       "name": "Notion Meeting Intelligence",
@@ -107,7 +122,8 @@
       "git_ref": "main",
       "path": "skills/.curated/notion-meeting-intelligence",
       "source": "openai",
-      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/notion-meeting-intelligence"
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/notion-meeting-intelligence",
+      "apps": ["notion", "zoom", "meet", "teams", "slack"]
     },
     {
       "name": "Security Best Practices",
@@ -116,7 +132,8 @@
       "git_ref": "main",
       "path": "skills/.curated/security-best-practices",
       "source": "openai",
-      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/security-best-practices"
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/security-best-practices",
+      "apps": ["cursor", "code", "terminal", "iterm"]
     },
     {
       "name": "Transcribe",
@@ -125,7 +142,9 @@
       "git_ref": "main",
       "path": "skills/.curated/transcribe",
       "source": "openai",
-      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/transcribe"
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/transcribe",
+      "featured": true,
+      "apps": ["zoom", "meet", "teams", "quicktime", "music", "voice"]
     }
   ]
 }
