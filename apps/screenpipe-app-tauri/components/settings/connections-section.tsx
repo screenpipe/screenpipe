@@ -1358,91 +1358,19 @@ function describeSyncOutcome(result: any): string {
 // credentials map — connect() always writes the resolved home_path so
 // the backend `Integration::list()`'s `enabled && !credentials.is_empty()`
 // rule sees us as on.
-function MemorySyncSubsection({
-  integrationId,
-  defaultPath,
-  targetFilename,
-}: {
-  integrationId: "claude-code" | "codex";
-  defaultPath: string;
-  targetFilename: string;
-}) {
+// Shared connect/test/sync/disconnect lifecycle for a memory-sync destination
+// (claude code, codex, obsidian). Every destination drives the same
+// `/connections/:id` + `/memories/sync-external` flow and the same state
+// machine — only the stored credential shape and presentation differ — so this
+// hook owns the logic and a fix lands in exactly one place. Each consumer keeps
+// its own input state and supplies the credential payload at connect time.
+function useMemorySyncDestination(integrationId: string) {
   const { toast } = useToast();
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [homePath, setHomePath] = useState(defaultPath);
   const [status, setStatus] = useState<"idle" | "connecting" | "syncing">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastResultAt, setLastResultAt] = useState<number | null>(null);
-
-  useEffect(() => {
-    localFetch(`/connections/${integrationId}`)
-      .then(r => r.json())
-      .then(data => {
-        const saved = data?.credentials?.home_path;
-        if (typeof saved === "string" && saved.length > 0) {
-          setHomePath(saved);
-          setConnected(true);
-        } else {
-          setConnected(false);
-        }
-      })
-      .catch(() => setConnected(false));
-  }, [integrationId]);
-
-  const persistedPath = homePath.trim() || defaultPath;
-
-  const handleConnect = useCallback(async () => {
-    setStatus("connecting");
-    setError(null);
-    try {
-      // `test` round-trips through the backend Integration::test() which
-      // creates the directory if missing and probes write access. This
-      // surfaces "read-only filesystem" / "no permission" up front rather
-      // than silently failing in the background scheduler later.
-      const testRes = await localFetch(`/connections/${integrationId}/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials: { home_path: persistedPath } }),
-      });
-      const testData = await testRes.json();
-      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
-
-      const saveRes = await localFetch(`/connections/${integrationId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials: { home_path: persistedPath } }),
-      });
-      const saveData = await saveRes.json();
-      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
-
-      setConnected(true);
-      notifyConnectionsUpdated();
-      posthog.capture("connection_saved", { integration: integrationId });
-
-      // Kick off an immediate sync so the user sees the file populate
-      // before the next 5-minute scheduler tick.
-      await triggerSyncNow();
-    } catch (e: any) {
-      setError(e?.message || "connection failed");
-    } finally {
-      setStatus("idle");
-    }
-  }, [integrationId, persistedPath]);
-
-  const handleDisconnect = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await localFetch(`/connections/${integrationId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
-      setConnected(false);
-      setLastResult(null);
-      setLastResultAt(null);
-      notifyConnectionsUpdated();
-    } catch (e: any) {
-      setError(e?.message || "disconnect failed");
-    }
-  }, [integrationId]);
 
   const triggerSyncNow = useCallback(async () => {
     setStatus("syncing");
@@ -1452,9 +1380,8 @@ function MemorySyncSubsection({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "sync failed");
 
-      // The endpoint returns a list of per-destination outcomes — pick
-      // the one for this integration and render it. The other tile's
-      // panel will refresh independently when the user opens it.
+      // The endpoint returns a list of per-destination outcomes — pick the one
+      // for this integration and render it. Other tiles refresh independently.
       const me = (data?.results || []).find((r: any) => r.destination_id === integrationId);
       if (me?.outcome?.ok) {
         const resultText = describeSyncOutcome(me.outcome.result);
@@ -1472,6 +1399,90 @@ function MemorySyncSubsection({
       setStatus("idle");
     }
   }, [integrationId, toast]);
+
+  // Validate the credentials, persist them, then sync immediately so the file
+  // populates before the next scheduler tick. `test` round-trips through the
+  // backend Integration::test() (creates the dir, probes write access), so
+  // permission errors surface here instead of silently in the background.
+  const connect = useCallback(async (credentials: Record<string, string>) => {
+    setStatus("connecting");
+    setError(null);
+    try {
+      const testRes = await localFetch(`/connections/${integrationId}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      const testData = await testRes.json();
+      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
+
+      const saveRes = await localFetch(`/connections/${integrationId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+
+      setConnected(true);
+      notifyConnectionsUpdated();
+      posthog.capture("connection_saved", { integration: integrationId });
+      await triggerSyncNow();
+    } catch (e: any) {
+      setError(e?.message || "connection failed");
+    } finally {
+      setStatus("idle");
+    }
+  }, [integrationId, triggerSyncNow]);
+
+  const disconnect = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await localFetch(`/connections/${integrationId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
+      setConnected(false);
+      setLastResult(null);
+      setLastResultAt(null);
+      notifyConnectionsUpdated();
+    } catch (e: any) {
+      setError(e?.message || "disconnect failed");
+    }
+  }, [integrationId]);
+
+  return { connected, setConnected, status, error, setError, lastResult, lastResultAt, triggerSyncNow, connect, disconnect };
+}
+
+function MemorySyncSubsection({
+  integrationId,
+  defaultPath,
+  targetFilename,
+}: {
+  integrationId: "claude-code" | "codex";
+  defaultPath: string;
+  targetFilename: string;
+}) {
+  const [homePath, setHomePath] = useState(defaultPath);
+  const {
+    connected, setConnected, status, error,
+    lastResult, lastResultAt, triggerSyncNow, connect, disconnect,
+  } = useMemorySyncDestination(integrationId);
+
+  useEffect(() => {
+    localFetch(`/connections/${integrationId}`)
+      .then(r => r.json())
+      .then(data => {
+        const saved = data?.credentials?.home_path;
+        if (typeof saved === "string" && saved.length > 0) {
+          setHomePath(saved);
+          setConnected(true);
+        } else {
+          setConnected(false);
+        }
+      })
+      .catch(() => setConnected(false));
+  }, [integrationId, setConnected]);
+
+  const persistedPath = homePath.trim() || defaultPath;
 
   if (connected === null) {
     return null; // initial fetch in flight — avoid flicker
@@ -1507,7 +1518,7 @@ function MemorySyncSubsection({
             <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
             </Button>
-            <Button onClick={handleDisconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <Button onClick={disconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               <LogOut className="h-3 w-3" />stop syncing
             </Button>
           </div>
@@ -1524,7 +1535,7 @@ function MemorySyncSubsection({
               spellCheck={false}
             />
           </div>
-          <Button onClick={handleConnect} disabled={status === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <Button onClick={() => connect({ home_path: persistedPath })} disabled={status === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
           </Button>
         </>
@@ -1559,18 +1570,16 @@ function sanitizeVaultFolder(folder: string): string {
 }
 
 function ObsidianMemorySyncSubsection() {
-  const { toast } = useToast();
-  const [connected, setConnected] = useState<boolean | null>(null);
   const [vaultPath, setVaultPath] = useState("");
   const [folder, setFolder] = useState(OBSIDIAN_DEFAULT_FOLDER);
-  const [status, setStatus] = useState<"idle" | "connecting" | "syncing">("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<string | null>(null);
-  const [lastResultAt, setLastResultAt] = useState<number | null>(null);
+  const {
+    connected, setConnected, status, error, setError,
+    lastResult, lastResultAt, triggerSyncNow, connect, disconnect,
+  } = useMemorySyncDestination(OBSIDIAN_MEMORIES_ID);
 
   // Load any saved memory-sync config. If none, prefill the vault path from
   // the user's default vault-writing `obsidian` connection so enabling sync
-  // is one click for the common single-vault case — but they stay fully
+  // is one click for the common single-vault case — they stay fully
   // independent stores (we only read it as a suggestion).
   useEffect(() => {
     let cancelled = false;
@@ -1601,87 +1610,17 @@ function ObsidianMemorySyncSubsection() {
       if (!cancelled) setConnected(false);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [setConnected]);
 
   const folderClean = sanitizeVaultFolder(folder.trim() || OBSIDIAN_DEFAULT_FOLDER);
   const notePath = `${vaultPath.replace(/[\\/]+$/, "")}/${folderClean}/screenpipe-memories.md`;
 
-  const triggerSyncNow = useCallback(async () => {
-    setStatus("syncing");
-    setError(null);
-    try {
-      const res = await localFetch("/memories/sync-external", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "sync failed");
-      const me = (data?.results || []).find((r: any) => r.destination_id === OBSIDIAN_MEMORIES_ID);
-      if (me?.outcome?.ok) {
-        const resultText = describeSyncOutcome(me.outcome.result);
-        setLastResult(resultText);
-        setLastResultAt(Date.now());
-        toast({ title: "memory sync", description: resultText });
-      } else if (me) {
-        throw new Error(me?.outcome?.error || "sync failed");
-      }
-    } catch (e: any) {
-      const msg = e?.message || "sync failed";
-      setError(msg);
-      toast({ title: "memory sync failed", description: msg, variant: "destructive" });
-    } finally {
-      setStatus("idle");
-    }
-  }, [toast]);
-
-  const handleConnect = useCallback(async () => {
+  const handleEnable = useCallback(() => {
     const vault = vaultPath.trim();
     if (!vault) { setError("pick a vault folder first"); return; }
-    setStatus("connecting");
-    setError(null);
-    try {
-      const credentials = { vault_path: vault, memories_folder: folder.trim() || OBSIDIAN_DEFAULT_FOLDER };
-      // test() validates the vault (.obsidian present), creates the target
-      // folder, and probes write access — so read-only / wrong-folder errors
-      // surface here, not silently in the background scheduler.
-      const testRes = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials }),
-      });
-      const testData = await testRes.json();
-      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
-
-      const saveRes = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials }),
-      });
-      const saveData = await saveRes.json();
-      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
-
-      setConnected(true);
-      notifyConnectionsUpdated();
-      posthog.capture("connection_saved", { integration: OBSIDIAN_MEMORIES_ID });
-      // Populate the note immediately rather than waiting for the next tick.
-      await triggerSyncNow();
-    } catch (e: any) {
-      setError(e?.message || "connection failed");
-    } finally {
-      setStatus("idle");
-    }
-  }, [vaultPath, folder, triggerSyncNow]);
-
-  const handleDisconnect = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
-      setConnected(false);
-      setLastResult(null);
-      setLastResultAt(null);
-      notifyConnectionsUpdated();
-    } catch (e: any) {
-      setError(e?.message || "disconnect failed");
-    }
-  }, []);
+    // Backend re-sanitizes the folder authoritatively; send the raw value.
+    return connect({ vault_path: vault, memories_folder: folder.trim() || OBSIDIAN_DEFAULT_FOLDER });
+  }, [vaultPath, folder, connect, setError]);
 
   if (connected === null) {
     return null; // initial fetch in flight — avoid flicker
@@ -1715,7 +1654,7 @@ function ObsidianMemorySyncSubsection() {
             <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
             </Button>
-            <Button onClick={handleDisconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <Button onClick={disconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               <LogOut className="h-3 w-3" />stop syncing
             </Button>
           </div>
@@ -1755,7 +1694,7 @@ function ObsidianMemorySyncSubsection() {
               spellCheck={false}
             />
           </div>
-          <Button onClick={handleConnect} disabled={status === "connecting" || !vaultPath.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <Button onClick={handleEnable} disabled={status === "connecting" || !vaultPath.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
           </Button>
         </>
