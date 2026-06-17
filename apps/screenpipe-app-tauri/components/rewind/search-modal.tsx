@@ -889,15 +889,15 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     (async () => {
       setIsSearchingTags(true);
       try {
-        // Fetch tags from DB — filter at SQL level for performance on large DBs.
-        // Without a filter, GROUP BY on vision_tags scans the full table; LIMIT 200
-        // bounds the transfer. With a filter, LIKE restricts the join to matching
-        // tags only, which is both faster and correct (finds all matches, not just
-        // the top-N by count that would be returned before the LIMIT cuts off).
+        // Query only the tags table (tiny — just distinct names), not vision_tags.
+        // count is never displayed, so we don't need the expensive GROUP BY aggregate
+        // over vision_tags. COLLATE NOCASE handles Unicode correctly (SQLite LOWER()
+        // is ASCII-only). LIMIT 500 keeps even low-count unique tags (e.g. per-session
+        // workflow tags with count=1) so specific long queries still find their target.
         const safeTagQuery = tagQuery.replace(/'/g, "''");
         const tagsSQL = tagQuery.length > 0
-          ? `SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id WHERE LOWER(t.name) LIKE '%${safeTagQuery}%' GROUP BY t.id, t.name ORDER BY count DESC LIMIT 100`
-          : `SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id GROUP BY t.id, t.name ORDER BY count DESC LIMIT 200`;
+          ? `SELECT name FROM tags WHERE name LIKE '%${safeTagQuery}%' COLLATE NOCASE ORDER BY name LIMIT 500`
+          : `SELECT name FROM tags ORDER BY name LIMIT 500`;
 
         const tagsResp = await localFetch("/raw_sql", {
           method: "POST",
@@ -907,7 +907,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         });
 
         if (cancelled) return;
-        const allDbTags: { name: string; count: number }[] = tagsResp.ok
+        const allDbTags: { name: string }[] = tagsResp.ok
           ? await tagsResp.json()
           : [];
 
