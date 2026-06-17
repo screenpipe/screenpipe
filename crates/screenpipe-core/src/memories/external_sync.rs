@@ -125,6 +125,16 @@ impl Destination {
     }
 }
 
+// Compile-time invariants for the destination table. An `owns_target`
+// destination must NOT also declare a sidecar — the engine's owned-file write
+// path replaces the whole file and ignores `sidecar_filename`, so the two
+// together would silently drop the sidecar. The co-authored destinations must
+// stay non-owned so their marker-block splice keeps the user's hand edits. A
+// bad edit to the table fails to compile rather than misbehaving at runtime.
+const _: () =
+    assert!(Destination::OBSIDIAN.owns_target && Destination::OBSIDIAN.sidecar_filename.is_none());
+const _: () = assert!(!Destination::CLAUDE_CODE.owns_target && !Destination::CODEX.owns_target);
+
 /// Bound how big the rendered block can get. Above ~200 entries the
 /// signal dies under noise and we start eating Claude Code's context
 /// budget. Beyond the cap we drop low-importance rows first.
@@ -435,21 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn obsidian_destination_is_owned_and_sidecar_free() {
-        // The Obsidian note is screenpipe-owned end to end — it must carry
-        // the full digest itself (owns_target) and never declare a sidecar,
-        // otherwise the engine's owned-file path and the sidecar path would
-        // both try to claim it.
-        assert!(Destination::OBSIDIAN.owns_target);
-        assert_eq!(Destination::OBSIDIAN.sidecar_filename, None);
-        assert_eq!(Destination::OBSIDIAN.filename, "screenpipe-memories.md");
-        // Distinct id from the vault-writing `obsidian` integration so the
-        // two connections never share credentials.
+    fn obsidian_destination_uses_expected_id_and_filename() {
+        // (owns_target / no-sidecar invariants are enforced at compile time
+        // via the `const _` assertions next to the destination table.)
+        // The id is deliberately distinct from the vault-writing `obsidian`
+        // integration so the two connections never share credentials.
         assert_eq!(Destination::OBSIDIAN.id, "obsidian-memories");
-        // The co-authored destinations must stay non-owned so their marker
-        // splice + sidecar behavior is preserved.
-        assert!(!Destination::CLAUDE_CODE.owns_target);
-        assert!(!Destination::CODEX.owns_target);
+        assert_eq!(Destination::OBSIDIAN.filename, "screenpipe-memories.md");
+        assert_eq!(Destination::OBSIDIAN.sidecar_filename, None);
     }
 
     #[test]
