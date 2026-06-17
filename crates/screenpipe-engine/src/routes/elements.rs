@@ -202,8 +202,12 @@ impl From<Element> for ElementResponse {
 //   | mostly-structural   |     5879 |     299 |   95% |
 //   | AGGREGATE           |    20525 |    1864 |   91% |
 //
-// OCR text-heavy is the floor (the text blob dominates, nothing to dedup) —
-// same caveat as CSV/TSV; everywhere else it's a 5–75× cut.
+// The win tracks tree SHAPE, which tracks source: accessibility trees (rows
+// 1–4, 6–7 above) are the target — structural noise to drop, repeated
+// cells/rows to dedup, hierarchy, and state — a 6–75× cut. OCR is the floor
+// (flat text blocks: generic role, no hierarchy/state, nothing to dedup, so the
+// outline ≈ the text) — same caveat as CSV/TSV; for pure OCR `fields=text` is
+// about as good.
 // ---------------------------------------------------------------------------
 
 const OUTLINE_MAX_LINES: usize = 200;

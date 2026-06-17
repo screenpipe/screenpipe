@@ -135,7 +135,7 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 
 Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, plus `format` (`json`/`csv`/`tsv`/`outline`) and `fields` (dotted paths). Elements are uniform rows, so this is where compact formats pay off most.
 
-**`format=outline` (alias `tree`) is the cheapest read for "what's on screen?"** — a deduped, indented text tree of just the text-bearing nodes (drops empty structural nodes + bounds, collapses repeats into `×N`, `#id` is the ref, inlines `(disabled)`/`(selected)`/`(focused)`/`(expanded)`/`(off-screen)` state, body capped). Measured ~91% fewer tokens than JSON (o200k_base); 67% floor on OCR text-heavy, up to 99% on tables.
+**`format=outline` (alias `tree`) is the cheapest read for "what's on screen?"** — a deduped, indented text tree of just the text-bearing nodes (drops empty structural nodes + bounds, collapses repeats into `×N`, `#id` is the ref, inlines `(disabled)`/`(selected)`/`(focused)`/`(expanded)`/`(off-screen)` state, body capped). Best on `source=accessibility` (the common UI case — structural noise, repeated rows, hierarchy, state): 85–99% fewer tokens than JSON (o200k_base). Flat OCR text blocks are the floor (~67%, nothing to dedup) — for pure OCR `format=csv&fields=text` is about as good.
 
 ```bash
 # compact outline — best default for an LLM reading the UI
