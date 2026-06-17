@@ -12,10 +12,12 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { commands, type DeviceSkill, type ImportedSkill } from "@/lib/utils/tauri";
+import { SkillsBrowser } from "./skills-browser";
 
 /**
  * Manage the agent's skills: a skill is a folder with a `SKILL.md` (the same
@@ -29,6 +31,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
   // The path or name currently being imported/removed, to show a spinner.
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -109,6 +112,27 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
         playbooks — the same format Claude Code uses. Import them here and
         screenpipe&apos;s agent loads them in chat and in every pipe.
       </p>
+
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-xs"
+        onClick={() => setBrowsing(true)}
+        disabled={!loaded}
+      >
+        <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+        Browse skills
+      </Button>
+
+      <SkillsBrowser
+        open={browsing}
+        onClose={() => setBrowsing(false)}
+        installedNames={imported.map((s) => s.name)}
+        onInstalled={() => {
+          refresh();
+          onChanged?.();
+        }}
+      />
 
       {error && (
         <div className="flex items-start gap-1.5 text-xs rounded-md border border-destructive/40 bg-destructive/5 text-destructive p-2.5">

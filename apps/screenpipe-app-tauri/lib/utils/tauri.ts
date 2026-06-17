@@ -770,6 +770,32 @@ async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
 }
 },
 /**
+ * Return the curated catalog, each entry flagged `imported` against the store.
+ * Prefers the remote catalog so it can grow without an app release, but never
+ * fails the panel — any hiccup falls back to the bundled copy.
+ */
+async fetchSkillsRegistry() : Promise<Result<RegistrySkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("fetch_skills_registry") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Install a catalog skill: download its folder into a staging dir, then swap it
+ * into the store atomically so a failed download never leaves a half-written
+ * skill behind. Re-installing the same name refreshes it.
+ */
+async installRegistrySkill(repo: string, gitRef: string, path: string, name: string) : Promise<Result<ImportedSkill, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_registry_skill", { repo, gitRef, path, name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Initialize sync with password.
  * This initializes both the local SyncManager (for device queries) and
  * the server's SyncService (for actual data sync).
@@ -2295,6 +2321,12 @@ export type ImportedSkill = { name: string; description: string;
  * Absolute path inside `<data_dir>/skills/`.
  */
 path: string }
+/**
+ * A skill offered by the curated registry. Installing one downloads its folder
+ * (the directory containing `SKILL.md`) from a public GitHub repo into the
+ * store, reusing the same store the device/folder importers write to.
+ */
+export type RegistrySkill = { name: string; description: string; repo: string; git_ref: string; path: string; source: string; repo_url: string | null; homepage: string | null; imported: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
