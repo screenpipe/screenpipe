@@ -889,13 +889,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     (async () => {
       setIsSearchingTags(true);
       try {
-        // Fetch all distinct tags with counts from the tags + vision_tags tables
+        // Fetch tags from DB — filter at SQL level for performance on large DBs.
+        // Without a filter, GROUP BY on vision_tags scans the full table; LIMIT 200
+        // bounds the transfer. With a filter, LIKE restricts the join to matching
+        // tags only, which is both faster and correct (finds all matches, not just
+        // the top-N by count that would be returned before the LIMIT cuts off).
+        const safeTagQuery = tagQuery.replace(/'/g, "''");
+        const tagsSQL = tagQuery.length > 0
+          ? `SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id WHERE LOWER(t.name) LIKE '%${safeTagQuery}%' GROUP BY t.id, t.name ORDER BY count DESC LIMIT 100`
+          : `SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id GROUP BY t.id, t.name ORDER BY count DESC LIMIT 200`;
+
         const tagsResp = await localFetch("/raw_sql", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: "SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id GROUP BY t.id, t.name ORDER BY count DESC",
-          }),
+          body: JSON.stringify({ query: tagsSQL }),
           signal: AbortSignal.timeout(5000),
         });
 
@@ -904,18 +911,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           ? await tagsResp.json()
           : [];
 
-        // Set autocomplete pills (filtered if user typed something after #)
+        // SQL already filtered by tagQuery — use results directly
         const tagNames = allDbTags.map(t => t.name);
-        setAllTags(
-          tagQuery.length > 0
-            ? tagNames.filter(t => t.toLowerCase().includes(tagQuery))
-            : tagNames
-        );
+        setAllTags(tagNames);
 
-        // Find tags that match the query
-        const matched = tagQuery.length > 0
-          ? allDbTags.filter(t => t.name.toLowerCase().includes(tagQuery))
-          : allDbTags;
+        // All returned tags already match the query
+        const matched = allDbTags;
 
         if (matched.length > 0 && !cancelled) {
           // Fetch frames tagged with matching tags
