@@ -135,13 +135,14 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 
 Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, plus `format` (`json`/`csv`/`tsv`/`outline`) and `fields` (dotted paths). Elements are uniform rows, so this is where compact formats pay off most.
 
-**`format=outline` (alias `tree`) is the cheapest read for "what's on screen?"** — a deduped, indented text tree of just the text-bearing nodes (drops empty structural nodes + bounds, collapses repeats into `×N`, `#id` is the ref, `(off-screen)` flags hidden nodes, body capped). Measured ~91% fewer tokens than JSON (o200k_base); 67% floor on OCR text-heavy, up to 99% on tables.
+**`format=outline` (alias `tree`) is the cheapest read for "what's on screen?"** — a deduped, indented text tree of just the text-bearing nodes (drops empty structural nodes + bounds, collapses repeats into `×N`, `#id` is the ref, inlines `(disabled)`/`(selected)`/`(focused)`/`(expanded)`/`(off-screen)` state, body capped). Measured ~91% fewer tokens than JSON (o200k_base); 67% floor on OCR text-heavy, up to 99% on tables.
 
 ```bash
 # compact outline — best default for an LLM reading the UI
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/elements?q=Submit&format=outline&limit=30"
 #   frame 12345 · accessibility · 8 text elements
 #     AXButton "Submit Order" #4012
+#     AXButton "Cancel" #4013 (disabled)
 #     AXCell "Shipped" #4020 ×6
 
 # columnar table when you need specific columns (e.g. bounds) instead

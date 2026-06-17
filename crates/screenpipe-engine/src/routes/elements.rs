@@ -92,6 +92,10 @@ pub(crate) struct ElementResponse {
     /// landed — see issue #2436.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_screen: Option<bool>,
+    /// Compact interaction state (disabled/focused/selected/expanded) parsed
+    /// from the captured automation properties. Omitted when there's no state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<ElementState>,
 }
 
 #[derive(OaSchema, Serialize)]
@@ -100,6 +104,40 @@ pub(crate) struct BoundsResponse {
     pub top: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Compact interaction state, parsed from the captured `properties` JSON. Only
+/// the flags actually present are emitted (so a static-text node carries no
+/// `state` at all). `disabled` is the inverse of the stored `is_enabled`.
+#[derive(OaSchema, Serialize, Debug, Clone, PartialEq, Default)]
+pub(crate) struct ElementState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expanded: Option<bool>,
+}
+
+/// Parse the stored automation `properties` JSON into compact state. Returns
+/// `None` unless at least one state flag is present, so non-interactive rows
+/// stay empty. Defensive: bad/absent JSON simply yields `None`.
+fn parse_element_state(properties: Option<&str>) -> Option<ElementState> {
+    let v: Value = serde_json::from_str(properties?).ok()?;
+    let b = |k: &str| v.get(k).and_then(Value::as_bool);
+    let state = ElementState {
+        disabled: b("is_enabled").map(|enabled| !enabled),
+        focused: b("is_focused"),
+        selected: b("is_selected"),
+        expanded: b("is_expanded"),
+    };
+    if state == ElementState::default() {
+        None
+    } else {
+        Some(state)
+    }
 }
 
 #[derive(OaSchema, Serialize)]
@@ -134,6 +172,7 @@ impl From<Element> for ElementResponse {
             confidence: e.confidence,
             sort_order: e.sort_order,
             on_screen: e.on_screen,
+            state: parse_element_state(e.properties.as_deref()),
         }
     }
 }
@@ -145,8 +184,9 @@ impl From<Element> for ElementResponse {
 // row, including the structural noise an accessibility tree is full of. For an
 // LLM asking "what's on screen?", the cheapest faithful view is a deduped,
 // indented outline of the *text-bearing* nodes. This is element-specific (it
-// understands role/text/depth/on_screen), so it lives here rather than in the
-// generic tabular renderer. Bounds and numeric metadata (parent_id/sort_order/
+// understands role/text/depth/on_screen/state), so it lives here rather than in
+// the generic tabular renderer. Interaction state (disabled/selected/focused/
+// expanded) is inlined; bounds and numeric metadata (parent_id/sort_order/
 // confidence) are dropped — ask for `format=json` when you need them.
 //
 // Measured vs the JSON default (tiktoken o200k_base, `dump_token_samples`):
@@ -194,7 +234,8 @@ fn outline_clip(s: &str, n: usize) -> String {
 /// Render an element list as the compact outline. Pure (no I/O) so it's unit
 /// tested directly. Drops empty-text structural nodes, collapses runs of
 /// identical `role`+`text` into `×N`, hoists per-frame context into a header,
-/// indents by depth, flags off-screen nodes, and caps the body with a note.
+/// indents by depth, escapes quotes in names, inlines state (off-screen +
+/// disabled/selected/focused/expanded), and caps the body with a note.
 fn elements_outline_text(elements: &[ElementResponse], total: i64) -> String {
     // A text view's whole point: keep only nodes that carry text.
     let kept: Vec<&ElementResponse> = elements
@@ -248,9 +289,34 @@ fn elements_outline_text(elements: &[ElementResponse], total: i64) -> String {
                 }
             }
             let indent = "  ".repeat((e.depth.max(0) as usize).min(6));
-            let mut line = format!("{indent}{} \"{text}\" #{}", e.role, e.id);
+            // Escape quotes so the "name" delimiters stay unambiguous even when
+            // the captured text itself contains a double-quote.
+            let safe = text.replace('"', "\\\"");
+            let mut line = format!("{indent}{} \"{safe}\" #{}", e.role, e.id);
+            // Inline state — off-screen (issue #2436) + interaction flags parsed
+            // from the captured properties.
+            let mut flags: Vec<&str> = Vec::new();
             if e.on_screen == Some(false) {
-                line.push_str(" (off-screen)");
+                flags.push("off-screen");
+            }
+            if let Some(st) = &e.state {
+                if st.disabled == Some(true) {
+                    flags.push("disabled");
+                }
+                if st.selected == Some(true) {
+                    flags.push("selected");
+                }
+                if st.focused == Some(true) {
+                    flags.push("focused");
+                }
+                match st.expanded {
+                    Some(true) => flags.push("expanded"),
+                    Some(false) => flags.push("collapsed"),
+                    None => {}
+                }
+            }
+            if !flags.is_empty() {
+                line.push_str(&format!(" ({})", flags.join(",")));
             }
             if run > 1 {
                 line.push_str(&format!(" ×{run}"));
@@ -435,7 +501,54 @@ mod tests {
             confidence: None,
             sort_order: id as i32,
             on_screen,
+            state: None,
         }
+    }
+
+    #[test]
+    fn parse_element_state_extracts_flags_and_inverts_enabled() {
+        let s = parse_element_state(Some(
+            r#"{"is_enabled":false,"is_selected":true,"value":"x"}"#,
+        ))
+        .unwrap();
+        assert_eq!(s.disabled, Some(true)); // is_enabled:false → disabled
+        assert_eq!(s.selected, Some(true));
+        assert_eq!(s.focused, None);
+        // value/placeholder only → no interaction state
+        assert!(parse_element_state(Some(r#"{"value":"x"}"#)).is_none());
+        assert!(parse_element_state(None).is_none());
+        assert!(parse_element_state(Some("not json")).is_none());
+    }
+
+    #[test]
+    fn outline_inlines_interaction_state() {
+        let mut a = el(1, 9, "AXButton", Some("Save"), 1, Some(true));
+        a.state = Some(ElementState {
+            disabled: Some(true),
+            ..Default::default()
+        });
+        let mut b = el(2, 9, "AXTab", Some("Inbox"), 1, Some(true));
+        b.state = Some(ElementState {
+            selected: Some(true),
+            focused: Some(true),
+            ..Default::default()
+        });
+        let mut c = el(3, 9, "AXDisclosureTriangle", Some("Details"), 1, Some(true));
+        c.state = Some(ElementState {
+            expanded: Some(false),
+            ..Default::default()
+        });
+        let out = elements_outline_text(&[a, b, c], 3);
+        assert!(out.contains("AXButton \"Save\" #1 (disabled)"), "got:\n{out}");
+        assert!(out.contains("AXTab \"Inbox\" #2 (selected,focused)"), "got:\n{out}");
+        assert!(out.contains("AXDisclosureTriangle \"Details\" #3 (collapsed)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn outline_escapes_quotes_in_text() {
+        let els = vec![el(1, 9, "AXStaticText", Some("say \"hi\" now"), 1, None)];
+        let out = elements_outline_text(&els, 1);
+        assert!(out.contains("\\\"hi\\\""), "quotes not escaped: {out}");
     }
 
     #[test]
@@ -619,7 +732,8 @@ mod tests {
         // exactly one frame header + one element line (+ trailing newline)
         let body: Vec<&str> = out.lines().filter(|l| l.contains('#')).collect();
         assert_eq!(body.len(), 1, "embedded newline split the row: {out:?}");
-        assert!(body[0].contains("he said \"hi\" then left"));
+        // newline collapsed to a space; embedded quotes escaped
+        assert!(body[0].contains("he said \\\"hi\\\" then left"), "got: {}", body[0]);
     }
 
     // Reproducible token-measurement harness. Renders JSON-default vs outline
