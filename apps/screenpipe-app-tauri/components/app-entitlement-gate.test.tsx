@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   spawnScreenpipe: vi.fn().mockResolvedValue(undefined),
   openLoginWindow: vi.fn().mockResolvedValue(undefined),
   setCloudToken: vi.fn().mockResolvedValue(undefined),
+  getCloudToken: vi.fn().mockResolvedValue(null),
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   state: { isSettingsLoaded: true, user: null as any },
@@ -41,6 +42,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     spawnScreenpipe: mocks.spawnScreenpipe,
     openLoginWindow: mocks.openLoginWindow,
     setCloudToken: mocks.setCloudToken,
+    getCloudToken: mocks.getCloudToken,
   },
 }));
 
@@ -221,6 +223,103 @@ describe("AppEntitlementGate", () => {
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
     await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledWith("tok", true));
+  });
+
+  it("keeps recording for an entitled account whose token failed to hydrate (corrupt secret store)", async () => {
+    // store.bin still shows a paid account (id + app_entitled survive), but the
+    // token lives in the secret store and didn't hydrate — the exact mid-meeting
+    // lockout. We must fail OPEN: render the app, never stop the recorder.
+    mocks.state.user = baseUser({
+      id: "u1",
+      token: undefined,
+      app_entitled: true,
+      subscription_plan: "pro",
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "subscription",
+        checked_at: daysAgo(5), // stale → not entitled by the normal path
+        features: { app: true },
+      },
+    });
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    expect(screen.queryByText(/sign in required/i)).not.toBeInTheDocument();
+    // Give the stop effect a chance to (wrongly) fire, then assert it didn't.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    // It actively tries to re-read the token so it self-heals without a restart.
+    await waitFor(() => expect(mocks.getCloudToken).toHaveBeenCalled());
+  });
+
+  it("stays open when access flips mid-session and never stops the recorder", async () => {
+    mocks.state.user = baseUser({
+      id: "u1",
+      app_entitled: true,
+      subscription_plan: "pro",
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "subscription",
+        checked_at: minsAgo(5),
+        features: { app: true },
+      },
+    });
+    const { rerender } = render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+
+    // Token + entitlement vanish (secret store blip), but the account object
+    // persists — this is a transient failure, not a sign-out.
+    mocks.state.user = baseUser({
+      id: "u1",
+      token: undefined,
+      app_entitled: false,
+      subscription_plan: "none",
+      entitlement: null,
+    });
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+  });
+
+  it("still walls and stops on a real sign-out, even after a prior entitled session", async () => {
+    mocks.state.user = baseUser({
+      id: "u1",
+      app_entitled: true,
+      subscription_plan: "pro",
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "subscription",
+        checked_at: minsAgo(5),
+        features: { app: true },
+      },
+    });
+    const { rerender } = render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+
+    // A real sign-out nulls the whole user — session-sticky must NOT leak access.
+    mocks.state.user = null;
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByText(/sign in required/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+  });
+
+  it("reports the gate once across re-renders of the same gated state", () => {
+    mocks.state.user = baseUser(); // signed in, unentitled → gated
+    const { rerender } = render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    const gateShown = mocks.capture.mock.calls.filter(
+      (c) => c[0] === "app_entitlement_gate_shown",
+    );
+    expect(gateShown).toHaveLength(1);
   });
 
   it("resumes recording when access transitions to entitled", async () => {

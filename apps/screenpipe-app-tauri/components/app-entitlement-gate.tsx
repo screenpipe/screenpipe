@@ -12,8 +12,10 @@ import { Button } from "@/components/ui/button";
 import {
   AppUser,
   hasAppEntitlement,
+  hasPersistedEntitlementEvidence,
   isDevBillingBypassEnabled,
   isDevLoginEnabled,
+  isTokenHydrationPending,
   needsAppEntitlementRefresh,
   normalizePlanLabel,
   PRICING_URL,
@@ -86,10 +88,39 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   const autoVerifiedRef = useRef(false);
   const prevEntitledRef = useRef<boolean | null>(null);
   const resumingRef = useRef(false);
+  const everEntitledRef = useRef(false);
+  const gateReportedRef = useRef(false);
+  const rehydratingRef = useRef(false);
   const user = settings.user as AppUser | null | undefined;
   const devBypass = isDevBillingBypassEnabled();
   const isEntitled = hasAppEntitlement(user);
   const needsRefresh = needsAppEntitlementRefresh(user);
+
+  // Latch "was entitled at least once this session". Mutating a ref during
+  // render is safe here because the write is idempotent (only ever flips
+  // false→true).
+  if (isEntitled) everEntitledRef.current = true;
+
+  // Fail the recording gate OPEN on a *transient* loss of access. The session
+  // token lives in an encrypted secret store (the db.sqlite `secrets` table);
+  // when that table is briefly corrupt or locked, getCloudToken() returns
+  // nothing and `user.token` goes undefined — even though store.bin still shows
+  // a paid account. Treating that as "no account / no plan" used to STOP the
+  // recorder mid-meeting and throw up the sign-in wall (PostHog: ~10 signed-in
+  // users/day, the gate re-firing hundreds of times as the token flapped).
+  // Instead, keep recording and the app usable on the last-known-good
+  // entitlement until the token re-hydrates. This only ever relaxes the gate
+  // for an account we have evidence WAS entitled, and never when `user` is null
+  // (a real sign-out), so it opens no free-access hole. A genuine downgrade
+  // still takes effect on the next launch.
+  const tokenPending = isTokenHydrationPending(user);
+  const failOpenForTransientAccessLoss =
+    !devBypass &&
+    !isEntitled &&
+    !!user &&
+    (everEntitledRef.current ||
+      (tokenPending && hasPersistedEntitlementEvidence(user)));
+
   const enterpriseAccountPolicyLoaded = Boolean(enterprisePolicy.orgName);
   const enterpriseRequiresLogin =
     isEnterprise &&
@@ -97,7 +128,8 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     !needsLicenseKey &&
     !isSectionHidden("account");
   const shouldGateForEnterpriseLogin = enterpriseRequiresLogin && !user?.token;
-  const shouldGateForEntitlement = !devBypass && !isEntitled;
+  const shouldGateForEntitlement =
+    !devBypass && !isEntitled && !failOpenForTransientAccessLoss;
   const shouldGate = shouldGateForEnterpriseLogin || shouldGateForEntitlement;
   const email = user?.email || "this account";
   const planLabel = useMemo(
@@ -105,8 +137,17 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     [user?.subscription_plan],
   );
 
+  // Report the gate at most once per continuous gated period. A corrupt secret
+  // store makes the token flap (hydrate → fail → strip → retry), which used to
+  // re-fire this on every settings broadcast — 33k events from 36 users in 30d.
+  // Reset the latch only when the gate clears so a genuine re-gate still counts.
   useEffect(() => {
-    if (!isSettingsLoaded || !shouldGate) return;
+    if (!isSettingsLoaded || !shouldGate) {
+      gateReportedRef.current = false;
+      return;
+    }
+    if (gateReportedRef.current) return;
+    gateReportedRef.current = true;
     posthog.capture("app_entitlement_gate_shown", {
       logged_in: Boolean(user?.token),
       reason: shouldGateForEnterpriseLogin ? "enterprise_login_required" : "app_entitlement",
@@ -114,6 +155,35 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
       app_entitled: user?.app_entitled ?? null,
     });
   }, [isSettingsLoaded, shouldGate, shouldGateForEnterpriseLogin, user?.app_entitled, user?.subscription_plan, user?.token]);
+
+  // When failing open on a pending token, keep trying to re-read it from the
+  // secret store. Once the store heals (the periodic WAL checkpoint clears the
+  // `-shm` desync, or the user runs `screenpipe db recover`), the token returns
+  // and we fully restore entitlement + push it to the sidecar via loadUser — no
+  // app restart needed. Cheap local read, guarded against overlap, and the
+  // interval clears itself the moment the token comes back.
+  useEffect(() => {
+    if (devBypass || !failOpenForTransientAccessLoss || !tokenPending) return;
+    let cancelled = false;
+    const attempt = async () => {
+      if (rehydratingRef.current) return;
+      rehydratingRef.current = true;
+      try {
+        const token = await commands.getCloudToken();
+        if (!cancelled && token) await loadUser(token, true);
+      } catch {
+        // secret store still unreadable — try again on the next tick
+      } finally {
+        rehydratingRef.current = false;
+      }
+    };
+    void attempt();
+    const id = setInterval(() => void attempt(), 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [devBypass, failOpenForTransientAccessLoss, tokenPending, loadUser]);
 
   useEffect(() => {
     if (!isSettingsLoaded || !shouldGate) {
