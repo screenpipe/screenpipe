@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogClose,
@@ -23,6 +24,7 @@ import {
   LogIn,
   Loader2,
   Plus,
+  Settings2,
   Trash2,
   X,
 } from "lucide-react";
@@ -92,7 +94,7 @@ async function listServers(): Promise<McpServer[]> {
   return body.data ?? [];
 }
 
-export function CustomMcpCard() {
+export function CustomMcpCard({ variant = "card" }: { variant?: "card" | "page" }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [browsing, setBrowsing] = useState(false);
@@ -159,6 +161,130 @@ export function CustomMcpCard() {
       notice: draft.authHint,
     });
   };
+
+  const editorDialogs = (
+    <>
+      <Dialog
+        open={!!editing}
+        onOpenChange={(open) => {
+          if (!open) closeEditor();
+        }}
+      >
+        <DialogContent
+          className="max-w-xl p-0 gap-0"
+          overlayClassName="bg-black/50 backdrop-blur-sm"
+          hideCloseButton
+          aria-describedby={undefined}
+        >
+          {editing && (
+            <>
+              <DialogHeader className="flex-row items-center gap-3 space-y-0 border-b border-border p-4 pr-12 text-left">
+                <DialogTitle className="text-sm font-semibold font-sans normal-case">
+                  {editing.mode === "create"
+                    ? "Add MCP Server"
+                    : "Edit MCP Server"}
+                </DialogTitle>
+                <DialogClose asChild>
+                  <button
+                    type="button"
+                    aria-label="close"
+                    className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">close</span>
+                  </button>
+                </DialogClose>
+              </DialogHeader>
+              <ServerEditor
+                key={editing.server.id}
+                initial={editing.server}
+                initialHeaders={editing.headers}
+                existingServers={servers}
+                mode={editing.mode}
+                notice={editing.notice}
+                onSaved={async () => {
+                  await refresh();
+                  notifyConnectionsUpdated();
+                  closeEditor();
+                }}
+                onCancel={closeEditor}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <RegistryBrowser
+        open={browsing}
+        onClose={() => setBrowsing(false)}
+        onPick={handlePick}
+        existingServers={servers}
+      />
+    </>
+  );
+
+  if (variant === "page") {
+    return (
+      <>
+        <div className="space-y-8">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <h3 className="text-sm font-semibold text-foreground">Servers</h3>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setBrowsing(true)}
+                  className="h-8 gap-1.5 px-2 text-xs normal-case font-sans tracking-normal text-muted-foreground hover:text-foreground"
+                  disabled={!loaded}
+                >
+                  <Boxes className="h-3.5 w-3.5" />
+                  Browse registry
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openCreate}
+                  className="h-8 gap-1.5 px-3 text-xs normal-case font-sans tracking-normal"
+                  disabled={!loaded}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add server
+                </Button>
+              </div>
+            </div>
+
+            <div className="overflow-hidden border border-border bg-card">
+              {servers.length > 0 ? (
+                servers.map((server) => (
+                  <ServerRow
+                    key={server.id}
+                    server={server}
+                    onEdit={() => openEdit(server)}
+                    onChanged={refresh}
+                    variant="page"
+                  />
+                ))
+              ) : loaded ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-sm font-medium text-foreground">No MCP servers yet</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Add an HTTP endpoint or local stdio MCP process to make its tools available.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading servers...
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+        {editorDialogs}
+      </>
+    );
+  }
 
   return (
     <Card className="border-border bg-card overflow-hidden">
@@ -281,62 +407,7 @@ export function CustomMcpCard() {
         </div>
       </CardContent>
 
-      <Dialog
-        open={!!editing}
-        onOpenChange={(open) => {
-          if (!open) closeEditor();
-        }}
-      >
-        <DialogContent
-          className="max-w-xl p-0 gap-0"
-          overlayClassName="bg-black/50 backdrop-blur-sm"
-          hideCloseButton
-          aria-describedby={undefined}
-        >
-          {editing && (
-            <>
-              <DialogHeader className="flex-row items-center gap-3 space-y-0 border-b border-border p-4 pr-12 text-left">
-                <DialogTitle className="text-sm font-semibold font-sans normal-case">
-                  {editing.mode === "create"
-                    ? "Add MCP Server"
-                    : "Edit MCP Server"}
-                </DialogTitle>
-                <DialogClose asChild>
-                  <button
-                    type="button"
-                    aria-label="close"
-                    className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <X className="h-4 w-4" />
-                    <span className="sr-only">close</span>
-                  </button>
-                </DialogClose>
-              </DialogHeader>
-              <ServerEditor
-                key={editing.server.id}
-                initial={editing.server}
-                initialHeaders={editing.headers}
-                existingServers={servers}
-                mode={editing.mode}
-                notice={editing.notice}
-                onSaved={async () => {
-                  await refresh();
-                  notifyConnectionsUpdated();
-                  closeEditor();
-                }}
-                onCancel={closeEditor}
-              />
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <RegistryBrowser
-        open={browsing}
-        onClose={() => setBrowsing(false)}
-        onPick={handlePick}
-        existingServers={servers}
-      />
+      {editorDialogs}
     </Card>
   );
 }
@@ -349,12 +420,15 @@ function ServerRow({
   server,
   onEdit,
   onChanged,
+  variant = "compact",
 }: {
   server: McpServer;
   onEdit: () => void;
   onChanged: () => void;
+  variant?: "compact" | "page";
 }) {
   const [removing, setRemoving] = useState(false);
+  const [toggling, setToggling] = useState(false);
   // Background tool-count probe — gives users a visible "this server
   // is reachable + has N tools" signal without forcing them to open
   // the editor. Failures stay quiet (the dot already shows enabled
@@ -395,6 +469,108 @@ function ServerRow({
       setRemoving(false);
     }
   }, [server.id, server.name, onChanged]);
+
+  const handleToggleEnabled = useCallback(async (enabled: boolean) => {
+    setToggling(true);
+    try {
+      const transport = server.transport ?? "http";
+      const body = transport === "stdio"
+        ? {
+          name: server.name,
+          transport: "stdio",
+          command: server.command ?? "",
+          args: server.args ?? [],
+          enabled,
+        }
+        : {
+          name: server.name,
+          transport: "http",
+          url: server.url,
+          headers: server.header_names.map((name) => ({ name, value: "" })),
+          enabled,
+        };
+
+      const res = await localFetch(`/mcp-servers/${encodeURIComponent(server.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      onChanged();
+      notifyConnectionsUpdated();
+    } finally {
+      setToggling(false);
+    }
+  }, [server.args, server.command, server.header_names, server.id, server.name, server.transport, server.url, onChanged]);
+
+  if (variant === "page") {
+    return (
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 last:border-b-0">
+        <div className="min-w-0 flex-1" title={server.url}>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-foreground truncate">
+              {server.name}
+            </span>
+            <span
+              className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                server.enabled ? "bg-foreground" : "bg-muted-foreground/40"
+              }`}
+              aria-hidden
+            />
+          </div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="truncate font-mono">
+              {server.transport === "stdio"
+                ? [server.command, ...(server.args ?? [])].filter(Boolean).join(" ")
+                : server.url}
+            </span>
+            <span className="shrink-0">
+              {probing
+                ? "checking..."
+                : toolCount !== null
+                ? `${toolCount} tool${toolCount === 1 ? "" : "s"}`
+                : server.enabled
+                ? "enabled"
+                : "disabled"}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <Switch
+            checked={server.enabled}
+            onCheckedChange={handleToggleEnabled}
+            disabled={toggling}
+            className="h-6 w-11"
+            aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+            className="h-10 w-10 p-0 border border-transparent bg-transparent text-foreground/80 hover:border-border hover:bg-muted hover:text-foreground"
+            aria-label={`Edit ${server.name}`}
+            title="Server settings"
+          >
+            <Settings2 className="h-5 w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDelete}
+            disabled={removing}
+            className="h-10 w-10 p-0 text-muted-foreground hover:bg-muted hover:text-destructive"
+            aria-label={`Remove ${server.name}`}
+          >
+            {removing ? (
+              <Loader2 className="h-[18px] w-[18px] animate-spin" />
+            ) : (
+              <Trash2 className="h-[18px] w-[18px]" />
+            )}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-between gap-2 text-xs border border-border rounded-md px-2 py-1.5">
@@ -476,7 +652,7 @@ function ServerEditor({
       : "stdio";
   const url = transport === "http" ? serverInput.trim() : "";
   const command = transport === "stdio" ? serverInput.trim() : "";
-  const [enabled, setEnabled] = useState(initial.enabled);
+  const enabled = initial.enabled;
   const [oauthStatus, setOauthStatus] = useState<McpOAuthStatus | null>(null);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthWaiting, setOauthWaiting] = useState(false);
@@ -1045,15 +1221,6 @@ function ServerEditor({
           </p>
         </div>
       )}
-
-      <label className="flex items-center gap-2 text-xs">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setEnabled(e.target.checked)}
-        />
-        <span>Enabled — make tools available to pipes and chat</span>
-      </label>
 
       {testResult && (
         <div

@@ -267,7 +267,7 @@ export const RECOMMENDED_SERVERS: RegistryServer[] = [
     title: "Linear",
     description: "Create and manage Linear issues, projects and cycles. OAuth sign-in.",
     repository: { url: "https://linear.app/docs/mcp" },
-    remotes: [{ type: "sse", url: "https://mcp.linear.app/sse" }],
+    remotes: [{ type: "streamable-http", url: "https://mcp.linear.app/mcp" }],
   },
   {
     name: "com.monday/monday.com",

@@ -226,4 +226,12 @@ describe("RECOMMENDED_SERVERS", () => {
       expect(displayName(s)).toBe(s.title);
     }
   });
+
+  it("uses Linear's streamable HTTP endpoint, not the legacy SSE endpoint", () => {
+    const linear = RECOMMENDED_SERVERS.find((s) => s.title === "Linear");
+    expect(linear).toBeTruthy();
+    expect(linear?.remotes).toEqual([
+      { type: "streamable-http", url: "https://mcp.linear.app/mcp" },
+    ]);
+  });
 });
