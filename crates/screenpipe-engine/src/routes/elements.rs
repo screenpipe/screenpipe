@@ -148,6 +148,22 @@ impl From<Element> for ElementResponse {
 // understands role/text/depth/on_screen), so it lives here rather than in the
 // generic tabular renderer. Bounds and numeric metadata (parent_id/sort_order/
 // confidence) are dropped — ask for `format=json` when you need them.
+//
+// Measured vs the JSON default (tiktoken o200k_base, `dump_token_samples`):
+//
+//   | tree shape          | json tok | outline | saved |
+//   |---------------------|---------:|--------:|------:|
+//   | small flat UI       |      381 |      58 |   85% |
+//   | typical app frame   |     4196 |     463 |   89% |
+//   | wide table (dups)   |     4471 |      60 |   99% |
+//   | deep nested         |     1534 |      51 |   97% |
+//   | OCR text-heavy      |     1309 |     432 |   67% |
+//   | multi-frame search  |     2755 |     501 |   82% |
+//   | mostly-structural   |     5879 |     299 |   95% |
+//   | AGGREGATE           |    20525 |    1864 |   91% |
+//
+// OCR text-heavy is the floor (the text blob dominates, nothing to dedup) —
+// same caveat as CSV/TSV; everywhere else it's a 5–75× cut.
 // ---------------------------------------------------------------------------
 
 const OUTLINE_MAX_LINES: usize = 200;
@@ -528,6 +544,188 @@ mod tests {
         let els = vec![el(1, 9, "AXGroup", None, 0, None)];
         assert!(elements_outline_text(&els, 1).contains("no text-bearing elements"));
         assert!(elements_outline_text(&[], 0).contains("no text-bearing elements"));
+    }
+
+    #[test]
+    fn outline_is_char_safe_with_unicode_and_clips_by_char() {
+        // Multi-byte text must clip on char boundaries (never panic) and the
+        // … marker must appear without slicing a code point.
+        let emoji = "🎉".repeat(OUTLINE_TEXT_CLIP + 30);
+        let els = vec![
+            el(1, 9, "AXStaticText", Some("café — naïve 日本語 😀"), 1, None),
+            el(2, 9, "AXStaticText", Some(&emoji), 1, None),
+        ];
+        let out = elements_outline_text(&els, 2);
+        assert!(out.contains("café — naïve 日本語 😀"));
+        assert!(out.contains('…'));
+        // clipped to OUTLINE_TEXT_CLIP code points (+ the … marker)
+        let clipped_line = out.lines().find(|l| l.contains("🎉")).unwrap();
+        let emoji_count = clipped_line.chars().filter(|&c| c == '🎉').count();
+        assert_eq!(emoji_count, OUTLINE_TEXT_CLIP);
+    }
+
+    #[test]
+    fn outline_caps_indent_for_deeply_nested() {
+        let els = vec![el(1, 9, "AXButton", Some("Deep"), 30, Some(true))];
+        let out = elements_outline_text(&els, 1);
+        let line = out.lines().find(|l| l.contains("Deep")).unwrap();
+        let leading = line.len() - line.trim_start().len();
+        assert_eq!(leading, 12, "indent should cap at 6 levels × 2 spaces"); // not 60
+    }
+
+    #[test]
+    fn outline_dedup_is_adjacent_only_preserving_structure() {
+        // A A B A — the trailing A must NOT merge with the leading run.
+        let els = vec![
+            el(1, 9, "AXTab", Some("A"), 1, None),
+            el(2, 9, "AXTab", Some("A"), 1, None),
+            el(3, 9, "AXTab", Some("B"), 1, None),
+            el(4, 9, "AXTab", Some("A"), 1, None),
+        ];
+        let out = elements_outline_text(&els, 4);
+        assert!(out.contains("AXTab \"A\" #1 ×2"), "got:\n{out}");
+        assert!(out.contains("AXTab \"B\" #3"));
+        assert!(out.contains("AXTab \"A\" #4"));
+        assert!(!out.contains("#4 ×"));
+    }
+
+    #[test]
+    fn outline_buckets_interleaved_frames() {
+        // Search can return frames interleaved; the outline buckets each frame
+        // (first-seen order) so the model reads one coherent frame at a time.
+        let els = vec![
+            el(1, 100, "AXButton", Some("one"), 0, None),
+            el(2, 200, "AXButton", Some("two"), 0, None),
+            el(3, 100, "AXButton", Some("three"), 0, None),
+        ];
+        let out = elements_outline_text(&els, 3);
+        assert!(out.contains("frame 100 · accessibility · 2 text elements"), "got:\n{out}");
+        assert!(out.contains("frame 200 · accessibility · 1 text elements"));
+        // #1 and #3 (frame 100) precede #2 (frame 200)
+        assert!(out.find("#3").unwrap() < out.find("#2").unwrap());
+    }
+
+    #[test]
+    fn outline_keeps_one_line_per_element_through_quotes_and_newlines() {
+        let els = vec![el(
+            1,
+            9,
+            "AXStaticText",
+            Some("he said \"hi\"\nthen left"),
+            1,
+            None,
+        )];
+        let out = elements_outline_text(&els, 1);
+        // exactly one frame header + one element line (+ trailing newline)
+        let body: Vec<&str> = out.lines().filter(|l| l.contains('#')).collect();
+        assert_eq!(body.len(), 1, "embedded newline split the row: {out:?}");
+        assert!(body[0].contains("he said \"hi\" then left"));
+    }
+
+    // Reproducible token-measurement harness. Renders JSON-default vs outline
+    // for several realistic tree shapes into a temp file so an external
+    // tokenizer can score them:
+    //   cargo test -p screenpipe-engine dump_token_samples -- --ignored
+    //   python3 -c "import json,tiktoken;e=tiktoken.get_encoding('o200k_base');\
+    //     [print(s['name'], len(e.encode(s['json'])), len(e.encode(s['outline']))) \
+    //      for s in json.load(open('<tmp>/sp_elem_samples.json'))]"
+    // Measured (o200k_base): 91% fewer tokens aggregate (11×); per shape 67%
+    // (OCR text-heavy) … 99% (tabular dedup). #[ignore] so CI never does the IO.
+    #[test]
+    #[ignore]
+    fn dump_token_samples() {
+        fn collect(name: &str, els: Vec<ElementResponse>) -> serde_json::Value {
+            let total = els.len() as i64;
+            let json = serde_json::to_string(&serde_json::json!({
+                "data": &els,
+                "pagination": { "limit": total, "offset": 0, "total": total }
+            }))
+            .unwrap();
+            let outline = elements_outline_text(&els, total);
+            serde_json::json!({ "name": name, "elements": els.len(), "json": json, "outline": outline })
+        }
+
+        let mut samples = Vec::new();
+
+        // 1. small flat UI
+        samples.push(collect(
+            "small_flat",
+            vec![
+                el(1, 1, "AXButton", Some("Compose"), 1, Some(true)),
+                el(2, 1, "AXLink", Some("Inbox"), 1, Some(true)),
+                el(3, 1, "AXLink", Some("Sent"), 1, Some(true)),
+                el(4, 1, "AXTextField", Some("Search mail"), 1, Some(true)),
+                el(5, 1, "AXButton", Some("Settings"), 1, Some(true)),
+            ],
+        ));
+
+        // 2. typical app frame: real text + structural noise + some dup text
+        let mut typ = vec![
+            el(1, 7, "AXHeading", Some("Inbox"), 1, Some(true)),
+            el(2, 7, "AXButton", Some("Compose"), 1, Some(true)),
+            el(3, 7, "AXTextField", Some("Search"), 1, Some(true)),
+        ];
+        for i in 0..18 {
+            typ.push(el(100 + i * 3, 7, "AXGroup", None, 2, Some(true))); // empty noise
+            typ.push(el(101 + i * 3, 7, "AXStaticText", Some(&format!("Sender {i}")), 4, Some(true)));
+            typ.push(el(102 + i * 3, 7, "AXStaticText", Some("Unread"), 4, Some(true))); // dup
+        }
+        samples.push(collect("typical_app", typ));
+
+        // 3. wide table: 60 rows of repeated cells (dedup territory)
+        let mut table = vec![el(1, 3, "AXHeading", Some("Orders"), 1, Some(true))];
+        for i in 0..60 {
+            table.push(el(10 + i, 3, "AXCell", Some("Shipped"), 3, Some(true)));
+        }
+        samples.push(collect("wide_table_dups", table));
+
+        // 4. deep nested chain
+        let mut deep = Vec::new();
+        for d in 0..20 {
+            deep.push(el(d as i64 + 1, 4, "AXGroup", None, d, Some(true)));
+        }
+        deep.push(el(999, 4, "AXButton", Some("Deeply nested action"), 20, Some(true)));
+        samples.push(collect("deep_nested", deep));
+
+        // 5. OCR-heavy long text
+        let mut ocr = Vec::new();
+        for i in 0..15 {
+            let mut e = el(
+                i + 1,
+                5,
+                "text",
+                Some(&format!("This is a longer sentence of captured OCR text number {i} that a real screen would contain in a paragraph.")),
+                1,
+                Some(true),
+            );
+            e.source = "ocr".into();
+            e.on_screen = None;
+            ocr.push(e);
+        }
+        samples.push(collect("ocr_heavy", ocr));
+
+        // 6. multi-frame search result
+        let mut multi = Vec::new();
+        for f in 0..3 {
+            for i in 0..12 {
+                multi.push(el(f * 100 + i, 200 + f, "AXLink", Some(&format!("Result {f}-{i}")), 2, Some(true)));
+            }
+        }
+        samples.push(collect("multi_frame", multi));
+
+        // 7. mostly-structural noise (60 empty groups, 20 text)
+        let mut noisy = Vec::new();
+        for i in 0..60 {
+            noisy.push(el(i + 1, 6, "AXGroup", None, (i % 8) as i32, Some(true)));
+        }
+        for i in 0..20 {
+            noisy.push(el(1000 + i, 6, "AXStaticText", Some(&format!("Label {i}")), 3, Some(true)));
+        }
+        samples.push(collect("noisy_structural", noisy));
+
+        let path = std::env::temp_dir().join("sp_elem_samples.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&samples).unwrap()).unwrap();
+        eprintln!("wrote {} samples to {}", samples.len(), path.display());
     }
 }
 
