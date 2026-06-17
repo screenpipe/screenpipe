@@ -145,12 +145,14 @@ fn create_query_params(languages: Vec<Language>, vocabulary: &[VocabularyEntry])
         }
     }
 
-    // Add vocabulary as Deepgram keyterms (Nova-3 uses `keyterm` instead of `keywords`)
+    // Add vocabulary as Deepgram nova-3 keyterms. nova-3 keyterm prompting takes
+    // plain terms with NO `:intensifier` (that's the older nova-2 `keywords`
+    // syntax) — a trailing `:2` would be sent as part of the literal term.
     for entry in vocabulary.iter().take(100) {
         let keyword = entry.replacement.as_deref().unwrap_or(&entry.word);
-        // Simple percent-encode spaces for the query string
-        let encoded = keyword.replace(' ', "%20");
-        query_params.push_str(&format!("&keyterm={}:2", encoded));
+        // Percent-encode spaces (and the comma, which separates keyterms).
+        let encoded = keyword.replace(' ', "%20").replace(',', "%2C");
+        query_params.push_str(&format!("&keyterm={}", encoded));
     }
 
     query_params
@@ -667,6 +669,25 @@ mod tests {
         let params = create_query_params(vec![Language::Portuguese], &[]);
         assert!(params.contains("&language=pt"), "got: {params}");
         assert!(!params.contains("detect_language"));
+    }
+
+    #[test]
+    fn vocabulary_becomes_plain_keyterms_without_intensifier() {
+        let vocab = vec![
+            VocabularyEntry {
+                word: "Screenpipe".into(),
+                replacement: None,
+            },
+            VocabularyEntry {
+                word: "Core Audio".into(),
+                replacement: None,
+            },
+        ];
+        let params = create_query_params(vec![], &vocab);
+        assert!(params.contains("&keyterm=Screenpipe"), "got: {params}");
+        // nova-3 keyterms take no `:intensifier` (that's nova-2 keywords).
+        assert!(!params.contains(":2"), "got: {params}");
+        assert!(params.contains("&keyterm=Core%20Audio"), "got: {params}");
     }
 
     #[test]

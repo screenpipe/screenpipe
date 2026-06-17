@@ -2043,9 +2043,10 @@ async fn do_capture(
                 // Mirror the downstream content-dedup gate: a non-empty walk
                 // whose hash matches the previous frame (and which is dedup
                 // eligible) won't be stored — count it as deduped.
-                let is_dedup = dedup_applies(trigger, hd_active, last_db_write.elapsed())
-                    && previous_content_hash
-                        .is_some_and(|prev| prev == snap.content_hash as i64 && prev != 0);
+                let is_dedup =
+                    dedup_applies(trigger, hd_active, in_meeting, last_db_write.elapsed())
+                        && previous_content_hash
+                            .is_some_and(|prev| prev == snap.content_hash as i64 && prev != 0);
                 let outcome = if is_dedup {
                     crate::ui_recorder::TreeWalkOutcome::Deduped {
                         duration_ms,
@@ -2513,8 +2514,18 @@ mod tests {
             false,
             recent
         ));
-        assert!(!dedup_applies(&CaptureTrigger::KeyPress, false, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Clipboard, false, false, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::KeyPress,
+            false,
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::Clipboard,
+            false,
+            false,
+            recent
+        ));
 
         // HD active → dedup is bypassed even for an otherwise-eligible trigger.
         // This is the fix: video/demo replay moves pixels but not AX text, so
@@ -2552,7 +2563,12 @@ mod tests {
 
         // Idle/Manual are always dedup-exempt (timeline floor), HD or not.
         assert!(!dedup_applies(&CaptureTrigger::Idle, false, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Manual, false, false, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::Manual,
+            false,
+            false,
+            recent
+        ));
 
         // 30s time-floor: once it elapses, write through regardless.
         assert!(!dedup_applies(
@@ -2683,7 +2699,9 @@ mod tests {
 
         // ~6s since the last capture — past the meeting cap, well under 30s.
         let six_s_ago = Instant::now()
-            .checked_sub(Duration::from_millis(MEETING_IDLE_CAPTURE_INTERVAL_MS + 1_000))
+            .checked_sub(Duration::from_millis(
+                MEETING_IDLE_CAPTURE_INTERVAL_MS + 1_000,
+            ))
             .unwrap_or(Instant::now());
 
         // Not in a meeting: 6s < 30s → no idle capture yet.

@@ -659,6 +659,88 @@ const TOOLS: Tool[] = [
       required: ["action"],
     },
   },
+  // ----- Pipes: scheduled AI automations ----------------------------------
+  // The pipe lifecycle. The rich how-to (prompt format, schedule syntax,
+  // presets, how a pipe should query screenpipe) lives in the
+  // screenpipe://guide/pipes resource — keep these descriptions short and
+  // point there, per progressive disclosure.
+  {
+    name: "list-pipes",
+    description:
+      "List the user's pipes (scheduled AI automations) with their enabled state + schedule. " +
+      "USE WHEN: the user asks what automations/pipes exist, or before you create or edit one.",
+    annotations: { title: "List Pipes", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "create-pipe",
+    description:
+      "Create a pipe — a scheduled AI automation that runs a markdown prompt on a schedule (e.g. 'every day at 9am'). " +
+      "Writes ~/.screenpipe/pipes/<name>/pipe.md, installs it, enables it, and (by default) runs it once to test. " +
+      "USE WHEN: the user wants to automate a recurring task (daily summary, reminder, report, monitor, sync). " +
+      "IMPORTANT: read the screenpipe://guide/pipes resource FIRST — it documents the prompt format, schedule syntax, presets, and how the pipe prompt should query screenpipe. After creating, check pipe-logs to confirm the test run worked.",
+    annotations: { title: "Create Pipe", readOnlyHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "kebab-case id, e.g. 'daily-time-report'. Becomes the folder name + pipe id.",
+        },
+        prompt: {
+          type: "string",
+          description:
+            "The markdown instructions the AI agent runs every scheduled execution. Be specific: what to query (which screenpipe endpoints + time range), how to process it, and what to output (write a note, send a notification, push to a connection). screenpipe prepends a context header (time range, timezone, OS, API base + key) before each run, so no template variables are needed. See screenpipe://guide/pipes.",
+        },
+        schedule: {
+          type: "string",
+          description:
+            "When to run: 'every 30m', 'every 1h', 'every day at 9am', 'every monday at 9am', or a cron expression like '0 9 * * *'.",
+        },
+        enabled: { type: "boolean", description: "Enable on creation (default true).", default: true },
+        preset: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional AI model preset name(s), e.g. ['Primary','Fallback']. Omit to use the default preset.",
+        },
+        history: {
+          type: "boolean",
+          description: "Feed the previous run's output back in as context on the next run (default false).",
+          default: false,
+        },
+        run_now: {
+          type: "boolean",
+          description: "Run once immediately after creating, to test it (default true).",
+          default: true,
+        },
+      },
+      required: ["name", "prompt", "schedule"],
+    },
+  },
+  {
+    name: "run-pipe",
+    description:
+      "Run a pipe once immediately (a test run), independent of its schedule. " +
+      "USE WHEN: you just created/edited a pipe and want to verify it, or the user says 'run X now'. Then read pipe-logs to see what it did.",
+    annotations: { title: "Run Pipe", readOnlyHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string", description: "The pipe id/name." } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "pipe-logs",
+    description:
+      "Get a pipe's recent execution logs / output. " +
+      "USE WHEN: debugging why a pipe misbehaved, or reading the result of a test run.",
+    annotations: { title: "Pipe Logs", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string", description: "The pipe id/name." } },
+      required: ["name"],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -772,6 +854,13 @@ const RESOURCES = [
     description: "How to use screenpipe tools effectively — search strategy, progressive disclosure, and common patterns",
     mimeType: "text/markdown",
   },
+  {
+    uri: "screenpipe://guide/pipes",
+    name: "Creating Pipes",
+    description:
+      "How to create pipes (scheduled AI automations): the pipe.md prompt format, schedule syntax, presets, how the prompt should query screenpipe, and the create→run→logs lifecycle. Read before using create-pipe.",
+    mimeType: "text/markdown",
+  },
 ];
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
@@ -849,6 +938,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - "Find when I was on Twitter" → search-content with app_name='Arc' (or the browser name), q='twitter'
 - "Remember that I prefer X" → update-memory with content describing the preference
 - "What do you remember about X?" → search-content with content_type='memory', q='X'
+- "Automate X every day / on a schedule" → read the screenpipe://guide/pipes resource, then create-pipe (a scheduled AI automation)
 
 ## Deep Links
 
@@ -856,6 +946,65 @@ When referencing specific moments in results, create clickable links:
 - Frame: [10:30 AM — Chrome](screenpipe://frame/{frame_id}) — use frame_id from search results
 - Timeline: [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from results
 Never fabricate IDs or timestamps — only use values from actual results.
+`,
+        },
+      ],
+    };
+  }
+
+  if (uri === "screenpipe://guide/pipes") {
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: "text/markdown",
+          text: `# Creating Pipes — scheduled AI automations
+
+A **pipe** is a markdown prompt that an AI agent runs on a schedule. Each pipe is a folder \`~/.screenpipe/pipes/<name>/pipe.md\` with YAML frontmatter + a prompt body. Use the **create-pipe** tool — it writes the file, installs, enables, and (by default) runs it once to test. Manage with **list-pipes**, **run-pipe**, and **pipe-logs**.
+
+## pipe.md anatomy
+
+\`\`\`markdown
+---
+schedule: every day at 9am
+enabled: true
+preset: ["Primary", "Fallback"]   # optional model preset(s); omit for default
+history: false                     # optional; feed prior run's output back in
+---
+
+Your instructions here. This prompt is what the AI agent executes on schedule.
+\`\`\`
+
+**schedule** (required): \`every 30m\` · \`every 1h\` · \`every day at 9am\` · \`every monday at 9am\` · or cron \`0 9 * * *\`.
+
+screenpipe **prepends a context header** before every run (current time range, timezone, OS, API base URL + auth). So the prompt does NOT need template variables or to hardcode the key — it just says what to do.
+
+## Writing a good pipe prompt
+
+Make the prompt do three things, concretely:
+1. **Query** the relevant window of activity. Prefer the same endpoints these MCP tools wrap:
+   - \`GET /activity-summary?start_time=...&end_time=now\` — apps/windows/durations. **Let this endpoint own all time math; never sum minutes in the prompt (the model drifts).**
+   - \`GET /search?q=...&content_type=all&start_time=...\` — specific screen text, audio transcripts, memories.
+   - \`GET /memories?...\`, \`GET /meetings?...\` for curated facts / meetings.
+   Always pass \`start_time\` — never scan the whole history.
+2. **Process / summarize** the results.
+3. **Output** somewhere: write a note/file, send a desktop notification (\`POST\` the Tauri sidecar on port 11435 \`/notify\`), or push to a configured connection (Telegram/Slack/Discord/Email — see the CLI \`connection\` commands).
+
+Keep each pipe to **one bounded job**. A focused "summarize my day and write it to a note" beats a vague "monitor everything".
+
+## Lifecycle
+
+- **create-pipe** → writes pipe.md + installs + enables (+ optional \`run_now\` test).
+- **run-pipe** → run once now to test, independent of schedule.
+- **pipe-logs** → read the output / debug.
+- To change config later: \`POST /pipes/<name>/config\` with e.g. \`{ "schedule": "every 1h", "enabled": true }\`.
+
+## Example
+
+A daily time-audit pipe:
+- name: \`daily-time-report\`
+- schedule: \`every day at 6pm\`
+- prompt: "Call /activity-summary for today (start_time='today', end_time=now). Group time by app and project. Write a concise markdown report of where my time went and the top 3 time sinks, then send it as a desktop notification with a link to the timeline."
 `,
         },
       ],
@@ -1028,6 +1177,129 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case "list-pipes": {
+        const res = await callAPI("/pipes");
+        const data = await res.json();
+        const pipes: any[] = Array.isArray(data) ? data : data.data || [];
+        if (!pipes.length) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No pipes yet. Use create-pipe to add a scheduled automation (read the screenpipe://guide/pipes resource first).",
+              },
+            ],
+          };
+        }
+        const rows = pipes.map((p: any) => {
+          const id = p.id || p.name || p.pipe_id || "?";
+          const cfg = p.config || p;
+          const en = (cfg.enabled ?? p.enabled) ? "on " : "off";
+          const sch = cfg.schedule || p.schedule || "?";
+          return `${en} | ${id} | ${sch}`;
+        });
+        return {
+          content: [
+            { type: "text", text: `pipes (enabled | name | schedule):\n${rows.join("\n")}` },
+          ],
+        };
+      }
+
+      case "create-pipe": {
+        const pipeName = String(args.name || "").trim();
+        if (!/^[a-z0-9][a-z0-9-_]*$/i.test(pipeName)) {
+          throw new Error(
+            "invalid pipe name — use kebab-case letters/numbers/dashes, e.g. 'daily-time-report'"
+          );
+        }
+        const prompt = String(args.prompt || "").trim();
+        const schedule = String(args.schedule || "").trim();
+        if (!prompt) throw new Error("prompt is required");
+        if (!schedule) throw new Error("schedule is required");
+        const enabled = args.enabled !== false;
+        const runNow = args.run_now !== false;
+
+        const fm: string[] = ["---", `schedule: ${schedule}`, `enabled: ${enabled}`];
+        if (Array.isArray(args.preset) && args.preset.length) {
+          fm.push(`preset: ${JSON.stringify(args.preset)}`);
+        }
+        if (args.history === true) fm.push("history: true");
+        fm.push("---", "", prompt, "");
+        const md = fm.join("\n");
+
+        const dir = path.join(os.homedir(), ".screenpipe", "pipes", pipeName);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "pipe.md"), md, "utf8");
+        const steps: string[] = [`wrote ${path.join(dir, "pipe.md")}`];
+
+        const instRes = await callAPI("/pipes/install", {
+          method: "POST",
+          body: JSON.stringify({ source: dir }),
+        });
+        const inst = await instRes.json();
+        if (inst?.error) throw new Error(`install failed: ${inst.error}`);
+        const pipeId = inst?.name || pipeName;
+        steps.push(`installed as "${pipeId}"`);
+
+        if (enabled) {
+          await callAPI(`/pipes/${encodeURIComponent(pipeId)}/enable`, {
+            method: "POST",
+            body: JSON.stringify({ enabled: true }),
+          });
+          steps.push("enabled");
+        }
+
+        let runNote = "";
+        if (runNow) {
+          try {
+            await callAPI(`/pipes/${encodeURIComponent(pipeId)}/run`, { method: "POST" });
+            steps.push("started a test run");
+            runNote = `\n\nA test run was started — read it with pipe-logs (name="${pipeId}").`;
+          } catch (e) {
+            runNote = `\n\nCreated, but the test run couldn't start: ${(e as Error).message}. Try run-pipe later.`;
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Created pipe "${pipeId}" — schedule: ${schedule}, ${enabled ? "enabled" : "disabled"}.\n` +
+                steps.map((s) => `- ${s}`).join("\n") +
+                runNote,
+            },
+          ],
+        };
+      }
+
+      case "run-pipe": {
+        const pipeName = String(args.name || "").trim();
+        if (!pipeName) throw new Error("name is required");
+        const res = await callAPI(`/pipes/${encodeURIComponent(pipeName)}/run`, {
+          method: "POST",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data?.error) throw new Error(String(data.error));
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Started a run of "${pipeName}". Read pipe-logs (name="${pipeName}") for the output.`,
+            },
+          ],
+        };
+      }
+
+      case "pipe-logs": {
+        const pipeName = String(args.name || "").trim();
+        if (!pipeName) throw new Error("name is required");
+        const res = await callAPI(`/pipes/${encodeURIComponent(pipeName)}/logs`);
+        const text = await res.text();
+        const trimmed = text.length > 6000 ? `…${text.slice(-6000)}` : text;
+        return { content: [{ type: "text", text: trimmed || "(no logs yet)" }] };
+      }
+
       case "search-content": {
         const includeFrames = args.include_frames === true;
         const normalized = normalizeTimeFields(args);
