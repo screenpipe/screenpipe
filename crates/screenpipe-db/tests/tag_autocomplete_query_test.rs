@@ -142,6 +142,45 @@ async fn tag_autocomplete_query_counts_tags_across_screen_audio_and_memories() {
     assert_eq!(rows["memory-only"].4, 2);
 }
 
+/// Regression: a memory row whose `tags` column is empty (`''`), NULL, or
+/// non-JSON must not blow up the autocomplete query. Before the `json_valid`
+/// guard, a single `tags = ''` row made `json_each(memories.tags)` raise
+/// "(code: 1) malformed JSON", which 500-ed `GET /tags/autocomplete` for the
+/// whole chat tag filter (observed firing ~15k times/day in production).
+#[tokio::test]
+async fn tag_autocomplete_query_tolerates_malformed_memory_tags() {
+    let db = migrated_db().await;
+
+    exec(
+        &db,
+        "INSERT INTO memories (content, tags) VALUES \
+         ('ok1', '[\"shared\",\"memory-only\"]'), \
+         ('empty', ''), \
+         ('null', NULL), \
+         ('garbage', 'not json at all'), \
+         ('ok2', '[\"memory-only\"]')",
+    )
+    .await;
+
+    // Must not error — this is the regression. `.unwrap()` inside `tag_rows`
+    // would panic with "malformed JSON" before the guard was added.
+    let rows = by_name(tag_rows(&db).await);
+
+    // Valid memory tags still surface with correct counts; bad rows are skipped.
+    assert_eq!(rows["memory-only"].4, 2, "memory_count for memory-only");
+    assert_eq!(rows["shared"].4, 1, "memory_count for shared");
+    assert!(
+        !rows.contains_key(""),
+        "empty/malformed tags must not surface as a tag"
+    );
+
+    // `list_memory_tags` shares the same `json_each(memories.tags)` pattern and
+    // must tolerate the bad rows too.
+    let tag_list = db.list_memory_tags().await.unwrap();
+    assert!(tag_list.iter().any(|t| t == "memory-only"));
+    assert!(tag_list.iter().any(|t| t == "shared"));
+}
+
 #[tokio::test]
 async fn tag_autocomplete_query_survives_large_mixed_sources() {
     let db = migrated_db().await;

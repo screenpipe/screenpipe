@@ -401,7 +401,7 @@ impl DatabaseManager {
     pub async fn list_memory_tags(&self) -> Result<Vec<String>, SqlxError> {
         // Tags are stored as JSON arrays. Extract all unique tag values across all memories.
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT j.value FROM memories, json_each(memories.tags) j \
+            "SELECT DISTINCT j.value FROM memories, json_each(CASE WHEN json_valid(memories.tags) THEN memories.tags ELSE '[]' END) j \
              WHERE j.value IS NOT NULL AND j.value != '' \
              ORDER BY j.value",
         )
@@ -443,7 +443,7 @@ impl DatabaseManager {
                 SELECT name
                 FROM (
                   SELECT json_tags.value as name
-                  FROM memories, json_each(memories.tags) json_tags
+                  FROM memories, json_each(CASE WHEN json_valid(memories.tags) THEN memories.tags ELSE '[]' END) json_tags
                   WHERE json_tags.value IS NOT NULL
                     AND json_tags.value != ''
                     AND (? = '' OR json_tags.value LIKE '%' || ? || '%' COLLATE NOCASE)
@@ -470,7 +470,7 @@ impl DatabaseManager {
                 WHERE t.name = candidates.name
               ) + (
                 SELECT COUNT(DISTINCT memories.id)
-                FROM memories, json_each(memories.tags) memory_tags
+                FROM memories, json_each(CASE WHEN json_valid(memories.tags) THEN memories.tags ELSE '[]' END) memory_tags
                 WHERE memory_tags.value = candidates.name
               ) as count,
               (
@@ -487,7 +487,7 @@ impl DatabaseManager {
               ) as audio_count,
               (
                 SELECT COUNT(DISTINCT memories.id)
-                FROM memories, json_each(memories.tags) memory_tags
+                FROM memories, json_each(CASE WHEN json_valid(memories.tags) THEN memories.tags ELSE '[]' END) memory_tags
                 WHERE memory_tags.value = candidates.name
               ) as memory_count
             FROM candidates
