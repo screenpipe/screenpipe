@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 52
-- Declared test blocks: 176
-- Weighted coverage points: 138.0
+- Mapped specs: 53
+- Declared test blocks: 177
+- Weighted coverage points: 138.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 45 | 165 | 134.6 | 15 | 52 | 92% |
-| macos | 49 | 142 | 110.6 | 15 | 52 | 89% |
-| linux | 38 | 130 | 107.0 | 13 | 49 | 86% |
+| windows | 46 | 166 | 135.3 | 15 | 52 | 92% |
+| macos | 50 | 143 | 111.3 | 15 | 52 | 89% |
+| linux | 39 | 131 | 107.7 | 13 | 49 | 86% |
 
 ## Runtime Results
 
@@ -36,14 +36,14 @@ pass/fail/skip counts.
 | audio-device | 2 specs / 26 tests / 19.4 pts | 1 specs / 1 tests / 0.3 pts | - |
 | billing | 2 specs / 2 tests / 1.7 pts | 2 specs / 2 tests / 1.7 pts | 2 specs / 2 tests / 1.7 pts |
 | capture-ocr | 2 specs / 13 tests / 5.2 pts | 2 specs / 3 tests / 1.2 pts | 1 specs / 2 tests / 0.8 pts |
-| chat-ai | 8 specs / 8 tests / 4.9 pts | 10 specs / 11 tests / 5.8 pts | 8 specs / 8 tests / 4.9 pts |
+| chat-ai | 9 specs / 9 tests / 5.6 pts | 11 specs / 12 tests / 6.5 pts | 9 specs / 9 tests / 5.6 pts |
 | local-api | 13 specs / 88 tests / 74.0 pts | 12 specs / 63 tests / 55.0 pts | 10 specs / 62 tests / 54.6 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts | 1 specs / 3 tests / 1.2 pts |
 | os-integration | 4 specs / 16 tests / 15.1 pts | 4 specs / 3 tests / 0.9 pts | - |
 | performance | 2 specs / 43 tests / 43.0 pts | 4 specs / 33 tests / 29.5 pts | 1 specs / 28 tests / 28.0 pts |
 | pipes | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts |
-| real-ui-e2e | 25 specs / 89 tests / 72.9 pts | 26 specs / 76 tests / 62.4 pts | 22 specs / 70 tests / 60.5 pts |
+| real-ui-e2e | 26 specs / 90 tests / 73.6 pts | 27 specs / 77 tests / 63.1 pts | 23 specs / 71 tests / 61.2 pts |
 | settings | 10 specs / 27 tests / 24.9 pts | 10 specs / 20 tests / 17.2 pts | 9 specs / 19 tests / 16.9 pts |
 | storage-privacy | 6 specs / 20 tests / 19.1 pts | 5 specs / 12 tests / 11.1 pts | 4 specs / 12 tests / 11.1 pts |
 | tauri-command | 8 specs / 17 tests / 10.3 pts | 9 specs / 19 tests / 10.8 pts | 8 specs / 17 tests / 10.3 pts |
@@ -103,6 +103,7 @@ pass/fail/skip counts.
 | chat-prefill-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-prefill | medium | partial | synthetic | 1 | Cross-window prefill duplicate regression. |
 | chat-settings-background-stream.spec.ts | windows, macos, linux | chat-ai, settings, real-ui-e2e | chat, chat-streaming, settings | high | strong | real-user-flow | 1 | Opening the standalone Settings route mid-stream must not abort the chat: a long synthetic stream keeps running while the user round-trips to Settings, remains live in Recents, and restores the full response (early + final tokens) after the row is clicked. |
 | chat-sidebar-stub-dedup.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Listener-order regression for metadata-only sidebar stubs gaining dedup keys. |
+| chat-source-file-preview.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | Clicking a chat file source opens it in the preview sidebar with rendered markdown + syntax-highlighted code. |
 | chat-streaming-performance.spec.ts | macos | chat-ai, performance | chat, chat-streaming | medium | conditional | performance | 2 | macOS-only chat streaming responsiveness. |
 | chat-switch-context-loss.spec.ts | windows, macos, linux | chat-ai | chat, chat-context | medium | partial | synthetic | 1 | Switching conversations during streaming must not corrupt state. |
 | chat-window.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, window-lifecycle | high | strong | real-user-flow | 1 | Opens Chat and focuses the composer for typing. |

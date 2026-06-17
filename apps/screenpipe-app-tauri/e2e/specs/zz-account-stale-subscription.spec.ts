@@ -43,7 +43,13 @@
 
 import { existsSync } from "node:fs";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { openHomeWindow, waitForAppReady, waitForTestId, t } from "../helpers/test-utils.js";
+import {
+  openHomeWindow,
+  reloadAndWaitForHome,
+  waitForAppReady,
+  waitForTestId,
+  t,
+} from "../helpers/test-utils.js";
 import { invoke } from "../helpers/tauri.js";
 
 const FAKE_TOKEN = "e2e-fake-token-stale-subscription";
@@ -174,28 +180,18 @@ async function loginAsSubscriber(): Promise<boolean> {
 }
 
 async function reloadHomeToAccount(): Promise<void> {
-  await browser.execute(() => window.location.reload());
-  await browser.waitUntil(
-    async () =>
-      (await browser.execute(
-        () => !!document.querySelector('[data-testid="home-page"]'),
-      )) as boolean,
-    { timeout: t(30_000), interval: 500, timeoutMsg: "home did not re-render after reload" },
-  );
+  await reloadAndWaitForHome();
   await openAccountSettings();
 }
 
-// QUARANTINED 2026-06-16 (Louis CI unblock): this spec is flaky in CI. Its
-// `window.location.reload()` intermittently loses the webdriver session
-// ("WebDriverError: Session ... not found") and then times out in
-// `reloadHomeToAccount` ("home did not re-render after reload"), reding E2E on
-// all three platforms (it was the ONLY failing spec once the coverage-map +
-// Windows-ORT fixes landed). It fails on the reload infrastructure BEFORE the
-// card assertion, so no product regression is being hidden. The spec was added
-// in #4172 but merged while E2E was already red (a missing coverage-map entry),
-// so it was never validated green. Re-enable by dropping `.skip` once the
-// reload is stabilized (e.g. a more robust re-render signal than `home-page`,
-// or a reload that can't drop the session).
+// QUARANTINED (describe.skip): the shared `reloadAndWaitForHome` helper stabilized
+// the OTHER reload specs (zz-logout-resurrect, updater-banner) and main-overlay,
+// which now pass green, but this one still times out in `reloadHomeToAccount` even
+// with the transient-trapping poll. After the all-window fetch-mock plus
+// secret-store token clear, the reload genuinely doesn't re-render `home-page`
+// within 30s (not just a transient error), so it needs local wdio debugging of
+// that specific sequence. Kept skipped so it doesn't red E2E; the helper and the
+// other three fixes still ship.
 describe.skip("Account never shows an active plan card under a not-logged-in header", function () {
   this.timeout(180_000);
 
@@ -222,16 +218,7 @@ describe.skip("Account never shows an active plan card under a not-logged-in hea
       // best-effort
     }
     await forEachWindow(() => restoreFetch()).catch(() => {});
-    await browser.execute(() => window.location.reload());
-    await browser
-      .waitUntil(
-        async () =>
-          (await browser.execute(
-            () => !!document.querySelector('[data-testid="home-page"]'),
-          )) as boolean,
-        { timeout: t(30_000), interval: 500, timeoutMsg: "home did not re-render after reload" },
-      )
-      .catch(() => {});
+    await reloadAndWaitForHome().catch(() => {});
   });
 
   it("hides the cloud plan card once the token is gone but cloud_subscribed lingers", async () => {

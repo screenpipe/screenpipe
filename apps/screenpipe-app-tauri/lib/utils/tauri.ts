@@ -770,6 +770,32 @@ async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
 }
 },
 /**
+ * Return the curated catalog, each entry flagged `imported` against the store.
+ * Prefers the remote catalog so it can grow without an app release, but never
+ * fails the panel — any hiccup falls back to the bundled copy.
+ */
+async fetchSkillsRegistry() : Promise<Result<RegistrySkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("fetch_skills_registry") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Install a catalog skill: download its folder into a staging dir, then swap it
+ * into the store atomically so a failed download never leaves a half-written
+ * skill behind. Re-installing the same name refreshes it.
+ */
+async installRegistrySkill(repo: string, gitRef: string, path: string, name: string) : Promise<Result<ImportedSkill, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_registry_skill", { repo, gitRef, path, name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Initialize sync with password.
  * This initializes both the local SyncManager (for device queries) and
  * the server's SyncService (for actual data sync).
@@ -930,9 +956,9 @@ async oauthCancel(integrationId: string) : Promise<Result<null, string>> {
  * `integration_id` must match the integration's `def().id`.
  * `instance` is an optional name for multi-account support (e.g. email address).
  */
-async oauthConnect(integrationId: string, instance: string | null) : Promise<Result<OAuthStatus, string>> {
+async oauthConnect(integrationId: string, instance: string | null, variant: string | null) : Promise<Result<OAuthStatus, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId, instance }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId, instance, variant }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2295,6 +2321,12 @@ export type ImportedSkill = { name: string; description: string;
  * Absolute path inside `<data_dir>/skills/`.
  */
 path: string }
+/**
+ * A skill offered by the curated registry. Installing one downloads its folder
+ * (the directory containing `SKILL.md`) from a public GitHub repo into the
+ * store, reusing the same store the device/folder importers write to.
+ */
+export type RegistrySkill = { name: string; description: string; repo: string; git_ref: string; path: string; source: string; repo_url: string | null; homepage: string | null; apps: string[]; featured: boolean; imported: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
@@ -2765,6 +2797,19 @@ piiBackend?: string;
  * Addresses, Sensitive) as opt-in checkboxes.
  */
 piiRedactionLabels?: string[];
+/**
+ * Render redacted PII as **consistent pseudonyms** instead of static
+ * `[LABEL]` tags when `asyncPiiRedaction` is on. Same value → same
+ * stable token (e.g. `[PERSON_1a2b3c4d5e6f]`), so the timeline stays
+ * correlatable without exposing the value. Irreversible: a one-way
+ * keyed hash with a random per-install key, no `token -> value`
+ * store. Applies to newly-redacted rows only — rows already redacted
+ * keep their existing tags (the worker redacts each row once).
+ * Ignored for the Tinfoil backend (the enclave returns no spans to
+ * tokenize). Off by default. See issue #4206 and `screenpipe-redact`'s
+ * `Pseudonymizer`.
+ */
+piiRedactionPseudonyms?: boolean;
 /**
  * Screenpipe cloud user ID. Empty string means not logged in.
  * Kept as String (not Option) to match existing store.bin schema.

@@ -30,6 +30,7 @@
 //! created, so the owned browser must not pass a per-window `--user-data-dir`
 //! through `additional_browser_args` on Windows.
 
+use crate::owned_browser_transport as transport;
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
 use serde::Serialize;
@@ -80,49 +81,13 @@ const SESSION_ACCESS_REQUEST_EVENT: &str = "owned-browser:session-access-request
 const V20_COOKIE_BLOCK_EVENT: &str = "owned-browser:v20-cookie-blocked";
 const SESSION_ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Marker prefix for `document.title`-based result delivery. The bridge JS
-/// sets `document.title = "<MARKER>:<json>"`; the Rust eval polls
-/// the latest title observed from native title-change events until it sees
-/// this prefix and parses the
-/// trailing JSON. Title is universally writable from JS on every origin,
-/// which is why we use it instead of Tauri's IPC bridge (the latter is
-/// only available on app-origin pages, and the agent navigates the
-/// browser to arbitrary external sites).
-const RESULT_TITLE_PREFIX: &str = "__SP_OWNED_BROWSER_RESULT__:";
-
-/// Bridge script — runs on every page load via the child webview's
-/// initialization script. Defines `window.__SP_RESULT__(payload)` which sets
-/// the page title to a recognisable marker. Idempotent — re-running on the
-/// same page is a no-op (the function is already there).
-const BRIDGE_INIT_SCRIPT: &str = r#"
-(function () {
-    if (window.__SP_RESULT__) return;
-    window.__SP_RESULT__ = function (payload) {
-        try {
-            var json = JSON.stringify(payload);
-            document.title = "__SP_OWNED_BROWSER_RESULT__:" + json;
-        } catch (e) {
-            document.title = "__SP_OWNED_BROWSER_RESULT__:" + JSON.stringify({
-                ok: false,
-                error: "serialize result failed: " + (e && e.message || e),
-            });
-        }
-    };
-})();
-"#;
-
-fn title_after_eval_marker(original_title: &str, result_json: &str) -> String {
-    #[derive(serde::Deserialize)]
-    struct Payload {
-        #[serde(default)]
-        title: Option<String>,
-    }
-
-    serde_json::from_str::<Payload>(result_json)
-        .ok()
-        .and_then(|payload| payload.title)
-        .unwrap_or_else(|| original_title.to_string())
-}
+// The `document.title` result transport — marker prefix, bridge init script,
+// chunked-result codec, and title-restore helper — lives in
+// [`crate::owned_browser_transport`] (`transport`), so the large-result chunking
+// can be unit-tested in isolation. The title is universally writable from JS on
+// every origin, which is why we use it instead of Tauri's IPC bridge (the latter
+// is only injected on app-origin pages, and the agent navigates the browser to
+// arbitrary external sites).
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -530,7 +495,7 @@ fn child_webview_builder(
     let app_for_nav = app.clone();
     let app_for_page_load = app.clone();
     let builder = tauri::webview::WebviewBuilder::new(label.to_string(), url)
-        .initialization_script(BRIDGE_INIT_SCRIPT)
+        .initialization_script(transport::BRIDGE_INIT_SCRIPT)
         .on_navigation(move |_url| {
             // Browsers do not put subframe navigations in the omnibox. Wry's
             // `on_navigation` URL can be an iframe target on macOS (wry#1593),
@@ -552,7 +517,7 @@ fn child_webview_builder(
         .on_document_title_changed(move |webview, title| {
             let state = browser_state();
             state.record_title(title.clone());
-            if title.starts_with(RESULT_TITLE_PREFIX) {
+            if title.starts_with(transport::RESULT_TITLE_PREFIX) {
                 return;
             }
             let committed_url = webview_url(&webview);
@@ -739,12 +704,14 @@ impl TauriOwnedHandle {
             .eval(wrapped)
             .map_err(|e| format!("webview.eval failed: {e}"))?;
 
-        // Poll the title for our marker. 50ms cadence is fine — most
-        // evals complete in <500ms and the timeout cap keeps a stuck
-        // page from blocking forever.
+        // Read the result the bridge ferries back via document.title. Small
+        // results arrive inline; large ones (e.g. a page snapshot) exceed the
+        // browser's ~1KB title cap, so they're pulled in base64 chunks and
+        // reassembled — see [`transport`]. The whole read honours `timeout`.
         let start = Instant::now();
-        let result_json = loop {
-            if start.elapsed() >= timeout {
+        let payload = match self.read_eval_payload(&active, start, timeout).await {
+            Ok(payload) => payload,
+            Err(e) => {
                 // Restore hidden whenever we revealed the webview *only* to run
                 // a background eval (`shown_for_eval` is set only on Windows and
                 // only when it wasn't already visible). This must fire for the
@@ -756,22 +723,13 @@ impl TauriOwnedHandle {
                     let _ = active.hide();
                     self.state.set_visible(false).await;
                 }
-                return Err(format!(
-                    "owned-browser eval timed out after {}s (last title: {:?})",
-                    timeout.as_secs(),
-                    self.state.latest_title()
-                ));
+                return Err(e);
             }
-            let title = self.state.latest_title();
-            if let Some(rest) = title.strip_prefix(RESULT_TITLE_PREFIX) {
-                break rest.to_string();
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
         };
 
         // Clear the marker without undoing a document.title mutation made by
         // the caller's eval code.
-        let restore_title = title_after_eval_marker(&original_title, &result_json);
+        let restore_title = transport::title_after_eval_marker(&original_title, &payload);
         let restore_lit = serde_json::to_string(&restore_title).unwrap_or_else(|_| "\"\"".into());
         let _ = active.eval(format!("document.title = {restore_lit};"));
         if shown_for_eval && url.is_none() {
@@ -779,37 +737,96 @@ impl TauriOwnedHandle {
             self.state.set_visible(false).await;
         }
 
-        // Parse the payload our wrapper emitted. We expect the same
-        // shape as before: { id, ok, result?, error? }.
-        #[derive(serde::Deserialize)]
-        struct Payload {
-            #[serde(default)]
-            id: String,
-            ok: bool,
-            #[serde(default)]
-            result: Option<serde_json::Value>,
-            #[serde(default)]
-            error: Option<String>,
-        }
-        let parsed: Payload = serde_json::from_str(&result_json)
-            .map_err(|e| format!("parse eval result: {e} (raw: {result_json})"))?;
-
-        // The id is informational — with eval_lock serialising calls,
-        // there's only ever one outstanding eval, so mismatches would
-        // indicate a stale title from a previous eval that didn't get
-        // restored. Log but accept.
-        if parsed.id != id {
+        // The id is informational — with eval_lock serialising calls, there's
+        // only ever one outstanding eval, so a mismatch would indicate a stale
+        // title from a previous eval that didn't get restored. Log but accept.
+        if payload.id != id {
             warn!(
                 "owned-browser eval got stale result id (got {}, expected {})",
-                parsed.id, id
+                payload.id, id
             );
         }
 
         Ok(EvalResult {
-            ok: parsed.ok,
-            result: parsed.result,
-            error: parsed.error,
+            ok: payload.ok,
+            result: payload.result,
+            error: payload.error,
         })
+    }
+
+    /// Read one eval's result from the `document.title` transport, honouring the
+    /// overall `timeout` (measured from `start`). An inline result returns
+    /// directly; a chunk header triggers a pull of every base64 chunk, which are
+    /// reassembled into the full payload — so results larger than the browser's
+    /// ~1KB title cap (e.g. a page snapshot) survive intact.
+    async fn read_eval_payload(
+        &self,
+        active: &Webview<Wry>,
+        start: Instant,
+        timeout: Duration,
+    ) -> Result<transport::EvalPayload, String> {
+        match self.poll_marker(start, timeout, None).await? {
+            transport::Marker::Result(payload) => Ok(payload),
+            transport::Marker::Chunk { seq, .. } => Err(format!(
+                "owned-browser eval: got chunk {seq} before a header"
+            )),
+            transport::Marker::Header { chunks, .. } => {
+                let mut parts: Vec<String> = Vec::with_capacity(chunks);
+                for i in 0..chunks {
+                    active
+                        .eval(transport::chunk_fetch_js(i))
+                        .map_err(|e| format!("owned-browser fetch chunk {i}: {e}"))?;
+                    match self.poll_marker(start, timeout, Some(i)).await? {
+                        transport::Marker::Chunk { seq, b64 } if seq == i => parts.push(b64),
+                        other => {
+                            return Err(format!(
+                                "owned-browser eval: expected chunk {i}, got {other:?}"
+                            ))
+                        }
+                    }
+                }
+                let json = transport::reassemble_chunks(&parts)?;
+                serde_json::from_str::<transport::EvalPayload>(&json)
+                    .map_err(|e| format!("parse chunked eval result: {e}"))
+            }
+        }
+    }
+
+    /// Poll the result-transport title (50ms cadence) until a marker appears or
+    /// `timeout` elapses. With `want_seq = Some(i)`, only a chunk marker with
+    /// that seq satisfies the wait — so we don't latch the header or a previous
+    /// chunk's still-current title; `None` accepts the first marker seen.
+    async fn poll_marker(
+        &self,
+        start: Instant,
+        timeout: Duration,
+        want_seq: Option<usize>,
+    ) -> Result<transport::Marker, String> {
+        loop {
+            if start.elapsed() >= timeout {
+                return Err(format!(
+                    "owned-browser eval timed out after {}s (last title: {:?})",
+                    timeout.as_secs(),
+                    self.state.latest_title()
+                ));
+            }
+            let title = self.state.latest_title();
+            if let Some(rest) = title.strip_prefix(transport::RESULT_TITLE_PREFIX) {
+                let marker = transport::parse_marker(rest)?;
+                match want_seq {
+                    // Waiting for a specific chunk: accept only that seq; a stale
+                    // header / earlier chunk title means keep polling.
+                    Some(want) => {
+                        if matches!(&marker, transport::Marker::Chunk { seq, .. } if *seq == want) {
+                            return Ok(marker);
+                        }
+                    }
+                    // First-marker wait (inline result or chunk header).
+                    None => return Ok(marker),
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
 
@@ -1231,7 +1248,7 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
 
 #[cfg(test)]
 mod normalize_url_tests {
-    use super::{normalize_url, title_after_eval_marker, OwnedBrowserState};
+    use super::{normalize_url, OwnedBrowserState};
 
     #[test]
     fn keeps_fully_qualified() {
@@ -1275,31 +1292,8 @@ mod normalize_url_tests {
         assert_eq!(u.scheme(), "data");
     }
 
-    #[test]
-    fn restores_title_changed_by_eval_code() {
-        let payload = r#"{"id":"1","ok":true,"title":"changed","result":null}"#;
-        assert_eq!(
-            title_after_eval_marker("Example Domain", payload),
-            "changed"
-        );
-    }
-
-    #[test]
-    fn restores_original_title_when_payload_has_no_title() {
-        let payload = r#"{"id":"1","ok":true,"result":null}"#;
-        assert_eq!(
-            title_after_eval_marker("Example Domain", payload),
-            "Example Domain"
-        );
-    }
-
-    #[test]
-    fn restores_original_title_when_payload_is_malformed() {
-        assert_eq!(
-            title_after_eval_marker("Example Domain", "not json"),
-            "Example Domain"
-        );
-    }
+    // The `document.title` result-transport logic (inline + chunked) and the
+    // title-restore helper are unit-tested in `owned_browser_transport`.
 
     #[test]
     fn redirect_committed_url_keeps_same_navigation_context() {

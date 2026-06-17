@@ -1844,7 +1844,7 @@ function MessageContent({
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
   const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
-    <SourceCitationFooter citations={sourceCitations} />
+    <SourceCitationFooter citations={sourceCitations} onOpenFile={onOpenViewerPath} />
   ) : null;
 
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -3986,8 +3986,49 @@ export function StandaloneChat({
       // to the wrong handler.
       piSessionIdRef.current = sid;
     };
+
+    // E2E hook: seed a finished assistant message carrying source citations,
+    // so chat-source-file-preview.spec.ts can render the "N sources" footer
+    // and click a file card without driving a real model run. Production
+    // impact: zero — only a non-functional reference on `window`.
+    (window as any).__e2eSeedAssistantMessage = (
+      sid: string,
+      payload: { content?: string; sourceCitations?: unknown[] },
+    ) => {
+      const id = `e2e-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const assistantMsg = {
+        id,
+        role: "assistant" as const,
+        content: payload.content ?? "",
+        timestamp: Date.now(),
+        sourceCitations: payload.sourceCitations ?? [],
+      };
+
+      const store = useChatStore.getState();
+      const existing = store.sessions[sid];
+      if (!existing) {
+        store.actions.upsert({
+          id: sid,
+          title: "e2e",
+          preview: (payload.content ?? "").slice(0, 60),
+          status: "idle",
+          messageCount: 1,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          pinned: false,
+          unread: false,
+          messages: [assistantMsg as any],
+        });
+      } else {
+        store.actions.appendMessage(sid, assistantMsg as any);
+      }
+
+      setMessages((prev) => [...prev, assistantMsg as any]);
+      piSessionIdRef.current = sid;
+    };
     return () => {
       delete (window as any).__e2eSeedUserMessage;
+      delete (window as any).__e2eSeedAssistantMessage;
     };
   }, []);
 
@@ -9306,7 +9347,10 @@ export function StandaloneChat({
                 className="w-full"
                 data-testid="chat-turn-sources"
               >
-                <SourceCitationFooter citations={turnAggregatedCitations} />
+                <SourceCitationFooter
+                  citations={turnAggregatedCitations}
+                  onOpenFile={openFilePreview}
+                />
               </motion.div>
             ) : null,
               ];

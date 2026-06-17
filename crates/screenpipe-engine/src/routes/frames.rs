@@ -123,6 +123,9 @@ pub async fn get_frame_data(
                         "error_type": "remote_device",
                         "frame_id": frame_id,
                         "timestamp": timestamp,
+                        // Neutral name for the frame's text, consistent with the
+                        // rest of the API. `ocr_text` is a deprecated alias.
+                        "text": acc_text,
                         "ocr_text": ocr_text,
                         "accessibility_text": acc_text,
                     });

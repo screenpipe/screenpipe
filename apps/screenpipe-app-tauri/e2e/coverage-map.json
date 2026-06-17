@@ -263,6 +263,16 @@
       "notes": "Opens Chat and focuses the composer for typing."
     },
     {
+      "spec": "chat-source-file-preview.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Clicking a chat file source opens it in the preview sidebar with rendered markdown + syntax-highlighted code."
+    },
+    {
       "spec": "chat-within-session-context-loss.spec.ts",
       "platforms": ["macos"],
       "layers": ["chat-ai"],

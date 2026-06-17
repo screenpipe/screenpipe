@@ -1537,48 +1537,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        // Default to the server's compact `outline` view — a deduped, indented
+        // tree of just the text-bearing nodes, far cheaper for the model to read
+        // than the raw JSON rows (and the dedup/cap/footer replace the old
+        // hand-rolled header). Callers can still override with format=json|csv|tsv.
+        if (!params.has("format")) params.append("format", "outline");
+
         const response = await callAPI(`/elements?${params.toString()}`);
-
-        const data = await response.json();
-        const elements = data.data || [];
-        const pagination = data.pagination || {};
-
-        if (elements.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No elements found. Try: broader search, different role/source, or wider time range.",
-              },
-            ],
-          };
-        }
-
-        const formatted = elements.map(
-          (e: {
-            id: number;
-            frame_id: number;
-            source: string;
-            role: string;
-            text: string | null;
-            depth: number;
-            bounds: { left: number; top: number; width: number; height: number } | null;
-          }) => {
-            const boundsStr = e.bounds
-              ? ` [${e.bounds.left.toFixed(2)},${e.bounds.top.toFixed(2)} ${e.bounds.width.toFixed(2)}x${e.bounds.height.toFixed(2)}]`
-              : "";
-            return `[${e.source}] ${e.role} (frame:${e.frame_id}, depth:${e.depth})${boundsStr}\n  ${e.text || "(no text)"}`;
-          }
-        );
-
-        const header =
-          `Elements: ${elements.length}/${pagination.total || "?"}` +
-          (pagination.total > elements.length
-            ? ` (use offset=${(pagination.offset || 0) + elements.length} for more)`
-            : "");
+        const text = (await response.text()).trim();
 
         return {
-          content: [{ type: "text", text: header + "\n\n" + formatted.join("\n---\n") }],
+          content: [
+            {
+              type: "text",
+              text: text.length
+                ? text
+                : "No elements found. Try: broader search, different role/source, or wider time range.",
+            },
+          ],
         };
       }
 
@@ -1997,19 +1973,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!frameId) {
           return { content: [{ type: "text", text: "Error: frame_id is required" }] };
         }
-        const response = await callAPI(`/frames/${frameId}/elements`);
-        const elements = await response.json();
-        if (!Array.isArray(elements) || elements.length === 0) {
-          return { content: [{ type: "text", text: `No elements found for frame ${frameId}.` }] };
-        }
-        const formatted = elements.map(
-          (e: { role: string; text: string | null; depth: number; source: string }) => {
-            const indent = "  ".repeat(Math.min(e.depth, 5));
-            return `${indent}[${e.source}:${e.role}] ${e.text || "(no text)"}`;
-          }
-        );
+        // Compact outline (text/plain): drops structural noise, dedups repeated
+        // rows, caps the body. Also avoids the old bug here that parsed the
+        // `{data,pagination}` envelope as a bare array and always reported
+        // "no elements".
+        const response = await callAPI(`/frames/${frameId}/elements?format=outline`);
+        const text = (await response.text()).trim();
         return {
-          content: [{ type: "text", text: `Frame ${frameId} elements (${elements.length}):\n${formatted.join("\n")}` }],
+          content: [
+            {
+              type: "text",
+              text: text.length ? text : `No elements found for frame ${frameId}.`,
+            },
+          ],
         };
       }
 

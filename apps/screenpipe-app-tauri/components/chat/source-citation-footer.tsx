@@ -15,6 +15,7 @@ import {
   Globe,
   HardDrive,
   History,
+  PanelRight,
   Plug,
   Search,
   TerminalSquare,
@@ -26,6 +27,9 @@ import { jumpToTimelineMoment, openSearchForQuery } from "@/lib/timeline-navigat
 interface SourceCitationFooterProps {
   citations: SourceCitation[];
   className?: string;
+  // Open a local file source in the in-chat preview sidebar. When provided,
+  // file/memory/pipe citations that carry an absolute `path` become clickable.
+  onOpenFile?: (path: string) => void;
 }
 
 const KIND_ICON: Record<SourceCitationKind, React.ComponentType<{ className?: string }>> = {
@@ -93,7 +97,7 @@ const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
   ["zapier", "/images/zapier.png"],
 ];
 
-export function SourceCitationFooter({ citations, className }: SourceCitationFooterProps) {
+export function SourceCitationFooter({ citations, className, onOpenFile }: SourceCitationFooterProps) {
   const [expanded, setExpanded] = React.useState(false);
 
   if (citations.length === 0) return null;
@@ -130,7 +134,11 @@ export function SourceCitationFooter({ citations, className }: SourceCitationFoo
       {expanded && (
         <div className="mt-2 grid gap-1.5">
           {citations.map((citation, index) => (
-            <SourceCitationRow key={citationRowKey(citation, index)} citation={citation} />
+            <SourceCitationRow
+              key={citationRowKey(citation, index)}
+              citation={citation}
+              onOpenFile={onOpenFile}
+            />
           ))}
         </div>
       )}
@@ -145,16 +153,26 @@ function citationRowKey(citation: SourceCitation, index: number): string {
   return `${stablePart}:${index}`;
 }
 
-function SourceCitationRow({ citation }: { citation: SourceCitation }) {
+function SourceCitationRow({
+  citation,
+  onOpenFile,
+}: {
+  citation: SourceCitation;
+  onOpenFile?: (path: string) => void;
+}) {
   const Icon = KIND_ICON[citation.kind] ?? FileText;
   const kindLabel = KIND_LABEL[citation.kind] ?? citation.kind;
   const canOpen = Boolean(citation.href);
   // A screen capture with a search term opens the search window (a thumbnail
   // grid of every matching capture); a time-only capture jumps into the
-  // timeline at that moment; web/file sources open their external href.
+  // timeline at that moment; web/file sources open their external href; a
+  // local file source opens in the in-chat preview sidebar (rendered markdown
+  // or syntax-highlighted code).
   const canSearch = !canOpen && Boolean(citation.query);
   const canJump = !canOpen && !canSearch && Boolean(citation.timestamp);
-  const interactive = canOpen || canSearch || canJump;
+  const canPreview =
+    !canOpen && !canSearch && !canJump && Boolean(citation.path) && Boolean(onOpenFile);
+  const interactive = canOpen || canSearch || canJump || canPreview;
 
   const inner = (
     <>
@@ -170,6 +188,7 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
           {canOpen && <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
           {canSearch && <Search className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
           {canJump && <History className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
+          {canPreview && <PanelRight className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
         </span>
         {citation.subtitle && (
           <span className="mt-0.5 block break-words text-muted-foreground">{citation.subtitle}</span>
@@ -189,7 +208,16 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
   return (
     <button
       type="button"
-      title={canSearch ? "open in search" : canJump ? "open in timeline" : undefined}
+      data-testid={canPreview ? "source-citation-file" : undefined}
+      title={
+        canSearch
+          ? "open in search"
+          : canJump
+            ? "open in timeline"
+            : canPreview
+              ? "open in preview"
+              : undefined
+      }
       onClick={() => {
         if (canSearch && citation.query) {
           void openSearchForQuery(citation.query);
@@ -197,6 +225,10 @@ function SourceCitationRow({ citation }: { citation: SourceCitation }) {
         }
         if (canJump && citation.timestamp) {
           void jumpToTimelineMoment(citation.timestamp);
+          return;
+        }
+        if (canPreview && citation.path && onOpenFile) {
+          onOpenFile(citation.path);
           return;
         }
         void openUrl(citation.href!);

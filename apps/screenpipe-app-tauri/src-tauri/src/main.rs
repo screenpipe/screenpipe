@@ -61,6 +61,7 @@ mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;
 mod owned_browser;
+mod owned_browser_transport;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
 // injects via WKHTTPCookieStore; other platforms compile to a stub
 // `cookies_for_host` that returns empty until Windows (DPAPI + AES-256-

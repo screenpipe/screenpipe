@@ -2128,19 +2128,20 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
     }
 
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
-    if let Ok(pool) = sqlx::SqlitePool::connect(&db_url).await {
-        if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, Some(key)).await {
-            match store.reencrypt_unencrypted_secrets(&key).await {
-                Ok(count) if count > 0 => {
-                    tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
-                }
-                Err(e) => {
-                    tracing::warn!("failed to re-encrypt secrets: {}", e);
-                }
-                _ => {}
+    // Shared, engine-matched pool (never an ad-hoc per-call connection — that
+    // churn corrupts db.sqlite, #4263).
+    if let Ok(store) =
+        screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key)).await
+    {
+        match store.reencrypt_unencrypted_secrets(&key).await {
+            Ok(count) if count > 0 => {
+                tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
             }
+            Err(e) => {
+                tracing::warn!("failed to re-encrypt secrets: {}", e);
+            }
+            _ => {}
         }
     }
 
@@ -2154,13 +2155,12 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
     if db_path.exists() {
-        let pool = sqlx::SqlitePool::connect(&db_url).await.map_err(|e| {
-            format!("failed to open secret database before disabling encryption: {e}")
-        })?;
-        let plain_store = screenpipe_secrets::SecretStore::new(pool.clone(), None)
+        // Shared, engine-matched pool (never an ad-hoc per-call connection —
+        // that churn corrupts db.sqlite, #4263). The later encrypted-store open
+        // reuses this same cached pool.
+        let plain_store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None)
             .await
             .map_err(|e| format!("failed to open secret store: {e}"))?;
         let encrypted_count = plain_store
@@ -2188,9 +2188,10 @@ pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
                 }
             };
 
-            let encrypted_store = screenpipe_secrets::SecretStore::new(pool, Some(key))
-                .await
-                .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
+            let encrypted_store =
+                screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key))
+                    .await
+                    .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
             match encrypted_store.decrypt_encrypted_secrets().await {
                 Ok(count) => {
                     tracing::info!("decrypted {} secrets before keychain opt-out", count);

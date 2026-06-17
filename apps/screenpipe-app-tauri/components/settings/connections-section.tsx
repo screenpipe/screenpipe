@@ -2221,6 +2221,22 @@ interface OAuthAccount {
   displayName: string | null;
 }
 
+// Integrations that let the user choose how much access to grant at connect
+// time. Only ids/labels live here — the actual OAuth scope strings stay
+// server-side (screenpipe-connect), so the UI can never request arbitrary
+// scopes. The selected `id` is passed to `oauthConnect` as the variant; the
+// backend resolves it against its whitelist. Keep ids in sync with each
+// integration's `oauth_scope_variants()`.
+const OAUTH_SCOPE_VARIANTS: Record<
+  string,
+  { id: string; label: string; description: string }[]
+> = {
+  slack: [
+    { id: "send", label: "Send only", description: "Post messages as you. Screenpipe can't read your Slack." },
+    { id: "read_write", label: "Send + read", description: "Also search & read your messages, DMs and channels." },
+  ],
+};
+
 function OAuthPanel({
   integrationId,
   integrationName,
@@ -2244,6 +2260,11 @@ function OAuthPanel({
   // instance. The token is then stored under oauth:zendesk:{subdomain}.
   const isSubdomainProvider = integrationId === "zendesk";
   const [subdomain, setSubdomain] = useState("");
+  // Optional access-level choice (e.g. Slack send-only vs send+read). Defaults
+  // to the first (least-privileged) variant; null when the integration offers
+  // no choice, in which case the backend uses its default scopes.
+  const scopeVariants = OAUTH_SCOPE_VARIANTS[integrationId];
+  const [scopeVariant, setScopeVariant] = useState(scopeVariants?.[0]?.id ?? null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -2279,7 +2300,7 @@ function OAuthPanel({
     setStatus("loading");
     connectingRef.current = true;
     try {
-      const res = await commands.oauthConnect(integrationId, instanceArg);
+      const res = await commands.oauthConnect(integrationId, instanceArg, scopeVariant);
       if (!connectingRef.current) return; // cancelled — handleCancel owns the UI
       if (res.status === "ok" && res.data.connected) {
         await fetchStatus();
@@ -2370,6 +2391,26 @@ function OAuthPanel({
             />
             <span className="text-[11px] text-muted-foreground whitespace-nowrap">.zendesk.com</span>
           </div>
+        </div>
+      )}
+      {scopeVariants && (isPro || connected) && status !== "loading" && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-muted-foreground">Access level</p>
+          {scopeVariants.map((v) => (
+            <label key={v.id} className="flex items-start gap-2 text-xs cursor-pointer">
+              <input
+                type="radio"
+                name={`${integrationId}-scope`}
+                checked={scopeVariant === v.id}
+                onChange={() => setScopeVariant(v.id)}
+                className="mt-0.5 accent-foreground"
+              />
+              <span>
+                <span className="font-medium">{v.label}</span>
+                <span className="block text-[11px] text-muted-foreground">{v.description}</span>
+              </span>
+            </label>
+          ))}
         </div>
       )}
       <div className="flex flex-wrap gap-2">

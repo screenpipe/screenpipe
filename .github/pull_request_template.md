@@ -13,7 +13,7 @@ brief description of the changes in this pr.
 
 related issue: #
 
-> attach screenshots / recordings here — **never commit media into the repo.** agents/cli: `gh release upload <tag> file.png` (or `gh gist create file.png`) and paste the url. humans: just drag the file into this box — github hosts it.
+> attach screenshots / recordings here — **never commit media into the repo.** drag the file into this box (works for anyone, browser only) and github hosts it. on the cli: attach it as a release asset — `gh release upload <tag> file.png` if you can write here, else `gh release create media file.png --repo <you>/screenpipe` on your fork — and paste the url.
 
 ## before
 

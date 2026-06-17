@@ -16,6 +16,7 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  Clock,
   RefreshCw,
   Loader2,
   ExternalLink,
@@ -2125,19 +2126,38 @@ export function PipesSection() {
 
             return (
             <div key={pipe.config.name} className={cn("group border border-border hover:bg-accent/40 transition-colors", !pipe.config.enabled && "opacity-60")}>
-              {/* Card top line */}
-              <div className="flex items-center gap-3 px-4 pt-3 pb-1">
-                {/* Status indicator — monochrome, brand-aligned */}
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 shrink-0",
-                    lastStatus === "ok" && "bg-foreground",
-                    lastStatus === "running" && "bg-foreground animate-pulse",
-                    lastStatus === "error" && "border border-foreground bg-transparent",
-                    lastStatus === "idle" && "bg-muted-foreground/30",
-                  )}
-                  title={lastStatus}
-                />
+              {/* Card top line — the whole row is the expand affordance:
+                  click anywhere (except the star / badges) to open runs,
+                  config and logs. Keyboard-operable via role=button. */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded === pipe.config.name}
+                onClick={() => toggleExpand(pipe.config.name)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleExpand(pipe.config.name);
+                  }
+                }}
+                title={expanded === pipe.config.name ? "collapse" : "open — runs, config, logs"}
+                className="flex items-center gap-2.5 px-4 pt-3 pb-1 cursor-pointer select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                {/* Disclosure chevron — the row's "you can open this" cue.
+                    Doubles as a status tint: red when the last run failed,
+                    pulses while running. Replaces the old standalone dot so
+                    status lives in one obvious place, not a mystery square. */}
+                {expanded === pipe.config.name ? (
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-colors" />
+                ) : (
+                  <ChevronRight
+                    className={cn(
+                      "h-4 w-4 shrink-0 text-muted-foreground/50 group-hover:text-foreground transition-colors",
+                      lastStatus === "error" && "text-destructive group-hover:text-destructive",
+                      lastStatus === "running" && "text-foreground animate-pulse",
+                    )}
+                  />
+                )}
 
                 {/* Favorite toggle — per-machine preference persisted via /pipes/favorites */}
                 <button
@@ -2163,14 +2183,11 @@ export function PipesSection() {
                   />
                 </button>
 
-                {/* Pipe name + outcome — click name to expand */}
+                {/* Pipe name + description */}
                 <div className="flex flex-col min-w-0 flex-1 gap-0.5">
-                  <button
-                    onClick={() => toggleExpand(pipe.config.name)}
-                    className="text-sm font-medium truncate text-left hover:underline"
-                  >
+                  <span className="text-sm font-medium truncate" title={pipe.config.name}>
                     {pipe.config.name}
-                  </button>
+                  </span>
                   {typeof pipe.config.description === "string" &&
                     (pipe.config.description as string).trim() && (
                       <span className="text-xs text-muted-foreground truncate">
@@ -2257,9 +2274,11 @@ export function PipesSection() {
                   </button>
                 )}
 
-                {/* Schedule + triggers */}
+                {/* Schedule + triggers — the Clock icon marks this as the
+                    cadence (e.g. "4h" = runs every 4h), so it can't be misread
+                    as the last-run time in the column beside it. */}
                 <span
-                  className="text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[180px]"
+                  className="inline-flex items-center justify-end gap-1 text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[180px]"
                   title={[
                     pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
                       ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
@@ -2267,9 +2286,16 @@ export function PipesSection() {
                     pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${humanizeSchedule(pipe.config.schedule)}` : "",
                   ].filter(Boolean).join(" | ") || "manual"}
                 >
-                  {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0
-                    ? `› ${(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)} trigger${((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 1 ? "s" : ""}`
-                    : humanizeSchedule(pipe.config.schedule)}
+                  {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0 ? (
+                    `› ${(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)} trigger${((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 1 ? "s" : ""}`
+                  ) : pipe.config.schedule && pipe.config.schedule !== "manual" ? (
+                    <>
+                      <Clock className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                      {humanizeSchedule(pipe.config.schedule)}
+                    </>
+                  ) : (
+                    "manual"
+                  )}
                   {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0 && pipe.config.schedule && pipe.config.schedule !== "manual" ? (
                     <span className="text-muted-foreground/50"> + {humanizeSchedule(pipe.config.schedule)}</span>
                   ) : null}
@@ -2294,7 +2320,7 @@ export function PipesSection() {
                   ) : lastExec?.started_at ? (
                     relativeTime(lastExec.started_at)
                   ) : (
-                    "—"
+                    <span className="text-muted-foreground/50">never run</span>
                   )}
                 </span>
               </div>

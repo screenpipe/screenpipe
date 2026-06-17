@@ -8,17 +8,16 @@ import { logModelOutcome } from '../services/model-health';
 import { isFlexEligible } from '../utils/latency';
 import { captureException } from '@sentry/cloudflare';
 
-// Auto model waterfall (INTERACTIVE) — leads with gemini-3.5-flash on the
-// STANDARD tier. Interactive flex is OFF (GEMINI_FLEX_INTERACTIVE=false) because
-// flex is best-effort latency and made user-facing chat slow; standard tier
-// gives normal low latency at higher quality than glm-5 (AA 55 vs 50). glm-5 and
-// the other free Vertex MaaS picks stay as fallbacks. Latency-tolerant traffic
-// uses AUTO_WATERFALL_BACKGROUND on the cheaper flex tier instead.
+// Auto model waterfall (INTERACTIVE) — leads with glm-5. Interactive is
+// latency-bound (a user is waiting), and on these models intelligence == reasoning
+// effort == latency: gemini-3.5-flash / gpt-5.x are only "smarter" at high effort,
+// which is slow (3-10s+); at chat speed they drop BELOW glm-5's IQ. glm-5 is the
+// fast/smart sweet spot for chat (~1.2s, AA 50, free Vertex MaaS). Smart reasoning
+// models live on AUTO_WATERFALL_BACKGROUND where latency doesn't matter.
 // Exported so tests can pin that every chain entry has a MODEL_PRICING match
 // (otherwise served-model cost rows fall into the unknown-model estimate).
 export const AUTO_WATERFALL = [
-  'gemini-3.5-flash', // standard tier (interactive non-flex) — fast + higher quality than glm-5
-  'glm-5',            // free Vertex MaaS fallback
+  'glm-5',            // fast (~1.2s) + AA 50, free Vertex MaaS — best fast/smart for latency-bound chat
   'kimi-k2.5',
   'deepseek-v3.2',
   'glm-4.7',
@@ -35,15 +34,19 @@ export const AUTO_WATERFALL_VISION = [
 ];
 
 // Background waterfall — for latency-tolerant traffic (pipes, daily summary,
-// suggestions) where no user is waiting. Leads with gemini-3.5-flash on the
-// FLEX tier: 50% off ($0.75/$4.50 per MTok) + implicit caching makes it land
-// BELOW glm-5 for screenpipe's input-heavy mix, at higher quality (AA 55 vs
-// 50). glm-5 + gemini-3-flash are standard-tier fallbacks for when flex is
-// throttled (best-effort tier 429s under load). Flex is applied per-request
-// by tryModel to the gemini entries only — glm-5 (MaaS) has no flex tier.
+// suggestions) where no user is waiting. This is the lane to BUY intelligence:
+// latency is free, so lead with gpt-5.4 (AA ~54 at its default reasoning effort,
+// 0.1x cache discount) on the OpenAI credit pool — smarter pipes, and it bleeds
+// background load OFF the strained GCP/Vertex credits. gemini-3.5-flash (flex)
+// + glm-5 + gemini-3-flash are the cheaper fallbacks if OpenAI 429s/errors;
+// runChain cascades on transient failures, and flex applies to the gemini
+// entries only (gpt-5.4 has no Vertex flex tier — it runs standard OpenAI).
+// NOTE: gpt-5.4 is ~3-4x the per-token cost of gemini-flex, so watch the $30k
+// OpenAI credit burn — at full background volume it can run ~$1-2k/day.
 export const AUTO_WATERFALL_BACKGROUND = [
-  'gemini-3.5-flash', // flex tier — cheapest input once flex+cache stack
-  'glm-5',            // MaaS fallback, standard tier
+  'gpt-5.4',          // smart reasoning model on OpenAI credits — latency-tolerant lane
+  'gemini-3.5-flash', // flex fallback (cheap) if OpenAI throttles/errors
+  'glm-5',            // free Vertex MaaS fallback
   'gemini-3-flash',   // near-free safety net
 ];
 
@@ -456,11 +459,11 @@ export async function handleChatCompletions(
   // scopes it to Gemini attempts; a flex 429 cascades to a standard sibling.
   const flexEligible = isFlexEligible(latency, env);
 
-  // Chain selection keyed on latency: interactive 'auto' leads with
-  // gemini-3.5-flash at STANDARD tier (interactive flex is off), background swaps
-  // to the flex-first Gemini chain. Flex is applied to Gemini entries only when
-  // flexEligible — background always, interactive only if GEMINI_FLEX_INTERACTIVE
-  // is left "true" (we set it "false" so interactive chat stays low-latency).
+  // Chain selection keyed on latency: interactive 'auto' leads with glm-5 (fast,
+  // free MaaS) so chat stays low-latency; background 'auto' leads with gpt-5.4 (a
+  // smart reasoning model — latency-tolerant lane, OpenAI credits). Flex applies
+  // to Gemini entries only when flexEligible — background always, interactive only
+  // if GEMINI_FLEX_INTERACTIVE is "true" (set "false" to keep interactive snappy).
   const useBackgroundChain = latency === 'background';
 
   if (body.model === 'auto') {

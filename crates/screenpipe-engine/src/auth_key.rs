@@ -151,8 +151,6 @@ pub async fn regenerate_api_auth_key(data_dir: &Path) -> Result<String> {
 
 async fn open_secret_store(data_dir: &Path) -> Result<screenpipe_secrets::SecretStore> {
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-    let pool = sqlx::SqlitePool::connect(&db_url).await?;
     // Load the keychain encryption key if the user has opted into encryption,
     // otherwise pass None (plaintext mode). Without this, the previous code
     // ALWAYS opened the store unkeyed — so as soon as the user toggled
@@ -173,7 +171,9 @@ async fn open_secret_store(data_dir: &Path) -> Result<screenpipe_secrets::Secret
     } else {
         None
     };
-    let store = screenpipe_secrets::SecretStore::new(pool, key).await?;
+    // Shared, engine-matched pool — not an ad-hoc per-call connection, which
+    // churns the WAL-index and corrupts db.sqlite (#4263).
+    let store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), key).await?;
     Ok(store)
 }
 

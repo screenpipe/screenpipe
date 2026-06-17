@@ -23,7 +23,9 @@
 //! and non-meeting contexts (Slack chat, etc.). A mute button counts only when
 //! accompanied by a leave/hangup signal (see `min_signals_required`).
 
-use crate::meeting_telemetry::{capture_detection_decision, MeetingDetectionScanSummary};
+use crate::meeting_telemetry::{
+    capture_detection_decision, capture_detection_outcome, MeetingDetectionScanSummary,
+};
 use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
@@ -1746,6 +1748,45 @@ fn output_audio_keeps_meeting_alive(
     recent_output_chunk && recent_voice_activity
 }
 
+/// Audio/calendar liveness that keeps a meeting alive when its call-control UI
+/// is hidden (tab switch, minimize, screen-share, transient process-scan miss).
+///
+/// Shared by BOTH keep-alive sites — the apps-present (Ending-only) path and the
+/// no-apps (Active|Ending) path — so the silence-gating can never drift between
+/// them. The caller ANDs in the state guard; this is just the liveness signal.
+/// Pure + `pub` so the eval harness exercises the real composition.
+pub fn audio_or_calendar_keepalive(
+    recent_output_chunk: bool,
+    recent_voice_activity: bool,
+    calendar_active: bool,
+) -> bool {
+    output_audio_keeps_meeting_alive(recent_output_chunk, recent_voice_activity) || calendar_active
+}
+
+/// True when a transition is an Active<->Ending oscillation (a "flap") — the
+/// end-detection-health signal. `was_active`/`was_ending` are captured from the
+/// prior state *before* it is consumed by the transition fn; typed `matches!`
+/// on `next` keeps it rename-safe (a state rename is a compile error).
+fn is_active_ending_flap(was_active: bool, was_ending: bool, next: &MeetingState) -> bool {
+    let now_active = matches!(next, MeetingState::Active { .. });
+    let now_ending = matches!(next, MeetingState::Ending { .. });
+    (was_active && now_ending) || (was_ending && now_active)
+}
+
+/// Fetch the just-ended meeting and emit the privacy-safe outcome telemetry.
+/// Shared by every auto-end site so the metric covers them uniformly.
+/// Best-effort: a failed lookup just skips the event.
+async fn capture_meeting_outcome(
+    db: &DatabaseManager,
+    meeting_id: i64,
+    end_reason: &'static str,
+    flap_count: u32,
+) {
+    if let Ok(meeting) = db.get_meeting_by_id(meeting_id).await {
+        capture_detection_outcome(&meeting, end_reason, flap_count);
+    }
+}
+
 /// Advance the state machine based on scan results.
 ///
 /// Returns the new state plus an optional action to perform (DB insert/update).
@@ -2735,6 +2776,10 @@ pub async fn run_meeting_detection_loop(
     // it for the rest of this detector lifetime. Cleared on app restart,
     // which is fine — the DB filter takes over from there.
     let mut last_explicit_stop_id: Option<i64> = None;
+    // Count Active<->Ending oscillations for the current meeting so end-detection
+    // health is observable (a clean auto end flaps ~0; sustained flapping flags a
+    // call that lost its controls but kept getting revived). Reset per meeting.
+    let mut flap_count: u32 = 0;
 
     info!(
         "meeting v2: detection loop started (base_interval={:?}, profiles={}, ignored_apps={})",
@@ -2982,12 +3027,29 @@ pub async fn run_meeting_detection_loop(
                 state,
                 MeetingState::Active { .. } | MeetingState::Ending { .. }
             ) {
-                db.has_recent_output_audio(30).await.unwrap_or(false)
-                    || has_active_calendar_event(&calendar_events, Utc::now())
+                // Same silence-gating as the apps-present path (shared helper):
+                // a recent (output) chunk must be paired with RMS-gated voice
+                // activity, else the continuously-written silent tap chunks would
+                // keep an ended call alive forever here too.
+                let recent_output_chunk = db.has_recent_output_audio(30).await.unwrap_or(false);
+                let recent_voice_activity = detector.as_ref().map_or(true, |d| {
+                    d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
+                });
+                let calendar_active = has_active_calendar_event(&calendar_events, Utc::now());
+                audio_or_calendar_keepalive(
+                    recent_output_chunk,
+                    recent_voice_activity,
+                    calendar_active,
+                )
             } else {
                 false
             };
+            let was_active = matches!(state, MeetingState::Active { .. });
+            let was_ending = matches!(state, MeetingState::Ending { .. });
             let (new_state, ended_id) = handle_no_apps_running(state, keep_alive);
+            if is_active_ending_flap(was_active, was_ending, &new_state) {
+                flap_count = flap_count.saturating_add(1);
+            }
             state = new_state;
             if let Some(meeting_id) = ended_id {
                 let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
@@ -2996,6 +3058,15 @@ pub async fn run_meeting_detection_loop(
                     .await
                 {
                     Ok(()) => {
+                        // End-detection health telemetry (privacy-safe buckets only).
+                        capture_meeting_outcome(
+                            db.as_ref(),
+                            meeting_id,
+                            "auto_timeout",
+                            flap_count,
+                        )
+                        .await;
+                        flap_count = 0;
                         if let Err(e) = screenpipe_events::send_event(
                             "meeting_ended",
                             serde_json::json!({ "meeting_id": meeting_id }),
@@ -3070,35 +3141,37 @@ pub async fn run_meeting_detection_loop(
         // This applies to both browser meetings (e.g., Google Meet via Arc) and
         // native meeting apps (e.g., Zoom). Audio activity is a strong signal
         // that the user is still in the meeting even if UI controls are hidden.
-        let has_output_audio = if matches!(state, MeetingState::Ending { .. }) {
-            // A recent (output) chunk alone isn't enough: the system-audio tap
-            // writes those continuously even during silence, which would keep an
-            // already-ended call "live" forever (controls gone, tap still running)
-            // and the meeting would never auto-finalize. Require RMS-gated voice
-            // activity too, so a quiet call ends on schedule but an audible one
-            // (tab-switched / minimized / screen-sharing) stays alive. No detector
-            // wired (tests / detector disabled) -> default true to preserve prior
-            // behavior.
-            let recent_output_chunk = db.has_recent_output_audio(30).await.unwrap_or(false);
-            let recent_voice_activity = detector.as_ref().map_or(true, |d| {
-                d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
-            });
-            output_audio_keeps_meeting_alive(recent_output_chunk, recent_voice_activity)
-        } else {
-            false
-        };
-        // A meeting also stays alive while a scheduled (non-all-day) calendar event
-        // is in progress: controls vanish during screen-share / minimize, but the
-        // event is strong evidence the meeting is still going. This only sustains an
-        // already-detected meeting (it never starts one), so a "Lunch" calendar
-        // entry can't trigger recording on its own. `has_output_audio` is kept
-        // separate so detection-decision telemetry stays audio-accurate.
-        let keep_alive = has_output_audio
-            || (matches!(state, MeetingState::Ending { .. })
-                && has_active_calendar_event(&calendar_events, Utc::now()));
+        // Audio-only liveness, kept separate so detection-decision telemetry stays
+        // audio-accurate. Only queried in Ending (the `&&` short-circuits the DB
+        // call otherwise). RMS-gated: a silent (output) chunk alone must not count.
+        let in_ending = matches!(state, MeetingState::Ending { .. });
+        let recent_output_chunk =
+            in_ending && db.has_recent_output_audio(30).await.unwrap_or(false);
+        // No detector wired (tests / detector disabled) -> default true.
+        let recent_voice_activity = detector.as_ref().map_or(true, |d| {
+            d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
+        });
+        let has_output_audio =
+            output_audio_keeps_meeting_alive(recent_output_chunk, recent_voice_activity);
+        // Keep an Ending meeting alive when controls are hidden but the call is still
+        // live: the audio liveness above OR an active (non-all-day) calendar event
+        // (sustains an already-detected meeting; never starts one). Same shared
+        // helper as the no-apps path so the gating can't drift between them.
+        let calendar_active = in_ending && has_active_calendar_event(&calendar_events, Utc::now());
+        let keep_alive = audio_or_calendar_keepalive(
+            recent_output_chunk,
+            recent_voice_activity,
+            calendar_active,
+        );
 
-        // 3. Advance state machine
+        // 3. Advance state machine. Capture the prev variant before the move so we
+        // can count Active<->Ending oscillation (end-detection health telemetry).
+        let was_active = matches!(state, MeetingState::Active { .. });
+        let was_ending = matches!(state, MeetingState::Ending { .. });
         let (new_state, action) = advance_state(state, &scan_results, keep_alive);
+        if is_active_ending_flap(was_active, was_ending, &new_state) {
+            flap_count = flap_count.saturating_add(1);
+        }
         state = new_state;
 
         // Adaptive interval based on state, gated on recent audio when Idle.
@@ -3117,6 +3190,8 @@ pub async fn run_meeting_detection_loop(
         if let Some(action) = action {
             match action {
                 StateAction::StartMeeting { app } => {
+                    // Fresh meeting -> reset the flap counter for outcome telemetry.
+                    flap_count = 0;
                     // Calendar enrichment: find overlapping calendar event
                     let (cal_title, cal_attendees) =
                         find_overlapping_calendar_event(&calendar_events);
@@ -3254,6 +3329,15 @@ pub async fn run_meeting_detection_loop(
                         {
                             Ok(()) => {
                                 info!("meeting v2: meeting ended (id={})", meeting_id);
+                                // End-detection health telemetry (privacy-safe buckets only).
+                                capture_meeting_outcome(
+                                    db.as_ref(),
+                                    meeting_id,
+                                    "auto_timeout",
+                                    flap_count,
+                                )
+                                .await;
+                                flap_count = 0;
                                 // Emit event so triggered pipes can react
                                 if let Err(e) = screenpipe_events::send_event(
                                     "meeting_ended",

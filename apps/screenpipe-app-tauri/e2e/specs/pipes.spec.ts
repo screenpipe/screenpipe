@@ -374,7 +374,9 @@ describe('Pipes: discover → install → play', function () {
   it('shows the installed pipe in My Pipes list', async () => {
     const isOnPage = async (): Promise<boolean> => {
       return (await browser.execute((name: string) => {
-        return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+        // #4278: the pipe name is now a <span> inside a div[role="button"] row,
+        // not a <button>; match button OR span (never the row div itself).
+        return Array.from(document.querySelectorAll<HTMLElement>('button, span'))
           .some((b) => b.textContent?.trim() === name);
       }, installedPipeName)) as boolean;
     };
@@ -433,7 +435,7 @@ describe('Pipes: discover → install → play', function () {
     await browser.waitUntil(
       async () =>
         (await browser.execute((name: string) => {
-          const btn = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+          const btn = Array.from(document.querySelectorAll<HTMLElement>('button, span')).find(
             (b) => b.textContent?.trim() === name
           );
           if (!btn) return false;
@@ -443,13 +445,15 @@ describe('Pipes: discover → install → play', function () {
       { timeout: 8_000, timeoutMsg: `Pipe name button "${installedPipeName}" not found` }
     );
     await browser.pause(400);
-    const pipeNameBtn = await $(`button=${installedPipeName}`);
+    // #4278: name is a <span> now; `span=NAME` matches it. Hovering it still
+    // triggers the row's group-hover (the span lives inside div.group).
+    const pipeNameBtn = await $(`span=${installedPipeName}`);
     // Hover to trigger group-hover CSS → opacity-0 → opacity-100 on play button
     await pipeNameBtn.moveTo();
     await browser.pause(400);
 
     const played = await browser.execute((name: string) => {
-      for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
+      for (const nameBtn of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
         if (nameBtn.textContent?.trim() !== name) continue;
         const row = nameBtn.closest<HTMLElement>('div.group');
         if (!row) continue;

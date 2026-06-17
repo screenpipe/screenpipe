@@ -8367,7 +8367,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
- "sqlx",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -8521,12 +8520,15 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
+ "hex",
+ "hmac 0.12.1",
  "image",
  "moka",
  "ndarray 0.17.2",
  "once_cell",
  "opf",
  "ort",
+ "rand 0.9.4",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-rfdetr-mlx",
@@ -8542,6 +8544,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

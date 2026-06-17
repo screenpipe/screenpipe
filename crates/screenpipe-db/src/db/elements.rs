@@ -269,7 +269,7 @@ LIMIT ? OFFSET ?
         let sql = format!(
             r#"SELECT e.id, e.frame_id, e.source, e.role, e.text, e.parent_id,
                       e.depth, e.left_bound, e.top_bound, e.width_bound, e.height_bound,
-                      e.confidence, e.sort_order, e.on_screen
+                      e.confidence, e.sort_order, e.on_screen, e.properties
                FROM elements e
                JOIN frames f ON f.id = e.frame_id
                {}
@@ -361,9 +361,9 @@ LIMIT ? OFFSET ?
         .unwrap_or(frame_id);
 
         let sql = if source.is_some() {
-            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, on_screen FROM elements WHERE frame_id = ?1 AND source = ?2 ORDER BY sort_order"
+            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, on_screen, properties FROM elements WHERE frame_id = ?1 AND source = ?2 ORDER BY sort_order"
         } else {
-            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, on_screen FROM elements WHERE frame_id = ?1 ORDER BY sort_order"
+            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, on_screen, properties FROM elements WHERE frame_id = ?1 ORDER BY sort_order"
         };
 
         let mut query = sqlx::query_as::<_, ElementRow>(sql).bind(effective_frame_id);
@@ -587,5 +587,94 @@ LIMIT ? OFFSET ?
         }
 
         groups
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn mem_db() -> DatabaseManager {
+        DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .expect("in-memory db")
+    }
+
+    async fn seed_frame(db: &DatabaseManager) {
+        sqlx::query("INSERT INTO video_chunks (id, file_path) VALUES (1, '/tmp/x.mp4')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO frames (id, video_chunk_id, offset_index, timestamp) \
+             VALUES (1, 1, 0, '2026-06-17T00:00:00Z')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    const INSERT_EL: &str = "INSERT INTO elements \
+        (frame_id, source, role, text, parent_id, depth, left_bound, top_bound, \
+         width_bound, height_bound, confidence, sort_order, properties, on_screen) \
+        VALUES (1, ?, ?, ?, NULL, 1, 0.1, 0.2, 0.3, 0.4, NULL, ?, ?, 1)";
+
+    #[tokio::test]
+    async fn element_queries_select_and_roundtrip_properties() {
+        let db = mem_db().await;
+        seed_frame(&db).await;
+
+        // accessibility element WITH state properties
+        sqlx::query(INSERT_EL)
+            .bind("accessibility")
+            .bind("AXButton")
+            .bind("Save")
+            .bind(1)
+            .bind(r#"{"is_enabled":false,"is_selected":true}"#)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        // accessibility element with NULL properties
+        sqlx::query(INSERT_EL)
+            .bind("accessibility")
+            .bind("AXStaticText")
+            .bind("Welcome")
+            .bind(2)
+            .bind(Option::<String>::None)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // get_frame_elements: the new `properties` column is selected + mapped.
+        let frame_els = db.get_frame_elements(1, None).await.unwrap();
+        assert_eq!(frame_els.len(), 2);
+        let btn = frame_els.iter().find(|e| e.role == "AXButton").unwrap();
+        assert!(btn.properties.as_deref().unwrap().contains("is_enabled"));
+        let txt = frame_els.iter().find(|e| e.role == "AXStaticText").unwrap();
+        assert!(txt.properties.is_none());
+
+        // search_elements path also selects `properties` and executes cleanly.
+        let (search_els, total) = db
+            .search_elements("", Some(1), None, None, None, None, None, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(total, 2);
+        assert!(search_els
+            .iter()
+            .any(|e| e.properties.as_deref().is_some_and(|p| p.contains("is_selected"))));
+    }
+
+    #[tokio::test]
+    async fn element_queries_run_against_real_schema_when_empty() {
+        // A typo'd column in either SELECT is a *runtime* sqlx error a compile
+        // check can't catch — assert both run on the real (migrated) schema.
+        let db = mem_db().await;
+        let (els, total) = db
+            .search_elements("", None, None, None, None, None, None, None, 5, 0)
+            .await
+            .unwrap();
+        assert!(els.is_empty());
+        assert_eq!(total, 0);
+        assert!(db.get_frame_elements(1, None).await.unwrap().is_empty());
     }
 }

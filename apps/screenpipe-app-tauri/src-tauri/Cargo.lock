@@ -10975,7 +10975,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.47"
+version = "2.5.49"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11391,12 +11391,15 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
+ "hex",
+ "hmac 0.12.1",
  "image 0.25.10",
  "moka",
  "ndarray 0.17.2",
  "once_cell",
  "opf",
  "ort",
+ "rand 0.9.2",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-rfdetr-mlx",
@@ -11410,6 +11413,7 @@ dependencies = [
  "tokenizers 0.21.4",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

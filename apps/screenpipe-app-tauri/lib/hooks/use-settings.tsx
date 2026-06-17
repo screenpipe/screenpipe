@@ -545,7 +545,12 @@ let DEFAULT_SETTINGS: Settings = {
 			monitorIds: ["default"],
 			audioDevices: ["default"],
 			useSystemDefaultAudio: true,
-			usePiiRemoval: false,
+			// Default ON (#3819): this is the lightweight hot-path regex redaction
+			// in screenpipe-core (emails, phone numbers, SSNs, card numbers, API
+			// keys, etc.) — NOT the heavy async AI model (asyncPiiRedaction stays
+			// off, so no ~2.8GB model download). Privacy-by-default for new installs;
+			// existing users keep whatever they already chose.
+			usePiiRemoval: true,
 			port: 3030,
 			dataDir: "default",
 			disableAudio: false,

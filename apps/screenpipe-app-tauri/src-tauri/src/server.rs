@@ -591,4 +591,20 @@ curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
   -d '{"title": "Saved", "body": "Note saved to Obsidian", "timeout": 5000}'
 
+# Announcement push (modal / banner / card) instead of a notification panel.
+# Triggered by adding a `surface` field — the on-demand counterpart to the
+# PostHog `app-announcement` flag. kind = news|tip|reminder; position =
+# top|bottom (banner) or {top,bottom}-{left,right} (card).
+curl -X POST http://localhost:11435/notify \
+  -H "Content-Type: application/json" \
+  -d '{
+        "surface": "card",
+        "position": "bottom-right",
+        "kind": "tip",
+        "id": "tip-pipes-2026-06",
+        "title": "pipes run on a schedule",
+        "body": "create a pipe once and it keeps working.",
+        "cta": {"label": "create a pipe", "route": "/home?section=pipes"}
+      }'
+
 */

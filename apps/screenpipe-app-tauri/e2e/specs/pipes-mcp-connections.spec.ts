@@ -190,7 +190,9 @@ async function waitForPipeRow(): Promise<void> {
       (await browser.execute((pipeName: string) => {
         const root = document.querySelector('[data-testid="section-pipes"]');
         if (!root) return false;
-        return Array.from(root.querySelectorAll<HTMLButtonElement>('button')).some(
+        // #4278: the pipe name is now a <span> inside a div[role="button"] row,
+        // so match button OR span (never the row div, whose text is name+desc).
+        return Array.from(root.querySelectorAll<HTMLElement>('button, span')).some(
           (button) => button.textContent?.trim() === pipeName
         );
       }, PIPE_NAME)) as boolean,
@@ -205,7 +207,7 @@ async function expandPipeConfig(): Promise<void> {
   const clicked = (await browser.execute((pipeName: string) => {
     const root = document.querySelector('[data-testid="section-pipes"]');
     if (!root) return false;
-    const nameButton = Array.from(root.querySelectorAll<HTMLButtonElement>('button')).find(
+    const nameButton = Array.from(root.querySelectorAll<HTMLElement>('button, span')).find(
       (button) => button.textContent?.trim() === pipeName
     );
     const group = nameButton?.closest<HTMLElement>('div.group');
@@ -221,7 +223,7 @@ async function expandPipeConfig(): Promise<void> {
     async () =>
       (await browser.execute((pipeName: string) => {
         const root = document.querySelector('[data-testid="section-pipes"]');
-        const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+        const nameButton = Array.from(root?.querySelectorAll<HTMLElement>('button, span') ?? []).find(
           (button) => button.textContent?.trim() === pipeName
         );
         const group = nameButton?.closest<HTMLElement>('div.group');
@@ -237,7 +239,7 @@ async function expandPipeConfig(): Promise<void> {
 async function clickConnectionsAdd(): Promise<void> {
   const clicked = (await browser.execute((pipeName: string) => {
     const root = document.querySelector('[data-testid="section-pipes"]');
-    const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+    const nameButton = Array.from(root?.querySelectorAll<HTMLElement>('button, span') ?? []).find(
       (button) => button.textContent?.trim() === pipeName
     );
     const group = nameButton?.closest<HTMLElement>('div.group');
@@ -305,7 +307,7 @@ describe('Pipes: custom MCP connection picker', function () {
       async () =>
         (await browser.execute((pipeName: string, serverName: string) => {
           const root = document.querySelector('[data-testid="section-pipes"]');
-          const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+          const nameButton = Array.from(root?.querySelectorAll<HTMLElement>('button, span') ?? []).find(
             (button) => button.textContent?.trim() === pipeName
           );
           const group = nameButton?.closest<HTMLElement>('div.group');
@@ -343,7 +345,7 @@ describe('Pipes: custom MCP connection picker', function () {
       async () =>
         (await browser.execute((pipeName: string) => {
           const root = document.querySelector('[data-testid="section-pipes"]');
-          const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+          const nameButton = Array.from(root?.querySelectorAll<HTMLElement>('button, span') ?? []).find(
             (button) => button.textContent?.trim() === pipeName
           );
           const group = nameButton?.closest<HTMLElement>('div.group');
@@ -357,7 +359,7 @@ describe('Pipes: custom MCP connection picker', function () {
 
     const openedSetup = (await browser.execute((pipeName: string) => {
       const root = document.querySelector('[data-testid="section-pipes"]');
-      const nameButton = Array.from(root?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+      const nameButton = Array.from(root?.querySelectorAll<HTMLElement>('button, span') ?? []).find(
         (button) => button.textContent?.trim() === pipeName
       );
       const group = nameButton?.closest<HTMLElement>('div.group');

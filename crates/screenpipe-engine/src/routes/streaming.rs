@@ -78,6 +78,11 @@ pub struct DeviceMetadata {
     pub file_path: String,
     pub app_name: String,
     pub window_name: String,
+    /// Neutral name for the frame's text. Despite living next to `ocr_text`,
+    /// the content is accessibility-derived for most captures. Prefer this.
+    pub text: String,
+    /// @deprecated Legacy alias for `text`, kept for backward compatibility.
+    /// Always equal to `text`. Will be removed in a future major version.
     pub ocr_text: String,
     pub browser_url: Option<String>,
 }
@@ -115,6 +120,7 @@ impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
                             file_path: device_frame.metadata.file_path,
                             app_name: device_frame.metadata.app_name,
                             window_name: device_frame.metadata.window_name,
+                            text: device_frame.metadata.ocr_text.clone(),
                             ocr_text: device_frame.metadata.ocr_text,
                             browser_url: device_frame.metadata.browser_url,
                         },
@@ -545,6 +551,7 @@ async fn handle_stream_frames_socket(
                                         file_path: hot_frame.snapshot_path.to_string(),
                                         app_name: hot_frame.app_name.to_string(),
                                         window_name: hot_frame.window_name.to_string(),
+                                        text: hot_frame.ocr_text_preview.to_string(),
                                         ocr_text: hot_frame.ocr_text_preview.to_string(),
                                         browser_url: hot_frame.browser_url.as_deref().map(String::from),
                                     },

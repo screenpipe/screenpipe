@@ -1864,7 +1864,7 @@ async fn main() -> anyhow::Result<()> {
             },
             pipeline::{Pipeline, PipelineConfig},
             worker::{Worker, WorkerConfig, ALL_TARGET_TABLES},
-            Redactor, TextRedactionPolicy,
+            Pseudonymizer, Redactor, TextRedactionPolicy,
         };
         use std::sync::Arc;
 
@@ -1889,6 +1889,26 @@ async fn main() -> anyhow::Result<()> {
         //      regex-redacted text into the source columns).
         let pool = db.pool.clone();
         let labels = config.pii_redaction_labels.clone();
+        // Consistent-pseudonym tokens (issue #4206), opt-in. Loads (or
+        // creates on first run) the per-install key under the data dir;
+        // on any IO error we log and fall back to static `[LABEL]` tags
+        // rather than block the worker.
+        let pseudonymizer = if config.pii_redaction_pseudonyms {
+            match Pseudonymizer::load_or_create(&config.data_dir) {
+                Ok(p) => {
+                    info!("text-PII redaction: consistent pseudonyms ON (issue #4206)");
+                    Some(Arc::new(p))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "couldn't load pseudonym key ({e}); rendering static [LABEL] tags instead"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         tokio::spawn(async move {
             // Per-label allow-list from the `piiRedactionLabels` setting
             // (default ["secret"]). Local adapters filter client-side via
@@ -1975,6 +1995,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             };
+            // Opt-in pseudonym tokens (no-op when `pseudonymizer` is None
+            // or the adapter is span-less, i.e. tinfoil).
+            let pipeline = pipeline.with_pseudonyms(pseudonymizer);
             let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;
 
             let worker_cfg = WorkerConfig {

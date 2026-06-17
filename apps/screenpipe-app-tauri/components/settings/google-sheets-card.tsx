@@ -63,7 +63,7 @@ export function GoogleSheetsCard({
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("google-sheets", null);
+      const res = await commands.oauthConnect("google-sheets", null, null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_sheets_connected");
         await fetchAccounts();

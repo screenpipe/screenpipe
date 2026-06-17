@@ -57,7 +57,7 @@ export function GmailCard() {
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("gmail", null);
+      const res = await commands.oauthConnect("gmail", null, null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("gmail_connected");
         await fetchAccounts();
