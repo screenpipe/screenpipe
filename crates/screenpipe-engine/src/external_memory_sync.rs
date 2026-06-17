@@ -327,6 +327,15 @@ fn apply(
     // Destinations screenpipe owns end-to-end (e.g. an Obsidian vault note)
     // have no hand-edited content to preserve — write the full digest and
     // skip the marker-splice / sidecar dance entirely.
+    //
+    // The owned-file path deliberately ignores `sidecar_filename`; assert the
+    // two are never set together so a future destination can't silently lose a
+    // declared sidecar (the invariant is also covered by a core unit test).
+    debug_assert!(
+        !(dest.owns_target && dest.sidecar_filename.is_some()),
+        "owns_target destinations must not declare a sidecar (got {})",
+        dest.id
+    );
     if dest.owns_target {
         let body = render_owned_note(entries, dest);
         let changed = write_atomic_full(&target, &body)

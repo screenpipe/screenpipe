@@ -1545,6 +1545,19 @@ function MemorySyncSubsection({
 const OBSIDIAN_MEMORIES_ID = "obsidian-memories";
 const OBSIDIAN_DEFAULT_FOLDER = "screenpipe";
 
+// Mirror of the backend `sanitize_relative_folder` (obsidian_memories.rs) so the
+// previewed note path matches exactly where the digest will actually be written.
+// Drops empty / "." / ".." components and a leading separator (an absolute or
+// traversing folder is forced vault-relative); falls back to the default when
+// nothing usable remains. Splits on both separators for Windows-style input.
+function sanitizeVaultFolder(folder: string): string {
+  const parts = folder
+    .split(/[\\/]/)
+    .map((p) => p.trim())
+    .filter((p) => p !== "" && p !== "." && p !== "..");
+  return parts.length > 0 ? parts.join("/") : OBSIDIAN_DEFAULT_FOLDER;
+}
+
 function ObsidianMemorySyncSubsection() {
   const { toast } = useToast();
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -1590,7 +1603,7 @@ function ObsidianMemorySyncSubsection() {
     return () => { cancelled = true; };
   }, []);
 
-  const folderClean = (folder.trim() || OBSIDIAN_DEFAULT_FOLDER).replace(/^[\\/]+|[\\/]+$/g, "");
+  const folderClean = sanitizeVaultFolder(folder.trim() || OBSIDIAN_DEFAULT_FOLDER);
   const notePath = `${vaultPath.replace(/[\\/]+$/, "")}/${folderClean}/screenpipe-memories.md`;
 
   const triggerSyncNow = useCallback(async () => {
