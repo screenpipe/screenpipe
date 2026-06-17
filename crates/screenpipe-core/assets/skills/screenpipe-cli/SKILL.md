@@ -5,7 +5,7 @@ description: Manage screenpipe pipes (scheduled AI automations) and connections 
 
 # Screenpipe CLI
 
-Use `bun x screenpipe@latest` to run CLI commands. No separate install needed.
+Use `bun x screenpipe@latest` to run CLI commands. No separate install needed. `npx -y screenpipe@latest` and `bunx screenpipe@latest` are equivalent — use whichever the machine has (the examples below use `bun x`; swap in `npx -y` freely).
 
 **IMPORTANT**: Always run `bun x` commands from a clean temp directory to avoid node_modules conflicts:
 ```bash
@@ -22,7 +22,7 @@ cd "$(mktemp -d)" && bun x screenpipe@latest <command>
 
 ## Pipe Management
 
-Pipes are markdown-based AI automations that run on schedule. Each pipe lives at `~/.screenpipe/pipes/<name>/pipe.md`.
+Pipes are markdown-based AI automations that run on a schedule (an interval or a cron expression) — the way to turn a one-off task into a recurring automation that processes your data. Each pipe lives at `~/.screenpipe/pipes/<name>/pipe.md`.
 
 ### Commands
 
@@ -82,6 +82,15 @@ When fired, the pipe auto-disables itself — `enabled: false` is set in the loc
 **Config fields**: `schedule`, `enabled` (bool), `preset` (string or array — e.g. `"Oai"` or `["Primary", "Fallback"]`), `history` (bool — include previous output as context)
 
 Screenpipe prepends a context header with time range, timezone, OS, and API URL before each execution. No template variables needed.
+
+### How a pipe runs
+
+A pipe is an AI agent that executes your prompt on its schedule. At run time screenpipe spawns the agent with your prompt as instructions plus the context header — then the agent does the work itself. Inside a pipe the agent:
+
+- queries the local API at `http://localhost:3030` (search, activity-summary, meetings, …) — or any HTTP endpoint, e.g. an enterprise/team API with a bearer token — to read the data it needs;
+- writes deliverables to `./output/` and prefers bun/TypeScript for scripts (Python may not be installed);
+- sends notifications via `POST http://localhost:11435/notify` with `{"title": "...", "body": "..."}` (body supports markdown; file links must be absolute paths, e.g. `[log](/Users/me/out.md)`, not `./out.md`);
+- must **not** run `screenpipe pipe run` itself — it already *is* the running pipe, so calling it spawns a recursive duplicate. Do the task directly with the tools at hand (bash, file I/O, HTTP).
 
 After creating:
 ```bash
