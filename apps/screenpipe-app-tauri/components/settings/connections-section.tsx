@@ -1328,6 +1328,26 @@ function ClaudeCodePanel() {
   );
 }
 
+// Render one `/memories/sync-external` per-destination outcome to a short
+// human string. Shared by every memory-sync subsection (claude code, codex,
+// obsidian) so the snake_case SyncOutcome parsing stays in exactly one place.
+// Rust serializes the SyncOutcome enum with `rename_all = "snake_case"`, so
+// the variant keys are lowercase (`wrote` / `unchanged` / `skipped`).
+function describeSyncOutcome(result: any): string {
+  if (result?.wrote) {
+    const n = result.wrote.entries;
+    return `wrote ${n} ${n === 1 ? "memory" : "memories"}`;
+  }
+  if (result?.unchanged) {
+    const n = result.unchanged.entries;
+    return `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
+  }
+  if (result?.skipped) {
+    return `skipped · ${result.skipped.reason}`;
+  }
+  return "synced";
+}
+
 // Shared subsection used by ClaudeCodePanel + CodexPanel. Surfaces the
 // memory-sync feature backed by the screenpipe-connect Integrations of
 // the same id ("claude-code", "codex"). Lives next to the MCP install
@@ -1435,23 +1455,9 @@ function MemorySyncSubsection({
       // The endpoint returns a list of per-destination outcomes — pick
       // the one for this integration and render it. The other tile's
       // panel will refresh independently when the user opens it.
-      // Rust serializes the SyncOutcome enum with `rename_all = "snake_case"`,
-      // so the variant keys are lowercase (`wrote` / `unchanged` / `skipped`).
       const me = (data?.results || []).find((r: any) => r.destination_id === integrationId);
       if (me?.outcome?.ok) {
-        const result = me.outcome.result;
-        let resultText: string;
-        if (result?.wrote) {
-          const n = result.wrote.entries;
-          resultText = `wrote ${n} ${n === 1 ? "memory" : "memories"}`;
-        } else if (result?.unchanged) {
-          const n = result.unchanged.entries;
-          resultText = `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
-        } else if (result?.skipped) {
-          resultText = `skipped · ${result.skipped.reason}`;
-        } else {
-          resultText = "synced";
-        }
+        const resultText = describeSyncOutcome(me.outcome.result);
         setLastResult(resultText);
         setLastResultAt(Date.now());
         toast({ title: "memory sync", description: resultText });
@@ -1519,6 +1525,224 @@ function MemorySyncSubsection({
             />
           </div>
           <Button onClick={handleConnect} disabled={status === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
+          </Button>
+        </>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+// Memory-sync subsection shown inside the Obsidian card. Mirrors
+// MemorySyncSubsection (claude code / codex) but targets the dedicated
+// `obsidian-memories` connection — kept separate from the vault-writing
+// `obsidian` connection so toggling memory sync never clobbers the vault a
+// user's pipes write to, and vice-versa. Writes a single screenpipe-owned
+// note `<vault>/<folder>/screenpipe-memories.md`, rewritten end-to-end on
+// each 5-minute scheduler tick.
+const OBSIDIAN_MEMORIES_ID = "obsidian-memories";
+const OBSIDIAN_DEFAULT_FOLDER = "screenpipe";
+
+function ObsidianMemorySyncSubsection() {
+  const { toast } = useToast();
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [vaultPath, setVaultPath] = useState("");
+  const [folder, setFolder] = useState(OBSIDIAN_DEFAULT_FOLDER);
+  const [status, setStatus] = useState<"idle" | "connecting" | "syncing">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+  const [lastResultAt, setLastResultAt] = useState<number | null>(null);
+
+  // Load any saved memory-sync config. If none, prefill the vault path from
+  // the user's default vault-writing `obsidian` connection so enabling sync
+  // is one click for the common single-vault case — but they stay fully
+  // independent stores (we only read it as a suggestion).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}`);
+        const data = await r.json();
+        const savedVault = data?.credentials?.vault_path;
+        if (typeof savedVault === "string" && savedVault.length > 0) {
+          if (cancelled) return;
+          setVaultPath(savedVault);
+          const savedFolder = data?.credentials?.memories_folder;
+          if (typeof savedFolder === "string" && savedFolder.trim().length > 0) {
+            setFolder(savedFolder);
+          }
+          setConnected(true);
+          return;
+        }
+      } catch { /* fall through to suggestion */ }
+      try {
+        const r = await localFetch("/connections/obsidian");
+        const data = await r.json();
+        const suggested = data?.credentials?.vault_path;
+        if (!cancelled && typeof suggested === "string" && suggested.length > 0) {
+          setVaultPath(suggested);
+        }
+      } catch { /* no default vault — user types one in */ }
+      if (!cancelled) setConnected(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const folderClean = (folder.trim() || OBSIDIAN_DEFAULT_FOLDER).replace(/^[\\/]+|[\\/]+$/g, "");
+  const notePath = `${vaultPath.replace(/[\\/]+$/, "")}/${folderClean}/screenpipe-memories.md`;
+
+  const triggerSyncNow = useCallback(async () => {
+    setStatus("syncing");
+    setError(null);
+    try {
+      const res = await localFetch("/memories/sync-external", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "sync failed");
+      const me = (data?.results || []).find((r: any) => r.destination_id === OBSIDIAN_MEMORIES_ID);
+      if (me?.outcome?.ok) {
+        const resultText = describeSyncOutcome(me.outcome.result);
+        setLastResult(resultText);
+        setLastResultAt(Date.now());
+        toast({ title: "memory sync", description: resultText });
+      } else if (me) {
+        throw new Error(me?.outcome?.error || "sync failed");
+      }
+    } catch (e: any) {
+      const msg = e?.message || "sync failed";
+      setError(msg);
+      toast({ title: "memory sync failed", description: msg, variant: "destructive" });
+    } finally {
+      setStatus("idle");
+    }
+  }, [toast]);
+
+  const handleConnect = useCallback(async () => {
+    const vault = vaultPath.trim();
+    if (!vault) { setError("pick a vault folder first"); return; }
+    setStatus("connecting");
+    setError(null);
+    try {
+      const credentials = { vault_path: vault, memories_folder: folder.trim() || OBSIDIAN_DEFAULT_FOLDER };
+      // test() validates the vault (.obsidian present), creates the target
+      // folder, and probes write access — so read-only / wrong-folder errors
+      // surface here, not silently in the background scheduler.
+      const testRes = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      const testData = await testRes.json();
+      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
+
+      const saveRes = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+
+      setConnected(true);
+      notifyConnectionsUpdated();
+      posthog.capture("connection_saved", { integration: OBSIDIAN_MEMORIES_ID });
+      // Populate the note immediately rather than waiting for the next tick.
+      await triggerSyncNow();
+    } catch (e: any) {
+      setError(e?.message || "connection failed");
+    } finally {
+      setStatus("idle");
+    }
+  }, [vaultPath, folder, triggerSyncNow]);
+
+  const handleDisconnect = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
+      setConnected(false);
+      setLastResult(null);
+      setLastResultAt(null);
+      notifyConnectionsUpdated();
+    } catch (e: any) {
+      setError(e?.message || "disconnect failed");
+    }
+  }, []);
+
+  if (connected === null) {
+    return null; // initial fetch in flight — avoid flicker
+  }
+
+  return (
+    <div className="border-t border-border pt-3 mt-1 space-y-2">
+      <div className="space-y-0.5">
+        <p className="text-xs font-medium text-foreground">memory sync (beta)</p>
+        <p className="text-xs text-muted-foreground">
+          writes your screenpipe memories into a note in this vault so they show up
+          in your graph and search. updates automatically every 5 minutes.
+        </p>
+      </div>
+
+      {connected ? (
+        <>
+          <div className="p-2 bg-muted border border-border rounded-lg space-y-1">
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">note</p>
+              <p className="text-xs text-foreground font-mono break-all">{notePath}</p>
+            </div>
+            {lastResult && (
+              <div className="pt-1 border-t border-border space-y-0.5">
+                <p className="text-xs text-muted-foreground">last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
+                <p className="text-xs text-foreground break-all">{lastResult}</p>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+              {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
+            </Button>
+            <Button onClick={handleDisconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+              <LogOut className="h-3 w-3" />stop syncing
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">vault folder</Label>
+            <div className="relative">
+              <Input
+                value={vaultPath}
+                onChange={(e) => setVaultPath(e.target.value)}
+                placeholder={platform() === "windows" ? "C:\\Users\\you\\Documents\\MyVault" : "/Users/you/Documents/MyVault"}
+                className="h-7 text-xs font-mono pr-8"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                title="browse for vault folder"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={async () => {
+                  const selected = await openDialog({ directory: true, multiple: false, title: "Select Obsidian Vault Folder" });
+                  if (typeof selected === "string") setVaultPath(selected);
+                }}
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">folder inside vault (optional)</Label>
+            <Input
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+              placeholder={OBSIDIAN_DEFAULT_FOLDER}
+              className="h-7 text-xs font-mono"
+              spellCheck={false}
+            />
+          </div>
+          <Button onClick={handleConnect} disabled={status === "connecting" || !vaultPath.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
           </Button>
         </>
@@ -2668,6 +2892,8 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <ObsidianMemorySyncSubsection />
     </div>
   );
 }
@@ -3497,10 +3723,12 @@ export function ConnectionsSection({
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
     // owned-default is hidden from settings — the agent drives it via the
-    // embedded sidebar, no user-facing controls.
+    // embedded sidebar, no user-facing controls. obsidian-memories is hidden
+    // too: it's a memory-sync destination surfaced as a subsection inside the
+    // Obsidian card, not a standalone connection tile.
     const hardcodedIds = new Set(hardcoded.map(h => h.id));
     const apiTiles: ConnectionTile[] = integrations
-      .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default")
+      .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default" && i.id !== "obsidian-memories")
       .map(i => ({
         id: i.id,
         name: i.name,

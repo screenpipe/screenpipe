@@ -46,6 +46,7 @@ pub mod n8n;
 pub mod notion;
 pub mod ntfy;
 pub mod obsidian;
+pub mod obsidian_memories;
 pub mod odoo;
 pub mod openclaw;
 pub mod otter;
@@ -265,6 +266,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(linear::Linear),
         Box::new(perplexity::Perplexity),
         Box::new(obsidian::Obsidian),
+        Box::new(obsidian_memories::ObsidianMemories),
         Box::new(n8n::N8n),
         Box::new(make::Make),
         Box::new(zapier::Zapier),
