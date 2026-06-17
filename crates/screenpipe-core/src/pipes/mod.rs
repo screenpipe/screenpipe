@@ -4367,6 +4367,17 @@ impl PipeManager {
                 std::fs::create_dir_all(&dir)?;
                 atomic_write(&pipe_md, content)?;
                 info!("installed built-in pipe: {}", name);
+            } else if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+                // already installed — don't overwrite the user's copy, but do
+                // repair known-broken instructions left over from older bundles
+                // (e.g. PATCH /meetings/:id, which the server never supported).
+                if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                    atomic_write(&pipe_md, &migrated)?;
+                    info!(
+                        "migrated built-in pipe '{}' (fixed stale instructions)",
+                        name
+                    );
+                }
             }
         }
 
@@ -4433,6 +4444,37 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     let config: PipeConfig = serde_yaml::from_str(yaml_str)?;
 
     Ok((config, body))
+}
+
+/// Surgically repair known-broken fragments in an already-installed builtin
+/// `pipe.md` without clobbering the user's other edits. `install_builtin_pipes`
+/// only writes when the file is absent, so a stale local copy never picks up a
+/// bundled fix on its own. Rather than overwrite the whole file (which would
+/// throw away user customization), we replace just the specific broken fragment.
+///
+/// Returns the rewritten content only when a migration actually applied, so the
+/// caller can skip the disk write otherwise. Idempotent: running it on
+/// already-fixed content is a no-op.
+fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    // (old, new) fragment swaps per builtin pipe.
+    let replacements: &[(&str, &str)] = match name {
+        // the meeting-summary pipe shipped instructions to PATCH
+        // /meetings/:id, but the server only registers PUT (see
+        // screenpipe-engine server.rs) — so every save 404'd. fix already
+        // installed local copies. PR #4247.
+        "meeting-summary" => &[(
+            "-X PATCH \"http://localhost:3030/meetings/",
+            "-X PUT \"http://localhost:3030/meetings/",
+        )],
+        _ => return None,
+    };
+
+    let mut updated = original.to_string();
+    for (old, new) in replacements {
+        updated = updated.replace(old, new);
+    }
+
+    (updated != original).then_some(updated)
 }
 
 /// Atomic file write: write to a temp file in the same directory, then rename.
@@ -5170,6 +5212,26 @@ mod tests {
         // cap larger than input keeps everything
         let files = vec![f("a.md", 100)];
         assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn migrate_builtin_pipe_fixes_stale_patch_verb() {
+        // a stale local meeting-summary copy with the old PATCH verb gets
+        // surgically rewritten to PUT, leaving surrounding text untouched.
+        let stale = "do stuff\n  curl -s -X PATCH \"http://localhost:3030/meetings/<MEETING_ID>\" \\\n    -d '{}'\nmore stuff";
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("stale PATCH content should migrate");
+        assert!(fixed.contains("-X PUT \"http://localhost:3030/meetings/"));
+        assert!(!fixed.contains("-X PATCH"));
+        assert!(fixed.starts_with("do stuff"));
+        assert!(fixed.ends_with("more stuff"));
+
+        // idempotent: already-PUT content is a no-op (no rewrite, no churn).
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+
+        // other builtins and unrelated content are left alone.
+        assert!(migrate_builtin_pipe_text("day-recap", stale).is_none());
+        assert!(migrate_builtin_pipe_text("meeting-summary", "no api calls here").is_none());
     }
 
     #[test]
