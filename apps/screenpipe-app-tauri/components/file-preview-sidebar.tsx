@@ -71,28 +71,20 @@ export function FilePreviewSidebar({
 
   return (
     <div data-testid="file-preview-sidebar" className="flex flex-col flex-1 min-h-0">
-      <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
-        <div className="flex-1 min-w-0 text-muted-foreground" title={path}>
-          <div className="text-xs truncate">{fileName}</div>
-          {breadcrumb && breadcrumb !== fileName && (
-            <div className="text-[10px] leading-3 truncate opacity-70">
-              {breadcrumb}
-            </div>
-          )}
-        </div>
+      <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60">
         <button
-          onClick={openInDefault}
-          title="Open file"
-          className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          onClick={onClose}
+          title="Close preview"
+          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
         >
-          open
+          <PanelRightClose className="h-3.5 w-3.5" />
         </button>
         <button
-          onClick={revealInFinder}
-          title="Reveal file"
+          onClick={copyPath}
+          title="Copy file path"
           className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
         >
-          reveal
+          {copyPathToast ? "copied" : "path"}
         </button>
         {content?.kind === "text" && content.text !== "" && (
           <button
@@ -104,19 +96,27 @@ export function FilePreviewSidebar({
           </button>
         )}
         <button
-          onClick={copyPath}
-          title="Copy file path"
+          onClick={revealInFinder}
+          title="Reveal file"
           className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
         >
-          {copyPathToast ? "copied" : "path"}
+          reveal
         </button>
         <button
-          onClick={onClose}
-          title="Close preview"
-          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+          onClick={openInDefault}
+          title="Open file"
+          className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
         >
-          <PanelRightClose className="h-3.5 w-3.5" />
+          open
         </button>
+        <div className="flex-1 min-w-0 text-muted-foreground text-right" title={path}>
+          <div className="text-xs truncate">{fileName}</div>
+          {breadcrumb && breadcrumb !== fileName && (
+            <div className="text-[10px] leading-3 truncate opacity-70">
+              {breadcrumb}
+            </div>
+          )}
+        </div>
       </div>
       <ViewerFileContent
         path={path}

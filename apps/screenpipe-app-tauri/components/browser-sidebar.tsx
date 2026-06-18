@@ -69,6 +69,7 @@ const STATE_EVENT = "owned-browser:state";
 const DEFAULT_WIDTH = 480;
 const MIN_WIDTH = 320;
 const MIN_CHAT_WIDTH = 360;
+const INSPECTOR_WIDTH = 280;
 const CHROME_WEBSTORE_URL =
   "https://chromewebstore.google.com/search/screenpipe%20browser%20bridge";
 
@@ -86,6 +87,12 @@ interface BrowserSidebarProps {
   } | null;
   onCloseFilePreview?: () => void;
   onReplaceFilePreviewPath?: (path: string) => void;
+  /** When set, rendered in place of the browser/file-preview content inside
+   *  the same panel container (same width, drag handle, background). */
+  inspectorContent?: React.ReactNode | null;
+  /** Called when an agent navigation event would reveal the browser panel,
+   *  so the parent can close the inspector first. */
+  onBecomeVisible?: () => void;
 }
 
 interface SessionAccessEvent {
@@ -158,6 +165,8 @@ export function BrowserSidebar({
   filePreview,
   onCloseFilePreview,
   onReplaceFilePreviewPath,
+  inspectorContent,
+  onBecomeVisible,
 }: BrowserSidebarProps) {
   const { settings, updateSettings } = useSettings();
   const [visible, setVisible] = useState(false);
@@ -196,10 +205,11 @@ export function BrowserSidebar({
   );
   const previewActive = filePreview?.visible === true && !!filePreview.path;
   const previewPath = previewActive ? filePreview.path : null;
+  const inspectorActive = !!inspectorContent;
 
   const effectiveWidth = clampWidth(requestedWidth, availableW);
   const browserPanelOpen = visible && !collapsed && effectiveWidth > 0;
-  const panelOpen = previewActive || browserPanelOpen;
+  const panelOpen = inspectorActive || previewActive || browserPanelOpen;
 
   useEffect(() => {
     try {
@@ -208,6 +218,13 @@ export function BrowserSidebar({
       // plugin unavailable in web dev mode
     }
   }, []);
+
+  // Hide the native webview when the inspector takes over the panel area
+  useEffect(() => {
+    if (inspectorActive) {
+      commands.ownedBrowserHide().catch(() => {});
+    }
+  }, [inspectorActive]);
 
   // ---------------------------------------------------------------------------
   // Persistence
@@ -388,6 +405,7 @@ export function BrowserSidebar({
           setVisible(true);
           setCollapsed(false);
           persistState({ url, collapsed: false });
+          onBecomeVisible?.();
         } else {
           persistState({ url });
         }
@@ -922,18 +940,25 @@ export function BrowserSidebar({
       {panelOpen && (
         <div
           ref={panelRef}
-          // Inline flex item — sits *beside* the chat, doesn't overlay
-          // it. shrink-0 keeps us at effectiveWidth; the chat content
-          // (flex-1 min-w-0) gives way. The JS clamp on effectiveWidth
-          // guarantees viewport - chat ≥ 360px so the chat is never
-          // crushed below readable width.
-          style={{ width: effectiveWidth, flexBasis: effectiveWidth }}
-          className="border-l border-border/50 bg-muted/30 flex flex-col overflow-hidden shrink-0 relative"
+          // Inline flex item beside the chat — pushes the chat column
+          // narrower. Browser/file-preview get the full sidebar chrome
+          // (border, tinted bg, resize handle). Inspector gets the same
+          // background as the chat surface with no border or chrome so
+          // the layout reads as one page with a quiet right-side region.
+          style={inspectorActive
+            ? { width: INSPECTOR_WIDTH, flexBasis: INSPECTOR_WIDTH }
+            : { width: effectiveWidth, flexBasis: effectiveWidth }
+          }
+          className={inspectorActive
+            ? "bg-background flex flex-col overflow-hidden shrink-0"
+            : "border-l border-border/50 bg-muted/30 flex flex-col overflow-hidden shrink-0 relative"
+          }
         >
-          {/* Drag handle — 10px hot zone on the left edge with a thicker
-                visible grip in the vertical center. The 1px border
-                reads as the panel's edge; the 32px tall grip bar is the
-                discoverable affordance. */}
+          {/* Drag handle — hidden when inspector is active (no resize needed).
+                10px hot zone on the left edge with a thicker visible grip in
+                the vertical center. The 1px border reads as the panel's edge;
+                the 32px tall grip bar is the discoverable affordance. */}
+          {!inspectorActive && (
           <div
             onMouseDown={onDragStart}
             className="absolute top-0 left-0 h-full w-2.5 cursor-ew-resize z-10 group/resize -translate-x-1/2"
@@ -942,8 +967,11 @@ export function BrowserSidebar({
             <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border/60 group-hover/resize:bg-foreground/40 transition-colors" />
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-10 w-1 rounded-full bg-border group-hover/resize:bg-foreground/60 group-hover/resize:w-1.5 transition-all" />
           </div>
+          )}
 
-          {previewActive ? (
+          {inspectorActive ? (
+            inspectorContent
+          ) : previewActive ? (
             previewPath ? (
               <FilePreviewSidebar
                 path={previewPath}
@@ -1152,7 +1180,7 @@ export function BrowserSidebar({
       {/* Floating re-open affordance: shown when a URL is saved but the
           panel is collapsed. Pinned to the viewport's top-right corner so
           it's discoverable regardless of the chat layout state. */}
-      {!previewActive && visible && collapsed && currentUrl && (
+      {!inspectorActive && !previewActive && visible && collapsed && currentUrl && (
         <button
           onClick={expand}
           title={`Show browser (${currentUrl})`}

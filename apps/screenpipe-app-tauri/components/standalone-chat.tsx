@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Sparkles, Plug, CornerDownRight } from "lucide-react";
+import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Sparkles, Plug, CornerDownRight, PanelRight } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
@@ -71,6 +71,8 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
+import { useChatInspector } from "@/lib/hooks/use-chat-inspector";
+import { ChatInspector } from "@/components/chat/chat-inspector";
 import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
@@ -3137,6 +3139,18 @@ export function StandaloneChat({
   );
   const { filePreview, openFilePreview, closeFilePreview } =
     useChatFilePreview(conversationId);
+  const { inspectorOpen, setInspectorOpen, outputs: inspectorOutputs, sources: inspectorSources } =
+    useChatInspector(conversationId, messages);
+
+  const toggleInspector = useCallback(() => {
+    if (inspectorOpen) {
+      setInspectorOpen(false);
+    } else {
+      closeFilePreview();
+      setInspectorOpen(true);
+    }
+  }, [inspectorOpen, closeFilePreview, setInspectorOpen]);
+
   const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
   const queuedPrompts = useMemo(
     () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
@@ -8754,6 +8768,21 @@ export function StandaloneChat({
             ) : null}
           </>
         )}
+        {/* Inspector toggle — opens/closes the right-side inspector panel.
+            Always visible regardless of hideInlineHistory. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleInspector();
+          }}
+          className={cn("relative z-10 h-7 w-7", inspectorOpen && "bg-muted")}
+          title="Inspector"
+        >
+          <PanelRight size={14} />
+        </Button>
       </div>
 
       {/* Main content area with optional history sidebar — only used in
@@ -9207,6 +9236,7 @@ export function StandaloneChat({
                   <MessageContent
                     message={message}
                     deferSourceFooter={
+                      inspectorOpen ||
                       citationPlan.deferredMessageIds.has(message.id) ||
                       message.id === activeSourceFooterMessageId
                     }
@@ -9332,7 +9362,7 @@ export function StandaloneChat({
               ) : null}
               </div>
             </motion.div>,
-            turnAggregatedCitations && turnAggregatedCitations.length > 0 ? (
+            !inspectorOpen && turnAggregatedCitations && turnAggregatedCitations.length > 0 ? (
               <motion.div
                 key={`turn-sources-${message.id}`}
                 initial={{ opacity: 0, y: 4 }}
@@ -10120,6 +10150,14 @@ export function StandaloneChat({
         filePreview={filePreview}
         onCloseFilePreview={closeFilePreview}
         onReplaceFilePreviewPath={openFilePreview}
+        inspectorContent={inspectorOpen ? (
+          <ChatInspector
+            outputs={inspectorOutputs}
+            sources={inspectorSources}
+            onOpenFile={(path) => { setInspectorOpen(false); openFilePreview(path); }}
+          />
+        ) : null}
+        onBecomeVisible={() => setInspectorOpen(false)}
       />
       </div> {/* End of horizontal chat+browser split */}
 

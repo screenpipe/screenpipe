@@ -32,7 +32,7 @@ interface SourceCitationFooterProps {
   onOpenFile?: (path: string) => void;
 }
 
-const KIND_ICON: Record<SourceCitationKind, React.ComponentType<{ className?: string }>> = {
+export const KIND_ICON: Record<SourceCitationKind, React.ComponentType<{ className?: string }>> = {
   screenpipe: Search,
   database: Database,
   connector: Plug,
@@ -43,7 +43,7 @@ const KIND_ICON: Record<SourceCitationKind, React.ComponentType<{ className?: st
   command: TerminalSquare,
 };
 
-const KIND_LABEL: Record<SourceCitationKind, string> = {
+export const KIND_LABEL: Record<SourceCitationKind, string> = {
   screenpipe: "screen",
   database: "db",
   connector: "app",
@@ -54,7 +54,7 @@ const KIND_LABEL: Record<SourceCitationKind, string> = {
   command: "cmd",
 };
 
-const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
+export const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
   ["apple-calendar", "/images/apple.svg"],
   ["apple calendar", "/images/apple.svg"],
   ["asana", "/images/asana.svg"],
@@ -241,7 +241,7 @@ function SourceCitationRow({
   );
 }
 
-function SourceCitationIcon({
+export function SourceCitationIcon({
   citation,
   fallback: FallbackIcon,
 }: {
@@ -264,7 +264,7 @@ function SourceCitationIcon({
   return <FallbackIcon className="h-3 w-3" />;
 }
 
-function sourceIconSrc(citation: SourceCitation): string | undefined {
+export function sourceIconSrc(citation: SourceCitation): string | undefined {
   if (citation.kind === "screenpipe") {
     return "/images/screenpipe.png";
   }
@@ -279,11 +279,11 @@ function sourceIconSrc(citation: SourceCitation): string | undefined {
   return undefined;
 }
 
-function sourceUsesObsidianIcon(citation: SourceCitation): boolean {
+export function sourceUsesObsidianIcon(citation: SourceCitation): boolean {
   return citation.kind === "connector" && sourceFingerprint(citation).includes("obsidian");
 }
 
-function sourceFingerprint(citation: SourceCitation): string {
+export function sourceFingerprint(citation: SourceCitation): string {
   return `${citation.id} ${citation.title} ${citation.subtitle ?? ""}`
     .toLowerCase()
     .replace(/[_-]+/g, " ");
