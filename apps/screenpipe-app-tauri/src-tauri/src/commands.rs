@@ -3524,3 +3524,93 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
     );
     Ok(())
 }
+
+fn is_safe_ai_url(url_str: &str) -> bool {
+    let parsed = match url::Url::parse(url_str) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    
+    let host = match parsed.host_str() {
+        Some(h) => h.to_lowercase(),
+        None => return false,
+    };
+    
+    // Allow known public AI providers
+    if host == "api.openai.com" 
+        || host == "api.anthropic.com" 
+        || host == "api.screenpipe.com" 
+        || host == "api.screenpi.pe"
+    {
+        return true;
+    }
+    
+    if host == "localhost" || host.ends_with(".local") {
+        return true;
+    }
+    
+    // Check if host is an IP address
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                ipv4.is_loopback() || ipv4.is_private()
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                ipv6.is_loopback() 
+                    || (ipv6.segments()[0] & 0xfe00) == 0xfc00 // ULA
+                    || (ipv6.segments()[0] & 0xffc0) == 0xfe80 // Link-Local
+            }
+        }
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn test_ai_endpoint(
+    url: String,
+    method: String,
+    headers: std::collections::HashMap<String, String>,
+    body: Option<serde_json::Value>,
+) -> Result<String, String> {
+    if !is_safe_ai_url(&url) {
+        return Err("URL is blocked for security (only loopback, private IP ranges, .local, or official AI providers allowed)".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let mut req = match method.to_uppercase().as_str() {
+        "POST" => client.post(&url),
+        "GET" => client.get(&url),
+        _ => return Err("unsupported method".to_string()),
+    };
+
+    for (k, v) in headers {
+        if let Ok(hk) = reqwest::header::HeaderName::from_bytes(k.as_bytes()) {
+            if let Ok(hv) = reqwest::header::HeaderValue::from_str(&v) {
+                req = req.header(hk, hv);
+            }
+        }
+    }
+
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("connection failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("failed to read response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("HTTP error {}: {}", status.as_u16(), text));
+    }
+
+    Ok(text)
+}

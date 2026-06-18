@@ -136,9 +136,63 @@ const isLocalhostUrl = (url?: string): boolean => {
   if (!url) return false;
   try {
     const hostname = new URL(url).hostname.toLowerCase();
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
+    // mDNS/Bonjour .local domains resolve to local addresses (RFC 6762)
+    if (hostname.endsWith(".local")) return true;
+    // Private IP ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+    if (/^10\.\d+\.\d+\.\d+$/.test(hostname)) return true;
+    if (/^172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/.test(hostname)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(hostname)) return true;
+    return false;
   } catch {
     return false;
+  }
+};
+
+const tauriBackendFetch = async (
+  url: string,
+  options?: RequestInit
+): Promise<Response> => {
+  try {
+    const headers: Record<string, string> = {};
+    if (options?.headers) {
+      const h = options.headers as Record<string, string>;
+      Object.keys(h).forEach((key) => {
+        headers[key] = h[key];
+      });
+    }
+    const bodyVal = options?.body ? JSON.parse(options.body as string) : null;
+    const res = await commands.testAiEndpoint(
+      url,
+      options?.method || "GET",
+      headers,
+      bodyVal
+    );
+    if (res.status === "error") {
+      throw new Error(res.error);
+    }
+    const resText = res.data;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(resText),
+      text: async () => resText,
+      clone: function () {
+        return this;
+      },
+    } as unknown as Response;
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 500,
+      text: async () => String(err?.message || err),
+      json: async () => {
+        throw new Error(String(err?.message || err));
+      },
+      clone: function () {
+        return this;
+      },
+    } as unknown as Response;
   }
 };
 
@@ -816,8 +870,12 @@ const AISection = ({
       chatHeaders["OpenAI-Beta"] = "responses=experimental";
     }
 
-    // Use tauriFetch for chatgpt.com and Anthropic to bypass CORS
-    const fetchFn = (isChatGpt || isAnthropic) ? tauriFetch : fetch;
+    // Use tauriFetch for chatgpt.com and Anthropic to bypass CORS, and tauriBackendFetch for local URLs
+    const fetchFn = (isChatGpt || isAnthropic)
+      ? tauriFetch
+      : isLocalhostUrl(chatUrl)
+      ? tauriBackendFetch
+      : fetch;
 
     const chatStart = performance.now();
     try {
@@ -955,7 +1013,7 @@ const AISection = ({
           break;
         case "custom":
           try {
-            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriFetch : fetch;
+            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriBackendFetch : fetch;
             const customResponse = await customFetchFn(
               `${settingsPreset?.url}/models`,
               {
