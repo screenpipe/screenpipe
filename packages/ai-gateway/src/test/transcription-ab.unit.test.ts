@@ -21,6 +21,7 @@ import {
   extractTranscript,
   runTranscriptionABTest,
 } from '../services/transcription-ab';
+import { handleFileTranscription } from '../handlers/transcription';
 
 // ─── Config parsing ─────────────────────────────────────────────────────────
 
@@ -203,6 +204,116 @@ describe('callDeepgram', () => {
       const url = new URL(urls[0]);
       expect(url.searchParams.get('diarize')).toBe('true');
       expect(url.searchParams.get('utterances')).toBe('true');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('handleFileTranscription', () => {
+  it('reads repeated detect_language query params from desktop clients', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          results: {
+            channels: [{
+              alternatives: [{ transcript: 'hello world', confidence: 0.9 }],
+            }],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const response = await handleFileTranscription(
+        new Request('https://ai.example/v1/listen?detect_language=en&detect_language=hi&sample_rate=16000', {
+          method: 'POST',
+          body: new Uint8Array([1, 2, 3]),
+          headers: { 'Content-Type': 'audio/mpeg' },
+        }),
+        { DEEPGRAM_API_KEY: 'dg-test-key' } as any,
+      );
+
+      expect(response.status).toBe(200);
+      const url = new URL(urls[0]);
+      expect(url.searchParams.getAll('detect_language')).toEqual(['en', 'hi']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reads a single language query param from desktop clients', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          results: {
+            channels: [{
+              alternatives: [{ transcript: 'hello world', confidence: 0.9 }],
+            }],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const response = await handleFileTranscription(
+        new Request('https://ai.example/v1/listen?language=en&sample_rate=16000', {
+          method: 'POST',
+          body: new Uint8Array([1, 2, 3]),
+          headers: { 'Content-Type': 'audio/mpeg' },
+        }),
+        { DEEPGRAM_API_KEY: 'dg-test-key' } as any,
+      );
+
+      expect(response.status).toBe(200);
+      const url = new URL(urls[0]);
+      expect(url.searchParams.getAll('detect_language')).toEqual(['en']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('treats detect_language=true as auto-detect', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          results: {
+            channels: [{
+              alternatives: [{ transcript: 'hello world', confidence: 0.9 }],
+            }],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const response = await handleFileTranscription(
+        new Request('https://ai.example/v1/listen?detect_language=true&sample_rate=16000', {
+          method: 'POST',
+          body: new Uint8Array([1, 2, 3]),
+          headers: { 'Content-Type': 'audio/mpeg' },
+        }),
+        { DEEPGRAM_API_KEY: 'dg-test-key' } as any,
+      );
+
+      expect(response.status).toBe(200);
+      const url = new URL(urls[0]);
+      expect(url.searchParams.getAll('detect_language')).toEqual([]);
     } finally {
       globalThis.fetch = originalFetch;
     }
