@@ -42,25 +42,67 @@ function isConnectionLikeError(errorStr: string): boolean {
     normalized.includes("failed to fetch") ||
     normalized.includes("fetch failed") ||
     normalized.includes("econnrefused") ||
-    normalized.includes("connection refused")
+    normalized.includes("connection refused") ||
+    // network/TLS signatures seen reaching the chat from the gateway, e.g. the
+    // 2026-06-18 outage: reqwest "error sending request" / "tls handshake eof".
+    normalized.includes("error sending request") ||
+    normalized.includes("tls handshake") ||
+    normalized.includes("unexpected eof") ||
+    normalized.includes("unexpectedeof") ||
+    normalized.includes("could not connect") ||
+    normalized.includes("unable to connect") ||
+    normalized.includes("connect error") ||
+    normalized.includes("network error") ||
+    normalized.includes("dns error") ||
+    normalized.includes("enotfound") ||
+    normalized.includes("etimedout") ||
+    normalized.includes("timed out")
   );
+}
+
+export function isHostedScreenpipeProvider(provider?: string | null): boolean {
+  // screenpipe's own hosted gateway (default chat preset + the Pi agent both
+  // route through api.screenpipe.com). A connection failure here is on us,
+  // not the user's machine.
+  return provider === "screenpipe-cloud" || provider === "pi";
+}
+
+export function buildCloudConnectionMessage(): string {
+  return "Can't reach screenpipe cloud right now — this is usually a brief outage on our end, not your setup. Wait a few seconds and try again.";
+}
+
+export function buildRemoteConnectionMessage(provider?: string | null): string {
+  const named = provider && provider !== "custom" ? ` (${provider})` : "";
+  return `Can't reach the AI provider${named}. Check your internet connection and try again.`;
 }
 
 export function buildProviderErrorMessage(
   errorStr: string,
   preset?: ProviderLike | null
 ): string | null {
-  if (!isNativeOllamaProvider(preset?.provider)) return null;
-
+  const provider = preset?.provider;
   const model = preset?.model || undefined;
   const normalized = errorStr.toLowerCase();
-  if (normalized.includes("not found")) {
-    return model
-      ? buildOllamaModelMissingMessage(model)
-      : "The selected Ollama model was not found. Check your AI preset in settings.";
+
+  if (isNativeOllamaProvider(provider)) {
+    if (normalized.includes("not found")) {
+      return model
+        ? buildOllamaModelMissingMessage(model)
+        : "The selected Ollama model was not found. Check your AI preset in settings.";
+    }
+    if (isConnectionLikeError(errorStr)) {
+      return buildOllamaConnectionMessage(model);
+    }
+    return null;
   }
+
+  // Hosted/remote providers: a connection-like failure means we never reached
+  // the gateway (TLS dropped, DNS, offline). The raw "Connection error." reads
+  // like the app is broken — surface a clearer, retryable message instead.
   if (isConnectionLikeError(errorStr)) {
-    return buildOllamaConnectionMessage(model);
+    return isHostedScreenpipeProvider(provider)
+      ? buildCloudConnectionMessage()
+      : buildRemoteConnectionMessage(provider);
   }
 
   return null;

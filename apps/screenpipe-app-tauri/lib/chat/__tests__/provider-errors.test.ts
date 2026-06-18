@@ -32,9 +32,45 @@ describe("provider error copy", () => {
     expect(msg).toContain("ollama pull llama3.2");
   });
 
-  it("does not rewrite cloud provider connection errors", () => {
+  it("maps screenpipe cloud connection errors to a transient-outage message", () => {
+    const msg = buildProviderErrorMessage("Connection error.", {
+      provider: "screenpipe-cloud",
+      model: "auto",
+    });
+
+    expect(msg).toContain("screenpipe cloud");
+    expect(msg?.toLowerCase()).toContain("try again");
+    // does not blame the user's own machine/setup
+    expect(msg?.toLowerCase()).not.toContain("ollama");
+  });
+
+  it("maps the gateway TLS-handshake / send-request signatures the same way", () => {
+    // exact strings observed reaching the app during the 2026-06-18 outage
+    for (const raw of [
+      "tls handshake eof",
+      "error sending request for url (https://api.screenpipe.com/v1/chat/completions)",
+    ]) {
+      expect(
+        buildProviderErrorMessage(raw, { provider: "screenpipe-cloud", model: "auto" })
+      ).toContain("screenpipe cloud");
+    }
+  });
+
+  it("gives a generic connectivity message for other remote providers", () => {
     expect(
-      buildProviderErrorMessage("Connection error.", {
+      buildProviderErrorMessage("Connection error.", { provider: "anthropic", model: "claude-opus-4-8" })
+    ).toContain("anthropic");
+    expect(
+      buildProviderErrorMessage("Connection error.", { provider: "custom", model: "x" })
+    ).toContain("Can't reach the AI provider");
+  });
+
+  it("leaves non-connection cloud errors untouched (quota/auth handled elsewhere)", () => {
+    expect(
+      buildProviderErrorMessage("model_not_allowed", { provider: "screenpipe-cloud", model: "auto" })
+    ).toBeNull();
+    expect(
+      buildProviderErrorMessage('{"resets_at":"2026-06-19T00:00:00Z"}', {
         provider: "screenpipe-cloud",
         model: "auto",
       })
