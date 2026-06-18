@@ -61,7 +61,10 @@ export interface DeviceMetadata {
 	file_path: string;
 	app_name: string;
 	window_name: string;
-	ocr_text: string;
+	/** Frame text (accessibility-derived for most captures, OCR fallback). */
+	text: string;
+	/** @deprecated Legacy alias for `text`; the server still sends it but read `text`. */
+	ocr_text?: string;
 	timestamp: string;
 	browser_url?: string;
 }
@@ -718,12 +721,13 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			contextParts.push(`Apps: ${Array.from(apps).join(", ")}`);
 		}
 
-		// Add sample OCR text (first few frames)
+		// Add sample frame text (first few frames)
 		const ocrSamples: string[] = [];
 		selectedFrames.slice(0, 3).forEach((frame) => {
 			frame.devices.forEach((device) => {
-				if (device.metadata.ocr_text && device.metadata.ocr_text.length > 0) {
-					const sample = device.metadata.ocr_text.slice(0, 200);
+				const frameText = device.metadata.text ?? device.metadata.ocr_text;
+				if (frameText && frameText.length > 0) {
+					const sample = frameText.slice(0, 200);
 					if (sample.trim()) {
 						ocrSamples.push(sample);
 					}

@@ -79,6 +79,7 @@ import {
   parseMentions,
   buildAppMentionSuggestions,
   buildTagMentionSuggestions,
+  filterMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
   extractConversationHistorySyncUserText,
@@ -1846,7 +1847,7 @@ function MessageContent({
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
   const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
-    <SourceCitationFooter citations={sourceCitations} />
+    <SourceCitationFooter citations={sourceCitations} onOpenFile={onOpenViewerPath} />
   ) : null;
 
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -3945,6 +3946,44 @@ export function StandaloneChat({
   // never read from production code paths.
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const seedE2eSessionMessage = (
+      sid: string,
+      message: any,
+      preview: string,
+    ) => {
+      const store = useChatStore.getState();
+      const existing = store.sessions[sid];
+      const existingMessages = Array.isArray(existing?.messages)
+        ? existing.messages
+        : [];
+      const nextMessages = [...existingMessages, message];
+
+      if (!existing) {
+        store.actions.upsert({
+          id: sid,
+          title: "e2e",
+          preview,
+          status: "idle",
+          messageCount: nextMessages.length,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          pinned: false,
+          unread: false,
+          messages: nextMessages,
+        });
+      } else {
+        store.actions.appendMessage(sid, message, preview);
+      }
+
+      store.actions.setCurrent(sid);
+      store.actions.setPanelSession(sid);
+      setMessages(nextMessages as any);
+      setConversationId(sid);
+      piSessionIdRef.current = sid;
+      piSessionSyncedRef.current = true;
+      void emit("chat-current-session", { id: sid });
+    };
+
     (window as any).__e2eSeedUserMessage = (sid: string, text: string) => {
       const id = `e2e-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const userMsg = {
@@ -3954,42 +3993,49 @@ export function StandaloneChat({
         timestamp: Date.now(),
       };
 
-      // (2) Ensure the session record exists in the store so subsequent
-      // appendMessage / setStreaming / snapshotSession calls actually
-      // mutate something. upsert overwrites if existing, so we read first
-      // and merge messages by hand.
+      seedE2eSessionMessage(sid, userMsg as any, text.slice(0, 60));
+    };
+
+    // E2E hook: seed a finished assistant message carrying source citations,
+    // so chat-source-file-preview.spec.ts can render the "N sources" footer
+    // and click a file card without driving a real model run. Production
+    // impact: zero — only a non-functional reference on `window`.
+    (window as any).__e2eSeedAssistantMessage = (
+      sid: string,
+      payload: { content?: string; sourceCitations?: unknown[] },
+    ) => {
+      const id = `e2e-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const assistantMsg = {
+        id,
+        role: "assistant" as const,
+        content: payload.content ?? "",
+        timestamp: Date.now(),
+        sourceCitations: payload.sourceCitations ?? [],
+      };
+
+      seedE2eSessionMessage(
+        sid,
+        assistantMsg as any,
+        (payload.content ?? "").slice(0, 60),
+      );
       const store = useChatStore.getState();
-      const existing = store.sessions[sid];
-      if (!existing) {
-        store.actions.upsert({
-          id: sid,
-          title: "e2e",
-          preview: text.slice(0, 60),
-          status: "idle",
-          messageCount: 1,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-          messages: [userMsg as any],
-        });
-      } else {
-        store.actions.appendMessage(sid, userMsg as any);
-      }
-
-      // (1) Mirror to local React state so `ensureAssistantPlaceholder`
-      // sees the user-tail on the next text_delta. Always do this — the
-      // test only ever seeds for the about-to-stream session, which is
-      // by definition what the panel is rendering.
-      setMessages((prev) => [...prev, userMsg as any]);
-
-      // (3) Force the session ref in case the panel hasn't finished
-      // switching yet. Otherwise text_deltas with this sid would route
-      // to the wrong handler.
-      piSessionIdRef.current = sid;
+      store.actions.setStreaming(sid, {
+        streamingText: "",
+        streamingMessageId: null,
+        contentBlocks: [],
+        isLoading: false,
+        isStreaming: false,
+      });
+      store.actions.patch(sid, { status: "idle", lastError: undefined });
+      piStreamingTextRef.current = "";
+      piMessageIdRef.current = null;
+      piContentBlocksRef.current = [];
+      setIsLoading(false);
+      setIsStreaming(false);
     };
     return () => {
       delete (window as any).__e2eSeedUserMessage;
+      delete (window as any).__e2eSeedAssistantMessage;
     };
   }, []);
 
@@ -4341,9 +4387,9 @@ export function StandaloneChat({
     return map;
   }, [appMentionSuggestions]);
 
-  const baseMentionSuggestions = React.useMemo(
-    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions, ...tagMentionSuggestions],
-    [appMentionSuggestions, tagMentionSuggestions]
+  const atMentionSuggestions = React.useMemo(
+    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
+    [appMentionSuggestions]
   );
 
   // Parse current input to extract active filters for chip display
@@ -4492,7 +4538,7 @@ export function StandaloneChat({
       return;
     }
 
-    const matchesBase = baseMentionSuggestions.some(
+    const matchesBase = atMentionSuggestions.some(
       s => s.tag.toLowerCase().includes(`@${mentionFilter.toLowerCase()}`)
     );
     if (matchesBase && mentionFilter.length < 3) {
@@ -4526,7 +4572,7 @@ export function StandaloneChat({
 
     const debounceTimeout = setTimeout(searchSpeakers, 300);
     return () => clearTimeout(debounceTimeout);
-  }, [mentionFilter, mentionTrigger, baseMentionSuggestions]);
+  }, [mentionFilter, mentionTrigger, atMentionSuggestions]);
 
   useEffect(() => {
     if (mentionTrigger !== "#" || !mentionFilter.trim()) {
@@ -4622,34 +4668,22 @@ export function StandaloneChat({
   }, [appFilterOpen, filterSearch]);
 
   const filteredMentions = React.useMemo(() => {
-    if (mentionTrigger === "#") {
-      const tagSuggestions = !mentionFilter
-        ? tagMentionSuggestions
-        : tagSearchSuggestions.length > 0
-          ? tagSearchSuggestions
-          : allTagMentionSuggestions.filter(
-              s => s.tag.toLowerCase().includes(mentionFilter.toLowerCase()) ||
-                   s.description.toLowerCase().includes(mentionFilter.toLowerCase())
-            );
-      return tagSuggestions;
-    }
-
-    const searchableSuggestions = mentionFilter
-      ? [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions, ...allTagMentionSuggestions]
-      : baseMentionSuggestions;
-    const suggestions = !mentionFilter
-      ? searchableSuggestions
-      : searchableSuggestions.filter(
-          s => s.tag.toLowerCase().includes(mentionFilter.toLowerCase()) ||
-               s.description.toLowerCase().includes(mentionFilter.toLowerCase())
-        );
-    return [...suggestions, ...speakerSuggestions];
+    return filterMentionSuggestions({
+      mentionTrigger,
+      mentionFilter,
+      atMentionSuggestions,
+      tagMentionSuggestions,
+      allTagMentionSuggestions,
+      tagSearchSuggestions,
+      speakerSuggestions,
+      recentSpeakers,
+    });
   }, [
     mentionFilter,
     mentionTrigger,
+    atMentionSuggestions,
     speakerSuggestions,
-    baseMentionSuggestions,
-    appMentionSuggestions,
+    recentSpeakers,
     tagMentionSuggestions,
     allTagMentionSuggestions,
     tagSearchSuggestions,
@@ -4975,9 +5009,11 @@ export function StandaloneChat({
     setIsUserScrolledUp(false);
   }, [scheduleScrollToBottom]);
 
-  // Preload recent speakers when filter popover opens
+  // Preload recent speakers when filter popover opens or the composer @ menu opens.
   useEffect(() => {
-    if (!appFilterOpen || recentSpeakers.length > 0) return;
+    const shouldLoadRecentSpeakers =
+      appFilterOpen || (showMentionDropdown && mentionTrigger === "@");
+    if (!shouldLoadRecentSpeakers || recentSpeakers.length > 0) return;
     (async () => {
       try {
         const response = await localFetch(
@@ -4999,7 +5035,7 @@ export function StandaloneChat({
         // silent
       }
     })();
-  }, [appFilterOpen, recentSpeakers.length]);
+  }, [appFilterOpen, showMentionDropdown, mentionTrigger, recentSpeakers.length]);
 
   // Apps/tags load on mount, but the first fetch often races server startup.
   // App names are stable enough to retry only when empty; tags can change
@@ -9341,7 +9377,10 @@ export function StandaloneChat({
                 className="w-full"
                 data-testid="chat-turn-sources"
               >
-                <SourceCitationFooter citations={turnAggregatedCitations} />
+                <SourceCitationFooter
+                  citations={turnAggregatedCitations}
+                  onOpenFile={openFilePreview}
+                />
               </motion.div>
             ) : null,
               ];
@@ -9410,7 +9449,7 @@ export function StandaloneChat({
       </div> {/* End of main content area with history sidebar */}
 
       {/* Input */}
-      <div ref={inputSectionRef} className="relative border-t border-border/50 bg-gradient-to-t from-muted/20 to-transparent">
+      <div ref={inputSectionRef} className="relative bg-gradient-to-t from-background via-background/80 to-transparent">
         <div className={CHAT_RAIL_CLASS}>
         {/* Prefill, filters, suggestions first; then attached images in gap; then agent bar; then form */}
         {/* Prefill context indicator from search */}
@@ -9799,7 +9838,7 @@ export function StandaloneChat({
           <div
             className={cn(
               "flex flex-col rounded-lg border bg-input ring-offset-background transition-colors focus-within:border-foreground focus-within:ring-foreground/10 focus-within:ring-1",
-              "bg-background/50 border-border/50",
+              "bg-background/80 border-border/50 shadow-lg shadow-black/5",
               disabledReason && "border-muted-foreground/30"
             )}
           >
@@ -10109,6 +10148,10 @@ export function StandaloneChat({
           positioned over the placeholder div inside this component. */}
       <BrowserSidebar
         conversationId={conversationId}
+        // Session id the agent process runs under (the value tagged as the
+        // navigation `owner` via x-screenpipe-session). Lets the sidebar reveal
+        // this chat's own agent navigations even if `conversationId` state lags.
+        agentSessionId={piSessionIdRef.current}
         filePreview={filePreview}
         onCloseFilePreview={closeFilePreview}
         onReplaceFilePreviewPath={openFilePreview}

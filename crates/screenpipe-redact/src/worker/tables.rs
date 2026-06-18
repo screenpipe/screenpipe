@@ -77,12 +77,18 @@ pub enum TargetTable {
 }
 
 pub const ALL_TARGET_TABLES: &[TargetTable] = &[
-    TargetTable::AudioTranscription,
+    // FullText first: its per-frame pass detects once on `full_text` and
+    // propagates the redaction to the same frame's `accessibility_text`,
+    // so the Accessibility pass that follows is only a fallback for frames
+    // it couldn't cover (empty / already-redacted full_text, or a
+    // span-less backend). See `worker::Worker::process_frames_fulltext`
+    // and screenpipe/website#291.
+    TargetTable::FullText,
     TargetTable::Accessibility,
+    TargetTable::AudioTranscription,
     TargetTable::UiEventsKeyboard,
     TargetTable::UiEventsClipboard,
     TargetTable::Elements,
-    TargetTable::FullText,
 ];
 
 /// One row to redact.
@@ -200,6 +206,50 @@ pub async fn fetch_unredacted(
             // lossily so the row still gets redacted and stamped, with the bad
             // bytes replaced by U+FFFD.
             text: String::from_utf8_lossy(&r.get::<Vec<u8>, _>("text")).into_owned(),
+        })
+        .collect();
+    Ok(out)
+}
+
+/// A frame's `full_text` plus the sibling `accessibility_text` the worker
+/// redacts from the SAME detection pass (screenpipe/website#291).
+/// `full_text` is the union of accessibility + OCR text (migration
+/// `20260312000000_consolidate_search_to_frames_full_text.sql`), so every
+/// PII value in `accessibility_text` is present in `full_text` — detect
+/// once on `full_text`, propagate the resulting map to `accessibility_text`.
+#[derive(Debug)]
+pub struct FrameTextRow {
+    pub id: i64,
+    pub full_text: String,
+    pub accessibility_text: Option<String>,
+    pub accessibility_redacted_at: Option<i64>,
+}
+
+/// Fetch up to `limit` frames whose `full_text` needs redaction
+/// (newest-first), carrying the sibling `accessibility_text` + its
+/// watermark so the caller can propagate in one pass.
+pub async fn fetch_unredacted_frames_fulltext(
+    pool: &SqlitePool,
+    limit: u32,
+) -> Result<Vec<FrameTextRow>, sqlx::Error> {
+    let q = "SELECT id, full_text, accessibility_text, accessibility_redacted_at \
+             FROM frames \
+             WHERE full_text IS NOT NULL AND full_text != '' \
+               AND full_text_redacted_at IS NULL \
+             ORDER BY id DESC \
+             LIMIT ?";
+    let rows = sqlx::query(q).bind(limit as i64).fetch_all(pool).await?;
+    let out = rows
+        .into_iter()
+        .map(|r| FrameTextRow {
+            id: r.get::<i64, _>("id"),
+            // Lossy UTF-8 decode — same invalid-byte guard as
+            // `fetch_unredacted` (issue #4139); never panic the worker.
+            full_text: String::from_utf8_lossy(&r.get::<Vec<u8>, _>("full_text")).into_owned(),
+            accessibility_text: r
+                .get::<Option<Vec<u8>>, _>("accessibility_text")
+                .map(|b| String::from_utf8_lossy(&b).into_owned()),
+            accessibility_redacted_at: r.get::<Option<i64>, _>("accessibility_redacted_at"),
         })
         .collect();
     Ok(out)

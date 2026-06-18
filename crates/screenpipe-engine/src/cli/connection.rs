@@ -17,17 +17,13 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
     // but the file fallback still works for those).
     let db_path = screenpipe_dir.join("db.sqlite");
     let secret_store = if db_path.exists() {
-        let db_url = format!("sqlite:{}", db_path.display());
-        match sqlx::SqlitePool::connect(&db_url).await {
-            Ok(pool) => match screenpipe_secrets::SecretStore::new(pool, None).await {
-                Ok(store) => Some(Arc::new(store)),
-                Err(e) => {
-                    tracing::debug!("failed to open SecretStore: {e:#}");
-                    None
-                }
-            },
+        // Shared, engine-matched pool (WAL + busy_timeout) instead of an ad-hoc
+        // bare connection — waits for the lock instead of erroring when the
+        // running app holds the db, and never churns the WAL-index (#4263).
+        match screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None).await {
+            Ok(store) => Some(Arc::new(store)),
             Err(e) => {
-                tracing::debug!("failed to connect to db for SecretStore: {e:#}");
+                tracing::debug!("failed to open SecretStore: {e:#}");
                 None
             }
         }

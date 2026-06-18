@@ -560,6 +560,20 @@ export function PrivacySection() {
     handleSettingsChange({ piiRedactionLabels: ordered } as Partial<Settings>, true);
   };
 
+  // Consistent pseudonyms (issue #4206): render redacted values as
+  // stable tokens (e.g. [PERSON_1a2b3c4d]) instead of generic tags, so
+  // the same value stays correlatable across the timeline without being
+  // exposed. One-way + local; opt-in, default off.
+  const piiRedactionPseudonyms = Boolean(
+    settings.piiRedactionPseudonyms ?? false,
+  );
+  const handlePseudonymsToggle = (checked: boolean) => {
+    handleSettingsChange(
+      { piiRedactionPseudonyms: checked } as Partial<Settings>,
+      true,
+    );
+  };
+
   const handleIncognitoToggle = (checked: boolean) => {
     handleSettingsChange({ ignoreIncognitoWindows: checked }, true);
   };
@@ -1276,6 +1290,29 @@ export function PrivacySection() {
                   Unselected types stay visible so your timeline remains
                   searchable. Secrets are always removed in both modes.
                 </p>
+
+                <label className="flex items-start gap-2 text-xs cursor-pointer pt-2 mt-1.5 border-t border-border">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={piiRedactionPseudonyms}
+                    onChange={(e) => handlePseudonymsToggle(e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium text-foreground">
+                      Consistent pseudonyms
+                    </span>
+                    <span className="text-muted-foreground">
+                      {" "}— replace each value with a stable token like{" "}
+                      <code>[PERSON_1a2b3c4d5e6f]</code> instead of a generic{" "}
+                      <code>[PERSON]</code>, so the same person or value stays
+                      linkable across your timeline without being exposed.
+                      One-way and on-device — the original can&apos;t be
+                      recovered. Applies to newly-recorded activity going
+                      forward.
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
           </CardContent>

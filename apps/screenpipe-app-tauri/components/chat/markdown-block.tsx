@@ -14,7 +14,7 @@ import {
   rewriteLocalMarkdownLinksForChat,
   screenpipeViewerPathFromHref,
 } from "@/components/markdown";
-import { ChatCodeBlock } from "@/components/ui/chat-code-block";
+import { createCodeMarkdownComponents } from "@/components/markdown/code-block";
 import { commands } from "@/lib/utils/tauri";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { cn } from "@/lib/utils";
@@ -162,38 +162,10 @@ export function MarkdownBlock({
             </a>
           );
         },
-        pre({ children, ...props }) {
-          return (
-            <pre
-              className="overflow-x-auto rounded-lg border border-border bg-neutral-100 dark:bg-neutral-900 p-3 my-2 text-xs max-w-full not-prose"
-              {...props}
-            >
-              {children}
-            </pre>
-          );
-        },
-        code({ className, children, ...props }) {
-          const content = String(children).replace(/\n$/, "");
-          const match = /language-([^\s]+)/.exec(className || "");
-          const language = match?.[1] || "";
-          const isCodeBlock = className?.includes("language-");
-          const specialCodeBlock = renderSpecialCodeBlock?.(language, content);
-
-          if (specialCodeBlock) return specialCodeBlock;
-
-          if (isCodeBlock) {
-            return <ChatCodeBlock language={language} value={content} />;
-          }
-
-          return (
-            <code
-              className="px-1 py-0.5 rounded bg-muted font-mono text-[0.9em]"
-              {...props}
-            >
-              {children}
-            </code>
-          );
-        },
+        // Shared, theme-aware code rendering (block + inline + pre passthrough)
+        // so a fenced block looks identical in the chat and the file-preview
+        // sidebar, and stays readable in light and dark mode.
+        ...createCodeMarkdownComponents({ renderSpecialCodeBlock }),
       }}
     >
       {renderText}

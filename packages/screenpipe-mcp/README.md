@@ -154,6 +154,12 @@ List detected meetings with duration, app, and attendees. Pass `q` to filter by 
 Search structured UI elements (accessibility tree nodes and OCR text blocks):
 - Filter by source, role, app, time range
 - Much lighter than search-content for targeted UI lookups
+- Returns a compact `outline` view by default — a deduped, indented tree of the
+  text-bearing nodes (`#id` refs, `(off-screen)` flags), ~91% fewer tokens than
+  raw element JSON
+
+### get-frame-elements
+The whole element tree for one frame, as the same compact outline.
 
 ### frame-context
 Get accessibility text, parsed tree nodes, and extracted URLs for a specific frame.
@@ -179,7 +185,7 @@ Get accessibility text, parsed tree nodes, and extracted URLs for a specific fra
 - All timestamps are handled in UTC
 - Results are formatted for readability in Claude's interface
 - macOS automation features require accessibility permissions
-- The MCP tools already return compact, readable text. If you instead call the underlying screenpipe REST API directly (e.g. via `curl`), the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) accept `?format=csv|tsv` for a columnar table (column names written once) and `?fields=a,b,c` to select only the columns you need (dotted paths like `content.text`). On list-shaped results that is roughly a 70% token cut versus the default JSON, which stays unchanged when neither param is set.
+- The MCP tools already return compact, readable text (the element tools default to the `outline` view). If you instead call the underlying screenpipe REST API directly (e.g. via `curl`), the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) accept `?format=csv|tsv` for a columnar table (column names written once) and `?fields=a,b,c` to select only the columns you need (dotted paths like `content.text`); the element endpoints also accept `?format=outline` (the same tree the MCP tools return, ~91% fewer tokens than JSON). On list-shaped results that is a 70–91% token cut versus the default JSON, which stays unchanged when no param is set.
 
 ## Privacy Policy
 

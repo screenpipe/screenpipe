@@ -420,6 +420,19 @@ pub struct RecordingSettings {
     )]
     pub pii_redaction_labels: Vec<String>,
 
+    /// Render redacted PII as **consistent pseudonyms** instead of static
+    /// `[LABEL]` tags when `asyncPiiRedaction` is on. Same value → same
+    /// stable token (e.g. `[PERSON_1a2b3c4d5e6f]`), so the timeline stays
+    /// correlatable without exposing the value. Irreversible: a one-way
+    /// keyed hash with a random per-install key, no `token -> value`
+    /// store. Applies to newly-redacted rows only — rows already redacted
+    /// keep their existing tags (the worker redacts each row once).
+    /// Ignored for the Tinfoil backend (the enclave returns no spans to
+    /// tokenize). Off by default. See issue #4206 and `screenpipe-redact`'s
+    /// `Pseudonymizer`.
+    #[serde(rename = "piiRedactionPseudonyms", default)]
+    pub pii_redaction_pseudonyms: bool,
+
     // ── Cloud / Auth ───────────────────────────────────────────────────
     /// Screenpipe cloud user ID. Empty string means not logged in.
     /// Kept as String (not Option) to match existing store.bin schema.
@@ -610,6 +623,7 @@ impl Default for RecordingSettings {
             async_image_pii_redaction: false,
             pii_backend: default_pii_backend(),
             pii_redaction_labels: default_pii_redaction_labels(),
+            pii_redaction_pseudonyms: false,
             user_id: String::new(),
             user_name: None,
             openai_compatible_endpoint: None,

@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertCircle,
+  Boxes,
   Check,
   ChevronDown,
   LogIn,
@@ -28,23 +29,8 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
-
-interface McpHeader {
-  name: string;
-  value: string;
-}
-
-interface McpServer {
-  id: string;
-  name: string;
-  url: string;
-  transport?: "http" | "stdio";
-  command?: string;
-  args?: string[];
-  header_names: string[];
-  enabled: boolean;
-  created_at: number;
-}
+import { RegistryBrowser } from "./registry-browser";
+import type { McpHeader, McpServer, McpServerDraft } from "@/lib/mcp-registry";
 
 interface McpOAuthStatus {
   connected: boolean;
@@ -109,10 +95,12 @@ async function listServers(): Promise<McpServer[]> {
 export function CustomMcpCard() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [editing, setEditing] = useState<{
     mode: "create" | "edit";
     server: McpServer;
     headers: McpHeader[];
+    notice?: string;
   } | null>(null);
 
   const refresh = useCallback(async () => {
@@ -160,6 +148,18 @@ export function CustomMcpCard() {
 
   const closeEditor = () => setEditing(null);
 
+  // A registry pick opens the normal editor pre-filled, so install,
+  // auth, test and save all reuse the existing code path.
+  const handlePick = (draft: McpServerDraft) => {
+    setBrowsing(false);
+    setEditing({
+      mode: "create",
+      server: draft.server,
+      headers: draft.headers,
+      notice: draft.authHint,
+    });
+  };
+
   return (
     <Card className="border-border bg-card overflow-hidden">
       <CardContent className="p-0">
@@ -199,8 +199,9 @@ export function CustomMcpCard() {
             </div>
 
             <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-              Register MCP (Model Context Protocol) servers — HTTP endpoints
-              like Brave Search, Linear, Notion, or local stdio processes like{" "}
+              Register MCP (Model Context Protocol) servers — browse the
+              official registry, or add an HTTP endpoint like Brave Search,
+              Linear, Notion, or a local stdio process like{" "}
               <code className="text-xs bg-muted px-1 rounded">uvx mcp-server-brave</code>
               {" "}— so pipes and chat can call their tools via{" "}
               <code className="text-xs bg-muted px-1 rounded">sp_mcp_call</code>
@@ -220,11 +221,12 @@ export function CustomMcpCard() {
               </div>
             ) : loaded ? (
               <div className="text-[11px] text-muted-foreground bg-muted/30 rounded-md px-2.5 py-2 mb-3 leading-relaxed">
-                No servers yet. Try a public one like{" "}
+                No servers yet. Browse the registry to discover servers, or add
+                one by URL like{" "}
                 <code className="text-[10px] bg-muted px-1 rounded">
                   https://mcp.brave.com/v1
                 </code>
-                {" "}or point at your own internal MCP.
+                .
               </div>
             ) : null}
 
@@ -232,12 +234,22 @@ export function CustomMcpCard() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => setBrowsing(true)}
+                className="text-xs"
+                disabled={!loaded}
+              >
+                <Boxes className="h-3 w-3 mr-1.5" />
+                Browse registry
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={openCreate}
                 className="text-xs"
                 disabled={!loaded}
               >
                 <Plus className="h-3 w-3 mr-1.5" />
-                {servers.length === 0 ? "Add MCP server" : "Add another"}
+                {servers.length === 0 ? "Add manually" : "Add another"}
               </Button>
               {!loaded && (
                 <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
@@ -306,6 +318,7 @@ export function CustomMcpCard() {
                 initialHeaders={editing.headers}
                 existingServers={servers}
                 mode={editing.mode}
+                notice={editing.notice}
                 onSaved={async () => {
                   await refresh();
                   notifyConnectionsUpdated();
@@ -317,6 +330,13 @@ export function CustomMcpCard() {
           )}
         </DialogContent>
       </Dialog>
+
+      <RegistryBrowser
+        open={browsing}
+        onClose={() => setBrowsing(false)}
+        onPick={handlePick}
+        existingServers={servers}
+      />
     </Card>
   );
 }
@@ -432,6 +452,7 @@ function ServerEditor({
   initialHeaders,
   existingServers,
   mode,
+  notice,
   onSaved,
   onCancel,
 }: {
@@ -439,6 +460,7 @@ function ServerEditor({
   initialHeaders: McpHeader[];
   existingServers: McpServer[];
   mode: "create" | "edit";
+  notice?: string;
   onSaved: () => void;
   onCancel: () => void;
 }) {
@@ -787,6 +809,12 @@ function ServerEditor({
 
   return (
     <div className="p-4 space-y-4 text-sm">
+      {notice && (
+        <div className="flex items-start gap-1.5 text-[11px] rounded-md border border-border bg-muted/40 text-muted-foreground p-2.5 leading-snug">
+          <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>{notice}</span>
+        </div>
+      )}
       <div className="space-y-1.5">
         <Label htmlFor="mcp-name" className="text-xs">
           Name

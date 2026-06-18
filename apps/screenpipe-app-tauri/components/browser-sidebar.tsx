@@ -74,6 +74,11 @@ const CHROME_WEBSTORE_URL =
 
 interface BrowserSidebarProps {
   conversationId: string | null;
+  /** Session id the on-screen chat's agent process runs under (the value the
+   *  agent's `x-screenpipe-session` header carries). Used alongside
+   *  `conversationId` to reveal the chat's own agent navigations even when the
+   *  `conversationId` state lags the id the agent was spawned with. */
+  agentSessionId?: string | null;
   filePreview?: {
     path: string;
     visible: boolean;
@@ -149,6 +154,7 @@ function clampWidth(want: number, available: number): number {
 
 export function BrowserSidebar({
   conversationId,
+  agentSessionId,
   filePreview,
   onCloseFilePreview,
   onReplaceFilePreviewPath,
@@ -355,7 +361,20 @@ export function BrowserSidebar({
         // chat's file so it sticks on reopen. Restore/reload paths now tag
         // themselves with the foreground conversation id; ownerless events are
         // treated as stale/legacy and ignored.
-        if (isForeignNavigation(owner, conversationId)) return;
+        if (isForeignNavigation(owner, conversationId, agentSessionId)) {
+          // Diagnostic for the "agent navigated but the sidebar never opened"
+          // report: a *tagged* navigation we dropped because its owner matched
+          // neither the on-screen conversation nor its agent's session. Surfaces
+          // the exact id mismatch (or a missing owner header → owner null, which
+          // this skips since that's the expected stale/legacy case).
+          if (owner) {
+            console.debug(
+              "[browser-sidebar] dropped navigation not owned by this chat",
+              { owner, conversationId, agentSessionId, navigationId, url },
+            );
+          }
+          return;
+        }
         if (!navigationId) return;
         setSessionAccessRequest(null);
         setSessionAccessAnswer(null);
@@ -374,10 +393,27 @@ export function BrowserSidebar({
         }
       },
     );
+    unlistenPromise.then(() => {
+      if (typeof window !== "undefined") {
+        (window as any).__e2eOwnedBrowserNavigateReady = {
+          conversationId,
+          agentSessionId,
+        };
+      }
+    }).catch(() => {});
     return () => {
+      if (typeof window !== "undefined") {
+        const ready = (window as any).__e2eOwnedBrowserNavigateReady;
+        if (
+          ready?.conversationId === conversationId &&
+          ready?.agentSessionId === agentSessionId
+        ) {
+          (window as any).__e2eOwnedBrowserNavigateReady = null;
+        }
+      }
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistState, conversationId]);
+  }, [persistState, conversationId, agentSessionId]);
 
   useEffect(() => {
     const unlistenPromise = listen<SessionAccessEvent>(
@@ -388,7 +424,7 @@ export function BrowserSidebar({
         if (!requestId || !payload?.url || !payload?.host) return;
         // Same ownership gate as the navigate event — a background pipe's
         // cookie-consent prompt must not surface in another chat.
-        if (isForeignNavigation(payload.owner, conversationId)) return;
+        if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
         if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
         const request = {
           requestId,
@@ -416,7 +452,7 @@ export function BrowserSidebar({
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistState, conversationId, currentNavigationId]);
+  }, [persistState, conversationId, currentNavigationId, agentSessionId]);
 
   useEffect(() => {
     const unlistenPromise = listen<V20CookieBlockEvent>(
@@ -424,7 +460,7 @@ export function BrowserSidebar({
       (e) => {
         const payload = e.payload;
         if (!payload?.url || !payload?.host) return;
-        if (isForeignNavigation(payload.owner, conversationId)) return;
+        if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
         if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
         const block = {
           url: payload.url,
@@ -453,7 +489,7 @@ export function BrowserSidebar({
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistState, conversationId, currentNavigationId]);
+  }, [persistState, conversationId, currentNavigationId, agentSessionId]);
 
   useEffect(() => {
     sessionAccessActiveRef.current =
@@ -519,7 +555,7 @@ export function BrowserSidebar({
       // them so the foreign URL/title isn't persisted into this chat (the
       // sticky half of the leak: without this the URL is restored on reopen
       // even though the panel never visibly popped).
-      if (isForeignNavigation(payload.owner, conversationId)) return;
+      if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
       if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
 
       if (typeof payload.url === "string" && payload.url.length > 0) {
@@ -542,7 +578,7 @@ export function BrowserSidebar({
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [currentNavigationId, currentUrl, persistState, conversationId]);
+  }, [currentNavigationId, currentUrl, persistState, conversationId, agentSessionId]);
 
   // ---------------------------------------------------------------------------
   // Per-conversation restore

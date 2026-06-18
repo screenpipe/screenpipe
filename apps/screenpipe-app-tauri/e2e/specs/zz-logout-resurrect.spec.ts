@@ -40,7 +40,13 @@
 
 import { existsSync } from "node:fs";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { openHomeWindow, waitForAppReady, waitForTestId, t } from "../helpers/test-utils.js";
+import {
+  openHomeWindow,
+  reloadAndWaitForHome,
+  waitForAppReady,
+  waitForTestId,
+  t,
+} from "../helpers/test-utils.js";
 
 const FAKE_TOKEN = "e2e-fake-token-logout-resurrect";
 const FAKE_EMAIL = "e2e-logout@screenpipe.test";
@@ -184,6 +190,50 @@ async function restoreFetchAllWindows(): Promise<void> {
   if (start) await browser.switchToWindow(start).catch(() => {});
 }
 
+/** Make every PEER window answer /api/user with a hard 401 so its auto-refresh
+ *  retry loop STOPS and it can no longer 200-write the fake user back and
+ *  broadcast it to home after logout. Home keeps its slow 200 mock (its in-flight
+ *  loadUser is the thing under test).
+ *
+ *  Why a 401 MOCK and not the previous clear-token + restoreFetch():
+ *   - The auto-refresh effect (use-settings.tsx ~1158) keys on the IN-MEMORY
+ *     settings.user.token, not the secret store — clearing the secret token does
+ *     not stop a peer that already has the token in memory.
+ *   - That loop only stops the retries on a literal 401/403 (use-settings.tsx
+ *     ~1176); a transient non-401 network error keeps it retrying. Restoring REAL
+ *     fetch therefore left the loop alive on a contended macOS runner and the
+ *     peer kept resurrecting the session (the flake we still saw).
+ *  A deterministic 401 both stops the loop AND, via the auth interceptor,
+ *  reinforces sign-out — so even a peer that transiently wrote the user back gets
+ *  re-cleared. Best-effort + resilient to the macOS WebDriver session dropping a
+ *  switchToWindow mid-loop. */
+async function block401InPeerWindows(): Promise<void> {
+  const home = await browser.getWindowHandle().catch(() => null);
+  for (const handle of await browser.getWindowHandles().catch(() => [] as string[])) {
+    if (handle === home) continue;
+    try {
+      await browser.switchToWindow(handle);
+      await browser.execute(() => {
+        const w = window as unknown as Record<string, unknown>;
+        const orig = (w.__E2E_ORIG_FETCH as typeof window.fetch) || window.fetch.bind(window);
+        if (!w.__E2E_ORIG_FETCH) w.__E2E_ORIG_FETCH = orig;
+        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+          const url =
+            typeof input === "string" ? input : (input as Request)?.url ?? String(input);
+          if (url.includes("/api/user")) {
+            return Promise.resolve(new Response("{}", { status: 401, statusText: "Unauthorized" }));
+          }
+          return orig(input, init);
+        };
+        w.__E2E_FETCH_PATCHED = true;
+      });
+    } catch {
+      // window may have closed or the macOS session hiccuped mid-iteration
+    }
+  }
+  if (home) await browser.switchToWindow(home).catch(() => {});
+}
+
 async function userFetchCalls(): Promise<number> {
   return (await browser.execute(
     () => ((window as unknown as Record<string, unknown>).__E2E_USER_CALLS as number) || 0,
@@ -276,16 +326,7 @@ describe("Logout is not resurrected by an in-flight loadUser", function () {
       // best-effort
     }
     await restoreFetchAllWindows().catch(() => {});
-    await browser.execute(() => window.location.reload());
-    await browser
-      .waitUntil(
-        async () =>
-          (await browser.execute(
-            () => !!document.querySelector('[data-testid="home-page"]'),
-          )) as boolean,
-        { timeout: t(30_000), interval: 500, timeoutMsg: "home did not re-render after reload" },
-      )
-      .catch(() => {});
+    await reloadAndWaitForHome().catch(() => {});
   });
 
   it("stays logged out after one click even when a slow loadUser resolves afterwards", async () => {
@@ -324,9 +365,19 @@ describe("Logout is not resurrected by an in-flight loadUser", function () {
     const logoutBtn = await waitForTestId("account-logout-button", 8_000);
     await logoutBtn.click();
 
-    // Logout clears the session immediately.
+    // Immediately 401 every PEER window's /api/user so its auto-refresh retry
+    // loop stops and can't 200-resurrect the session after logout (the
+    // macOS/webkit flake). Done right after the click — before the "not logged
+    // in" wait — so the race window between logout and neutralization is minimal;
+    // if a peer did transiently resurrect, its own 401 now drives a sign-out that
+    // re-clears home, which the wait below then observes.
+    await block401InPeerWindows();
+
+    // Logout clears the session. Generous timeout: under CI load the logout
+    // click -> updateSettings -> React re-render can take a few seconds, and a
+    // transient peer resurrection may need its 401-driven sign-out to land.
     await browser.waitUntil(async () => (await loginStatusText()).includes("not logged in"), {
-      timeout: t(8_000),
+      timeout: t(20_000),
       interval: 200,
       timeoutMsg: "logout did not clear the session",
     });

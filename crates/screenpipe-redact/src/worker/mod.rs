@@ -224,10 +224,10 @@ impl Worker {
                 let batch_start = std::time::Instant::now();
                 let result = match shutdown.as_ref() {
                     Some(n) => tokio::select! {
-                        _r = self.process_table(*table) => Some(_r),
+                        _r = self.process_one(*table) => Some(_r),
                         _ = n.notified() => None,
                     },
-                    None => Some(self.process_table(*table).await),
+                    None => Some(self.process_one(*table).await),
                 };
                 match result {
                     None => {
@@ -314,6 +314,97 @@ impl Worker {
     async fn set_paused(&self, paused: bool) {
         let mut s = self.status.lock().await;
         s.paused = paused;
+    }
+
+    /// Dispatch one table. `FullText` gets the per-frame path that also
+    /// propagates to `accessibility_text` from a single detection
+    /// (screenpipe/website#291); everything else uses the generic
+    /// per-column path.
+    async fn process_one(&self, table: TargetTable) -> Result<u32, anyhow::Error> {
+        match table {
+            TargetTable::FullText => self.process_frames_fulltext().await,
+            other => self.process_table(other).await,
+        }
+    }
+
+    /// Redact the per-frame `full_text` search surface and, in the SAME
+    /// detection pass, propagate the result to that frame's
+    /// `accessibility_text` (a coherent substring of `full_text`) — so the
+    /// model runs once for both columns instead of twice. Falls back to
+    /// plain `full_text` redaction (leaving `accessibility_text` to its own
+    /// pass) when the redactor can't yield a value map (e.g. the span-less
+    /// enclave). Returns the number of column writes performed.
+    async fn process_frames_fulltext(&self) -> Result<u32, anyhow::Error> {
+        let rows =
+            tables::fetch_unredacted_frames_fulltext(&self.pool, self.cfg.batch_size).await?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        debug!(
+            count = rows.len(),
+            "redacting frame full_text batch (+ accessibility propagation)"
+        );
+
+        let mut writes = 0u32;
+        let mut propagated = 0u32;
+        for row in &rows {
+            match self.redactor.redact_with_map(&row.full_text).await? {
+                Some((out, map)) => {
+                    tables::write_redacted(
+                        &self.pool,
+                        TargetTable::FullText,
+                        row.id,
+                        &out.redacted,
+                    )
+                    .await?;
+                    writes += 1;
+                    // Propagate to the sibling accessibility_text if it
+                    // still needs it — no second detection. accessibility_text
+                    // ⊆ full_text, so all its PII values are in `map`.
+                    if let Some(acc) = row.accessibility_text.as_deref() {
+                        if !acc.is_empty() && row.accessibility_redacted_at.is_none() {
+                            let redacted = map.apply(acc);
+                            tables::write_redacted(
+                                &self.pool,
+                                TargetTable::Accessibility,
+                                row.id,
+                                &redacted,
+                            )
+                            .await?;
+                            writes += 1;
+                            propagated += 1;
+                        }
+                    }
+                }
+                None => {
+                    // Span-less / no-map redactor: redact full_text the
+                    // plain way; accessibility_text is left to the
+                    // Accessibility pass.
+                    let out = self.redactor.redact(&row.full_text).await?;
+                    tables::write_redacted(
+                        &self.pool,
+                        TargetTable::FullText,
+                        row.id,
+                        &out.redacted,
+                    )
+                    .await?;
+                    writes += 1;
+                }
+            }
+        }
+
+        if propagated > 0 {
+            debug!(
+                propagated,
+                "accessibility_text redacted via full_text propagation (no extra model passes)"
+            );
+        }
+
+        let mut s = self.status.lock().await;
+        s.redacted_total += writes as u64;
+        s.last_redacted_at = Some(chrono::Utc::now());
+        s.last_error = None;
+        Ok(writes)
     }
 
     /// Pull a batch of un-redacted rows for one table, redact them,

@@ -263,6 +263,16 @@
       "notes": "Opens Chat and focuses the composer for typing."
     },
     {
+      "spec": "chat-source-file-preview.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Clicking a chat file source opens it in the preview sidebar with rendered markdown + syntax-highlighted code."
+    },
+    {
       "spec": "chat-within-session-context-loss.spec.ts",
       "platforms": ["macos"],
       "layers": ["chat-ai"],
@@ -551,6 +561,16 @@
       "confidence": "smoke",
       "ux": "command",
       "notes": "Owned browser background navigation visibility."
+    },
+    {
+      "spec": "zzz-owned-browser-headless.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["os-integration", "window-lifecycle", "local-api"],
+      "features": ["owned-browser", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Headless owned browser for background pipes (#4248): with the sidebar never opened, a background eval and navigate-and-scrape over the local API lazily create a hidden offscreen child webview, return a real JS result (6*7 -> 42; document.readyState), and stay invisible; is_ready reflects real serviceability; the same singleton is then adopted into the sidebar panel (page state survives, no second webview). Search-driven and runs last because attaching the child to home tears down home's WebDriver handle."
     },
     {
       "spec": "updater-banner.spec.ts",

@@ -52,6 +52,42 @@ describe("owned-browser ownership", () => {
     });
   });
 
+  describe("isForeignNavigation — own-agent session match", () => {
+    it("reveals the chat's own agent navigation when conversationId lags/differs", () => {
+      // The agent runs under session S; the React conversationId state hasn't
+      // caught up (or never matched the spawn id). The navigation is owned by S,
+      // which is this chat's running agent → honored. This is the reveal bug:
+      // before, the owner only matched conversationId, so the chat's own agent
+      // page stayed hidden whenever the two diverged.
+      expect(isForeignNavigation("sess-S", "conv-LAGGED", "sess-S")).toBe(false);
+      expect(isForeignNavigation("sess-S", null, "sess-S")).toBe(false);
+    });
+
+    it("reveals on a conversationId match regardless of agentSessionId", () => {
+      expect(isForeignNavigation("conv-C", "conv-C", "sess-OTHER")).toBe(false);
+    });
+
+    it("still drops another chat's agent and background pipes", () => {
+      // owner is neither this chat's conversation nor its agent session.
+      expect(isForeignNavigation("conv-A", "conv-C", "sess-C")).toBe(true);
+      expect(isForeignNavigation("pipe:reddit", "conv-C", "sess-C")).toBe(true);
+    });
+
+    it("never matches a null/empty agentSessionId (no false reveal when unset)", () => {
+      expect(isForeignNavigation("conv-A", "conv-C", null)).toBe(true);
+      expect(isForeignNavigation("conv-A", "conv-C", undefined)).toBe(true);
+      expect(isForeignNavigation("conv-A", "conv-C", "")).toBe(true);
+      // An ownerless event stays dropped even with an agent session present.
+      expect(isForeignNavigation(null, "conv-C", "sess-C")).toBe(true);
+      expect(isForeignNavigation("", "conv-C", "sess-C")).toBe(true);
+    });
+
+    it("is backward compatible when agentSessionId is omitted", () => {
+      expect(isForeignNavigation("conv-C", "conv-C")).toBe(false);
+      expect(isForeignNavigation("conv-A", "conv-C")).toBe(true);
+    });
+  });
+
   describe("parseNavigatePayload", () => {
     it("parses the object payload with an owner", () => {
       expect(

@@ -84,6 +84,19 @@ pub struct CallBody {
 }
 
 #[derive(Deserialize)]
+pub struct RegistryQuery {
+    /// Substring match against server names (forwarded verbatim).
+    #[serde(default)]
+    pub search: Option<String>,
+    /// Opaque pagination cursor from a previous response.
+    #[serde(default)]
+    pub cursor: Option<String>,
+    /// Page size (registry clamps to 1..=100; we mirror that).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
 pub struct OAuthStartBody {
     #[serde(default)]
     pub redirect_uri: Option<String>,
@@ -516,6 +529,91 @@ async fn oauth_disconnect(
 }
 
 // ---------------------------------------------------------------------------
+// Official MCP registry proxy
+// ---------------------------------------------------------------------------
+
+/// Base URL of the official, community MCP registry. Read-only and
+/// unauthenticated — we proxy it so the desktop UI can browse/search
+/// published servers without a CORS detour (the registry sends no
+/// `access-control-allow-origin`) and without the renderer reaching the
+/// public internet directly. The engine stays the single egress point.
+const MCP_REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io/v0/servers";
+
+/// GET /mcp-servers/registry — search the official registry.
+///
+/// Returns `{ data: { servers: [...], nextCursor } }`. Each server is the
+/// registry's `server` object with the official `_meta` status flags
+/// (`status`, `isLatest`) flattened in, so the UI never has to reach into
+/// the vendored `_meta` namespace. The shape is otherwise forwarded
+/// as-is — we deliberately do NOT model the full schema so new fields
+/// (packages, remotes headers, env vars) flow through untouched.
+async fn list_registry(Query(q): Query<RegistryQuery>) -> Response {
+    let limit = q.limit.unwrap_or(30).clamp(1, 100);
+    let mut params: Vec<(&str, String)> = vec![("limit", limit.to_string())];
+    if let Some(search) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        params.push(("search", search.to_string()));
+    }
+    if let Some(cursor) = q.cursor.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        params.push(("cursor", cursor.to_string()));
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return bad_gateway(&e.to_string()),
+    };
+
+    let resp = match client.get(MCP_REGISTRY_BASE).query(&params).send().await {
+        Ok(r) => r,
+        Err(e) => return bad_gateway(&format!("mcp registry unreachable: {e}")),
+    };
+    if !resp.status().is_success() {
+        return bad_gateway(&format!("mcp registry returned HTTP {}", resp.status()));
+    }
+    let body: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return bad_gateway(&format!("mcp registry response was not JSON: {e}")),
+    };
+
+    let servers: Vec<Value> = body
+        .get("servers")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(flatten_registry_entry).collect())
+        .unwrap_or_default();
+    let next_cursor = body
+        .get("metadata")
+        .and_then(|m| m.get("nextCursor"))
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
+
+    Json(json!({ "data": { "servers": servers, "nextCursor": next_cursor } })).into_response()
+}
+
+/// Lift the official `_meta` status flags onto the `server` object so the
+/// renderer can read `status` / `isLatest` directly. Returns `None` for
+/// malformed entries (no `server` object) so one bad row can't poison the
+/// whole page — same defensive instinct as the json_each tag guard.
+fn flatten_registry_entry(entry: &Value) -> Option<Value> {
+    let server = entry.get("server")?.as_object()?.clone();
+    let mut out = Value::Object(server);
+    if let Some(meta) = entry
+        .get("_meta")
+        .and_then(|m| m.get("io.modelcontextprotocol.registry/official"))
+    {
+        if let Some(status) = meta.get("status") {
+            out["status"] = status.clone();
+        }
+        if let Some(is_latest) = meta.get("isLatest") {
+            out["isLatest"] = is_latest.clone();
+        }
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
 
@@ -630,6 +728,9 @@ where
     };
     Router::new()
         .route("/", get(list_servers))
+        // Official-registry browse proxy. Static segment, so it wins over
+        // the `/:id` param route below (same as `/test`).
+        .route("/registry", get(list_registry))
         // Ad-hoc probe (must be before /:id to avoid the literal "test"
         // being interpreted as an id).
         .route("/test", post(test_ad_hoc))
@@ -808,5 +909,44 @@ mod tests {
         assert!(!mcp_server_allowed(&state, Some("pipe:scoped"), "notion").await);
         assert!(mcp_server_allowed(&state, Some("pipe:legacy"), "notion").await);
         assert!(mcp_server_allowed(&state, None, "notion").await);
+    }
+
+    #[test]
+    fn flatten_registry_lifts_meta_status() {
+        // Mirrors a real entry from GET /v0/servers.
+        let entry = json!({
+            "server": {
+                "name": "ai.smithery/smithery-notion",
+                "description": "Notion workspace",
+                "remotes": [{ "type": "streamable-http", "url": "https://x" }]
+            },
+            "_meta": {
+                "io.modelcontextprotocol.registry/official": {
+                    "status": "active",
+                    "isLatest": true
+                }
+            }
+        });
+        let out = flatten_registry_entry(&entry).unwrap();
+        assert_eq!(out["name"], "ai.smithery/smithery-notion");
+        assert_eq!(out["status"], "active");
+        assert_eq!(out["isLatest"], true);
+        // The vendored remotes pass through untouched.
+        assert_eq!(out["remotes"][0]["url"], "https://x");
+    }
+
+    #[test]
+    fn flatten_registry_skips_malformed_entry() {
+        // No `server` object — one bad row must not poison the page.
+        assert!(flatten_registry_entry(&json!({ "_meta": {} })).is_none());
+        assert!(flatten_registry_entry(&json!({ "server": "not-an-object" })).is_none());
+    }
+
+    #[test]
+    fn flatten_registry_tolerates_missing_meta() {
+        let entry = json!({ "server": { "name": "x", "packages": [] } });
+        let out = flatten_registry_entry(&entry).unwrap();
+        assert_eq!(out["name"], "x");
+        assert!(out.get("status").is_none());
     }
 }

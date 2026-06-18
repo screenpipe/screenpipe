@@ -190,12 +190,31 @@ Query screenpipe at http://localhost:3030/search using the time range from the c
 Write the summary to ./output/<date>.md
 EOF
 
-# then use the desktop app (settings → pipes) to install, enable, and test
-# or use the REST API:
-# curl -X POST http://localhost:3030/pipes/install -H "Content-Type: application/json" -d '{"source": "~/.screenpipe/pipes/my-pipe"}'
-# curl -X POST http://localhost:3030/pipes/my-pipe/enable -H "Content-Type: application/json" -d '{"enabled": true}'
-# curl -X POST http://localhost:3030/pipes/my-pipe/run
+# install + enable + test it from the CLI (no install needed — npx / bunx / bun x all work):
+npx -y screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
+npx -y screenpipe@latest pipe enable my-pipe
+npx -y screenpipe@latest pipe run my-pipe        # run once now to test
+#
+# (or use the desktop app: settings → pipes — or the REST API: POST /pipes/install, /pipes/my-pipe/run)
 ```
+
+## manage pipes from the CLI
+
+every pipe action is available from the CLI — no separate install. `npx -y screenpipe@latest`, `bunx screenpipe@latest`, and `bun x screenpipe@latest` are equivalent; use whichever the machine has.
+
+```bash
+npx -y screenpipe@latest pipe list                   # list all pipes
+npx -y screenpipe@latest pipe install <url-or-path>  # install from a GitHub URL or a local folder
+npx -y screenpipe@latest pipe enable <name>          # turn the schedule on
+npx -y screenpipe@latest pipe disable <name>         # turn it off
+npx -y screenpipe@latest pipe run <name>             # run once now (test before the schedule fires)
+npx -y screenpipe@latest pipe logs <name>            # view execution logs
+npx -y screenpipe@latest pipe delete <name>          # remove a pipe
+```
+
+<Tip>run CLI commands from a clean temp directory to avoid `node_modules` conflicts: `cd "$(mktemp -d)" && npx -y screenpipe@latest pipe list`.</Tip>
+
+this is how you turn a one-off into a recurring **cron** automation: write a `pipe.md` with a `schedule` (e.g. `0 9 * * *`), `install` then `enable` it, and screenpipe runs it on that cron. you can also hand these commands to any AI agent — e.g. *"create a screenpipe pipe that summarizes my day at 6pm"* — and let it scaffold, install, and enable the pipe for you.
 
 ## pipe.md format
 

@@ -318,7 +318,7 @@ jobs:
         "$install_dir/bun" --version
 
     - name: Install Linux dependencies
-      timeout-minutes: 20
+      timeout-minutes: 35
       run: |
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive

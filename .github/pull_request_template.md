@@ -13,6 +13,8 @@ brief description of the changes in this pr.
 
 related issue: #
 
+> attach screenshots / recordings here — **never commit media into the repo.** drag the file into this box (works for anyone, browser only) and github hosts it. on the cli: attach it as a release asset — `gh release upload <tag> file.png` if you can write here, else `gh release create media file.png --repo <you>/screenpipe` on your fork — and paste the url.
+
 ## before
 
 a screen recording of the app/cli before this change

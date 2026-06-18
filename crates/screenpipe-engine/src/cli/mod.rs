@@ -443,6 +443,16 @@ pub struct RecordArgs {
     #[arg(long, value_delimiter = ',', default_value = "secret")]
     pub pii_redaction_labels: Vec<String>,
 
+    /// Render redacted PII as consistent pseudonym tokens
+    /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags, so the
+    /// same value stays correlatable across rows without exposing it.
+    /// Irreversible (one-way keyed hash, random per-install key, no
+    /// reverse map). Applies to the text worker when
+    /// `--async-pii-redaction` is on, for newly-redacted rows only;
+    /// ignored for the Tinfoil backend. Off by default. See issue #4206.
+    #[arg(long, default_value_t = false)]
+    pub pii_redaction_pseudonyms: bool,
+
     /// Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise)
     #[arg(long, default_value_t = false)]
     pub filter_music: bool,
@@ -700,6 +710,7 @@ pub struct RecordArgSources {
     pub async_image_pii_redaction: bool,
     pub pii_backend: bool,
     pub pii_redaction_labels: bool,
+    pub pii_redaction_pseudonyms: bool,
     pub filter_music: bool,
     pub disable_vision: bool,
     pub ignored_windows: bool,
@@ -751,6 +762,7 @@ impl RecordArgSources {
             async_image_pii_redaction: from_command_line(record, "async_image_pii_redaction"),
             pii_backend: from_command_line(record, "pii_backend"),
             pii_redaction_labels: from_command_line(record, "pii_redaction_labels"),
+            pii_redaction_pseudonyms: from_command_line(record, "pii_redaction_pseudonyms"),
             filter_music: from_command_line(record, "filter_music"),
             disable_vision: from_command_line(record, "disable_vision"),
             ignored_windows: from_command_line(record, "ignored_windows"),
@@ -794,6 +806,7 @@ impl RecordArgSources {
             || self.async_image_pii_redaction
             || self.pii_backend
             || self.pii_redaction_labels
+            || self.pii_redaction_pseudonyms
             || self.filter_music
             || self.disable_vision
             || self.ignored_windows
@@ -938,6 +951,7 @@ impl RecordArgs {
             async_image_pii_redaction: self.async_image_pii_redaction,
             pii_backend: self.pii_backend.clone(),
             pii_redaction_labels: self.pii_redaction_labels.clone(),
+            pii_redaction_pseudonyms: self.pii_redaction_pseudonyms,
             filter_music: self.filter_music,
             audio_transcription_engine: engine_str.to_string(),
             transcription_mode: mode_str.to_string(),
@@ -1212,6 +1226,9 @@ impl RecordArgs {
         }
         if sources.pii_redaction_labels {
             settings.pii_redaction_labels = self.pii_redaction_labels.clone();
+        }
+        if sources.pii_redaction_pseudonyms {
+            settings.pii_redaction_pseudonyms = self.pii_redaction_pseudonyms;
         }
         if sources.filter_music {
             settings.filter_music = self.filter_music;

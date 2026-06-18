@@ -53,13 +53,18 @@ struct WsCookieRequest<'a> {
 /// Why an eval call returned without a useful answer.
 #[derive(Debug, thiserror::Error)]
 pub enum EvalError {
-    #[error("browser extension not connected")]
+    #[error("browser not connected")]
     NotConnected,
-    #[error("failed to send to extension: {0}")]
+    // Shared by every `Browser` backend (Chrome extension *and* the embedded
+    // owned webview), so the wording must not name a specific transport — an
+    // owned-browser failure used to print "failed to send to extension", which
+    // wrongly implicated the user's Chrome extension. `{0}` carries the
+    // backend-specific detail.
+    #[error("failed to send command to browser: {0}")]
     SendFailed(String),
-    #[error("extension disconnected before responding")]
+    #[error("browser disconnected before responding")]
     Disconnected,
-    #[error("extension did not respond within {0}s")]
+    #[error("browser did not respond within {0}s")]
     Timeout(u64),
 }
 

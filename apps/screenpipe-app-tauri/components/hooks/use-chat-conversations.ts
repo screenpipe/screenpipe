@@ -1170,6 +1170,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         timestamp: m.timestamp,
         ...(m.displayContent ? { displayContent: m.displayContent } : {}),
         ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
+        ...((m as any).sourceCitations?.length
+          ? { sourceCitations: (m as any).sourceCitations }
+          : {}),
         ...((m as any).images?.length
           ? { images: (m as any).images }
           : (m as any).image

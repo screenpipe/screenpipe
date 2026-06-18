@@ -34,7 +34,13 @@
 
 import { existsSync } from "node:fs";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { openHomeWindow, waitForAppReady, waitForTestId, t } from "../helpers/test-utils.js";
+import {
+  openHomeWindow,
+  reloadAndWaitForHome,
+  waitForAppReady,
+  waitForTestId,
+  t,
+} from "../helpers/test-utils.js";
 
 // A version far above any real release so the banner's dismissed-version gate
 // can never suppress it and later specs in the shared session never collide.
@@ -53,16 +59,7 @@ describe("Update banner surfacing", function () {
     // variant is a single install button with no dismiss affordance. Reload the
     // webview to reset `isVisible` so the synthetic banner does not leak into
     // later specs that share this session.
-    await browser.execute(() => window.location.reload());
-    await browser
-      .waitUntil(
-        async () =>
-          (await browser.execute(
-            () => !!document.querySelector('[data-testid="home-page"]'),
-          )) as boolean,
-        { timeout: t(30_000), interval: 500, timeoutMsg: "home did not re-render after reload" },
-      )
-      .catch(() => {});
+    await reloadAndWaitForHome().catch(() => {});
   });
 
   it("surfaces the restart-to-update banner on update-available, without relaunching", async () => {

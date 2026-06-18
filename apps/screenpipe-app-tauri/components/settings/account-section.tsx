@@ -249,7 +249,12 @@ export function AccountSection() {
                 size="sm"
                 data-testid="account-logout-button"
                 onClick={async () => {
-                  updateSettings({ user: null as any });
+                  await updateSettings({ user: null as any });
+                  try {
+                    await commands.setCloudToken(null);
+                  } catch (e) {
+                    console.warn("failed to clear cloud token on logout:", e);
+                  }
                   // Restart Pi with null token so it stops using the old
                   // account's quota. Next message will auto-start as anonymous.
                   try {
