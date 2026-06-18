@@ -289,6 +289,19 @@ pub trait LocalApiClient: Send + Sync {
     ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
         Ok(Vec::new())
     }
+
+    /// Fetch one frame's full-resolution JPEG by id — the same image the
+    /// local `/frames/{id}` route serves, which means capture-time PII
+    /// redaction has already been applied when the org policy enables it.
+    /// Used by on-demand frame fulfillment (SOP step screenshots).
+    /// `Ok(None)` = frame unknown or expired from local retention. Default
+    /// `None` keeps shims that don't serve images compiling and inert.
+    async fn fetch_frame_jpeg(
+        &self,
+        _frame_id: i64,
+    ) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
+        Ok(None)
+    }
 }
 
 // ─── Wire types — what we POST upstream ─────────────────────────────────────
@@ -820,6 +833,281 @@ pub struct SyncTickReport {
     pub bytes: usize,
 }
 
+// ─── On-demand frame fulfillment (P3) ───────────────────────────────────────
+//
+// The org's cloud pipes cite frame_ids they want as images (SOP step
+// screenshots). The control plane keeps a per-device request manifest; after
+// every successful sync tick the device asks for its pending ids, decodes
+// those frames from local video (the same path `/frames/{id}` serves, so
+// capture-time PII redaction is already applied when the org enables it),
+// downscales them to a readable-but-bounded JPEG and uploads.
+//
+// Best-effort end to end by design: fulfillment must never fail a sync tick,
+// never touches the cursor, and never runs for direct-upload (zero-knowledge)
+// orgs — their telemetry bypasses our cloud, so frames must too. Errored ids
+// are reported back so the server can drop them from the manifest instead of
+// re-requesting them forever.
+
+/// Max frames fetched + uploaded per tick in "cited" mode (on-demand SOP
+/// screenshots). Keeps a tick bounded even when a pipe requests the manifest
+/// cap; the rest drains on subsequent ticks.
+const FRAME_BATCH_MAX_CITED: usize = 20;
+/// Per-tick batch in "all" mode — the org chose to centralize every frame,
+/// so the device drains its (server-auto-cited) manifest much faster:
+/// 200/tick x ~288 ticks/day far exceeds a busy device's daily frame count.
+const FRAME_BATCH_MAX_ALL: usize = 200;
+
+/// Per-tick frame batch for the org's chosen mode. Off never reaches the
+/// fetch loop (the gate returns first) but maps to 0 for totality.
+pub fn frame_batch_max(mode: crate::enterprise_policy::FrameImagesMode) -> usize {
+    use crate::enterprise_policy::FrameImagesMode as M;
+    match mode {
+        M::Off => 0,
+        M::Cited => FRAME_BATCH_MAX_CITED,
+        M::All => FRAME_BATCH_MAX_ALL,
+    }
+}
+/// Hard cap on a single encoded image. Matches the server's per-image limit.
+pub const FRAME_UPLOAD_MAX_BYTES: usize = 300_000;
+/// Width bound for uploaded frames — readable for SOP steps, not a raw dump.
+pub const FRAME_MAX_WIDTH: u32 = 1280;
+const FRAME_JPEG_QUALITY: u8 = 70;
+const FRAME_JPEG_QUALITY_FALLBACK: u8 = 50;
+
+/// Derive the control-plane base (e.g. `https://screenpi.pe`) from the
+/// configured ingest URL, so staging / on-prem `SCREENPIPE_ENTERPRISE_INGEST_URL`
+/// overrides keep working without a second env var.
+pub fn control_plane_base(ingest_url: &str) -> Option<String> {
+    let idx = ingest_url.find("/api/")?;
+    let base = ingest_url[..idx].trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    Some(base.to_string())
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FrameRequestsResponse {
+    #[serde(default)]
+    pub frame_ids: Vec<i64>,
+    /// Server signals the stream is off by policy — don't bother uploading.
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+/// One upload entry. Exactly one of `image_b64` / `error` is set; error
+/// entries let the server drop unfulfillable ids from the manifest.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FrameUploadEntry {
+    pub frame_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_b64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<&'static str>,
+}
+
+impl FrameUploadEntry {
+    fn image(frame_id: i64, jpeg: &[u8]) -> Self {
+        use base64::Engine as _;
+        Self {
+            frame_id,
+            image_b64: Some(base64::engine::general_purpose::STANDARD.encode(jpeg)),
+            mime: Some("image/jpeg"),
+            error: None,
+        }
+    }
+    fn err(frame_id: i64, reason: &'static str) -> Self {
+        Self {
+            frame_id,
+            image_b64: None,
+            mime: None,
+            error: Some(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FrameUploadAck {
+    #[serde(default)]
+    stored: Vec<i64>,
+}
+
+/// Decode → bound width at `FRAME_MAX_WIDTH` (aspect preserved) → JPEG.
+/// Re-encodes at a lower quality once if the first pass exceeds the size
+/// cap; gives up (`too_large`) rather than uploading an oversized image.
+pub fn downscale_frame_jpeg(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let img = image::load_from_memory(bytes).map_err(|_| "decode_failed")?;
+    let img = if img.width() > FRAME_MAX_WIDTH {
+        // `resize` fits within the (w, h) box preserving aspect ratio, so
+        // passing the original height only constrains the width.
+        img.resize(
+            FRAME_MAX_WIDTH,
+            img.height(),
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img
+    };
+    let rgb = img.into_rgb8();
+    for quality in [FRAME_JPEG_QUALITY, FRAME_JPEG_QUALITY_FALLBACK] {
+        let mut buf = Vec::with_capacity(128 * 1024);
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
+        rgb.write_with_encoder(encoder).map_err(|_| "encode_failed")?;
+        if buf.len() <= FRAME_UPLOAD_MAX_BYTES {
+            return Ok(buf);
+        }
+    }
+    Err("too_large")
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FrameFulfillReport {
+    pub requested: usize,
+    pub uploaded: usize,
+    pub failed: usize,
+}
+
+/// One fulfillment pass. Infallible by contract — every failure is logged
+/// and reflected in the report, never propagated (a broken image pipeline
+/// must not back off telemetry sync).
+pub async fn fulfill_frame_requests(
+    cfg: &EnterpriseSyncConfig,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> FrameFulfillReport {
+    let report = FrameFulfillReport::default();
+
+    // Fail-closed gates, cheapest first. The policy default is Off; the
+    // server enforces the same gate on the upload route (defense in depth).
+    // The mode also sizes the per-tick batch: "cited" trickles SOP
+    // screenshots, "all" (org chose to centralize every frame) drains the
+    // server-auto-cited manifest in larger batches.
+    let mode = crate::enterprise_policy::current_sync_streams().frame_images;
+    if mode == crate::enterprise_policy::FrameImagesMode::Off {
+        return report;
+    }
+    if !matches!(cfg.upload_mode, EnterpriseUploadMode::HostedIngest) {
+        debug!("frame fulfillment skipped: direct-upload org stays zero-knowledge");
+        return report;
+    }
+    let Some(base) = control_plane_base(&cfg.ingest_url) else {
+        warn!(
+            "frame fulfillment: cannot derive control plane base from ingest url {}",
+            cfg.ingest_url
+        );
+        return report;
+    };
+
+    let requests_url = format!("{base}/api/enterprise/frame-requests");
+    let resp = match http
+        .get(&requests_url)
+        .header("X-License-Key", &cfg.license_key)
+        .header("X-Device-Id", &cfg.device_id)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("frame fulfillment: requests fetch failed: {e}");
+            return report;
+        }
+    };
+    if !resp.status().is_success() {
+        warn!(
+            "frame fulfillment: GET {} -> {}",
+            requests_url,
+            resp.status()
+        );
+        return report;
+    }
+    let pending: FrameRequestsResponse = match resp.json().await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("frame fulfillment: bad requests payload: {e}");
+            return report;
+        }
+    };
+    if pending.disabled || pending.frame_ids.is_empty() {
+        return report;
+    }
+
+    let ids: Vec<i64> = pending
+        .frame_ids
+        .into_iter()
+        .filter(|id| *id > 0)
+        .take(frame_batch_max(mode))
+        .collect();
+    if ids.is_empty() {
+        return report;
+    }
+
+    let mut entries: Vec<FrameUploadEntry> = Vec::with_capacity(ids.len());
+    for id in ids.iter().copied() {
+        let entry = match local.fetch_frame_jpeg(id).await {
+            Ok(Some(bytes)) => {
+                // CPU-bound decode/encode off the async runtime, mirroring
+                // the snapshot path.
+                match tokio::task::spawn_blocking(move || downscale_frame_jpeg(&bytes)).await {
+                    Ok(Ok(jpeg)) => FrameUploadEntry::image(id, &jpeg),
+                    Ok(Err(reason)) => {
+                        warn!("frame fulfillment: frame {id} {reason}");
+                        FrameUploadEntry::err(id, reason)
+                    }
+                    Err(_) => FrameUploadEntry::err(id, "encode_panicked"),
+                }
+            }
+            Ok(None) => FrameUploadEntry::err(id, "not_found"),
+            Err(e) => {
+                warn!("frame fulfillment: fetch frame {id} failed: {e}");
+                FrameUploadEntry::err(id, "fetch_failed")
+            }
+        };
+        entries.push(entry);
+    }
+
+    let requested = entries.len();
+    let uploads_url = format!("{base}/api/enterprise/frame-uploads");
+    let resp = match http
+        .post(&uploads_url)
+        .header("X-License-Key", &cfg.license_key)
+        .header("X-Device-Id", &cfg.device_id)
+        .json(&serde_json::json!({ "frames": entries }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("frame fulfillment: upload failed: {e}");
+            return FrameFulfillReport {
+                requested,
+                uploaded: 0,
+                failed: requested,
+            };
+        }
+    };
+    if !resp.status().is_success() {
+        warn!(
+            "frame fulfillment: POST {} -> {}",
+            uploads_url,
+            resp.status()
+        );
+        return FrameFulfillReport {
+            requested,
+            uploaded: 0,
+            failed: requested,
+        };
+    }
+    let ack: FrameUploadAck = resp.json().await.unwrap_or_default();
+    FrameFulfillReport {
+        requested,
+        uploaded: ack.stored.len(),
+        failed: requested.saturating_sub(ack.stored.len()),
+    }
+}
+
 // ─── Long-running task ──────────────────────────────────────────────────────
 
 /// Run the sync forever (or until shutdown signal fires). Resilient to all
@@ -862,6 +1150,17 @@ pub async fn run(
                     );
                 }
                 backoff = BACKOFF_INITIAL;
+
+                // On-demand frame fulfillment — best-effort, gated on the
+                // frame_images stream + hosted mode inside; never affects
+                // the sync cursor or backoff.
+                let fr = fulfill_frame_requests(&cfg, local.as_ref(), &http).await;
+                if fr.requested > 0 {
+                    info!(
+                        "enterprise sync: frame fulfillment uploaded {}/{} requested ({} failed)",
+                        fr.uploaded, fr.requested, fr.failed
+                    );
+                }
             }
             Err(EnterpriseSyncError::IngestAuthRejected) => {
                 error!(
@@ -2066,7 +2365,7 @@ mod tests {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
 
         // Disable frames, ui, snapshots. Keep audio + memories on.
-        crate::enterprise_policy::set_sync_streams(false, true, false, true, false);
+        crate::enterprise_policy::set_sync_streams(false, true, false, true, false, "off".to_string());
 
         // Capture the POST body so we can assert what actually crossed the
         // wire — the most direct evidence that the gate worked, not just
@@ -2153,6 +2452,253 @@ mod tests {
 
         // Reset to defaults so the binary-wide static doesn't leak into
         // other tests that may run later in the same process.
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true);
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+    }
+
+    // ─── On-demand frame fulfillment (P3) ───────────────────────────────────
+
+    fn synth_jpeg(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([40, 90, 200]));
+        let mut buf = Vec::new();
+        let mut cur = std::io::Cursor::new(&mut buf);
+        image::DynamicImage::ImageRgb8(img)
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut cur, 80,
+            ))
+            .unwrap();
+        buf
+    }
+
+    /// Mock that only serves frame images: id 1 exists (oversized, exercises
+    /// the downscale), id 2 is gone from retention, anything else errors.
+    struct FrameMock;
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for FrameMock {
+        async fn fetch_frames_since(
+            &self,
+            _: Option<&str>,
+            _: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            Ok(Vec::new())
+        }
+        async fn fetch_audio_since(
+            &self,
+            _: Option<&str>,
+            _: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            Ok(Vec::new())
+        }
+        async fn fetch_frame_jpeg(
+            &self,
+            frame_id: i64,
+        ) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
+            match frame_id {
+                1 => Ok(Some(synth_jpeg(1600, 900))),
+                2 => Ok(None),
+                _ => Err(EnterpriseSyncError::LocalApi("boom".to_string())),
+            }
+        }
+    }
+
+    fn frame_test_cfg(server_uri: &str, tmp: &TempDir) -> EnterpriseSyncConfig {
+        EnterpriseSyncConfig {
+            license_key: "sek_frames".to_string(),
+            device_id: "dev-frame-test".to_string(),
+            device_label: "frame test".to_string(),
+            ingest_url: format!("{server_uri}/api/enterprise/ingest"),
+            cursor_path: tmp.path().join("cursor.json"),
+            upload_mode: EnterpriseUploadMode::HostedIngest,
+        }
+    }
+
+    #[test]
+    fn control_plane_base_derives_from_ingest_url() {
+        assert_eq!(
+            control_plane_base("https://screenpi.pe/api/enterprise/ingest").as_deref(),
+            Some("https://screenpi.pe")
+        );
+        assert_eq!(
+            control_plane_base("https://staging.screenpi.pe:8443/api/enterprise/ingest")
+                .as_deref(),
+            Some("https://staging.screenpi.pe:8443")
+        );
+        // No /api/ segment → can't derive, must not guess.
+        assert_eq!(control_plane_base("https://example.com/ingest"), None);
+        assert_eq!(control_plane_base("/api/enterprise/ingest"), None);
+        assert_eq!(control_plane_base(""), None);
+    }
+
+    #[test]
+    fn downscale_bounds_width_and_size() {
+        let big = synth_jpeg(1600, 900);
+        let out = downscale_frame_jpeg(&big).expect("downscale succeeds");
+        assert!(out.len() <= FRAME_UPLOAD_MAX_BYTES);
+        let decoded = image::load_from_memory(&out).expect("output is a decodable jpeg");
+        assert_eq!(decoded.width(), FRAME_MAX_WIDTH);
+        // Aspect preserved: 1600x900 → 1280x720.
+        assert_eq!(decoded.height(), 720);
+    }
+
+    #[test]
+    fn downscale_keeps_small_frames_unscaled() {
+        let small = synth_jpeg(640, 400);
+        let out = downscale_frame_jpeg(&small).expect("downscale succeeds");
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (640, 400));
+    }
+
+    #[test]
+    fn downscale_rejects_garbage() {
+        assert_eq!(downscale_frame_jpeg(b"not a jpeg"), Err("decode_failed"));
+        assert_eq!(downscale_frame_jpeg(&[]), Err("decode_failed"));
+    }
+
+    #[test]
+    fn frame_upload_entry_serde_shape() {
+        // Image entries carry image_b64 + mime and NO error key; error
+        // entries carry error and NO image keys. The server relies on this
+        // to drop unfulfillable ids from the manifest.
+        let img = serde_json::to_value(FrameUploadEntry::image(7, b"xx")).unwrap();
+        assert_eq!(img["frame_id"], 7);
+        assert!(img.get("image_b64").is_some());
+        assert_eq!(img["mime"], "image/jpeg");
+        assert!(img.get("error").is_none());
+
+        let err = serde_json::to_value(FrameUploadEntry::err(8, "not_found")).unwrap();
+        assert_eq!(err["frame_id"], 8);
+        assert_eq!(err["error"], "not_found");
+        assert!(err.get("image_b64").is_none());
+        assert!(err.get("mime").is_none());
+    }
+
+    #[tokio::test]
+    async fn fulfill_frame_requests_end_to_end() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "cited".to_string());
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/enterprise/frame-requests"))
+            .and(wiremock::matchers::header("X-License-Key", "sek_frames"))
+            .and(wiremock::matchers::header("X-Device-Id", "dev-frame-test"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "frame_ids": [1, 2, 3] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/frame-uploads"))
+            .and(wiremock::matchers::header("X-License-Key", "sek_frames"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "stored": [1], "failed": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let cfg = frame_test_cfg(&server.uri(), &tmp);
+        let http = reqwest::Client::new();
+        let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
+
+        assert_eq!(
+            report,
+            FrameFulfillReport {
+                requested: 3,
+                uploaded: 1,
+                failed: 2
+            }
+        );
+
+        // Inspect the actual upload body: one real image (downscaled,
+        // bounded), and the two failure modes reported so the server can
+        // drop those ids from the manifest.
+        let reqs = server.received_requests().await.unwrap();
+        let upload = reqs
+            .iter()
+            .find(|r| r.url.path() == "/api/enterprise/frame-uploads")
+            .expect("upload request was made");
+        let body: serde_json::Value = serde_json::from_slice(&upload.body).unwrap();
+        let frames = body["frames"].as_array().unwrap();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0]["frame_id"], 1);
+        assert_eq!(frames[0]["mime"], "image/jpeg");
+        let b64 = frames[0]["image_b64"].as_str().unwrap();
+        let jpeg = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        assert!(jpeg.len() <= FRAME_UPLOAD_MAX_BYTES);
+        assert_eq!(image::load_from_memory(&jpeg).unwrap().width(), 1280);
+        assert_eq!(frames[1]["error"], "not_found");
+        assert_eq!(frames[2]["error"], "fetch_failed");
+
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+    }
+
+    #[tokio::test]
+    async fn fulfill_skips_when_stream_disabled() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        // frame_images=false is the default; set explicitly for clarity.
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+
+        let server = wiremock::MockServer::start().await;
+        // Zero expected requests — the policy gate short-circuits before HTTP.
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let cfg = frame_test_cfg(&server.uri(), &tmp);
+        let http = reqwest::Client::new();
+        let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
+        assert_eq!(report, FrameFulfillReport::default());
+    }
+
+    #[tokio::test]
+    async fn fulfill_skips_for_zero_knowledge_upload_modes() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "cited".to_string());
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = frame_test_cfg(&server.uri(), &tmp);
+        // Direct-upload orgs keep telemetry out of our cloud; frames must
+        // follow the same promise even with the stream flag on.
+        cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
+            ticket_url: format!("{}/ticket", server.uri()),
+            complete_url: format!("{}/complete", server.uri()),
+            recipients: Vec::new(),
+        });
+        let http = reqwest::Client::new();
+        let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
+        assert_eq!(report, FrameFulfillReport::default());
+
+        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+    }
+}
+// (frame_batch_max tests live with the rest of the ee_sync tests above; this
+// standalone module keeps them compiled in consumer-test builds too.)
+#[cfg(test)]
+mod frame_batch_tests {
+    use super::frame_batch_max;
+    use crate::enterprise_policy::FrameImagesMode;
+
+    #[test]
+    fn batch_size_follows_mode() {
+        assert_eq!(frame_batch_max(FrameImagesMode::Off), 0);
+        assert_eq!(frame_batch_max(FrameImagesMode::Cited), 20);
+        assert_eq!(frame_batch_max(FrameImagesMode::All), 200);
     }
 }

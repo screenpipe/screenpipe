@@ -77,6 +77,50 @@ pub(crate) fn capture_detection_decision(
     analytics::capture_event_nonblocking("meeting_detection_decision", props);
 }
 
+/// Privacy-safe properties for the `meeting_detection_outcome` event. Pure, so
+/// the no-private-content guarantee can be unit-tested.
+fn detection_outcome_props(
+    meeting: &MeetingRecord,
+    end_reason: &'static str,
+    flap_count: u32,
+) -> serde_json::Value {
+    json!({
+        "meeting_event_key": meeting_event_key(meeting.id),
+        "end_reason": end_reason,
+        "app_bucket": app_bucket(&meeting.meeting_app),
+        "source_bucket": source_bucket(&meeting.detection_source),
+        "duration_bucket": duration_bucket(meeting),
+        "flap_bucket": flap_bucket(flap_count),
+    })
+}
+
+/// Emitted when a detected meeting auto-finalizes (grace-timeout end). This is
+/// the end-detection health signal: a clean auto end is `flap_bucket="none"`/
+/// `"low"`, while `"high"` flags sustained `Active<->Ending` oscillation — the
+/// failure mode where the call's controls vanished but the meeting kept getting
+/// revived and never finalized. No titles/attendees/notes — buckets only.
+pub(crate) fn capture_detection_outcome(
+    meeting: &MeetingRecord,
+    end_reason: &'static str,
+    flap_count: u32,
+) {
+    analytics::capture_event_nonblocking(
+        "meeting_detection_outcome",
+        detection_outcome_props(meeting, end_reason, flap_count),
+    );
+}
+
+/// Bucket the Active<->Ending oscillation count so we never emit a raw,
+/// fingerprintable number.
+fn flap_bucket(flaps: u32) -> &'static str {
+    match flaps {
+        0 => "none",
+        1..=2 => "low",
+        3..=9 => "elevated",
+        _ => "high",
+    }
+}
+
 pub(crate) fn capture_detection_feedback(
     action: &'static str,
     label: &'static str,
@@ -267,6 +311,26 @@ mod tests {
             detection_source: detection_source.to_string(),
             created_at: "2026-05-13T20:00:00.000Z".to_string(),
         }
+    }
+
+    #[test]
+    fn buckets_flap_counts() {
+        assert_eq!(flap_bucket(0), "none");
+        assert_eq!(flap_bucket(2), "low");
+        assert_eq!(flap_bucket(5), "elevated");
+        assert_eq!(flap_bucket(50), "high");
+    }
+
+    #[test]
+    fn outcome_props_carry_no_private_content() {
+        let m = meeting("zoom.us", "ui_scan");
+        let props = detection_outcome_props(&m, "auto_timeout", 12).to_string();
+        for leak in ["private title", "private attendee", "private note"] {
+            assert!(!props.contains(leak), "outcome props leaked: {leak}");
+        }
+        assert!(props.contains("\"flap_bucket\":\"high\""));
+        assert!(props.contains("\"end_reason\":\"auto_timeout\""));
+        assert!(props.contains("\"app_bucket\":\"zoom\""));
     }
 
     #[test]

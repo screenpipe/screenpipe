@@ -54,6 +54,15 @@ export function parseNavigatePayload(payload: OwnedBrowserNavigatePayload): {
  *
  * - owner === conversationId → this chat's own browser lifecycle event,
  *   honored.
+ * - owner === agentSessionId → this chat's own running agent. The navigation
+ *   `owner` is the session id the agent process was spawned under (the value
+ *   the bash shim forwards as `x-screenpipe-session`). That is normally equal
+ *   to `conversationId`, but the React `conversationId` state can lag the ref
+ *   the agent was started with, or a spawn can fall back to a non-matching
+ *   session id — in either case the agent's own page would otherwise never
+ *   reveal. Honor it when the owner matches the id the on-screen chat's agent
+ *   actually runs under. Still safe: another chat's agent / a background pipe
+ *   runs under a different session id, so its navigations are still dropped.
  * - owner null/empty → foreign/stale, ignored. All supported restore/reload
  *   paths now send the real `conversationId`; leaving ownerless events
  *   writable lets the singleton browser leak into whichever chat is open.
@@ -64,15 +73,19 @@ export function parseNavigatePayload(payload: OwnedBrowserNavigatePayload): {
 export function isForeignNavigation(
   owner: string | null | undefined,
   conversationId: string | null | undefined,
+  agentSessionId?: string | null | undefined,
 ): boolean {
   // Ownerless events are stale/legacy and must not mutate whichever chat is
   // currently open. Every supported restore/reload path now tags itself with
   // the foreground conversation id.
   if (!owner) return true;
-  // A tagged navigation is honored only by the chat that issued it. When no
-  // chat is bound (conversationId null/empty), `owner !== conversationId` is
-  // true, so the navigation is treated as foreign and dropped.
-  return owner !== conversationId;
+  // The on-screen chat's own navigation — matched by conversation id...
+  if (owner === conversationId) return false;
+  // ...or by the session id the on-screen chat's own agent process runs under
+  // (robust to a lagging `conversationId` state or a non-matching spawn id).
+  if (agentSessionId && owner === agentSessionId) return false;
+  // Anything else belongs to another chat or a background pipe — dropped.
+  return true;
 }
 
 export function isMismatchedNavigation(

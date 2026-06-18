@@ -204,6 +204,33 @@ describe("pipe-watch-writer: agent_end takes precedence", () => {
     expect(session.isLoading).toBe(false);
   });
 
+  it("keeps notification markers when agent_end replaces streamed messages", () => {
+    seedPipeWatchSession();
+    __testing.inject(
+      env({
+        type: "notification_sent",
+        id: "notification-abc",
+        title: "Report ready",
+        body: "open the report",
+      }),
+    );
+    __testing.inject(
+      env({
+        type: "agent_end",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "run pipe" }] },
+          { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+        ],
+      }),
+    );
+
+    const messages = useChatStore.getState().sessions[SID]!.messages! as any[];
+    expect(messages.map((m) => m.id)).toContain("notification-abc");
+    const marker = messages.find((m) => m.id === "notification-abc");
+    expect(marker.content).toContain("Report ready");
+    expect(marker.content).toContain("open the report");
+  });
+
   it("does not render Codex-style function returns as chat messages", () => {
     seedPipeWatchSession();
     __testing.inject(

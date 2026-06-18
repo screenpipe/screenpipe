@@ -62,6 +62,18 @@ pub struct RecordingSettings {
     #[serde(rename = "transcriptionMode")]
     pub transcription_mode: String,
 
+    // "always" = continuous 24/7 capture; "meetings_only" = only persist +
+    // transcribe audio while a meeting is detected (audio outside meetings is
+    // dropped — cutting cloud-transcription cost, disk, and the PII/transcription
+    // CPU pipeline; requires the meeting detector, else falls back to continuous);
+    // "disabled" maps to `disableAudio = true`. Defaults to "always" so existing
+    // config files and the CLI never switch silently; new desktop installs opt
+    // into "meetings_only" via first-run defaults (existing app users migrate to
+    // "always"). Detail in `default_audio_capture_mode`.
+    /// When to capture audio: "always" (default), "meetings_only", or "disabled".
+    #[serde(rename = "audioCaptureMode", default = "default_audio_capture_mode")]
+    pub audio_capture_mode: String,
+
     /// Stream live notes only for manually-started live meetings. This is
     /// separate from 24/7 background transcription: the recorder still writes
     /// durable chunks, while this powers the low-latency meeting note UI.
@@ -326,6 +338,13 @@ pub struct RecordingSettings {
     #[serde(rename = "disableKeyboardCapture", default = "default_true")]
     pub disable_keyboard_capture: bool,
 
+    /// Skip persisting mouse-click rows in the UI recorder. Defaults to
+    /// `false` (click DB capture ON — clicks carry no text payload and are
+    /// the backbone of workflow/task mining). Clicks still wake event-driven
+    /// capture when disabled; only the `ui_events` click rows are skipped.
+    #[serde(rename = "disableClickCapture", default)]
+    pub disable_click_capture: bool,
+
     /// Continue recording audio when the screen is locked.
     /// Default: false (audio pauses when screen is locked to save resources).
     #[serde(rename = "recordWhileLocked", default)]
@@ -400,6 +419,19 @@ pub struct RecordingSettings {
         default = "default_pii_redaction_labels"
     )]
     pub pii_redaction_labels: Vec<String>,
+
+    /// Render redacted PII as **consistent pseudonyms** instead of static
+    /// `[LABEL]` tags when `asyncPiiRedaction` is on. Same value → same
+    /// stable token (e.g. `[PERSON_1a2b3c4d5e6f]`), so the timeline stays
+    /// correlatable without exposing the value. Irreversible: a one-way
+    /// keyed hash with a random per-install key, no `token -> value`
+    /// store. Applies to newly-redacted rows only — rows already redacted
+    /// keep their existing tags (the worker redacts each row once).
+    /// Ignored for the Tinfoil backend (the enclave returns no spans to
+    /// tokenize). Off by default. See issue #4206 and `screenpipe-redact`'s
+    /// `Pseudonymizer`.
+    #[serde(rename = "piiRedactionPseudonyms", default)]
+    pub pii_redaction_pseudonyms: bool,
 
     // ── Cloud / Auth ───────────────────────────────────────────────────
     /// Screenpipe cloud user ID. Empty string means not logged in.
@@ -539,6 +571,7 @@ impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
             disable_audio: false,
+            audio_capture_mode: default_audio_capture_mode(),
             audio_transcription_engine: crate::best_engine_for_platform(crate::detect_tier())
                 .to_string(),
             transcription_mode: "batch".to_string(),
@@ -582,6 +615,7 @@ impl Default for RecordingSettings {
             pause_on_drm_content: false,
             disable_clipboard_capture: true,
             disable_keyboard_capture: true,
+            disable_click_capture: false,
             record_while_locked: false,
             languages: vec![],
             use_pii_removal: false,
@@ -589,6 +623,7 @@ impl Default for RecordingSettings {
             async_image_pii_redaction: false,
             pii_backend: default_pii_backend(),
             pii_redaction_labels: default_pii_redaction_labels(),
+            pii_redaction_pseudonyms: false,
             user_id: String::new(),
             user_name: None,
             openai_compatible_endpoint: None,
@@ -615,6 +650,14 @@ impl Default for RecordingSettings {
 
 fn default_true() -> bool {
     true
+}
+
+/// Default audio capture mode. "always" = continuous capture, the historical
+/// behavior. Kept as the deserialization default so existing config files and
+/// the CLI never silently switch to meetings-only; the desktop app opts new
+/// installs into "meetings_only" through its first-run defaults.
+fn default_audio_capture_mode() -> String {
+    "always".to_string()
 }
 
 /// Default `false` — the Process Tap can't see audio rendered through
@@ -775,6 +818,7 @@ mod tests {
         assert_eq!(settings.transcription_mode, "batch"); // default, wasn't in JSON
         assert_eq!(settings.power_mode, None); // default
         assert!(settings.vocabulary.is_empty()); // default
+        assert_eq!(settings.audio_capture_mode, "always"); // backward-compatible default
     }
 
     #[test]

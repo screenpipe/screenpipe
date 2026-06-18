@@ -1873,7 +1873,7 @@ function SortablePresetCard({
   onEdit: () => void;
   onDuplicate: () => void;
   onSetDefault: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   onShareToTeam?: () => void;
   isLoading: boolean;
   isTeamAdmin?: boolean;
@@ -1988,7 +1988,7 @@ function SortablePresetCard({
               </Tooltip>
             </TooltipProvider>
           )}
-          {!isDefault && !readOnly && (
+          {!isDefault && !readOnly && onDelete && (
             <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2 text-destructive hover:text-destructive ml-auto" onClick={(e) => { e.stopPropagation(); onDelete(); }} disabled={isLoading}>
               <Trash2 className="w-3 h-3" />
             </Button>
@@ -2124,12 +2124,15 @@ useEffect(() => {
         return;
       }
       if (presetToRemove?.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
-        toast({
-          title: "Cannot delete cloud preset",
-          description: "This preset is included with your Business subscription",
-          variant: "destructive",
-        });
-        return;
+        const cloudPresets = settings.aiPresets.filter((p) => p.provider === "screenpipe-cloud");
+        if (cloudPresets.length <= 1) {
+          toast({
+            title: "Cannot delete cloud preset",
+            description: "This preset is included with your Business subscription",
+            variant: "destructive",
+          });
+          return;
+        }
       }
 
       const checkIfDefault = settings.aiPresets.find(
@@ -2327,33 +2330,38 @@ useEffect(() => {
           strategy={rectSortingStrategy}
         >
           <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-3">
-            {visiblePresets.map((preset) => {
-              const readOnly =
-                isEnterprise &&
-                (!aiPresetPolicy.allow_employee_custom_presets || isEnterpriseManagedPreset(preset));
-              return (
-                <SortablePresetCard
-                  key={preset.id}
-                  preset={preset}
-                  isDefault={preset.defaultPreset}
-                  hasValidation={!!(preset.provider && preset.model && (preset.url || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
-                  chatgptTokenExpired={preset.provider === "openai-chatgpt" && chatgptTokenValid === false}
-                  onEdit={() => {
-                    setSelectedPreset(preset);
-                    setIsDuplicating(false);
-                    setCreatePresentDialog(true);
-                  }}
-                  onDuplicate={() => duplicatePreset(preset.id)}
-                  onSetDefault={() => setPresetToSetDefault(preset.id)}
-                  onDelete={() => setPresetToDelete(preset.id)}
-                  onShareToTeam={isTeamAdmin ? () => sharePresetToTeam(preset) : undefined}
-                  isLoading={isLoading}
-                  isTeamAdmin={isTeamAdmin}
-                  readOnly={readOnly}
-                  defaultLocked={isEnterprise && aiPresetPolicy.lock_default_preset}
-                />
-              );
-            })}
+            {(() => {
+              const cloudPresetCount = (settings.aiPresets || []).filter((p) => p.provider === "screenpipe-cloud").length;
+              return visiblePresets.map((preset) => {
+                const readOnly =
+                  isEnterprise &&
+                  (!aiPresetPolicy.allow_employee_custom_presets || isEnterpriseManagedPreset(preset));
+                const isLastCloudPreset =
+                  preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed && cloudPresetCount <= 1;
+                return (
+                  <SortablePresetCard
+                    key={preset.id}
+                    preset={preset}
+                    isDefault={preset.defaultPreset}
+                    hasValidation={!!(preset.provider && preset.model && (preset.url || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
+                    chatgptTokenExpired={preset.provider === "openai-chatgpt" && chatgptTokenValid === false}
+                    onEdit={() => {
+                      setSelectedPreset(preset);
+                      setIsDuplicating(false);
+                      setCreatePresentDialog(true);
+                    }}
+                    onDuplicate={() => duplicatePreset(preset.id)}
+                    onSetDefault={() => setPresetToSetDefault(preset.id)}
+                    onDelete={isLastCloudPreset ? undefined : () => setPresetToDelete(preset.id)}
+                    onShareToTeam={isTeamAdmin ? () => sharePresetToTeam(preset) : undefined}
+                    isLoading={isLoading}
+                    isTeamAdmin={isTeamAdmin}
+                    readOnly={readOnly}
+                    defaultLocked={isEnterprise && aiPresetPolicy.lock_default_preset}
+                  />
+                );
+              });
+            })()}
           </div>
         </SortableContext>
       </DndContext>

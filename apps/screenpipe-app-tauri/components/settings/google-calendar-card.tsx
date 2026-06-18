@@ -159,7 +159,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("google-calendar", null);
+      const res = await commands.oauthConnect("google-calendar", null, null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_calendar_connected");
         await fetchStatus();

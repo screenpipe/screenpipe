@@ -5,6 +5,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(deprecated)] // cocoa/objc crate deprecations — will migrate to objc2 later
 #![allow(unused_imports)]
+// analytics.rs builds a ~70-field json! health blob; the default recursion limit
+// (128) overflows while expanding the macro. Raise it for the whole crate.
+#![recursion_limit = "256"]
 
 use analytics::AnalyticsManager;
 use commands::show_main_window;
@@ -36,6 +39,7 @@ mod icons;
 use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
+mod auth_token;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -57,6 +61,7 @@ mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;
 mod owned_browser;
+mod owned_browser_transport;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
 // injects via WKHTTPCookieStore; other platforms compile to a stub
 // `cookies_for_host` that returns empty until Windows (DPAPI + AES-256-
@@ -754,6 +759,19 @@ async fn main() {
         }
     }
 
+    // #3943: migrate the cloud auth token out of the plaintext store.bin /
+    // auth.json (and the .last-good snapshot) into the encrypted secret store,
+    // seed the in-process cache, and scrub the plaintext copies. Runs here in
+    // `async main` — BEFORE the store plugin loads store.bin and before the
+    // engine spawn / `to_recording_settings` read the token. Must NOT run
+    // inside `.setup()`: a `block_on` there nests runtimes under
+    // #[tokio::main] and panics ("Cannot start a runtime from within a
+    // runtime"), killing the app at launch.
+    let _ = crate::auth_token::migrate_plaintext_token(
+        &screenpipe_core::paths::default_screenpipe_data_dir(),
+    )
+    .await;
+
     let recording_state = RecordingState {
         server: Arc::new(tokio::sync::Mutex::new(None)),
         capture: Arc::new(tokio::sync::Mutex::new(None)),
@@ -762,6 +780,7 @@ async fn main() {
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
         cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(None))),
+        db_wedge_breaker: recording::new_db_wedge_breaker(),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -1442,6 +1461,10 @@ async fn main() {
                 let capture_arc = recording_state.capture.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
                 let cloud_token_arc = recording_state.cloud_token.clone();
+                // DB-wedge auto-recovery hook wiring — captured into the server
+                // thread so the freshly-built `ServerCore`'s DB gets the hook.
+                let app_for_db_wedge = app_handle.clone();
+                let db_wedge_breaker = recording_state.db_wedge_breaker.clone();
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
@@ -1587,6 +1610,16 @@ async fn main() {
                                     return;
                                 }
                             };
+
+                            // Wire the persistent-failure hook so a wedged DB
+                            // auto-restarts recording (rebuilding every pool +
+                            // the shared WAL-index).
+                            server.db.set_persistent_failure_hook(
+                                crate::recording::make_db_wedge_recovery_hook(
+                                    app_for_db_wedge.clone(),
+                                    db_wedge_breaker.clone(),
+                                ),
+                            );
 
                             // Phase 2: Start capture session
                             let capture = match capture_session::CaptureSession::start(&server, &config, true).await {
@@ -1754,7 +1787,15 @@ async fn main() {
             {
                 if let Ok(Some(store)) = crate::store::SettingsStore::get(&app_handle) {
                     if store.enhanced_ai {
-                        let token = store.user.token.clone().unwrap_or_default();
+                        // #3943: the token no longer persists in store.bin —
+                        // fall back to the secret-store-backed cache.
+                        let token = store
+                            .user
+                            .token
+                            .clone()
+                            .filter(|t| !t.is_empty())
+                            .or_else(crate::auth_token::cached_cloud_token)
+                            .unwrap_or_default();
                         if !token.is_empty() {
                             // Use try_lock — blocking_lock panics inside a tokio runtime context
                             if let Ok(mut guard) = suggestions_state.enhanced_ai.try_lock() {

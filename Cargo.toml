@@ -6,11 +6,12 @@ exclude = [
     "apps/screenpipe-app-tauri/src-tauri",
     "crates/screenpipe-integrations",
     "ee/sdk",
+    "ci/ort-smoke",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.19"
+version = "0.4.21"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -86,14 +87,15 @@ axum = { version = "0.7", features = ["ws", "multipart"] }
 hex = "0.4"
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12"
 
 # Database
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 
 # Math / ML
-ndarray = "0.16"
+ndarray = "0.17"
 rand = "0.9"
-ort = { version = "=2.0.0-rc.10", default-features = false }
+ort = { version = "=2.0.0-rc.12", default-features = false }
 
 # Platform
 dirs = "6"
@@ -107,7 +109,7 @@ zbus = { version = "5.5", default-features = false, features = ["blocking-api", 
 windows = "0.58"
 xcap = "0.9"
 keyring = "3"
-ort-sys = { version = "=2.0.0-rc.10", default-features = false }
+ort-sys = { version = "=2.0.0-rc.12", default-features = false }
 samplerate = "0.2.4"
 libsamplerate-sys = "0.1.10"
 
@@ -124,7 +126,7 @@ wiremock = "0.6"
 
 # Audio
 hound = "3.5"
-audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", rev = "2fd5c360651157a5df504394066e509ad4d1bdc9", default-features = false }
+audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "86aa0212d0b537496370ebbd65892ca70c6d2e24", default-features = false }
 mlx-rs = "0.25"
 
 # Privacy filter enclave attestation (shared by engine + redact)

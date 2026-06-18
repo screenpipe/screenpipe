@@ -368,6 +368,7 @@ function SettingsContent() {
         {/* Back to app */}
         <div className={cn("px-4 py-3 border-b", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
           <button
+            data-testid="settings-back-to-app"
             onClick={() => router.push("/home")}
             className={cn(
               "flex items-center space-x-1.5 text-sm transition-colors w-full",

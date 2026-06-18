@@ -7,10 +7,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
-import {
-  coldarkCold,
-  coldarkDark,
-} from "react-syntax-highlighter/dist/cjs/styles/prism";
 import remarkGfm from "remark-gfm";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
@@ -20,6 +16,10 @@ import {
   screenpipeViewerPathFromHref,
   viewerUrlTransform,
 } from "@/components/markdown";
+import {
+  createCodeMarkdownComponents,
+  useSyntaxTheme,
+} from "@/components/markdown/code-block";
 
 export type ViewerContent =
   | {
@@ -68,30 +68,6 @@ export function viewerDisplayText(content: ViewerContent | null): string {
   if (!content || content.kind !== "text") return "";
   const detection = detectKind(content.name);
   return detection.kind === "json" ? prettifyJson(content.text) : content.text;
-}
-
-function useDarkMode(): boolean {
-  const [isDark, setIsDark] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const m = window.matchMedia("(prefers-color-scheme: dark)");
-    const update = () =>
-      setIsDark(
-        m.matches || document.documentElement.classList.contains("dark"),
-      );
-    update();
-    m.addEventListener("change", update);
-    const obs = new MutationObserver(update);
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => {
-      m.removeEventListener("change", update);
-      obs.disconnect();
-    };
-  }, []);
-  return isDark;
 }
 
 export function formatViewerBytes(n: number): string {
@@ -228,7 +204,7 @@ export function ViewerFileContent({
   onOpenViewerPath,
   className,
 }: ViewerFileContentProps) {
-  const isDark = useDarkMode();
+  const codeStyle = useSyntaxTheme();
 
   const detection = useMemo(() => {
     if (!content || content.kind !== "text") return null;
@@ -254,7 +230,6 @@ export function ViewerFileContent({
     [onOpenViewerPath],
   );
 
-  const codeStyle = isDark ? coldarkDark : coldarkCold;
   const isMarkdown = detection?.kind === "markdown";
   const isCode = detection?.kind === "code" || detection?.kind === "json";
 
@@ -311,6 +286,7 @@ export function ViewerFileContent({
 
       {content?.kind === "text" && content.text !== "" && isMarkdown && (
         <article
+          data-testid="file-preview-markdown"
           className="prose prose-sm dark:prose-invert max-w-none
                      prose-headings:font-mono prose-headings:tracking-tight
                      prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0
@@ -337,43 +313,12 @@ export function ViewerFileContent({
                   {children}
                 </a>
               ),
-              code: ({ className: codeClassName, children, ...rest }) => {
-                const match = /language-(\w+)/.exec(codeClassName || "");
-                const lang = match?.[1] ?? "";
-                const value = String(children).replace(/\n$/, "");
-                if (!match) {
-                  return (
-                    <code
-                      className="font-mono text-[12px] bg-foreground/5 px-1 py-[1px] border border-border"
-                      {...rest}
-                    >
-                      {children}
-                    </code>
-                  );
-                }
-                return (
-                  <SyntaxHighlighter
-                    language={lang}
-                    style={codeStyle as never}
-                    PreTag="div"
-                    customStyle={{
-                      margin: 0,
-                      padding: "12px 14px",
-                      background: "transparent",
-                      fontSize: "12px",
-                      fontFamily: "var(--font-mono, monospace)",
-                    }}
-                    codeTagProps={{ style: { fontFamily: "inherit" } }}
-                  >
-                    {value}
-                  </SyntaxHighlighter>
-                );
-              },
-              pre: ({ children }) => (
-                <pre className="bg-foreground/[0.04] border border-border my-3 overflow-x-auto">
-                  {children}
-                </pre>
-              ),
+              // Shared, theme-aware code rendering — identical to the chat
+              // transcript so a fenced block reads the same everywhere.
+              ...createCodeMarkdownComponents({
+                inlineCodeClassName:
+                  "font-mono text-[12px] text-foreground bg-foreground/10 px-1 py-[1px] rounded border border-border",
+              }),
             }}
           >
             {renderedText}

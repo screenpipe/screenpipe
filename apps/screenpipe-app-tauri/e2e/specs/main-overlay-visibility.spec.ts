@@ -32,13 +32,19 @@ async function waitForAnyMainHandle(timeoutMs = t(12_000)): Promise<MainLabel> {
 
 async function expectMainOverlayVisible(expected: boolean, timeoutMs = t(15_000)): Promise<void> {
   await browser.waitUntil(async () => {
-    // Use Home as the invoke() context. Some surfaces (like Main) can be hidden
-    // and still have a handle, but Home is always a stable Tauri IPC origin.
-    if ((await browser.getWindowHandles()).includes("home")) {
-      await browser.switchToWindow("home");
+    try {
+      // Use Home as the invoke() context. Some surfaces (like Main) can be hidden
+      // and still have a handle, but Home is always a stable Tauri IPC origin.
+      if ((await browser.getWindowHandles()).includes("home")) {
+        await browser.switchToWindow("home");
+      }
+      const visible = await invokeOrThrow<boolean>("e2e_main_overlay_visible");
+      return visible === expected;
+    } catch {
+      // Transient during a window switch / IPC-not-ready — retry rather than
+      // hard-failing the waitUntil (the fragility that intermittently reded CI).
+      return false;
     }
-    const visible = await invokeOrThrow<boolean>("e2e_main_overlay_visible");
-    return visible === expected;
   }, {
     timeout: timeoutMs,
     interval: 250,

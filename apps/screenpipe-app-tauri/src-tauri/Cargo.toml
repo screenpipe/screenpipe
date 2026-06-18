@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.35"
+version = "2.5.49"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -147,7 +147,6 @@ eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52
 # switch onnx-coreml → onnx-directml via a build-target override. No
 # CUDA / Vulkan / GPU-vendor SDKs bundled.
 screenpipe-redact = { path = "../../../crates/screenpipe-redact", features = ["onnx-coreml", "opf-text"] }
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 image = "0.25.5"
 
 # Used only by the path-included `ee/desktop-rust/enterprise_sync.rs`. Gated
@@ -269,9 +268,6 @@ official-build = []
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
 enterprise-build = ["dep:thiserror", "dep:screenpipe-sync"]
-
-# On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)
-apple-intelligence = ["screenpipe-engine/apple-intelligence"]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]

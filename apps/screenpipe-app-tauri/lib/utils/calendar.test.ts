@@ -125,6 +125,68 @@ describe("fetchUpcomingCalendarSnapshot", () => {
     ).toBe(false);
   });
 
+  it("skips the native HTTP probe when the platform has no native calendar", async () => {
+    // Linux shape: tauri status reports unavailable. Probing the HTTP route
+    // would be a guaranteed failure every 60s poll — it must not happen.
+    mocks.commands.calendarStatus.mockResolvedValue({
+      status: "ok",
+      data: {
+        available: false,
+        authorized: false,
+        calendarCount: 0,
+      },
+    });
+    mocks.commands.oauthStatus.mockResolvedValue({
+      status: "ok",
+      data: { connected: false },
+    });
+    mocks.localFetch.mockImplementation((url: string) =>
+      Promise.reject(new Error(`unexpected url: ${url}`)),
+    );
+
+    const snapshot = await fetchUpcomingCalendarSnapshot({ hoursAhead: 8 });
+
+    expect(snapshot.connectedSources).toEqual([]);
+    expect(snapshot.failedSources).toEqual([]);
+    expect(
+      mocks.localFetch.mock.calls.some(([url]) =>
+        String(url).startsWith("/connections/calendar/events"),
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a 200 connected:false native body as not connected", async () => {
+    // Status command unavailable → the HTTP probe still runs, and the engine
+    // answers 200 { data: [], connected: false, reason } on platforms with no
+    // native calendar (instead of the old 500). That must read as "provider
+    // unavailable", not "connected with zero events".
+    mocks.commands.calendarStatus.mockRejectedValue(
+      new Error("tauri unavailable"),
+    );
+    mocks.commands.oauthStatus.mockResolvedValue({
+      status: "ok",
+      data: { connected: false },
+    });
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.startsWith("/connections/calendar/events")) {
+        return Promise.resolve(
+          jsonResponse(true, {
+            data: [],
+            connected: false,
+            reason: "unsupported_platform",
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+
+    const snapshot = await fetchUpcomingCalendarSnapshot({ hoursAhead: 8 });
+
+    expect(snapshot.connectedSources).toEqual([]);
+    expect(snapshot.failedSources).toEqual([]);
+  });
+
   it("includes ICS events when hoursAhead is 72", async () => {
     mocks.commands.oauthStatus.mockResolvedValue({
       status: "ok",

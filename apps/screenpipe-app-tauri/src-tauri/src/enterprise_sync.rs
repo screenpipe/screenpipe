@@ -399,6 +399,39 @@ mod imp {
             }))
         }
 
+        async fn fetch_frame_jpeg(
+            &self,
+            frame_id: i64,
+        ) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
+            // Same image `/frames/{id}` serves in the UI — decoded from local
+            // video, with capture-time PII redaction already applied when the
+            // org policy enables it. Full resolution here; the core fulfiller
+            // downscales + bounds size before upload.
+            let img_url = format!("{}/frames/{}", self.api_url_base, frame_id);
+            let resp = self
+                .auth(self.http.get(&img_url))
+                .send()
+                .await
+                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                // Expired from retention or never existed — report back so the
+                // server drops the id from the manifest instead of looping.
+                return Ok(None);
+            }
+            if !resp.status().is_success() {
+                return Err(EnterpriseSyncError::LocalApi(format!(
+                    "GET {} -> {}",
+                    img_url,
+                    resp.status()
+                )));
+            }
+            let bytes = resp
+                .bytes()
+                .await
+                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+            Ok(Some(bytes.to_vec()))
+        }
+
         async fn fetch_memories_since(
             &self,
             since_ts: Option<&str>,

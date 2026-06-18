@@ -16,6 +16,9 @@ use std::sync::{
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
+use screenpipe_audio::audio_manager::builder::TranscriptionMode;
+
+use crate::recording_coverage::{coverage_snapshot, CoverageSnapshot};
 use crate::server::AppState;
 use crate::ui_recorder::{
     tree_walker_snapshot, ui_recorder_status_snapshot, TreeWalkerSnapshot, UiRecorderStatus,
@@ -198,8 +201,25 @@ pub struct HealthCheckResponse {
     /// distinctly from "off" so users can tell why ui_events stopped writing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_recorder: Option<UiRecorderStatus>,
+    /// Recording-coverage reliability metric: what fraction of the user's
+    /// working time (recent input) had healthy screen capture. None until the
+    /// sampler has accumulated any active or idle time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_coverage: Option<CoverageSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_stats: Option<PoolHealthInfo>,
+    /// True once the write queue has flagged the disk-I/O wedge as degraded.
+    #[serde(default)]
+    pub write_queue_degraded: bool,
+    /// Consecutive fatal write batches right now (0 when the write path is healthy).
+    #[serde(default)]
+    pub write_queue_consecutive_fatal: u64,
+    /// How many times the write pool was reopened in-process to clear poisoned connections.
+    #[serde(default)]
+    pub write_pool_reopens: u64,
+    /// How many times the persistent-failure hook fired (engine-restart requests).
+    #[serde(default)]
+    pub persistent_failure_signals: u64,
     /// True when vision capture loop is alive but DB writes have stopped (pool exhaustion).
     #[serde(default)]
     pub vision_db_write_stalled: bool,
@@ -250,6 +270,23 @@ pub struct PipelineHealthInfo {
     pub frames_db_written: u64,
     pub frames_dropped: u64,
     pub frame_drop_rate: f64,
+    /// Frames dropped because the capture op timed out (subset of frames_dropped).
+    pub frames_dropped_timeout: u64,
+    /// Frames dropped because the capture op errored (subset of frames_dropped).
+    pub frames_dropped_error: u64,
+    /// Residual loss canary: attempts - written - dedup - dropped. ~0 normally;
+    /// non-zero = a frame-loss path nothing counts. Use frames_dropped_* for the
+    /// actionable loss numbers.
+    pub silent_loss: u64,
+    /// silent_loss / (capture_attempts - dedup_skips). Should stay ~0.
+    pub silent_loss_rate: f64,
+    /// Total capture cycles attempted (loop heartbeat). Flat while uptime climbs
+    /// = trigger starvation (no capture events firing — the meeting-gap case).
+    pub capture_attempts: u64,
+    /// Capture cycles skipped by content dedup (static screen — expected/benign).
+    pub dedup_skips: u64,
+    /// Unix secs of the last capture attempt; consumers derive heartbeat age.
+    pub last_capture_attempt_ts: u64,
     pub capture_fps_actual: f64,
     pub avg_ocr_latency_ms: f64,
     pub avg_db_latency_ms: f64,
@@ -258,6 +295,9 @@ pub struct PipelineHealthInfo {
     pub time_to_first_frame_ms: Option<f64>,
     pub pipeline_stall_count: u64,
     pub ocr_cache_hit_rate: f64,
+    /// OCR runs that produced (near-)empty text (subset of ocr_completed).
+    /// `ocr_empty / ocr_completed` is the OCR-quality failure rate.
+    pub ocr_empty: u64,
 }
 
 #[derive(Serialize, OaSchema, Deserialize, Clone)]
@@ -281,6 +321,10 @@ pub struct AudioPipelineHealthInfo {
     pub chunks_received: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_errors: Option<u64>,
+    /// Audio buffers skipped because the recorder lagged the capture channel
+    /// (silent loss). Omitted when zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunks_lagged: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_level_rms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -394,7 +438,12 @@ fn degraded_response() -> HealthCheckResponse {
         audio_pipeline: None,
         accessibility: None,
         ui_recorder: None,
+        recording_coverage: None,
         pool_stats: None,
+        write_queue_degraded: false,
+        write_queue_consecutive_fatal: 0,
+        write_pool_reopens: 0,
+        persistent_failure_signals: 0,
         vision_db_write_stalled: false,
         audio_db_write_stalled: false,
         drm_content_paused: false,
@@ -445,6 +494,30 @@ async fn get_audio_reconciliation_backlog(
     }
 
     result
+}
+
+/// Resolve the `transcription_mode` reported by `/health`.
+///
+/// Reports the *configured* mode (#3989). When the options lock is momentarily
+/// contended, `configured` is `None` and we fall back to the legacy
+/// observed-activity heuristic so `/health` stays non-blocking and still returns
+/// a best-effort value.
+fn transcription_mode_label(
+    configured: Option<TranscriptionMode>,
+    deferred: u64,
+    batch_processed: u64,
+) -> &'static str {
+    match configured {
+        Some(TranscriptionMode::Realtime) => "realtime",
+        Some(TranscriptionMode::Batch) => "batch",
+        None => {
+            if deferred > 0 || batch_processed > 0 {
+                "batch"
+            } else {
+                "realtime"
+            }
+        }
+    }
 }
 
 async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
@@ -963,6 +1036,13 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             frames_db_written: vision_snap.frames_db_written,
             frames_dropped: vision_snap.frames_dropped,
             frame_drop_rate: vision_snap.frame_drop_rate,
+            frames_dropped_timeout: vision_snap.frames_dropped_timeout,
+            frames_dropped_error: vision_snap.frames_dropped_error,
+            silent_loss: vision_snap.silent_loss,
+            silent_loss_rate: vision_snap.silent_loss_rate,
+            capture_attempts: vision_snap.capture_attempts,
+            dedup_skips: vision_snap.dedup_skips,
+            last_capture_attempt_ts: vision_snap.last_capture_attempt_ts,
             capture_fps_actual: vision_snap.capture_fps_actual,
             avg_ocr_latency_ms: vision_snap.avg_ocr_latency_ms,
             avg_db_latency_ms: vision_snap.avg_db_latency_ms,
@@ -975,10 +1055,15 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             } else {
                 0.0
             },
+            ocr_empty: vision_snap.ocr_empty,
         })
     } else {
         None
     };
+
+    // Write-queue health: disk-I/O wedge detection + recovery counters. Surfaced
+    // so remote monitoring can see degradation and engine-restart requests.
+    let wqh = state.db.write_queue_health();
 
     HealthCheckResponse {
         status: overall_status.to_string(),
@@ -1019,6 +1104,16 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 None
             }
         },
+        recording_coverage: {
+            let snap = coverage_snapshot();
+            // Only attach once the sampler has observed any wall-clock time —
+            // before that the all-zero snapshot is noise.
+            if snap.active_secs + snap.idle_secs > 0 {
+                Some(snap)
+            } else {
+                None
+            }
+        },
         audio_pipeline: if !state.audio_disabled {
             // meeting_detected / meeting_app were queried earlier (next to
             // the stall gates that depend on them) — reuse them here.
@@ -1043,6 +1138,11 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 // Consumer stage diagnostics
                 chunks_received: Some(audio_snap.chunks_received),
                 process_errors: Some(audio_snap.process_errors),
+                chunks_lagged: if audio_snap.chunks_lagged > 0 {
+                    Some(audio_snap.chunks_lagged)
+                } else {
+                    None
+                },
                 audio_level_rms: Some(audio_snap.audio_level_rms),
                 per_device_audio_level_rms: if per_device_levels.is_empty() {
                     None
@@ -1054,14 +1154,15 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 } else {
                     Some(device_names)
                 },
-                // Batch/Smart mode
-                transcription_mode: if audio_snap.segments_deferred > 0
-                    || audio_snap.segments_batch_processed > 0
-                {
-                    Some("batch".to_string())
-                } else {
-                    Some("realtime".to_string())
-                },
+                // Reflect the CONFIGURED mode, not observed activity (#3989).
+                transcription_mode: Some(
+                    transcription_mode_label(
+                        state.audio_manager.configured_transcription_mode(),
+                        audio_snap.segments_deferred,
+                        audio_snap.segments_batch_processed,
+                    )
+                    .to_string(),
+                ),
                 transcription_paused: Some(transcription_paused),
                 segments_deferred: if audio_snap.segments_deferred > 0 {
                     Some(audio_snap.segments_deferred)
@@ -1091,6 +1192,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 write_pool_idle: wi,
             })
         },
+        write_queue_degraded: wqh.is_degraded(),
+        write_queue_consecutive_fatal: wqh.consecutive_fatal_batches(),
+        write_pool_reopens: wqh.write_pool_reopens(),
+        persistent_failure_signals: wqh.persistent_failure_signals(),
         vision_db_write_stalled,
         audio_db_write_stalled,
         drm_content_paused: crate::drm_detector::drm_content_paused(),
@@ -1205,6 +1310,31 @@ pub async fn api_vision_status() -> JsonResponse<serde_json::Value> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn transcription_mode_reports_configuration_not_activity() {
+        // The #3989 bug fix: a batch-configured instance reports "batch"
+        // immediately at idle, before any deferred/batch activity is observed.
+        assert_eq!(
+            transcription_mode_label(Some(TranscriptionMode::Batch), 0, 0),
+            "batch"
+        );
+        // Realtime stays realtime even if batch activity counters are non-zero —
+        // configuration always wins over observed activity when the lock is readable.
+        assert_eq!(
+            transcription_mode_label(Some(TranscriptionMode::Realtime), 5, 3),
+            "realtime"
+        );
+    }
+
+    #[test]
+    fn transcription_mode_falls_back_to_activity_when_contended() {
+        // configured == None (options lock momentarily contended) → legacy
+        // observed-activity heuristic, keeping /health non-blocking.
+        assert_eq!(transcription_mode_label(None, 0, 0), "realtime");
+        assert_eq!(transcription_mode_label(None, 1, 0), "batch");
+        assert_eq!(transcription_mode_label(None, 0, 1), "batch");
+    }
+
     fn dummy_response(status: &str) -> HealthCheckResponse {
         HealthCheckResponse {
             status: status.to_string(),
@@ -1230,7 +1360,12 @@ mod tests {
             audio_pipeline: None,
             accessibility: None,
             ui_recorder: None,
+            recording_coverage: None,
             pool_stats: None,
+            write_queue_degraded: false,
+            write_queue_consecutive_fatal: 0,
+            write_pool_reopens: 0,
+            persistent_failure_signals: 0,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
             drm_content_paused: false,

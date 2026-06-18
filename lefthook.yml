@@ -17,7 +17,12 @@ pre-commit:
   commands:
     rust-fmt:
       glob: "*.rs"
-      run: cargo fmt --check -- {staged_files}
+      # `cargo fmt -- <files>` ignores the file args and reformats the WHOLE
+      # workspace, so it false-fails on pre-existing drift in files the commit
+      # never touched. Call rustfmt directly to honor "only on STAGED files".
+      # `--` keeps any odd file name (e.g. one starting with '-') from being
+      # parsed as a flag.
+      run: rustfmt --edition 2021 --check -- {staged_files}
 
     rust-clippy:
       # Only run clippy on the crates that have at least one staged .rs file.

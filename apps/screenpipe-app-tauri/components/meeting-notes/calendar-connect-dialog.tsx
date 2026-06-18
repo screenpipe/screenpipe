@@ -316,7 +316,7 @@ function GoogleCalendarConnect({
     setBusy(true);
     setStatusText(null);
     try {
-      const result = await commands.oauthConnect("google-calendar", null);
+      const result = await commands.oauthConnect("google-calendar", null, null);
       if (result.status === "ok" && result.data.connected) {
         await onConnected();
         onClose();

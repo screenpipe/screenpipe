@@ -517,9 +517,15 @@ pub async fn auto_start_sync(app: &AppHandle, state: &SyncState) {
         }
     };
 
-    let token = match fresh_settings.user.token {
-        Some(ref t) if !t.is_empty() => t.clone(),
-        _ => {
+    let token = match fresh_settings
+        .user
+        .token
+        .clone()
+        .filter(|t| !t.is_empty())
+        .or_else(crate::auth_token::cached_cloud_token)
+    {
+        Some(t) => t,
+        None => {
             info!("cloud sync: no auth token, skipping auto-start");
             return;
         }
@@ -644,9 +650,15 @@ pub async fn auto_start_archive(app: &AppHandle) {
         }
     };
 
-    let token = match fresh_settings.user.token {
-        Some(t) if !t.is_empty() => t,
-        _ => {
+    let token = match fresh_settings
+        .user
+        .token
+        .clone()
+        .filter(|t| !t.is_empty())
+        .or_else(crate::auth_token::cached_cloud_token)
+    {
+        Some(t) => t,
+        None => {
             info!("cloud archive: no auth token, skipping auto-start");
             return;
         }

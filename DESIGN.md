@@ -88,11 +88,11 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 
 - Width: 1px solid
 - Style: Sharp, binary (on/off)
-- No gradients, no shadows
+- No gradients
 
 ### Shadows
 
-**None.** Flat design throughout. Use borders for separation.
+**Flat by default — use 1px borders for separation.** Subtle shadows are allowed to lift floating / elevated surfaces (chat input, overlays, popovers, dialogs) off the background. Keep them soft and low-opacity (e.g. `shadow-lg shadow-black/5`); never round corners to sell the lift — corners stay sharp.
 
 ---
 
@@ -131,7 +131,7 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 
 ```
 - Border: 1px solid
-- Shadow: None
+- Shadow: Subtle lift allowed (elevated surface)
 - Animation: 150ms fade
 - Title: lowercase
 ```
@@ -180,8 +180,8 @@ When creating new UI components:
 - [ ] Using Space Grotesk for headings
 - [ ] Using Crimson Text for body (or IBM Plex Mono for technical)
 - [ ] 1px solid border
-- [ ] No box shadows
-- [ ] 0px border radius (sharp corners)
+- [ ] Flat by default; subtle shadows OK only to lift floating/elevated surfaces
+- [ ] 0px border radius (sharp corners) — always, even on shadowed surfaces
 - [ ] Black, white, or gray only
 - [ ] 150ms transitions
 - [ ] UPPERCASE for buttons, lowercase for titles

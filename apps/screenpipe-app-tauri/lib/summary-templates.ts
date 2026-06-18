@@ -34,7 +34,7 @@ Follow these steps exactly. Do not skip any step.
 Run these queries against the screenpipe API to understand the user's work patterns. Use the last 24 hours of data.
 
 1. Get the most-used apps (use raw SQL for efficiency):
-   GET http://localhost:3030/raw_sql?query=SELECT app_name, COUNT(*) as count FROM ocr_text WHERE timestamp > datetime('now', '-24 hours') GROUP BY app_name ORDER BY count DESC LIMIT 15
+   GET http://localhost:3030/raw_sql?query=SELECT app_name, COUNT(*) as count FROM frames WHERE timestamp > datetime('now', '-24 hours') AND full_text IS NOT NULL GROUP BY app_name ORDER BY count DESC LIMIT 15
 
 2. Get recent audio transcriptions to understand what meetings/calls look like:
    GET http://localhost:3030/search?content_type=audio&limit=5&start_time=[24h ago ISO]&end_time=[now ISO]

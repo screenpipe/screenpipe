@@ -188,13 +188,16 @@ impl ScreenpipeSyncProvider {
         let time_start = frames.first().map(|f| f.1.clone()).unwrap();
         let time_end = frames.last().map(|f| f.1.clone()).unwrap();
 
-        // Get OCR for these frames (include app_name/window_name for cross-machine sync)
+        // Get OCR text for these frames from the frame itself (ocr_text retired
+        // 2026-06; frames.full_text is the OCR/search text). app_name/window_name
+        // included for cross-machine sync.
         type OcrRow = (i64, String, bool, Option<String>, Option<String>);
         let ocr_results: Vec<OcrRow> = sqlx::query_as(
             r#"
-            SELECT frame_id, text, focused, app_name, window_name
-            FROM ocr_text
-            WHERE frame_id IN (SELECT value FROM json_each(?))
+            SELECT id AS frame_id, full_text AS text, COALESCE(focused, 0) AS focused, app_name, window_name
+            FROM frames
+            WHERE id IN (SELECT value FROM json_each(?))
+              AND full_text IS NOT NULL AND full_text != ''
             "#,
         )
         .bind(serde_json::to_string(&frame_ids).unwrap())
@@ -546,13 +549,15 @@ impl ScreenpipeSyncProvider {
         // Import OCR
         for ocr in &chunk.ocr_records {
             if let Some(&frame_id) = frame_id_map.get(&ocr.frame_sync_id) {
-                // Check if already exists (read-only, uses read pool)
-                let exists: Option<(i64,)> =
-                    sqlx::query_as("SELECT 1 FROM ocr_text WHERE sync_id = ?")
-                        .bind(&ocr.sync_id)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| SyncError::Database(format!("failed to check OCR: {}", e)))?;
+                // ocr_text retired (2026-06): dedup on whether the frame already
+                // carries text. The apply below is an idempotent UPDATE anyway.
+                let exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT 1 FROM frames WHERE id = ? AND full_text IS NOT NULL AND full_text != ''",
+                )
+                .bind(frame_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| SyncError::Database(format!("failed to check OCR: {}", e)))?;
 
                 if exists.is_some() {
                     skipped += 1;

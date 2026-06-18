@@ -10,7 +10,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use screenpipe_connect::connections::render_context;
-use screenpipe_connect::mcp_servers::render_context as mcp_render_context;
 use screenpipe_core::pipes::PipeManager;
 use screenpipe_secrets::SecretStore;
 use serde::Deserialize;
@@ -166,36 +165,32 @@ pub async fn run_pipe_now(
     };
 
     // Validate required connections are configured before running the pipe
-    if let Some(pipe_status) = mgr.get_pipe(&id).await {
-        let required = &pipe_status.config.connections;
-        if !required.is_empty() {
-            let screenpipe_dir = mgr
-                .pipes_dir()
-                .parent()
-                .unwrap_or(mgr.pipes_dir())
-                .to_path_buf();
-            let ss = secret_store.as_ref().map(|e| e.0.as_ref());
-            let mut missing = Vec::new();
-            for conn_id in required {
-                let configured = screenpipe_connect::connections::is_connection_configured(
-                    ss,
-                    &screenpipe_dir,
-                    conn_id,
+    let required_connections = mgr
+        .get_pipe(&id)
+        .await
+        .map(|pipe_status| pipe_status.config.connections)
+        .unwrap_or_default();
+    if !required_connections.is_empty() {
+        let screenpipe_dir = mgr
+            .pipes_dir()
+            .parent()
+            .unwrap_or(mgr.pipes_dir())
+            .to_path_buf();
+        let ss = secret_store.as_ref().map(|e| e.0.as_ref());
+        let missing = screenpipe_connect::missing_pipe_connections(
+            ss,
+            &screenpipe_dir,
+            &required_connections,
+        )
+        .await;
+        if !missing.is_empty() {
+            return Json(json!({
+                "error": format!(
+                    "pipe '{}' requires unconfigured connections: {} — set them up in Settings → Connections",
+                    id,
+                    missing.join(", ")
                 )
-                .await;
-                if !configured {
-                    missing.push(conn_id.as_str());
-                }
-            }
-            if !missing.is_empty() {
-                return Json(json!({
-                    "error": format!(
-                        "pipe '{}' requires unconfigured connections: {} — set them up in Settings → Connections",
-                        id,
-                        missing.join(", ")
-                    )
-                }));
-            }
+            }));
         }
     }
 
@@ -208,14 +203,7 @@ pub async fn run_pipe_now(
         .to_path_buf();
     let api_port = mgr.api_port();
     let ss = secret_store.as_ref().map(|e| e.0.as_ref());
-    let mut conn_ctx = render_context(&screenpipe_dir, api_port, ss).await;
-    // Append user-supplied MCP servers — the `mcp-bridge.ts` extension
-    // surfaces them as tools, but the model also needs a natural-language
-    // listing in its system prompt so it knows what's available.
-    let mcp_ctx = mcp_render_context(&screenpipe_dir, api_port).await;
-    if !mcp_ctx.is_empty() {
-        conn_ctx.push_str(&mcp_ctx);
-    }
+    let conn_ctx = render_context(&screenpipe_dir, api_port, ss).await;
     mgr.set_connections_context(conn_ctx);
 
     let result = mgr.start_pipe_background(&id).await;

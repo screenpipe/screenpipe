@@ -60,11 +60,20 @@ export class GeminiProvider implements AIProvider {
 	}
 
 	/** Get auth headers — Bearer token for Vertex, none for API key (key is in URL) */
-	private async getAuthHeaders(): Promise<Record<string, string>> {
+	private async getAuthHeaders(serviceTier?: 'flex' | 'standard'): Promise<Record<string, string>> {
 		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 		if (this.vertexProvider) {
 			const token = await this.vertexProvider.getAccessToken();
 			headers['Authorization'] = `Bearer ${token}`;
+			// Flex tier — 50% cheaper, best-effort latency. Only meaningful on the
+			// Vertex path (the public generativelanguage endpoint ignores it). The
+			// router sets serviceTier='flex' for background traffic; the chat
+			// handler cascades to a standard-tier model if flex is throttled (429).
+			// Docs: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/flex
+			if (serviceTier === 'flex') {
+				headers['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+				headers['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
+			}
 		}
 		return headers;
 	}
@@ -114,7 +123,7 @@ export class GeminiProvider implements AIProvider {
 		const requestBody = this.buildRequestBody(body);
 
 		console.log('[Gemini] Request to:', url.replace(this.apiKey || 'N/A', '***'));
-		const headers = await this.getAuthHeaders();
+		const headers = await this.getAuthHeaders(body.serviceTier);
 
 		const response = await fetch(url, {
 			method: 'POST',
@@ -150,7 +159,7 @@ export class GeminiProvider implements AIProvider {
 			toolNames: requestBody.tools?.[0]?.functionDeclarations?.map((f: any) => f.name) || [],
 			hasToolConfig: !!requestBody.toolConfig,
 		}));
-		const streamHeaders = await this.getAuthHeaders();
+		const streamHeaders = await this.getAuthHeaders(body.serviceTier);
 
 		const response = await fetch(url, {
 			method: 'POST',

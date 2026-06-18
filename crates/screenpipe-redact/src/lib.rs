@@ -73,6 +73,8 @@
 pub mod adapters;
 pub mod image;
 pub mod pipeline;
+pub mod pseudonym;
+pub mod redaction_map;
 pub mod worker;
 
 mod cache;
@@ -82,6 +84,8 @@ mod span;
 pub use error::RedactError;
 pub use image::{ImageRedactionPolicy, ImageRedactor, ImageRegion};
 pub use pipeline::{Pipeline, PipelineConfig};
+pub use pseudonym::Pseudonymizer;
+pub use redaction_map::RedactionMap;
 pub use span::{RedactedSpan, SpanLabel, TextRedactionPolicy};
 
 use async_trait::async_trait;
@@ -131,4 +135,23 @@ pub trait Redactor: Send + Sync {
 
     /// Redact a batch of inputs. Order MUST be preserved.
     async fn redact_batch(&self, texts: &[String]) -> Result<Vec<RedactionOutput>, RedactError>;
+
+    /// Redact `text` AND return a reusable [`RedactionMap`] so the caller
+    /// can propagate the same redaction to *derived copies* of this text
+    /// (per-element / per-word / per-node representations of the same
+    /// screen content) without re-running detection.
+    ///
+    /// Returns `None` when this redactor can't produce a value-level map
+    /// — notably the span-less enclave, whose detections aren't exposed
+    /// as spans. Callers then fall back to redacting each copy directly.
+    /// The default returns `None`; [`Pipeline`] overrides it.
+    ///
+    /// See screenpipe/website#291 for why this exists (one detection per
+    /// frame instead of one per column).
+    async fn redact_with_map(
+        &self,
+        _text: &str,
+    ) -> Result<Option<(RedactionOutput, RedactionMap)>, RedactError> {
+        Ok(None)
+    }
 }

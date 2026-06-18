@@ -43,13 +43,13 @@ pub struct OAuthInstanceInfo {
 async fn open_secret_store() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-    let pool = sqlx::SqlitePool::connect(&db_url).await.ok()?;
     let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
         crate::secrets::KeyResult::Found(k) => Some(k),
         _ => None,
     };
-    screenpipe_secrets::SecretStore::new(pool, secret_key)
+    // Shared, engine-matched pool — never an ad-hoc per-call connection, which
+    // churns the WAL-index and corrupts db.sqlite (#4263).
+    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
         .await
         .ok()
 }
@@ -67,6 +67,7 @@ pub async fn oauth_connect(
     app_handle: AppHandle,
     integration_id: String,
     instance: Option<String>,
+    variant: Option<String>,
 ) -> Result<OAuthStatus, String> {
     let integrations = all_integrations();
     let integration = integrations
@@ -78,6 +79,21 @@ pub async fn oauth_connect(
         .oauth_config()
         .ok_or_else(|| format!("{} does not use OAuth", integration_id))?;
 
+    // Resolve the requested access level. When the user picked a scope variant
+    // (e.g. Slack send-only vs send+read) use that variant's params; otherwise
+    // fall back to the integration's default `extra_auth_params`. The variant
+    // id is validated against the server-side whitelist — the UI never supplies
+    // raw scope strings.
+    let auth_params: &[(&str, &str)] = match variant.as_deref() {
+        Some(vid) => integration
+            .oauth_scope_variants()
+            .iter()
+            .find(|v| v.id == vid)
+            .map(|v| v.params)
+            .ok_or_else(|| format!("unknown scope variant '{}' for {}", vid, integration_id))?,
+        None => config.extra_auth_params,
+    };
+
     // Gate OAuth behind Pro subscription
     let is_pro = SettingsStore::get(&app_handle)
         .unwrap_or_default()
@@ -88,6 +104,32 @@ pub async fn oauth_connect(
     if !is_pro {
         return Err("OAuth integrations require a Pro subscription. Please upgrade to connect third-party services.".to_string());
     }
+
+    // Per-account providers (Zendesk) host OAuth on the customer's own subdomain,
+    // so the authorization + token endpoints are per-account. When the auth_url
+    // carries a `{subdomain}` placeholder, the subdomain arrives as `instance`
+    // and is templated in here. Validate up front — before registering the
+    // pending callback — so a bad subdomain fails fast, and so we never build a
+    // request to an attacker-controlled host.
+    let needs_subdomain = config.auth_url.contains("{subdomain}");
+    let auth_url_str = if needs_subdomain {
+        let sub = instance.as_deref().map(str::trim).unwrap_or("");
+        if sub.is_empty() {
+            return Err(format!(
+                "{} needs your subdomain — enter it before connecting",
+                integration_id
+            ));
+        }
+        if !sub.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(format!(
+                "invalid subdomain '{}' — use only letters, numbers and hyphens (e.g. 'acme' for acme.zendesk.com)",
+                sub
+            ));
+        }
+        config.auth_url.replace("{subdomain}", sub)
+    } else {
+        config.auth_url.to_string()
+    };
 
     let state = uuid::Uuid::new_v4().simple().to_string();
     let (tx, rx) = oneshot::channel::<String>();
@@ -105,7 +147,7 @@ pub async fn oauth_connect(
     let redirect_uri = config.redirect_uri_override.unwrap_or(OAUTH_REDIRECT_URI);
 
     let mut auth_url =
-        reqwest::Url::parse(config.auth_url).map_err(|e| format!("bad auth_url: {}", e))?;
+        reqwest::Url::parse(&auth_url_str).map_err(|e| format!("bad auth_url: {}", e))?;
     {
         let mut pairs = auth_url.query_pairs_mut();
         pairs
@@ -113,7 +155,7 @@ pub async fn oauth_connect(
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", redirect_uri)
             .append_pair("state", &state);
-        for (k, v) in config.extra_auth_params {
+        for (k, v) in auth_params {
             pairs.append_pair(k, v);
         }
         // For Google OAuth, add login_hint to pre-select account
@@ -134,8 +176,8 @@ pub async fn oauth_connect(
         })?;
 
     info!(
-        "waiting for OAuth callback via /connections/oauth/callback ({}, instance={:?})",
-        integration_id, instance
+        "waiting for OAuth callback via /connections/oauth/callback ({}, instance={:?}, variant={:?})",
+        integration_id, instance, variant
     );
 
     let raw = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
@@ -167,12 +209,33 @@ pub async fn oauth_connect(
         .build()
         .map_err(|e| format!("http client: {}", e))?;
 
-    let mut token_data = oauth::exchange_code(&client, &integration_id, &code, redirect_uri)
-        .await
-        .map_err(|e| {
-            error!("token exchange failed for {}: {}", integration_id, e);
-            format!("token exchange failed: {}", e)
-        })?;
+    // Per-account providers (Zendesk) must tell the proxy which subdomain to hit
+    // for the token exchange — its token endpoint lives on that subdomain.
+    let exchange_extra: Option<serde_json::Map<String, serde_json::Value>> = if needs_subdomain {
+        instance.as_deref().map(|sub| {
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "subdomain".to_string(),
+                serde_json::Value::String(sub.to_string()),
+            );
+            m
+        })
+    } else {
+        None
+    };
+
+    let mut token_data = oauth::exchange_code(
+        &client,
+        &integration_id,
+        &code,
+        redirect_uri,
+        exchange_extra.as_ref(),
+    )
+    .await
+    .map_err(|e| {
+        error!("token exchange failed for {}: {}", integration_id, e);
+        format!("token exchange failed: {}", e)
+    })?;
 
     // Merge extra callback params (e.g. realmId for QuickBooks) into the stored token data.
     if let Some(ref extras) = callback_extras {
@@ -286,11 +349,25 @@ pub async fn oauth_connect(
         }
     }
 
-    // Slack's OAuth response nests the user-selected incoming webhook and team
-    // metadata. Copy stable, non-secret identifiers to top-level fields so the
+    // Zendesk: the access token alone carries no subdomain, but every API call
+    // (and the proxy's {subdomain} base_url) needs it. Stamp the subdomain the
+    // user connected with, and use it as the workspace display name + the
+    // per-account instance key (oauth:zendesk:{subdomain}).
+    if integration_id == "zendesk" {
+        if let Some(sub) = instance.as_deref() {
+            token_data["subdomain"] = serde_json::Value::String(sub.to_string());
+            if token_data["workspace_name"].is_null() {
+                token_data["workspace_name"] = serde_json::Value::String(sub.to_string());
+            }
+        }
+    }
+
+    // Slack's OAuth response nests team metadata plus either a user token
+    // (`authed_user`, the new no-bot flow) or an incoming webhook (legacy bot
+    // flow). Copy stable, non-secret identifiers to top-level fields so the
     // generic OAuth UI can display a useful account name and the local
     // connection config can expose channel/workspace context without exposing
-    // the webhook URL.
+    // the token or webhook URL.
     if integration_id == "slack" {
         if let Some(team_name) = token_data["team"]["name"].as_str().map(String::from) {
             token_data["workspace_name"] = serde_json::Value::String(team_name);
@@ -298,17 +375,34 @@ pub async fn oauth_connect(
         if let Some(team_id) = token_data["team"]["id"].as_str().map(String::from) {
             token_data["team_id"] = serde_json::Value::String(team_id);
         }
-        if let Some(channel) = token_data["incoming_webhook"]["channel"]
-            .as_str()
-            .map(String::from)
-        {
-            token_data["slack_channel"] = serde_json::Value::String(channel);
-        }
-        if let Some(channel_id) = token_data["incoming_webhook"]["channel_id"]
-            .as_str()
-            .map(String::from)
-        {
-            token_data["slack_channel_id"] = serde_json::Value::String(channel_id);
+        if token_data["incoming_webhook"].is_null() {
+            // New user-token flow: no bot, no channel picker. Default the send
+            // target to the connecting user's own DM so notifications land as a
+            // self-message until/unless a channel is passed explicitly.
+            if let Some(user_id) = token_data["authed_user"]["id"].as_str().map(String::from) {
+                token_data["slack_user_id"] = serde_json::Value::String(user_id.clone());
+                if token_data["slack_channel_id"].is_null() {
+                    token_data["slack_channel_id"] = serde_json::Value::String(user_id);
+                }
+                if token_data["slack_channel"].is_null() {
+                    token_data["slack_channel"] =
+                        serde_json::Value::String("direct message".to_string());
+                }
+            }
+        } else {
+            // Legacy incoming-webhook flow: the channel was chosen during OAuth.
+            if let Some(channel) = token_data["incoming_webhook"]["channel"]
+                .as_str()
+                .map(String::from)
+            {
+                token_data["slack_channel"] = serde_json::Value::String(channel);
+            }
+            if let Some(channel_id) = token_data["incoming_webhook"]["channel_id"]
+                .as_str()
+                .map(String::from)
+            {
+                token_data["slack_channel_id"] = serde_json::Value::String(channel_id);
+            }
         }
     }
 
@@ -409,6 +503,13 @@ pub async fn oauth_connect(
         "OAuth connected: {} (instance={:?}, display={:?})",
         integration_id, store_instance, display_name
     );
+
+    // The background calendar publisher backs off to a long interval while
+    // Google Calendar is disconnected — wake it so prewarm/meeting-detection
+    // get events immediately after a connect instead of after the backoff.
+    if integration_id == "google-calendar" {
+        crate::google_calendar::poke();
+    }
 
     Ok(OAuthStatus {
         connected: true,

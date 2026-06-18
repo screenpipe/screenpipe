@@ -882,7 +882,7 @@ mod tests {
         .unwrap();
 
         let raw_ocr_text: Vec<(String, Option<i64>)> =
-            sqlx::query_as("SELECT text, frame_id FROM ocr_text")
+            sqlx::query_as("SELECT COALESCE(full_text, '') AS text, id AS frame_id FROM frames")
                 .fetch_all(&db.pool)
                 .await
                 .unwrap();
@@ -1549,6 +1549,24 @@ mod tests {
         let speakers = db.search_speakers("test").await.unwrap();
         assert_eq!(speakers.len(), 1);
         assert_eq!(speakers[0].name, "test name");
+    }
+
+    #[tokio::test]
+    async fn test_search_speakers_limited_returns_more_than_legacy_picker_cap() {
+        let db = setup_test_db().await;
+
+        for i in 0..25 {
+            let speaker = db.insert_speaker(&vec![i as f32; 512]).await.unwrap();
+            db.update_speaker_name(speaker.id, &format!("person {i:02}"))
+                .await
+                .unwrap();
+        }
+
+        let speakers = db.search_speakers_limited("", 50, 0, false).await.unwrap();
+
+        assert_eq!(speakers.len(), 25);
+        assert_eq!(speakers[0].name, "person 00");
+        assert!(speakers.iter().all(|speaker| speaker.metadata == "{}"));
     }
 
     #[tokio::test]

@@ -4,8 +4,8 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Bell, Check, ChevronRight, ChevronDown, Copy, ExternalLink, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +19,7 @@ import {
 import { useRouter } from "next/navigation";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 
 interface NotificationEntry {
   id: string;
@@ -26,6 +27,9 @@ interface NotificationEntry {
   title: string;
   body: string;
   pipe_name?: string;
+  source_session_id?: string;
+  source_message_id?: string;
+  source_url?: string;
   timestamp: string;
   read: boolean;
 }
@@ -87,6 +91,20 @@ async function openNotificationLink(href: string) {
   await open(raw);
 }
 
+async function openNotificationSource(url: string) {
+  if (!url.trim()) return;
+  if (url.startsWith("screenpipe://")) {
+    await emit("deep-link-received", url);
+    return;
+  }
+  const { open } = await import("@tauri-apps/plugin-shell");
+  await open(url);
+}
+
+function notificationClipboardText(entry: NotificationEntry): string {
+  return `${entry.title}\n\n${entry.body}`.trim();
+}
+
 function buildNotificationDisplayLabel(title: string): string {
   const normalized = title.replace(/\s+/g, " ").trim();
   if (!normalized) return "Ask AI about notification";
@@ -98,7 +116,15 @@ export function NotificationBell() {
   const [history, setHistory] = useState<NotificationEntry[]>([]);
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    return () => {
+      if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+    };
+  }, []);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -270,7 +296,7 @@ export function NotificationBell() {
                           </span>
                         </div>
                         {!isExpanded && entry.body && (
-                          <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4 [&_p]:inline [&_strong]:text-foreground [&_a]:underline">
+                          <div className="select-text text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4 [&_p]:inline [&_strong]:text-foreground [&_a]:underline">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
                               urlTransform={notificationUrlTransform}
@@ -324,7 +350,7 @@ export function NotificationBell() {
                       className="px-3 pb-2 pl-7"
                     >
                       {entry.body && (
-                        <div className="text-[10px] text-muted-foreground leading-relaxed mb-2 [&_p]:mb-1 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_code]:bg-muted [&_code]:px-1 [&_code]:text-[9px] [&_ul]:pl-4 [&_ul]:my-0.5 [&_li]:my-0">
+                        <div className="select-text text-[10px] text-muted-foreground leading-relaxed mb-2 [&_p]:mb-1 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_code]:bg-muted [&_code]:px-1 [&_code]:text-[9px] [&_ul]:pl-4 [&_ul]:my-0.5 [&_li]:my-0">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             urlTransform={notificationUrlTransform}
@@ -356,29 +382,67 @@ export function NotificationBell() {
                           {entry.pipe_name}
                         </span>
                       )}
-                      <button
-                        data-testid={`notification-bell-ask-ai-${entry.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          posthog.capture("notification_bell_ask_ai", {
-                            notification_type: entry.type,
-                            pipe_name: entry.pipe_name,
-                            title: entry.title,
-                          });
-                          setOpen(false);
-                          showChatWithPrefill({
-                            context: `notification from ${entry.pipe_name || "screenpipe"}:\n\n**${entry.title}**\n${entry.body}`,
-                            prompt: `tell me more about this: "${entry.title}"`,
-                            displayLabel: buildNotificationDisplayLabel(entry.title),
-                            autoSend: true,
-                            source: `notification-bell-${entry.id}`,
-                          });
-                        }}
-                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <MessageSquare className="w-3 h-3" />
-                        ask ai about this
-                      </button>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <button
+                          data-testid={`notification-bell-copy-${entry.id}`}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await commands.copyTextToClipboard(notificationClipboardText(entry));
+                            if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+                            setCopiedId(entry.id);
+                            copiedResetRef.current = setTimeout(() => setCopiedId(null), 1400);
+                            posthog.capture("notification_bell_copy", {
+                              notification_type: entry.type,
+                              pipe_name: entry.pipe_name,
+                            });
+                          }}
+                          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {copiedId === entry.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          {copiedId === entry.id ? "copied" : "copy"}
+                        </button>
+                        {entry.source_url && (
+                          <button
+                            data-testid={`notification-bell-source-${entry.id}`}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setOpen(false);
+                              posthog.capture("notification_bell_open_source", {
+                                notification_type: entry.type,
+                                pipe_name: entry.pipe_name,
+                              });
+                              await openNotificationSource(entry.source_url!);
+                            }}
+                            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            source
+                          </button>
+                        )}
+                        <button
+                          data-testid={`notification-bell-ask-ai-${entry.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            posthog.capture("notification_bell_ask_ai", {
+                              notification_type: entry.type,
+                              pipe_name: entry.pipe_name,
+                              title: entry.title,
+                            });
+                            setOpen(false);
+                            showChatWithPrefill({
+                              context: `notification from ${entry.pipe_name || "screenpipe"}:\n\n**${entry.title}**\n${entry.body}`,
+                              prompt: `tell me more about this: "${entry.title}"`,
+                              displayLabel: buildNotificationDisplayLabel(entry.title),
+                              autoSend: true,
+                              source: `notification-bell-${entry.id}`,
+                            });
+                          }}
+                          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <MessageSquare className="w-3 h-3" />
+                          ask ai
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

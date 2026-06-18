@@ -11,8 +11,8 @@
 //!
 //! Fix: ship a tiny bash shim that defines a `curl` shell function which
 //! auto-injects the Bearer header **only** when the target URL is the local
-//! screenpipe API (localhost:3030). Non-screenpipe calls pass through
-//! untouched — the token never leaks.
+//! screenpipe API (localhost:3030) or local app server (localhost:11435).
+//! Non-screenpipe calls pass through untouched — the token never leaks.
 //!
 //! The shim is sourced automatically by every `bash -c` subshell via the
 //! `BASH_ENV` env var, which spawning code sets on the child `Command`.
@@ -37,13 +37,13 @@ pub const WRAPPER_RELATIVE_PATH: &str = "pi-agent/bash-env.sh";
 
 /// Bash shell-init content sourced by every `bash -c` subshell.
 ///
-/// Only matches literal `localhost:3030`, `127.0.0.1:3030`, `[::1]:3030`
+/// Only matches literal localhost/loopback screenpipe API or app-server
 /// substrings in command arguments. If none match, `curl` runs unchanged.
 pub const WRAPPER_SCRIPT: &str = r#"# screenpipe — auto-injected by pi-agent bash subshells (do not edit by hand)
 # Transparently adds Authorization: Bearer to curl calls that target the
-# local screenpipe API, tags them with x-screenpipe-session (the chat/pipe
-# that owns this agent, from SCREENPIPE_SESSION_ID) so the owned-browser
-# sidebar can route navigations to the right chat, and — when
+# local screenpipe API/app server, tags them with x-screenpipe-session
+# (the chat/pipe that owns this agent, from SCREENPIPE_SESSION_ID) so
+# owned-browser and notification source links route to the right chat, and — when
 # SCREENPIPE_FILTER_PII=1 — rewrites any /search URL to include filter_pii=1
 # so responses are PII-redacted before Pi sees them. Other curl calls pass
 # through unchanged — the token never leaks to third-party hosts.
@@ -82,7 +82,7 @@ curl() {
 
   for arg in "$@"; do
     case "$arg" in
-      *localhost:3030*|*127.0.0.1:3030*|*'[::1]:3030'*)
+      *localhost:3030*|*127.0.0.1:3030*|*'[::1]:3030'*|*localhost:11435*|*127.0.0.1:11435*|*'[::1]:11435'*)
         has_local=1
         if [ "$add_filter" = "1" ]; then
           # Only /search responses contain user-visible text we want to redact.
@@ -226,8 +226,15 @@ mod tests {
 
     #[test]
     fn wrapper_script_injects_only_for_localhost_3030() {
-        // Smoke check the three matched forms; any new alias needs a line here.
-        for needle in ["localhost:3030", "127.0.0.1:3030", "[::1]:3030"] {
+        // Smoke check matched forms; any new alias needs a line here.
+        for needle in [
+            "localhost:3030",
+            "127.0.0.1:3030",
+            "[::1]:3030",
+            "localhost:11435",
+            "127.0.0.1:11435",
+            "[::1]:11435",
+        ] {
             assert!(
                 WRAPPER_SCRIPT.contains(needle),
                 "wrapper should match {} in curl URL args",
@@ -302,6 +309,24 @@ mod tests {
         assert!(
             local.contains("x-screenpipe-session: conv-abc-123"),
             "local API call must carry the session owner header; got: {local}"
+        );
+
+        let argv_notify = tmp.path().join("notify.argv");
+        let status = Command::new("bash")
+            .env("PATH", format!("{}:/usr/bin:/bin", fake_curl_dir.display()))
+            .env("BASH_ENV", &wrapper)
+            .env("CURL_ARGV_FILE", &argv_notify)
+            .env("SCREENPIPE_LOCAL_API_KEY", "sp-test")
+            .env("SCREENPIPE_SESSION_ID", "pipe:daily:7")
+            .arg("-c")
+            .arg("curl -X POST http://localhost:11435/notify")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let notify = std::fs::read_to_string(&argv_notify).unwrap();
+        assert!(
+            notify.contains("x-screenpipe-session: pipe:daily:7"),
+            "local notification call must carry the session owner header; got: {notify}"
         );
 
         // Third-party host → owner header must NOT leak.

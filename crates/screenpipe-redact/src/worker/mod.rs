@@ -5,11 +5,12 @@
 //! Background reconciliation worker.
 //!
 //! Runs on a separate tokio task off the capture hot path. Polls the
-//! database for un-redacted rows in the four target tables (OCR text,
-//! audio transcripts, accessibility text, clipboard) and writes
-//! redacted versions back. Mirrors the existing FTS / migration
-//! backfill workers in shape — pause / resume / status, idle-aware
-//! scheduling knobs, retry-with-backoff on transient errors.
+//! database for un-redacted rows across the target text surfaces (the
+//! consolidated `frames.full_text` search text, audio transcripts,
+//! accessibility text, typed/clipboard input, and per-element text) and
+//! writes redacted versions back. Mirrors the existing FTS
+//! / migration backfill workers in shape — pause / resume / status,
+//! idle-aware scheduling knobs, retry-with-backoff on transient errors.
 //!
 //! Deliberately newest-first. Users search recent activity; redacting
 //! oldest-first means the most-likely-to-be-queried rows have stale
@@ -42,26 +43,58 @@ pub use tables::{TargetTable, ALL_TARGET_TABLES};
 /// place, just shadowed by a redacted copy).
 #[derive(Clone)]
 pub struct WorkerConfig {
-    /// How many rows to redact per database round-trip.
+    /// How many rows to redact per database round-trip. Also the width of
+    /// each CPU burst: the redactor runs this many inferences back-to-back
+    /// before the worker cools down, so a smaller batch gives a finer,
+    /// flatter CPU curve at the cost of more round-trips.
     pub batch_size: u32,
-    /// Sleep between batches when the queue isn't empty.
+    /// Lower bound on the post-batch cooldown (and the minimum yield for a
+    /// tiny batch). The actual cooldown is derived from how long the batch
+    /// took — see [`max_active_fraction`](Self::max_active_fraction).
     pub idle_between_batches: Duration,
-    /// Sleep when the queue IS empty (poll interval).
+    /// Sleep when the queue IS empty (poll interval). Doubles as the upper
+    /// bound on the post-batch cooldown.
     pub poll_interval: Duration,
-    /// Tables to reconcile. Default: all five (ocr, audio, accessibility,
-    /// ui_events:keyboard, ui_events:clipboard).
+    /// Ceiling on the worker's wall-clock duty cycle while draining a
+    /// backlog. After each batch the worker sleeps in proportion to the
+    /// time it just spent redacting, so it works at most ~this fraction of
+    /// the time and (since redaction is CPU-bound) holds ~this fraction of
+    /// the cores it touches on average. 0.4 = work 40%, rest 60%. This is
+    /// what turns the backlog drain from a sustained multi-core spike into
+    /// a low, flat band. Clamped to [0.05, 1.0]; 1.0 leaves only the
+    /// `idle_between_batches` floor between batches.
+    pub max_active_fraction: f64,
+    /// Tables to reconcile. Default: all of [`ALL_TARGET_TABLES`]
+    /// (frames:full_text, audio, accessibility, ui_events:keyboard,
+    /// ui_events:clipboard, elements).
     pub tables: Vec<TargetTable>,
 }
 
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
-            batch_size: 32,
+            batch_size: 16,
             idle_between_batches: Duration::from_millis(50),
             poll_interval: Duration::from_secs(5),
+            max_active_fraction: 0.4,
             tables: ALL_TARGET_TABLES.to_vec(),
         }
     }
+}
+
+/// Cooldown to sleep after a batch that did work, so the worker holds a
+/// flat, bounded slice of CPU while draining a backlog instead of running
+/// batches back-to-back. Sleeps long enough that the time spent redacting
+/// is at most `max_active_fraction` of the work-plus-sleep cycle, clamped
+/// to [`idle_between_batches`, `poll_interval`].
+fn cooldown_after(worked: Duration, cfg: &WorkerConfig) -> Duration {
+    let frac = cfg.max_active_fraction.clamp(0.05, 1.0);
+    // sleep = worked * (1/frac - 1)  =>  worked / (worked + sleep) == frac
+    let multiplier = (1.0 / frac - 1.0).max(0.0);
+    worked
+        .mul_f64(multiplier)
+        .max(cfg.idle_between_batches)
+        .min(cfg.poll_interval)
 }
 
 /// Public status the worker exposes (used by Settings UI).
@@ -188,12 +221,13 @@ impl Worker {
             for table in &self.cfg.tables {
                 // Race the table work against shutdown so a long redact batch
                 // doesn't hold us through tokio teardown.
+                let batch_start = std::time::Instant::now();
                 let result = match shutdown.as_ref() {
                     Some(n) => tokio::select! {
-                        _r = self.process_table(*table) => Some(_r),
+                        _r = self.process_one(*table) => Some(_r),
                         _ = n.notified() => None,
                     },
-                    None => Some(self.process_table(*table).await),
+                    None => Some(self.process_one(*table).await),
                 };
                 match result {
                     None => {
@@ -203,6 +237,23 @@ impl Worker {
                     Some(Ok(n)) if n > 0 => {
                         any_work = true;
                         corruption_logged = false; // DB readable again
+
+                        // Duty-cycle cooldown — the lever that keeps the CPU
+                        // curve flat. The redactor just ran `n` inferences
+                        // back-to-back on a few cores; with no pause,
+                        // consecutive batches pin those cores for the whole
+                        // backlog drain (the big screenpipe CPU spikes users
+                        // report). Sleeping in proportion to the time this
+                        // batch took holds the worker at `max_active_fraction`
+                        // of wall-clock, so the drain reads as a low flat band
+                        // rather than a sustained multi-core burst. Cooling
+                        // down per-table (not once per full sweep) keeps each
+                        // burst one batch wide.
+                        let nap = cooldown_after(batch_start.elapsed(), &self.cfg);
+                        if race(time::sleep(nap), shutdown.as_ref()).await.is_none() {
+                            info!("redact worker: shutdown signal received, exiting");
+                            return;
+                        }
                     }
                     Some(Ok(_)) => {
                         corruption_logged = false; // DB readable again
@@ -246,12 +297,14 @@ impl Worker {
                 }
             }
 
-            let nap = if any_work {
-                self.cfg.idle_between_batches
-            } else {
-                self.cfg.poll_interval
-            };
-            if race(time::sleep(nap), shutdown.as_ref()).await.is_none() {
+            // Nothing anywhere had work this sweep — idle at the poll
+            // interval. Batches that DID work already cooled down inline
+            // above, so there's no second nap to add here.
+            if !any_work
+                && race(time::sleep(self.cfg.poll_interval), shutdown.as_ref())
+                    .await
+                    .is_none()
+            {
                 info!("redact worker: shutdown signal received, exiting");
                 return;
             }
@@ -261,6 +314,97 @@ impl Worker {
     async fn set_paused(&self, paused: bool) {
         let mut s = self.status.lock().await;
         s.paused = paused;
+    }
+
+    /// Dispatch one table. `FullText` gets the per-frame path that also
+    /// propagates to `accessibility_text` from a single detection
+    /// (screenpipe/website#291); everything else uses the generic
+    /// per-column path.
+    async fn process_one(&self, table: TargetTable) -> Result<u32, anyhow::Error> {
+        match table {
+            TargetTable::FullText => self.process_frames_fulltext().await,
+            other => self.process_table(other).await,
+        }
+    }
+
+    /// Redact the per-frame `full_text` search surface and, in the SAME
+    /// detection pass, propagate the result to that frame's
+    /// `accessibility_text` (a coherent substring of `full_text`) — so the
+    /// model runs once for both columns instead of twice. Falls back to
+    /// plain `full_text` redaction (leaving `accessibility_text` to its own
+    /// pass) when the redactor can't yield a value map (e.g. the span-less
+    /// enclave). Returns the number of column writes performed.
+    async fn process_frames_fulltext(&self) -> Result<u32, anyhow::Error> {
+        let rows =
+            tables::fetch_unredacted_frames_fulltext(&self.pool, self.cfg.batch_size).await?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        debug!(
+            count = rows.len(),
+            "redacting frame full_text batch (+ accessibility propagation)"
+        );
+
+        let mut writes = 0u32;
+        let mut propagated = 0u32;
+        for row in &rows {
+            match self.redactor.redact_with_map(&row.full_text).await? {
+                Some((out, map)) => {
+                    tables::write_redacted(
+                        &self.pool,
+                        TargetTable::FullText,
+                        row.id,
+                        &out.redacted,
+                    )
+                    .await?;
+                    writes += 1;
+                    // Propagate to the sibling accessibility_text if it
+                    // still needs it — no second detection. accessibility_text
+                    // ⊆ full_text, so all its PII values are in `map`.
+                    if let Some(acc) = row.accessibility_text.as_deref() {
+                        if !acc.is_empty() && row.accessibility_redacted_at.is_none() {
+                            let redacted = map.apply(acc);
+                            tables::write_redacted(
+                                &self.pool,
+                                TargetTable::Accessibility,
+                                row.id,
+                                &redacted,
+                            )
+                            .await?;
+                            writes += 1;
+                            propagated += 1;
+                        }
+                    }
+                }
+                None => {
+                    // Span-less / no-map redactor: redact full_text the
+                    // plain way; accessibility_text is left to the
+                    // Accessibility pass.
+                    let out = self.redactor.redact(&row.full_text).await?;
+                    tables::write_redacted(
+                        &self.pool,
+                        TargetTable::FullText,
+                        row.id,
+                        &out.redacted,
+                    )
+                    .await?;
+                    writes += 1;
+                }
+            }
+        }
+
+        if propagated > 0 {
+            debug!(
+                propagated,
+                "accessibility_text redacted via full_text propagation (no extra model passes)"
+            );
+        }
+
+        let mut s = self.status.lock().await;
+        s.redacted_total += writes as u64;
+        s.last_redacted_at = Some(chrono::Utc::now());
+        s.last_error = None;
+        Ok(writes)
     }
 
     /// Pull a batch of un-redacted rows for one table, redact them,

@@ -20,6 +20,16 @@ describe('resolveModelAlias', () => {
 		expect(resolveModelAlias('glm-4.7')).toBe('glm-4.7');
 	});
 
+	// SCREENPIPE-AI-PROXY-1P: OpenRouter only serves the dated qwen3.5
+	// snapshots; the bare ids sit in tier allow-lists and older client
+	// presets and came back "not a valid model ID".
+	it('pins bare qwen3.5 ids to the dated OpenRouter snapshots', () => {
+		expect(resolveModelAlias('qwen/qwen3.5-flash')).toBe('qwen/qwen3.5-flash-02-23');
+		expect(resolveModelAlias('qwen/qwen3.5-397b')).toBe('qwen/qwen3.5-397b-a17b');
+		// The dated ids themselves pass through untouched.
+		expect(resolveModelAlias('qwen/qwen3.5-flash-02-23')).toBe('qwen/qwen3.5-flash-02-23');
+	});
+
 	// Regression for Sentry issue 7421816872: 4512 events / 573 users between
 	// Apr 18-26 from "Unknown Vertex MaaS model: deepseek/deepseek-chat".
 	// createProvider was reassigning a local `model` from the alias map, but

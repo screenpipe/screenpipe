@@ -96,6 +96,14 @@ pub struct PairedCaptureResult {
     pub captured_at: DateTime<Utc>,
     /// Total time for the paired capture
     pub duration_ms: u64,
+    /// Wall-clock of the OCR step in ms — `Some` only when OCR actually ran
+    /// (a11y text was missing/thin or the app prefers OCR). `None` means the
+    /// accessibility tree supplied the text and OCR was skipped. The capture
+    /// loop feeds this to `PipelineMetrics::record_ocr`.
+    pub ocr_duration_ms: Option<u64>,
+    /// True when OCR ran but produced (near-)empty text — an OCR-quality
+    /// failure proxy. False when OCR didn't run or returned usable text.
+    pub ocr_was_empty: bool,
     /// App name from accessibility tree or OCR
     pub app_name: Option<String>,
     /// Window name from accessibility tree or OCR
@@ -174,8 +182,13 @@ pub async fn paired_capture(
             .map(|s| a11y_content_is_thin(s, ctx.window_name, ctx.browser_url, ctx.app_name))
             .unwrap_or(false);
 
-    // Run OCR when: no a11y text, app prefers OCR, OR a11y text is thin (hybrid)
-    let (ocr_text, ocr_text_json) = if !has_accessibility_text || a11y_is_thin {
+    // Run OCR when: no a11y text, app prefers OCR, OR a11y text is thin (hybrid).
+    // Time the OCR step so the caller can feed `PipelineMetrics::record_ocr`
+    // (ocr_completed / avg_ocr_latency_ms). `ocr_duration_ms` is Some only when
+    // OCR actually ran — None when accessibility text was sufficient.
+    let ocr_ran = !has_accessibility_text || a11y_is_thin;
+    let ocr_started = Instant::now();
+    let (ocr_text, ocr_text_json) = if ocr_ran {
         // Windows native OCR is async, so call it directly (not inside spawn_blocking)
         #[cfg(target_os = "windows")]
         let raw = {
@@ -219,6 +232,16 @@ pub async fn paired_capture(
     } else {
         (String::new(), "[]".to_string())
     };
+    // Capture the OCR wall-clock right after the block — only meaningful when
+    // OCR actually ran.
+    let ocr_duration_ms = if ocr_ran {
+        Some(ocr_started.elapsed().as_millis() as u64)
+    } else {
+        None
+    };
+    // True when OCR ran but produced (near-)empty text — a quality-failure
+    // proxy surfaced via `ocr_empty` telemetry.
+    let ocr_was_empty = ocr_ran && ocr_text.trim().is_empty();
 
     // --- Extract data from tree snapshot, fall back to OCR text ---
     // When app_prefers_ocr (terminals), always prefer OCR over accessibility tree
@@ -358,6 +381,8 @@ pub async fn paired_capture(
         capture_trigger: ctx.capture_trigger.to_string(),
         captured_at: ctx.captured_at,
         duration_ms,
+        ocr_duration_ms,
+        ocr_was_empty,
         app_name: ctx.app_name.map(String::from),
         window_name: ctx.window_name.map(String::from),
         browser_url: ctx.browser_url.map(String::from),

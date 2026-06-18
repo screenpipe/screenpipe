@@ -53,6 +53,7 @@
 
 ## news
 
+- 06/10 - **we updated our license to keep screenpipe sustainable** — more funding, more shipping, better product
 - 05/29 - **we released an [alpha version of our AI PII model](https://screenpipe.github.io/screenleak/) outperforming Google, Microsoft, and OpenAI models** on computer recording data and running at 9ms on consumer device
 - 05/14 - **we joined YC S26** 
 
@@ -86,7 +87,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 ## install
 
-[download the desktop app](https://screenpi.pe/onboarding) — one-time purchase, all features, auto-updates
+[download the desktop app](https://screenpi.pe/onboarding) — all features, auto-updates
 
 or run the CLI:
 
@@ -109,7 +110,7 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 - 5-10% cpu usage
 - 0.5-3gb ram
 - ~20gb storage/month
-- filters (window, app, chrome extensions, passwords, PII)
+- filters (window, app, chrome extensions, passwords, proprietary AI PII model)
 - optional encryption at rest
 - works offline
 
@@ -235,9 +236,6 @@ screenpipe runs as an MCP server, allowing AI assistants to query your screen hi
 
 ### Developer API
 Full REST API running on localhost (default port 3030). Endpoints for searching screen content, audio, frames. Raw SQL access to the underlying SQLite database. JavaScript/TypeScript SDK available.
-
-### Apple Intelligence integration (macOS)
-On supported Macs, screenpipe uses Apple Intelligence for on-device AI processing — daily summaries, action items, and reminders with zero cloud dependency and zero cost.
 
 ## Privacy and security
 

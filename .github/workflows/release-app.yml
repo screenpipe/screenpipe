@@ -168,7 +168,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # GitHub-hosted macOS 26 runner for Apple Silicon + Apple Intelligence
+          # GitHub-hosted macOS 26 runner for Apple Silicon
           - platform: ${{ needs.check_commit.outputs.macos_arm_runner || 'macos-latest' }}
             args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml"
             target: aarch64-apple-darwin
@@ -200,29 +200,6 @@ jobs:
     runs-on: ${{ matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}
     timeout-minutes: 120
     steps:
-      - name: Detect Xcode version and set Apple Intelligence feature
-        if: matrix.os_type == 'macos'
-        id: detect-xcode
-        shell: bash
-        run: |
-          # Re-enabled: weak-linking fix in binary crate build.rs ensures
-          # FoundationModels.framework is LC_LOAD_WEAK_DYLIB (not LC_LOAD_DYLIB).
-          # DYLD skips the framework on macOS < 26 instead of crashing.
-          # Runtime guard (is_macos_26_or_later) prevents any FFI calls.
-          # Tested: binary built on macOS 26 SDK runs on macOS 15.5 without crash.
-          SDK_PATH=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || echo "")
-          SDK_SETTINGS="${SDK_PATH}/SDKSettings.json"
-          if [ -f "$SDK_SETTINGS" ] && grep -q '"26\.' "$SDK_SETTINGS"; then
-            echo "has_apple_intelligence=true" >> $GITHUB_OUTPUT
-            echo "🧠 macOS 26+ SDK detected - Apple Intelligence enabled"
-          elif [ -d "${SDK_PATH}/System/Library/Frameworks/FoundationModels.framework" ]; then
-            echo "has_apple_intelligence=true" >> $GITHUB_OUTPUT
-            echo "🧠 FoundationModels.framework found - Apple Intelligence enabled"
-          else
-            echo "has_apple_intelligence=false" >> $GITHUB_OUTPUT
-            echo "ℹ️ macOS SDK < 26 - Apple Intelligence not available (stub will be used)"
-          fi
-
       - name: Enable Git long paths on Windows
         if: matrix.os_type == 'windows'
         shell: powershell
@@ -494,7 +471,11 @@ jobs:
           } else {
             $arch = 'x64'
           }
-          $version = '1.22.0'
+          # ort rc.12 requests ONNX Runtime API 24, which needs onnxruntime >= 1.24.
+          # 1.22.0 only provides API 22 → "API version 24 not available" panic at
+          # runtime (ONNX init fails: VAD/diarization/PII broken). Match ci.yml's
+          # 1.24.2. See #4173/#4176.
+          $version = '1.24.2'
           $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-$arch-$version.zip"
           $zipFile = "onnxruntime-win-$arch-$version.zip"
           $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-$arch-$version"
@@ -503,6 +484,18 @@ jobs:
           7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
           Write-Host "ONNX Runtime extracted to $extractDir"
           Get-ChildItem "$extractDir/lib" | ForEach-Object { Write-Host $_.Name }
+          # ARM64 has no pyke prebuilt and load-dynamic hangs with ort rc.12
+          # (#4173/#4176), so link the MS DLL at build time. ort-sys's `system`
+          # strategy wants the dir that DIRECTLY contains onnxruntime.lib — the
+          # `lib` subdir, not the extract root. Set these ONLY for ARM64; x64
+          # must stay on download-binaries (no ORT_STRATEGY/ORT_LIB_LOCATION).
+          if ($arch -eq 'arm64') {
+            $libDir = (Resolve-Path "$extractDir/lib").Path
+            "ORT_STRATEGY=system"      | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "ORT_LIB_LOCATION=$libDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "$libDir"                  | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            Write-Host "ARM64: ORT_STRATEGY=system, ORT_LIB_LOCATION=$libDir"
+          }
 
       - name: Install Ninja (ARM64)
         if: matrix.os_type == 'windows' && matrix.target == 'aarch64-pc-windows-msvc'
@@ -694,11 +687,6 @@ jobs:
         shell: bash
         run: |
           ARGS="${{ matrix.tauri-args }}"
-          if [[ "${{ steps.detect-xcode.outputs.has_apple_intelligence }}" == "true" && "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            # Apple Intelligence only works on aarch64 - the crate exports nothing on x86_64
-            ARGS=$(echo "$ARGS" | sed 's/--features \([^ ]*\)/--features \1,apple-intelligence/')
-            echo "🧠 Tauri build will include Apple Intelligence"
-          fi
           echo "args=$ARGS" >> $GITHUB_OUTPUT
           echo "Final tauri args: $ARGS"
 
@@ -891,6 +879,10 @@ jobs:
           GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2' || '-DGGML_NATIVE=OFF' }}
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
+          # ORT link strategy is set per-arch in the "Download ONNX Runtime" step
+          # via $GITHUB_ENV (ARM64 → system + ORT_LIB_LOCATION; x64 → unset, uses
+          # download-binaries). Setting them inline here broke x64 because empty
+          # env values are still "set" and ort-sys chokes on them.
         run: bunx tauri build --verbose ${{ matrix.tauri-args }}
 
       - name: Sign NSIS installer with SSL.com EV (Windows)
@@ -1227,6 +1219,109 @@ jobs:
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG"
           codesign --verify --verbose=2 "$DMG"
           echo "✅ ${DMG##*/} re-created + signed from patched .app (with Applications symlink)"
+
+      - name: Inject libonnxruntime.dylib into Contents/MacOS/ + re-sign (Intel macOS)
+        # ort rc.12 ships no x86_64-apple-darwin prebuilt (pyke + upstream ONNX
+        # Runtime are arm64-only since ~1.20), so the Intel build links ONNX
+        # Runtime via `load-dynamic` and loads libonnxruntime.dylib at runtime.
+        # ort's loader resolves the bare "libonnxruntime.dylib" relative to the
+        # executable dir (Contents/MacOS/), so the dylib must sit next to the
+        # binary — same constraint, and same inject + re-sign + rebuild-DMG
+        # flow, as the mlx.metallib step above. Must run BEFORE notarization.
+        #
+        # Source: the Homebrew onnxruntime bottle (x86_64, 1.26.0), pinned by
+        # immutable ghcr blob digest (QQ== is Homebrew's anonymous ghcr token).
+        # ort only warns (never errors) when the dylib is newer than its target
+        # 1.24, so the 1.26 build is accepted.
+        if: matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          APP_DIR="${BUNDLE_DIR}/macos"
+
+          shopt -s nullglob
+          apps=( "${APP_DIR}"/*.app )
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "no .app to patch — skipping libonnxruntime inject"
+            exit 0
+          fi
+          APP="${apps[0]}"
+
+          # Fetch the x86_64 ONNX Runtime dylib from the Homebrew bottle
+          # (content-addressed = immutable; won't move if the formula bumps).
+          ORT_BLOB="https://ghcr.io/v2/homebrew/core/onnxruntime/blobs/sha256:afe69511a14f1b9351074b0bf9e5de65858d25a6795ab7f228ba78b149079c3d"
+          TMP="${RUNNER_TEMP:-/tmp}/ort-x64-$$"
+          mkdir -p "$TMP"
+          echo "=== Downloading x86_64 libonnxruntime.dylib (Homebrew bottle) ==="
+          curl -fsSL -H "Authorization: Bearer QQ==" "$ORT_BLOB" -o "$TMP/bottle.tar.gz"
+          tar -xzf "$TMP/bottle.tar.gz" -C "$TMP"
+          SRC_DYLIB="$(find "$TMP" -name 'libonnxruntime*.dylib' | head -1)"
+          if [ -z "$SRC_DYLIB" ]; then
+            echo "ERROR: no libonnxruntime dylib found in bottle" >&2
+            exit 1
+          fi
+          if ! lipo -info "$SRC_DYLIB" | grep -q 'x86_64'; then
+            echo "ERROR: dylib is not x86_64: $(lipo -info "$SRC_DYLIB")" >&2
+            exit 1
+          fi
+          DEST="${APP}/Contents/MacOS/libonnxruntime.dylib"
+          echo "=== Injecting $(basename "$SRC_DYLIB") -> Contents/MacOS/libonnxruntime.dylib ==="
+          cp "$SRC_DYLIB" "$DEST"
+          chmod 0644 "$DEST"
+
+          # Re-unlock the keychain before re-signing — same retry pattern the
+          # build + metallib steps use, since codesign needs the cert.
+          BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
+          if [ -f "$BUILD_KC" ]; then
+            security unlock-keychain -p "build_password" "$BUILD_KC"
+            security set-keychain-settings -t 3600 "$BUILD_KC"
+          fi
+
+          # Sign the injected dylib (hardened runtime + timestamp, required for
+          # notarization), then re-sign the whole bundle so the cdhash covers it.
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$DEST"
+          codesign --force --deep \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --entitlements apps/screenpipe-app-tauri/src-tauri/entitlements.plist \
+            --timestamp \
+            "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          echo "✅ ${APP##*/} re-signed with libonnxruntime.dylib in Contents/MacOS/"
+
+          # Rebuild the DMG so it ships the patched .app (same cheaper
+          # delete + recreate-from-staging flow as the metallib step, with the
+          # Applications symlink so drag-to-install still works).
+          DMG_DIR="${BUNDLE_DIR}/dmg"
+          dmgs=( "${DMG_DIR}"/*.dmg )
+          if [ ${#dmgs[@]} -eq 0 ]; then
+            echo "no DMG produced — skipping DMG patch"
+            rm -rf "$TMP"
+            exit 0
+          fi
+          DMG="${dmgs[0]}"
+          echo "=== Replacing DMG: ${DMG##*/} ==="
+          df -h "$DMG_DIR" | tail -1
+          rm -f "$DMG"
+          DMG_STAGE="${RUNNER_TEMP:-/tmp}/screenpipe-dmg-stage-$$"
+          mkdir -p "$DMG_STAGE"
+          cp -R "$APP" "$DMG_STAGE/"
+          ln -s /Applications "$DMG_STAGE/Applications"
+          hdiutil create \
+            -volname "Screenpipe" \
+            -srcfolder "$DMG_STAGE" \
+            -ov \
+            -format UDZO \
+            -imagekey zlib-level=9 \
+            "$DMG"
+          rm -rf "$DMG_STAGE" "$TMP"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG"
+          codesign --verify --verbose=2 "$DMG"
+          echo "✅ ${DMG##*/} re-created + signed from patched .app (with libonnxruntime.dylib)"
 
       - name: Clean up signing cert from login keychain (macOS)
         if: matrix.os_type == 'macos' && always()

@@ -21,6 +21,7 @@ use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    routes::search::is_screenpipe_app,
     server::AppState,
     video_cache::{AudioEntry, DeviceFrame, FrameMetadata, TimeSeriesFrame},
 };
@@ -28,6 +29,7 @@ use crate::{
 use super::websocket::{try_acquire_ws_connection, WsConnectionGuard};
 
 use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::time::Instant as TokioInstant;
 
 #[derive(Deserialize)]
 pub struct StreamFramesRequest {
@@ -44,6 +46,8 @@ pub struct StreamFramesRequest {
 
 const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
 const DEFAULT_STREAM_FRAME_LIMIT: usize = MAX_STREAM_FRAME_LIMIT;
+const STREAM_BATCH_CAPACITY: usize = 100;
+const STREAM_BATCH_FLUSH_DELAY: Duration = Duration::from_millis(100);
 
 fn stream_frame_limit(requested: Option<usize>) -> usize {
     requested
@@ -74,6 +78,11 @@ pub struct DeviceMetadata {
     pub file_path: String,
     pub app_name: String,
     pub window_name: String,
+    /// Neutral name for the frame's text. Despite living next to `ocr_text`,
+    /// the content is accessibility-derived for most captures. Prefer this.
+    pub text: String,
+    /// @deprecated Legacy alias for `text`, kept for backward compatibility.
+    /// Always equal to `text`. Will be removed in a future major version.
     pub ocr_text: String,
     pub browser_url: Option<String>,
 }
@@ -111,6 +120,7 @@ impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
                             file_path: device_frame.metadata.file_path,
                             app_name: device_frame.metadata.app_name,
                             window_name: device_frame.metadata.window_name,
+                            text: device_frame.metadata.ocr_text.clone(),
                             ocr_text: device_frame.metadata.ocr_text,
                             browser_url: device_frame.metadata.browser_url,
                         },
@@ -169,7 +179,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
         .ocr_entries
         .into_iter()
         // Filter out screenpipe frames at display time
-        .filter(|device_data| !device_data.app_name.to_lowercase().contains("screenpipe"))
+        .filter(|device_data| !is_screenpipe_app(&device_data.app_name))
         .map(|device_data| DeviceFrame {
             device_id: device_data.device_name,
             frame_id: chunk.frame_id,
@@ -456,8 +466,8 @@ async fn handle_stream_frames_socket(
 
     // Send frames to the client with batching + live cache subscription
     let send_handle = tokio::spawn(async move {
-        let mut frame_buffer = Vec::with_capacity(100);
-        let mut buffer_timer = tokio::time::interval(Duration::from_millis(100));
+        let mut frame_buffer = Vec::with_capacity(STREAM_BATCH_CAPACITY);
+        let mut next_batch_flush_at: Option<TokioInstant> = None;
         let mut keepalive_timer = tokio::time::interval(Duration::from_secs(30));
 
         // Subscribe to live frame updates from the hot cache
@@ -483,12 +493,17 @@ async fn handle_stream_frames_socket(
                                     .await;
                                 continue;
                             }
-                            frame_buffer.push(StreamTimeSeriesResponse::from(tsf));
-                            if frame_buffer.len() >= 100 {
+                            push_stream_batch(
+                                &mut frame_buffer,
+                                StreamTimeSeriesResponse::from(tsf),
+                                &mut next_batch_flush_at,
+                            );
+                            if frame_buffer.len() >= STREAM_BATCH_CAPACITY {
                                 if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
                                     error!("failed to send batch: {}", e);
                                     break;
                                 }
+                                next_batch_flush_at = None;
                             }
                         }
                         None => {
@@ -516,7 +531,7 @@ async fn handle_stream_frames_socket(
                             drop(sent);
 
                             // Skip screenpipe's own frames
-                            if hot_frame.app_name.to_lowercase().contains("screenpipe") {
+                            if is_screenpipe_app(&hot_frame.app_name) {
                                 continue;
                             }
 
@@ -536,6 +551,7 @@ async fn handle_stream_frames_socket(
                                         file_path: hot_frame.snapshot_path.to_string(),
                                         app_name: hot_frame.app_name.to_string(),
                                         window_name: hot_frame.window_name.to_string(),
+                                        text: hot_frame.ocr_text_preview.to_string(),
                                         ocr_text: hot_frame.ocr_text_preview.to_string(),
                                         browser_url: hot_frame.browser_url.as_deref().map(String::from),
                                     },
@@ -557,12 +573,17 @@ async fn handle_stream_frames_socket(
                                 }],
                             };
 
-                            frame_buffer.push(response);
-                            if frame_buffer.len() >= 100 {
+                            push_stream_batch(
+                                &mut frame_buffer,
+                                response,
+                                &mut next_batch_flush_at,
+                            );
+                            if frame_buffer.len() >= STREAM_BATCH_CAPACITY {
                                 if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
                                     error!("failed to send live batch: {}", e);
                                     break;
                                 }
+                                next_batch_flush_at = None;
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -618,13 +639,12 @@ async fn handle_stream_frames_socket(
                 }
 
                 // Flush partial batches
-                _ = buffer_timer.tick() => {
-                    if !frame_buffer.is_empty() {
-                        if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
-                            error!("failed to send batch: {}", e);
-                            break;
-                        }
+                _ = pending_batch_flush(next_batch_flush_at) => {
+                    if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                        error!("failed to send batch: {}", e);
+                        break;
                     }
+                    next_batch_flush_at = None;
                 }
 
                 // Keep-alive
@@ -700,6 +720,24 @@ async fn fetch_and_process_frames_with_tracking(
     Ok(latest_timestamp)
 }
 
+async fn pending_batch_flush(next_flush_at: Option<TokioInstant>) {
+    match next_flush_at {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+fn push_stream_batch(
+    buffer: &mut Vec<StreamTimeSeriesResponse>,
+    response: StreamTimeSeriesResponse,
+    next_flush_at: &mut Option<TokioInstant>,
+) {
+    buffer.push(response);
+    if buffer.len() == 1 {
+        *next_flush_at = Some(TokioInstant::now() + STREAM_BATCH_FLUSH_DELAY);
+    }
+}
+
 // Helper function to send batched frames
 async fn send_batch(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
@@ -755,6 +793,13 @@ mod tests {
             machine_id: None,
             ocr_entries,
             audio_entries,
+        }
+    }
+
+    fn test_stream_response() -> StreamTimeSeriesResponse {
+        StreamTimeSeriesResponse {
+            timestamp: chrono::Utc::now(),
+            devices: Vec::new(),
         }
     }
 
@@ -839,6 +884,48 @@ mod tests {
             stream_frame_limit(Some(MAX_STREAM_FRAME_LIMIT + 1)),
             MAX_STREAM_FRAME_LIMIT
         );
+    }
+
+    #[test]
+    fn test_create_time_series_frame_filters_screenpipe_app_names() {
+        let mut frame_data = create_test_frame_data(2, 0);
+        frame_data.ocr_entries[0].app_name = "SCREENPIPE Desktop".to_string();
+        frame_data.ocr_entries[1].app_name = "Notion".to_string();
+
+        let result = create_time_series_frame(frame_data);
+
+        assert_eq!(result.frame_data.len(), 1);
+        assert_eq!(result.frame_data[0].metadata.app_name, "Notion");
+    }
+
+    #[test]
+    fn test_stream_batch_deadline_is_armed_once() {
+        let mut buffer = Vec::with_capacity(STREAM_BATCH_CAPACITY);
+        let mut next_flush_at = None;
+
+        push_stream_batch(&mut buffer, test_stream_response(), &mut next_flush_at);
+
+        let first_deadline = next_flush_at.expect("first frame should arm flush deadline");
+        assert_eq!(buffer.len(), 1);
+
+        push_stream_batch(&mut buffer, test_stream_response(), &mut next_flush_at);
+
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(next_flush_at, Some(first_deadline));
+    }
+
+    #[tokio::test]
+    async fn test_pending_batch_flush_only_waits_when_armed() {
+        let idle_result =
+            tokio::time::timeout(Duration::from_millis(10), pending_batch_flush(None)).await;
+        assert!(idle_result.is_err());
+
+        tokio::time::timeout(
+            Duration::from_millis(10),
+            pending_batch_flush(Some(TokioInstant::now())),
+        )
+        .await
+        .expect("armed flush should complete");
     }
 
     /// TEST: Audio entries with no OCR entries should create a placeholder frame

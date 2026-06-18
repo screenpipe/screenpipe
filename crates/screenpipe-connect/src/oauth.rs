@@ -100,6 +100,28 @@ pub struct OAuthConfig {
     pub redirect_uri_override: Option<&'static str>,
 }
 
+/// One user-selectable access level for an OAuth integration.
+///
+/// Lets the user pick *how much* to grant at connect time (e.g. Slack
+/// send-only vs send+read). The scope strings stay here, server-side — the
+/// frontend only passes a variant `id`, so it can never request arbitrary
+/// scopes. An integration exposes its variants via
+/// [`crate::connections::Integration::oauth_scope_variants`]; when empty, the
+/// connect flow uses [`OAuthConfig::extra_auth_params`] verbatim (no choice).
+pub struct ScopeVariant {
+    /// Stable id passed from the UI (e.g. "send", "read_write").
+    pub id: &'static str,
+    /// Short label shown in the UI.
+    pub label: &'static str,
+    /// One-line description of what this access level grants.
+    pub description: &'static str,
+    /// Auth params used *instead of* `OAuthConfig::extra_auth_params` when this
+    /// variant is selected (e.g. a wider `user_scope` value).
+    pub params: &'static [(&'static str, &'static str)],
+    /// Whether this is the default selection.
+    pub default: bool,
+}
+
 // ---------------------------------------------------------------------------
 // SecretStore key helper
 // ---------------------------------------------------------------------------
@@ -925,13 +947,23 @@ pub async fn refresh_token_instance(
     let mut attempt = 0u8;
     let resp: Value = loop {
         attempt += 1;
+        let mut refresh_body = serde_json::json!({
+            "integration_id": integration_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_tok,
+        });
+        // Per-account providers (Zendesk) host their token endpoint on the
+        // customer's subdomain. Echo the stored routing field so the proxy can
+        // rebuild that URL on refresh; harmless for every other provider.
+        if let (Some(sub), Some(obj)) = (
+            stored.get("subdomain").and_then(|v| v.as_str()),
+            refresh_body.as_object_mut(),
+        ) {
+            obj.insert("subdomain".to_string(), Value::from(sub));
+        }
         let raw = client
             .post(EXCHANGE_PROXY_URL)
-            .json(&serde_json::json!({
-                "integration_id": integration_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_tok,
-            }))
+            .json(&refresh_body)
             .send()
             .await?;
         let status = raw.status();
@@ -1061,6 +1093,25 @@ pub async fn get_valid_token_instance(
     if let Some(token) = read_oauth_token_instance(store, integration_id, instance).await {
         return Some(token);
     }
+    // No token stored at all (never connected, or an interrupted OAuth flow
+    // that never reached the token write): a refresh cannot possibly succeed,
+    // so don't attempt one and don't WARN. Callers poll this path on a timer
+    // (the app's 60s calendar publisher, status checks), and the old
+    // unconditional WARN ("oauth refresh failed ...: no stored token") filled
+    // user log bundles twice a minute forever. This is an expected state, not
+    // a failure — keep it at debug. Real refresh failures (a token exists but
+    // the provider rejected it) still WARN below.
+    if load_oauth_json_with_instance(store, integration_id, instance)
+        .await
+        .is_none()
+    {
+        tracing::debug!(
+            "oauth: no stored token for {}(instance={:?}) — skipping refresh",
+            integration_id,
+            instance,
+        );
+        return None;
+    }
     match refresh_token_instance(store, client, integration_id, instance).await {
         Ok(token) => Some(token),
         Err(e) => {
@@ -1149,6 +1200,22 @@ mod tests {
     // never matches a real stored file on the developer's machine. Without
     // this, tests would pass/fail based on whether the tester happens to have
     // gmail connected locally.
+
+    #[tokio::test]
+    async fn get_valid_token_with_no_stored_token_returns_none_without_refresh() {
+        // Never-connected integration: there is nothing to refresh. The old
+        // path attempted a refresh anyway, hit "no stored token", and WARNed —
+        // and because the app polls calendar endpoints every 60s, that WARN
+        // (plus the resulting 5xx) repeated twice a minute in user logs
+        // forever. The short-circuit returns None before any network attempt
+        // (this test performs no real HTTP: with the pre-check the exchange
+        // proxy is never contacted).
+        let store = mem_store().await;
+        let client = reqwest::Client::new();
+        let token =
+            get_valid_token_instance(Some(&store), &client, "_t_never_connected", None).await;
+        assert!(token.is_none());
+    }
 
     #[tokio::test]
     async fn load_with_explicit_instance_hits_exact_key() {
@@ -2059,14 +2126,24 @@ pub async fn exchange_code(
     integration_id: &str,
     code: &str,
     redirect_uri: &str,
+    extra: Option<&serde_json::Map<String, Value>>,
 ) -> Result<Value> {
+    // `extra` carries provider-specific routing fields the proxy needs to build
+    // the token URL — e.g. Zendesk's `subdomain`, whose token endpoint lives on
+    // the customer's own subdomain rather than a central host.
+    let mut payload = serde_json::json!({
+        "integration_id": integration_id,
+        "code":           code,
+        "redirect_uri":   redirect_uri,
+    });
+    if let (Some(extra), Some(obj)) = (extra, payload.as_object_mut()) {
+        for (k, v) in extra {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
     let resp = client
         .post(EXCHANGE_PROXY_URL)
-        .json(&serde_json::json!({
-            "integration_id": integration_id,
-            "code":           code,
-            "redirect_uri":   redirect_uri,
-        }))
+        .json(&payload)
         .send()
         .await?;
     let status = resp.status();

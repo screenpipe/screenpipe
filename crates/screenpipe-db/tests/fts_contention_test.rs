@@ -78,8 +78,8 @@ mod fts_contention_tests {
 
         // Pre-read all data OUTSIDE any write transaction
         let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT frame_id, text, COALESCE(app_name, ''), COALESCE(window_name, '') \
-             FROM ocr_text WHERE text IS NOT NULL AND text != '' AND frame_id IS NOT NULL \
+            "SELECT id AS frame_id, full_text AS text, COALESCE(app_name, ''), COALESCE(window_name, '') \
+             FROM frames WHERE full_text IS NOT NULL AND full_text != '' AND id IS NOT NULL \
              ORDER BY rowid LIMIT 200",
         )
         .fetch_all(&db.pool)
@@ -171,8 +171,8 @@ mod fts_contention_tests {
 
         // Pre-read FTS data outside any tx
         let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT frame_id, text, COALESCE(app_name, ''), COALESCE(window_name, '') \
-             FROM ocr_text WHERE text IS NOT NULL AND text != '' AND frame_id IS NOT NULL \
+            "SELECT id AS frame_id, full_text AS text, COALESCE(app_name, ''), COALESCE(window_name, '') \
+             FROM frames WHERE full_text IS NOT NULL AND full_text != '' AND id IS NOT NULL \
              ORDER BY rowid LIMIT 200",
         )
         .fetch_all(&db.pool)

@@ -227,8 +227,9 @@ pub fn start(app: AppHandle) {
                 }));
             }
             // Prewarm fires before the meeting row exists; the HD action
-            // uses a timer-bound fallback so it's still safe to click.
-            if let Some(hd) = build_hd_action(&prewarm_app, None) {
+            // uses a timer-bound fallback so it's still safe to click. No
+            // note deeplink yet — keeps the plain "+ HD" label.
+            if let Some(hd) = build_hd_action(&prewarm_app, None, None) {
                 actions.push(hd);
             }
 
@@ -335,7 +336,9 @@ pub fn start(app: AppHandle) {
                 "url": url.clone(),
                 "primary": true,
             })];
-            if let Some(hd) = build_hd_action(&app, Some(meeting_id)) {
+            // The note deeplink doubles the HD button as "open note + HD":
+            // one click opens this meeting's live note and starts HD capture.
+            if let Some(hd) = build_hd_action(&app, Some(meeting_id), Some(&url)) {
                 actions.push(hd);
             }
 
@@ -423,7 +426,7 @@ fn meeting_notifications_enabled(app: &AppHandle) -> bool {
 }
 
 /// Read the user's HD-recording default mode (`"ask" | "always" | "never"`).
-/// Drives whether the meeting-start notification carries a "+ HD" action:
+/// Drives whether the meeting-start notification carries an HD action:
 /// - `"ask"` (default) — yes, add the action.
 /// - `"always"` — no, the engine auto-starts the session itself; an action
 ///   here would be a confusing no-op.
@@ -441,7 +444,7 @@ fn hd_recording_default(app: &AppHandle) -> String {
         .to_string()
 }
 
-/// Build the "+ HD" notification action. Returns `None` when the user's
+/// Build the HD notification action. Returns `None` when the user's
 /// preference suppresses it.
 ///
 /// When `meeting_id` is known (the started notification), starts a
@@ -452,7 +455,17 @@ fn hd_recording_default(app: &AppHandle) -> String {
 /// `meeting_started` subscriber then upgrades it to meeting-bound on the
 /// next event, preserving `started_at` so the user gets HD coverage for
 /// the whole call — not the previous 1-hour timer that clipped long calls.
-fn build_hd_action(app: &AppHandle, meeting_id: Option<i64>) -> Option<serde_json::Value> {
+///
+/// `note_url` is the live-note deeplink. When present (started
+/// notification), the button both opens the note and starts HD in one
+/// click — labeled "open note + HD" — so the user doesn't have to choose
+/// between the two adjacent buttons. The prewarm notification has no
+/// meeting row yet (no note to open), so it keeps the plain "+ HD" label.
+fn build_hd_action(
+    app: &AppHandle,
+    meeting_id: Option<i64>,
+    note_url: Option<&str>,
+) -> Option<serde_json::Value> {
     if hd_recording_default(app) != "ask" {
         return None;
     }
@@ -460,7 +473,7 @@ fn build_hd_action(app: &AppHandle, meeting_id: Option<i64>) -> Option<serde_jso
         Some(id) => json!({ "boundTo": "meeting", "meetingId": id }),
         None => json!({ "boundTo": "prewarm_pending" }),
     };
-    Some(json!({
+    let mut action = json!({
         "id": "record-hd",
         "action": "record-hd",
         "label": "+ HD",
@@ -468,7 +481,14 @@ fn build_hd_action(app: &AppHandle, meeting_id: Option<i64>) -> Option<serde_jso
         "url": "/capture/hd/start",
         "method": "POST",
         "body": body,
-    }))
+    });
+    // Embed the note deeplink so the click also opens the live note. The JS
+    // notification handler reads `deeplinkUrl` after the HD start succeeds.
+    if let Some(url) = note_url.filter(|u| !u.trim().is_empty()) {
+        action["label"] = json!("open note + HD");
+        action["deeplinkUrl"] = json!(url);
+    }
+    Some(action)
 }
 
 async fn fetch_fresh_calendar_events(app: &AppHandle) -> Vec<CalendarEventSignal> {

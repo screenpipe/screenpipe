@@ -2132,7 +2132,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return (
       <div className={cn(
         "flex flex-col bg-card/95 backdrop-blur-xl",
-        standalone ? "rounded-xl border border-border/50 shadow-2xl overflow-hidden" : "h-full",
+        standalone ? "h-full rounded-xl border border-border/50 shadow-2xl overflow-hidden" : "h-full",
       )}>
         {/* Search Input — Raycast-style large input */}
         <div className={cn(

@@ -28,7 +28,7 @@
 import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Users, ExternalLink, Calendar } from "lucide-react";
+import { Users, ExternalLink } from "lucide-react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import type { SettingsField } from "./settings-search";
 
@@ -38,7 +38,6 @@ export const searchIndex: SettingsField[] = [
 ];
 
 const TEAM_MARKETING_URL = "https://screenpi.pe/team";
-const TEAM_CALL_URL = "https://cal.com/team/screenpipe/chat";
 
 export function TeamSection() {
   return (
@@ -70,14 +69,6 @@ export function TeamSection() {
             >
               Open team on the web
               <ExternalLink className="size-4" />
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => openUrl(TEAM_CALL_URL)}
-              className="gap-2"
-            >
-              <Calendar className="size-4" />
-              Book a call
             </Button>
           </div>
         </CardContent>

@@ -10,7 +10,9 @@
 //! parses configs, runs the scheduler, and delegates execution to an
 //! [`AgentExecutor`].
 
+pub mod connections;
 pub mod favorites;
+pub mod mcp_access;
 pub mod permissions;
 pub mod preset_fallback;
 pub mod sync;
@@ -19,6 +21,8 @@ use crate::agents::{
     pi::{PiExecutor, SCREENPIPE_API_URL},
     AgentExecutor, ExecutionHandle,
 };
+use crate::pipes::connections::parse_mcp_connection_id;
+use crate::pipes::mcp_access::McpSessionAccessRegistry;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local, Utc};
 use cron::Schedule as CronSchedule;
@@ -30,6 +34,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+const PIPE_COMPLETED_EVENT_PREFIX: &str = "pipe_completed:";
 
 // ---------------------------------------------------------------------------
 // Config & log types
@@ -847,14 +853,15 @@ fn read_chatgpt_token_from_secrets() -> Option<String> {
         _ => None,
     };
 
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let db_path_str = db_path.to_string_lossy().into_owned();
 
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let pool = sqlx::SqlitePool::connect(&db_url).await.ok()?;
-            let store = screenpipe_secrets::SecretStore::new(pool, secret_key)
+            // Shared, engine-matched pool — not an ad-hoc per-call connection,
+            // which churns the WAL-index and corrupts db.sqlite (#4263).
+            let store = screenpipe_secrets::SecretStore::open(&db_path_str, secret_key)
                 .await
                 .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;
@@ -1354,6 +1361,8 @@ pub struct PipeManager {
     last_reload: Arc<Mutex<Instant>>,
     /// Optional token registry for server-side permission enforcement.
     token_registry: Option<Arc<dyn permissions::PipeTokenRegistry>>,
+    /// Optional registry for per-pipe MCP server allowlists.
+    mcp_session_access: Option<McpSessionAccessRegistry>,
     /// Extra context appended to every pipe prompt (e.g. connected integrations).
     extra_context: Option<String>,
     /// Connected integrations context injected into every pipe *system* prompt.
@@ -1399,6 +1408,7 @@ impl PipeManager {
                     .unwrap_or(Instant::now()),
             )),
             token_registry: None,
+            mcp_session_access: None,
             extra_context: None,
             connections_context: None,
             local_api_key: None,
@@ -1463,6 +1473,11 @@ impl PipeManager {
     /// Set a token registry for server-side permission enforcement.
     pub fn set_token_registry(&mut self, registry: Arc<dyn permissions::PipeTokenRegistry>) {
         self.token_registry = Some(registry);
+    }
+
+    /// Set the registry used by the local MCP API to enforce per-pipe MCP scopes.
+    pub fn set_mcp_session_access(&mut self, registry: McpSessionAccessRegistry) {
+        self.mcp_session_access = Some(registry);
     }
 
     /// Set a callback to be invoked after each scheduled pipe run.
@@ -2180,6 +2195,7 @@ impl PipeManager {
         let on_output = self.on_output_line.clone();
         let pipes_dir_for_log = self.pipes_dir.clone();
         let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let mcp_session_access = self.mcp_session_access.clone();
 
         // Spawn the actual execution in a background task
         tokio::spawn(async move {
@@ -2203,6 +2219,17 @@ impl PipeManager {
                 }
             });
 
+            let mcp_server_allowlist = selected_mcp_server_ids(&config);
+            let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
+            if let Some(ref registry) = mcp_session_access {
+                if mcp_server_allowlist.is_empty() {
+                    registry.clear_session(&session_owner).await;
+                } else {
+                    registry
+                        .set_allowlist(session_owner.clone(), mcp_server_allowlist.clone())
+                        .await;
+                }
+            }
             let run_result = tokio::time::timeout(
                 timeout_duration,
                 executor.run_streaming(
@@ -2216,14 +2243,18 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
-                    Some(format!("pipe:{pipe_name}").as_str()),
+                    mcp_allowlist_arg(&mcp_server_allowlist),
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
+                    Some(session_owner.as_str()),
                 ),
             )
             .await;
+            if let Some(ref registry) = mcp_session_access {
+                registry.clear_session(&session_owner).await;
+            }
 
             let finished_at = Utc::now();
 
@@ -2696,6 +2727,17 @@ impl PipeManager {
                 }
             });
 
+            let mcp_server_allowlist = selected_mcp_server_ids(&config);
+            let session_owner = format!("pipe:{name}:{}", exec_id.unwrap_or(0));
+            if let Some(ref registry) = self.mcp_session_access {
+                if mcp_server_allowlist.is_empty() {
+                    registry.clear_session(&session_owner).await;
+                } else {
+                    registry
+                        .set_allowlist(session_owner.clone(), mcp_server_allowlist.clone())
+                        .await;
+                }
+            }
             let run_result = tokio::time::timeout(
                 timeout_duration,
                 executor.run_streaming(
@@ -2709,14 +2751,18 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
-                    Some(format!("pipe:{name}").as_str()),
+                    mcp_allowlist_arg(&mcp_server_allowlist),
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
+                    Some(session_owner.as_str()),
                 ),
             )
             .await;
+            if let Some(ref registry) = self.mcp_session_access {
+                registry.clear_session(&session_owner).await;
+            }
 
             // Remove from running + clean up PID file
             let _removed_handle = {
@@ -3374,6 +3420,7 @@ impl PipeManager {
         let store = self.store.clone();
         let api_port = self.api_port;
         let token_registry = self.token_registry.clone();
+        let mcp_session_access = self.mcp_session_access.clone();
         let extra_context = self.extra_context.clone();
         let connections_context = self.connections_context.clone();
         let local_api_key = self.local_api_key.clone();
@@ -3483,7 +3530,7 @@ impl PipeManager {
                     }
                     // pipe_completed:* — filter from all-events subscription
                     while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
-                        if e.name.starts_with("pipe_completed:") {
+                        if is_pipe_completed_event(&e.name) {
                             pending_events.push((e.name, e.data));
                         }
                     }
@@ -3502,16 +3549,14 @@ impl PipeManager {
                                 }
 
                                 // Don't let a pipe trigger itself
-                                if *event_name == format!("pipe_completed:{}", name) {
+                                if is_pipe_completed_for_pipe(event_name, name) {
                                     continue;
                                 }
 
                                 // Circular chain detection: if pipe X was triggered by
                                 // pipe_completed:Y within the cooldown, don't let
                                 // pipe_completed:X trigger Y back.
-                                if let Some(source_pipe) =
-                                    event_name.strip_prefix("pipe_completed:")
-                                {
+                                if let Some(source_pipe) = pipe_completed_source(event_name) {
                                     let reverse_key = format!("{}→{}", name, source_pipe);
                                     if recent_chain.contains_key(&reverse_key) {
                                         debug!(
@@ -3576,10 +3621,72 @@ impl PipeManager {
                         if let Some(check) = &connection_check {
                             let missing = check(config.connections.clone()).await;
                             if !missing.is_empty() {
-                                debug!(
+                                let skipped_at = Utc::now();
+                                let trigger = if triggered_by_event {
+                                    "event"
+                                } else {
+                                    "scheduled"
+                                };
+                                let message = format!(
+                                    "pipe '{}' skipped: missing required connections: {}",
+                                    name,
+                                    missing.join(", ")
+                                );
+                                warn!(
                                     "scheduler: pipe '{}' in setup mode (missing connections: {:?}), skipping",
                                     name, missing
                                 );
+                                last_run.insert(name.clone(), skipped_at);
+                                if let Some(ref store) = store {
+                                    match store
+                                        .create_execution(
+                                            name,
+                                            trigger,
+                                            &config.model,
+                                            config.provider.as_deref(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(id) => {
+                                            let _ = store
+                                                .finish_execution(
+                                                    id,
+                                                    "failed",
+                                                    "",
+                                                    &message,
+                                                    None,
+                                                    Some("missing_connections"),
+                                                    Some(&message),
+                                                    None,
+                                                )
+                                                .await;
+                                        }
+                                        Err(e) => {
+                                            warn!("failed to create skipped execution row: {}", e);
+                                        }
+                                    }
+                                    let _ = store.upsert_scheduler_state(name, false).await;
+                                }
+                                {
+                                    let mut logs_guard = logs.lock().await;
+                                    let entry = logs_guard
+                                        .entry(name.clone())
+                                        .or_insert_with(VecDeque::new);
+                                    entry.push_front(PipeRunLog {
+                                        pipe_name: name.clone(),
+                                        started_at: skipped_at,
+                                        finished_at: skipped_at,
+                                        success: false,
+                                        stdout: String::new(),
+                                        stderr: message.clone(),
+                                    });
+                                    if entry.len() > 50 {
+                                        entry.pop_back();
+                                    }
+                                }
+                                if let Some(ref cb) = on_run_complete {
+                                    cb(name, false, 0.0, Some("missing_connections"));
+                                }
                                 continue;
                             }
                         }
@@ -3763,10 +3870,12 @@ impl PipeManager {
                     let on_output = on_output_line.clone();
                     let store_ref = store.clone();
                     let token_registry_ref = token_registry.clone();
+                    let mcp_session_access_ref = mcp_session_access.clone();
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let pipes_dir_for_mark = pipes_dir.clone();
                     let queued_ref = queued_or_running.clone();
+                    let mcp_server_allowlist = selected_mcp_server_ids(config);
 
                     tokio::spawn(async move {
                         // Event-triggered pipes skip the queue for low-latency response.
@@ -3876,6 +3985,19 @@ impl PipeManager {
                             }
                         });
 
+                        let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
+                        if let Some(ref registry) = mcp_session_access_ref {
+                            if mcp_server_allowlist.is_empty() {
+                                registry.clear_session(&session_owner).await;
+                            } else {
+                                registry
+                                    .set_allowlist(
+                                        session_owner.clone(),
+                                        mcp_server_allowlist.clone(),
+                                    )
+                                    .await;
+                            }
+                        }
                         let run_result = tokio::time::timeout(
                             timeout_duration,
                             executor.run_streaming(
@@ -3889,11 +4011,16 @@ impl PipeManager {
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
-                                // Owner tag — see run_pipe_with_trigger.
-                                Some(format!("pipe:{pipe_name}").as_str()),
+                                mcp_allowlist_arg(&mcp_server_allowlist),
+                                // Owner tag — must match pipeSessionId() on the
+                                // frontend. See run_pipe_with_trigger.
+                                Some(session_owner.as_str()),
                             ),
                         )
                         .await;
+                        if let Some(ref registry) = mcp_session_access_ref {
+                            registry.clear_session(&session_owner).await;
+                        }
 
                         let finished_at = Utc::now();
 
@@ -4241,6 +4368,17 @@ impl PipeManager {
                 std::fs::create_dir_all(&dir)?;
                 atomic_write(&pipe_md, content)?;
                 info!("installed built-in pipe: {}", name);
+            } else if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+                // already installed — don't overwrite the user's copy, but do
+                // repair known-broken instructions left over from older bundles
+                // (e.g. PATCH /meetings/:id, which the server never supported).
+                if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                    atomic_write(&pipe_md, &migrated)?;
+                    info!(
+                        "migrated built-in pipe '{}' (fixed stale instructions)",
+                        name
+                    );
+                }
             }
         }
 
@@ -4307,6 +4445,37 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     let config: PipeConfig = serde_yaml::from_str(yaml_str)?;
 
     Ok((config, body))
+}
+
+/// Surgically repair known-broken fragments in an already-installed builtin
+/// `pipe.md` without clobbering the user's other edits. `install_builtin_pipes`
+/// only writes when the file is absent, so a stale local copy never picks up a
+/// bundled fix on its own. Rather than overwrite the whole file (which would
+/// throw away user customization), we replace just the specific broken fragment.
+///
+/// Returns the rewritten content only when a migration actually applied, so the
+/// caller can skip the disk write otherwise. Idempotent: running it on
+/// already-fixed content is a no-op.
+fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    // (old, new) fragment swaps per builtin pipe.
+    let replacements: &[(&str, &str)] = match name {
+        // the meeting-summary pipe shipped instructions to PATCH
+        // /meetings/:id, but the server only registers PUT (see
+        // screenpipe-engine server.rs) — so every save 404'd. fix already
+        // installed local copies. PR #4247.
+        "meeting-summary" => &[(
+            "-X PATCH \"http://localhost:3030/meetings/",
+            "-X PUT \"http://localhost:3030/meetings/",
+        )],
+        _ => return None,
+    };
+
+    let mut updated = original.to_string();
+    for (old, new) in replacements {
+        updated = updated.replace(old, new);
+    }
+
+    (updated != original).then_some(updated)
 }
 
 /// Atomic file write: write to a temp file in the same directory, then rename.
@@ -4412,6 +4581,22 @@ fn render_pipe_system_prompt(
     sys
 }
 
+fn selected_mcp_server_ids(config: &PipeConfig) -> Vec<String> {
+    config
+        .connections
+        .iter()
+        .filter_map(|connection| parse_mcp_connection_id(connection).map(str::to_string))
+        .collect()
+}
+
+fn mcp_allowlist_arg(allowlist: &[String]) -> Option<&[String]> {
+    if allowlist.is_empty() {
+        None
+    } else {
+        Some(allowlist)
+    }
+}
+
 /// Build the dynamic user prompt for a pipe.
 ///
 /// Contains time-varying context (time range, date, timezone) and any extra context.
@@ -4509,6 +4694,18 @@ fn validate_one_off_freshness(schedule: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn pipe_completed_source(event_name: &str) -> Option<&str> {
+    event_name.strip_prefix(PIPE_COMPLETED_EVENT_PREFIX)
+}
+
+fn is_pipe_completed_event(event_name: &str) -> bool {
+    pipe_completed_source(event_name).is_some()
+}
+
+fn is_pipe_completed_for_pipe(event_name: &str, pipe_name: &str) -> bool {
+    matches!(pipe_completed_source(event_name), Some(source_pipe) if source_pipe == pipe_name)
 }
 
 /// Parsed schedule — fixed interval, cron, or a single fire-once timestamp.
@@ -5016,6 +5213,53 @@ mod tests {
         // cap larger than input keeps everything
         let files = vec![f("a.md", 100)];
         assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn migrate_builtin_pipe_fixes_stale_patch_verb() {
+        // a stale local meeting-summary copy with the old PATCH verb gets
+        // surgically rewritten to PUT, leaving surrounding text untouched.
+        let stale = "do stuff\n  curl -s -X PATCH \"http://localhost:3030/meetings/<MEETING_ID>\" \\\n    -d '{}'\nmore stuff";
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("stale PATCH content should migrate");
+        assert!(fixed.contains("-X PUT \"http://localhost:3030/meetings/"));
+        assert!(!fixed.contains("-X PATCH"));
+        assert!(fixed.starts_with("do stuff"));
+        assert!(fixed.ends_with("more stuff"));
+
+        // idempotent: already-PUT content is a no-op (no rewrite, no churn).
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+
+        // other builtins and unrelated content are left alone.
+        assert!(migrate_builtin_pipe_text("day-recap", stale).is_none());
+        assert!(migrate_builtin_pipe_text("meeting-summary", "no api calls here").is_none());
+    }
+
+    #[test]
+    fn pipe_completed_helpers_match_exact_pipe_event() {
+        assert!(is_pipe_completed_event("pipe_completed:daily-summary"));
+        assert_eq!(
+            pipe_completed_source("pipe_completed:daily-summary"),
+            Some("daily-summary")
+        );
+        assert!(is_pipe_completed_for_pipe(
+            "pipe_completed:daily-summary",
+            "daily-summary"
+        ));
+        assert!(!is_pipe_completed_for_pipe(
+            "pipe_completed:daily-summary",
+            "daily"
+        ));
+        assert!(!is_pipe_completed_event("workflow_event"));
+    }
+
+    #[test]
+    fn empty_mcp_allowlist_is_unscoped_for_legacy_pipes() {
+        let empty: Vec<String> = Vec::new();
+        let selected = vec!["linear".to_string()];
+
+        assert!(mcp_allowlist_arg(&empty).is_none());
+        assert_eq!(mcp_allowlist_arg(&selected), Some(selected.as_slice()));
     }
 
     #[test]

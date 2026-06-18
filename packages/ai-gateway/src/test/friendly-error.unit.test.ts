@@ -44,4 +44,19 @@ describe('friendlyError — actionable model errors (#3786)', () => {
     expect(friendlyError('m', 418, false)).toContain('request failed (418)');
     expect(friendlyError('m', 418, true)).toContain('All available models failed');
   });
+
+  // 413 = oversized conversation (SCREENPIPE-AI-PROXY-C/-D reclassification).
+  it('explains a 413 as an oversized conversation, naming the model', () => {
+    const msg = friendlyError('glm-5', 413, false);
+    expect(msg).toContain('glm-5');
+    expect(msg).toContain('context window');
+    expect(msg).toContain('new conversation');
+  });
+
+  it('uses chain-wide phrasing for a fell-through 413', () => {
+    const msg = friendlyError('glm-5', 413, true);
+    expect(msg).toContain('too long');
+    expect(msg).toContain('new conversation');
+    expect(msg).not.toContain('glm-5');
+  });
 });

@@ -9,6 +9,7 @@
 //! emits a `WorkflowEvent` to the event bus so matching pipes can be triggered.
 
 use std::collections::hash_map::DefaultHasher;
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
@@ -103,18 +104,7 @@ pub async fn start_workflow_classifier(
         last_activity_hash = hash;
 
         // 3. Format for classifier
-        let activity_text = activities
-            .iter()
-            .map(|a| {
-                let ts = if a.timestamp.len() > 19 {
-                    &a.timestamp[11..19]
-                } else {
-                    &a.timestamp
-                };
-                format!("[{}] {}: {}", ts, a.app, a.window)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let activity_text = format_activities_for_classifier(&activities);
 
         // 4. Call cloud classifier
         let result = match classify(&client, &classifier_url, &user_token, &activity_text).await {
@@ -331,6 +321,23 @@ fn hash_activities(activities: &[ActivityEntry]) -> u64 {
     hasher.finish()
 }
 
+fn format_activities_for_classifier(activities: &[ActivityEntry]) -> String {
+    let mut text = String::new();
+    for activity in activities {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        let ts = if activity.timestamp.len() > 19 {
+            &activity.timestamp[11..19]
+        } else {
+            &activity.timestamp
+        };
+        write!(&mut text, "[{}] {}: {}", ts, activity.app, activity.window)
+            .expect("writing to String cannot fail");
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +367,26 @@ mod tests {
         };
         let result: ClassifierResult = serde_json::from_str(clean).unwrap();
         assert_eq!(result.event, "no_event");
+    }
+
+    #[test]
+    fn format_activities_reuses_one_buffer() {
+        let activities = vec![
+            ActivityEntry {
+                app: "Arc".into(),
+                window: "LinkedIn".into(),
+                timestamp: "2026-03-24T09:15:22Z".into(),
+            },
+            ActivityEntry {
+                app: "Code".into(),
+                window: "screenpipe".into(),
+                timestamp: "short-ts".into(),
+            },
+        ];
+
+        assert_eq!(
+            format_activities_for_classifier(&activities),
+            "[09:15:22] Arc: LinkedIn\n[short-ts] Code: screenpipe"
+        );
     }
 }

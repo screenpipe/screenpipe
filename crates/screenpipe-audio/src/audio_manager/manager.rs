@@ -24,7 +24,10 @@ use whisper_rs::WhisperContext;
 
 use screenpipe_db::DatabaseManager;
 
-use super::{start_device_monitor, stop_device_monitor, AudioManagerOptions, TranscriptionMode};
+use super::{
+    start_device_monitor, stop_device_monitor, AudioCaptureMode, AudioManagerOptions,
+    TranscriptionMode,
+};
 use crate::{
     core::{
         device::{parse_audio_device, AudioDevice},
@@ -721,6 +724,7 @@ impl AudioManager {
         let audio_transcription_engine = options.transcription_engine.clone();
         let vocabulary = options.vocabulary.clone();
         let is_batch_mode = options.transcription_mode == TranscriptionMode::Batch;
+        let audio_capture_mode = options.audio_capture_mode.clone();
         let batch_max_duration_secs = options.batch_max_duration_secs;
         let filter_music = options.filter_music;
         let vad_engine = self.vad_engine.clone();
@@ -792,6 +796,26 @@ impl AudioManager {
                     meeting.on_audio_activity(&audio.device.device_type, has_activity);
                 }
 
+                // Meetings-only capture: drop this chunk before it is persisted or
+                // transcribed unless a meeting / audio session is active. The detector
+                // was just fed this chunk's activity above, so a meeting that is
+                // starting still flips the session on in time. With no detector we
+                // cannot tell whether we're in a meeting, so we keep capturing rather
+                // than silently dropping everything.
+                if audio_capture_mode == AudioCaptureMode::MeetingsOnly {
+                    let in_session = meeting_detector
+                        .as_ref()
+                        .map(|m| m.is_in_audio_session())
+                        .unwrap_or(true);
+                    if !in_session {
+                        debug!(
+                            "meetings-only capture: no active meeting, dropping audio chunk from {:?}",
+                            audio.device.name
+                        );
+                        continue;
+                    }
+                }
+
                 // ALWAYS persist audio to disk immediately, before any deferral.
                 // This ensures audio survives app restarts and can be retranscribed later.
                 let persisted_file_path = if let Some(ref out) = output_path {
@@ -830,6 +854,11 @@ impl AudioManager {
                             // Without this, audio files are written to disk but orphaned from the DB,
                             // causing silent data loss on the timeline.
                             let mut inserted = false;
+                            // Keep the last failure so the final error log can name
+                            // the actual cause. Without it every distinct DB failure
+                            // (pool timeout vs stuck transaction vs cantopen) collapses
+                            // into one undiagnosable Sentry issue.
+                            let mut last_err: Option<String> = None;
                             for retry in 0..3u32 {
                                 match db.insert_audio_chunk(&path, capture_dt).await {
                                     Ok(_) => {
@@ -842,6 +871,7 @@ impl AudioManager {
                                             retry + 1,
                                             e
                                         );
+                                        last_err = Some(format!("{:?}", e));
                                         if retry < 2 {
                                             tokio::time::sleep(std::time::Duration::from_millis(
                                                 500 * (retry as u64 + 1),
@@ -854,11 +884,27 @@ impl AudioManager {
                             if !inserted {
                                 // path is a structured field so Sentry dedups the
                                 // issue across different devices; otherwise every
-                                // device name creates a new Sentry issue.
+                                // device name creates a new Sentry issue. error is a
+                                // separate field so the underlying cause is filterable
+                                // within that one issue rather than lost.
                                 error!(
                                     audio_chunk_path = %path,
+                                    error = last_err.as_deref().unwrap_or("unknown"),
                                     "audio chunk DB insert failed after 3 retries, data may be missing from timeline"
                                 );
+                                // Durable recovery: the audio file is on disk but
+                                // has no audio_chunks row, so it is invisible to the
+                                // timeline and the reconciliation candidate query
+                                // (which only sees existing rows). Persist a marker
+                                // (off the hot path) so the reconciliation sweep
+                                // re-inserts the row once the write pool recovers.
+                                // See SCREENPIPE-CLI-RC.
+                                super::reconciliation::persist_orphaned_chunk(
+                                    out,
+                                    path.clone(),
+                                    capture_dt,
+                                )
+                                .await;
                             }
                             Some(path)
                         }
@@ -1071,6 +1117,16 @@ impl AudioManager {
             .iter()
             .map(|p| p.key().clone())
             .collect::<Vec<AudioDevice>>()
+    }
+
+    /// Non-blocking read of the *configured* transcription mode. Returns `None`
+    /// if the options lock is momentarily contended, so callers such as
+    /// `/health` never block on it.
+    pub fn configured_transcription_mode(&self) -> Option<TranscriptionMode> {
+        self.options
+            .try_read()
+            .ok()
+            .map(|o| o.transcription_mode.clone())
     }
 
     pub async fn enabled_devices(&self) -> HashSet<String> {

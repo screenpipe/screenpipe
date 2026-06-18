@@ -300,6 +300,30 @@ export function DisplaySection() {
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
+                <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Show Chat Suggestions
+                    <HelpTooltip text="Show the follow-up questions and suggested-prompt chips above the chat input. The X on the chips hides them too." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Follow-up questions and suggested prompts above the input</p>
+                </div>
+              </div>
+              <Switch
+                checked={settings?.showChatSuggestions !== false}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ showChatSuggestions: checked })
+                }
+                className="ml-4"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">

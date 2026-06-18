@@ -17,6 +17,12 @@ pub struct NotificationHistoryEntry {
     pub title: String,
     pub body: String,
     pub pipe_name: Option<String>,
+    #[serde(default)]
+    pub source_session_id: Option<String>,
+    #[serde(default)]
+    pub source_message_id: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
     pub timestamp: String,
     pub read: bool,
 }

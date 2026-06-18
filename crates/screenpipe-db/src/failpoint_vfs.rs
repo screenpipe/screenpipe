@@ -403,9 +403,11 @@ mod tests {
             Arc::from(format!("{}", db.display()).as_str()),
             WriteDrainOpts {
                 rebuilder: Some(rebuilder),
-                on_persistent_failure: Some(Arc::new(move || {
-                    fired_hook.store(true, AtomicOrdering::SeqCst);
-                })),
+                on_persistent_failure: crate::write_queue::persistent_failure_slot(Some(Arc::new(
+                    move || {
+                        fired_hook.store(true, AtomicOrdering::SeqCst);
+                    },
+                ))),
                 health: health.clone(),
                 reopen_every: 2,
                 degraded_after: 2,

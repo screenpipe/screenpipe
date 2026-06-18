@@ -57,7 +57,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AIPreset, commands } from "@/lib/utils/tauri";
-import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import {
   DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
@@ -130,8 +129,6 @@ export const DEFAULT_PROMPT = `Rules:
 function ChatGptSignInButton() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { settings, updateSettings } = useSettings();
-
   useEffect(() => {
     commands.chatgptOauthStatus().then((res) => {
       if (res.status === "ok") setLoggedIn(res.data.logged_in);
@@ -156,11 +153,6 @@ function ChatGptSignInButton() {
             const res = await commands.chatgptOauthLogin();
             if (res.status === "ok" && res.data) {
               setLoggedIn(true);
-              // auto-create a ChatGPT preset on first connection
-              await ensureChatGptPreset(
-                settings.aiPresets || [],
-                (presets) => updateSettings({ aiPresets: presets })
-              );
             }
           } catch (e) {
             console.error("chatgpt oauth failed:", e);
@@ -418,6 +410,7 @@ export function AIProviderConfig({
         } catch { /* ignore */ }
         // Fallback: Codex models available via ChatGPT subscription
         setOpenAIModels([
+          { id: "gpt-5.5" }, { id: "gpt-5.5-codex" },
           { id: "gpt-5.4" }, { id: "gpt-5.3-codex" },
           { id: "gpt-5.2-codex" }, { id: "gpt-5.2" }, { id: "gpt-5.1-codex-max" },
           { id: "gpt-5.1" }, { id: "gpt-5.1-codex-mini" },
@@ -1081,7 +1074,6 @@ export const AIPresetsSelector = ({
   const [selectedPresetToEdit, setSelectedPresetToEdit] = useState<
     AIPreset | undefined
   >();
-
   const isControlled = onControlledSelect !== undefined;
   const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
@@ -1277,12 +1269,16 @@ export const AIPresetsSelector = ({
       });
     }
 
-    // Notify parent to restart Pi if the saved preset is the active/default one
+    // Notify parent to restart Pi only when the edited preset is the one in use.
+    // In chat (controlled mode): the selected preset is the one active in chat.
+    // In Settings (non-controlled): fall back to checking the app-wide default.
     if (onPresetSaved) {
       const savedFull = { ...preset } as AIPreset;
-      const isDefault = selectedPresetToEdit?.defaultPreset ||
-        (!selectedPresetToEdit && settings.aiPresets.length === 0);
-      if (isDefault) {
+      const shouldNotify = isControlled
+        ? selectedPreset === preset.id
+        : selectedPresetToEdit?.defaultPreset ||
+          (!selectedPresetToEdit && settings.aiPresets.length === 0);
+      if (shouldNotify) {
         onPresetSaved(savedFull);
       }
     }
@@ -1364,13 +1360,14 @@ export const AIPresetsSelector = ({
       return;
     }
 
-    // Prevent deletion of screenpipe-cloud preset for Pro subscribers
+    // Safety net: prevent deletion of the last screenpipe-cloud preset for subscribers
     if (preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
-      toast.error("Cannot delete cloud preset", {
-        description: "This preset is included with your Business subscription",
-      });
-      return;
+      const cloudPresets = settings.aiPresets.filter((p) => p.provider === "screenpipe-cloud");
+      if (cloudPresets.length <= 1) {
+        return;
+      }
     }
+
     if (preset.defaultPreset) {
       toast.error("Cannot delete default preset", {
         description: "Please set another preset as default first",
@@ -1387,6 +1384,14 @@ export const AIPresetsSelector = ({
       description: `${preset.id} has been removed`,
     });
   };
+
+  // Hide delete button on the last remaining screenpipe-cloud preset for subscribers
+  const cloudPresetCount = useMemo(
+    () => (settings?.aiPresets || []).filter((p) => p.provider === "screenpipe-cloud").length,
+    [settings?.aiPresets]
+  );
+  const isLastCloudPreset = (preset: AIPreset) =>
+    preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed && cloudPresetCount <= 1;
 
   return (
     <>
@@ -1687,7 +1692,7 @@ export const AIPresetsSelector = ({
                                 <Star className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {!preset.defaultPreset && canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && (
+                            {!preset.defaultPreset && canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && !isLastCloudPreset(preset) && (
                               <Button
                                 variant="ghost"
                                 size="icon"

@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasAppEntitlement,
   hasCloudEntitlement,
+  hasPersistedEntitlementEvidence,
+  isSignedInCloudSubscriber,
+  isTokenHydrationPending,
   needsAppEntitlementRefresh,
   normalizeAppUser,
 } from "@/lib/app-entitlement";
@@ -149,5 +152,72 @@ describe("app entitlement", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("isSignedInCloudSubscriber", () => {
+  // Gates the account "active" plan card. Must require BOTH a token and
+  // cloud_subscribed so a token-hydration failure can't render the active card
+  // under the "not logged in" header.
+  it("is true only with both a token and cloud_subscribed", () => {
+    expect(isSignedInCloudSubscriber(user({ token: "t", cloud_subscribed: true }))).toBe(true);
+  });
+
+  it("is false for a tokenless stale shell even when cloud_subscribed and id survive", () => {
+    // The exact bug: store.bin kept cloud_subscribed:true (+ id) but the token
+    // failed to hydrate from the encrypted secret store. id must NOT rescue it.
+    expect(
+      isSignedInCloudSubscriber(
+        user({ token: null, id: "u1", cloud_subscribed: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when logged in without a cloud subscription", () => {
+    expect(isSignedInCloudSubscriber(user({ token: "t", cloud_subscribed: false }))).toBe(false);
+  });
+
+  it("is false for a missing user", () => {
+    expect(isSignedInCloudSubscriber(null)).toBe(false);
+    expect(isSignedInCloudSubscriber(undefined)).toBe(false);
+  });
+});
+
+describe("isTokenHydrationPending", () => {
+  // A real sign-out nulls the whole user; a hydration failure leaves the account
+  // id behind while only the secret-store-backed token is missing.
+  it("is true for a signed-in account whose token failed to hydrate", () => {
+    expect(isTokenHydrationPending(user({ id: "u1", token: null }))).toBe(true);
+    expect(isTokenHydrationPending(user({ id: "u1", token: undefined }))).toBe(true);
+  });
+
+  it("is false when the token is present", () => {
+    expect(isTokenHydrationPending(user({ id: "u1", token: "tok" }))).toBe(false);
+  });
+
+  it("is false without an account id (never signed in) and for a null user", () => {
+    expect(isTokenHydrationPending(user({ id: null, token: null }))).toBe(false);
+    expect(isTokenHydrationPending(null)).toBe(false);
+    expect(isTokenHydrationPending(undefined)).toBe(false);
+  });
+});
+
+describe("hasPersistedEntitlementEvidence", () => {
+  it("trusts store.bin signals that survive a token-hydration failure", () => {
+    expect(hasPersistedEntitlementEvidence(user({ cloud_subscribed: true }))).toBe(true);
+    expect(hasPersistedEntitlementEvidence(user({ app_entitled: true }))).toBe(true);
+    expect(
+      hasPersistedEntitlementEvidence(user({ entitlement: { features: { app: true } } })),
+    ).toBe(true);
+    expect(hasPersistedEntitlementEvidence(user({ entitlement: { active: true } }))).toBe(true);
+  });
+
+  it("is false for an account with no entitlement evidence", () => {
+    expect(
+      hasPersistedEntitlementEvidence(
+        user({ cloud_subscribed: false, app_entitled: false, entitlement: null }),
+      ),
+    ).toBe(false);
+    expect(hasPersistedEntitlementEvidence(null)).toBe(false);
   });
 });

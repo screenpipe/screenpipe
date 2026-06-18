@@ -72,7 +72,7 @@
     "deep-link": {
       "desktop": {
         "schemes": [
-          "screenpipe"
+          "screenpipe-enterprise"
         ]
       },
       "mobile": [

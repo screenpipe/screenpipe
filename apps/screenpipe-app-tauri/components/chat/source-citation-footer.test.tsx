@@ -88,4 +88,52 @@ describe("SourceCitationFooter", () => {
     expect(container.querySelector('img[src="/images/google-calendar.svg"]')).toBeTruthy();
     expect(container.querySelector('img[src="/images/screenpipe.png"]')).toBeTruthy();
   });
+
+  it("opens a file source in the preview sidebar when it carries a path", () => {
+    const onOpenFile = vi.fn();
+
+    render(
+      <SourceCitationFooter
+        onOpenFile={onOpenFile}
+        citations={[
+          {
+            id: "file-skill-md",
+            kind: "file",
+            title: "Read: SKILL.md",
+            subtitle: "~/.../skills/screenpipe-api/SKILL.md",
+            path: "/Users/me/.pi/skills/screenpipe-api/SKILL.md",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /1 source/i }));
+
+    const fileCard = screen.getByTestId("source-citation-file");
+    fireEvent.click(fileCard);
+
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "/Users/me/.pi/skills/screenpipe-api/SKILL.md",
+    );
+  });
+
+  it("leaves a file source non-interactive when there is no open handler", () => {
+    render(
+      <SourceCitationFooter
+        citations={[
+          {
+            id: "file-skill-md",
+            kind: "file",
+            title: "Read: SKILL.md",
+            path: "/Users/me/.pi/skills/screenpipe-api/SKILL.md",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /1 source/i }));
+
+    // Without an onOpenFile handler the row stays a plain, unclickable card.
+    expect(screen.queryByTestId("source-citation-file")).toBeNull();
+  });
 });

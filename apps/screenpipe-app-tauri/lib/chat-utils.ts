@@ -86,6 +86,7 @@ export type ChatTargetWindow = "home" | "chat";
 export interface ChatLoadConversationPayload {
   conversationId: string;
   targetWindow?: ChatTargetWindow;
+  focusMessageId?: string;
 }
 
 export const RECENT_CHAT_SEARCH_HANDOFF_EVENT = "recent-chat-search-handoff";
@@ -624,4 +625,43 @@ function formatTagAutocompleteDescription(item: AppAutocompleteItem) {
 
   if (parts.length > 0) return parts.join(", ");
   return pluralize(item.count, "use");
+}
+
+export interface FilterMentionSuggestionsOptions {
+  mentionTrigger: "@" | "#";
+  mentionFilter: string;
+  atMentionSuggestions: MentionSuggestion[];
+  tagMentionSuggestions: MentionSuggestion[];
+  allTagMentionSuggestions: MentionSuggestion[];
+  tagSearchSuggestions: MentionSuggestion[];
+  speakerSuggestions: MentionSuggestion[];
+  recentSpeakers?: MentionSuggestion[];
+}
+
+export function filterMentionSuggestions({
+  mentionTrigger,
+  mentionFilter,
+  atMentionSuggestions,
+  tagMentionSuggestions,
+  allTagMentionSuggestions,
+  tagSearchSuggestions,
+  speakerSuggestions,
+  recentSpeakers = [],
+}: FilterMentionSuggestionsOptions): MentionSuggestion[] {
+  const filter = mentionFilter.trim().toLowerCase();
+  const matchesFilter = (suggestion: MentionSuggestion) =>
+    suggestion.tag.toLowerCase().includes(filter) ||
+    suggestion.description.toLowerCase().includes(filter);
+
+  if (mentionTrigger === "#") {
+    if (!filter) return tagMentionSuggestions;
+    if (tagSearchSuggestions.length > 0) return tagSearchSuggestions;
+    return allTagMentionSuggestions.filter(matchesFilter);
+  }
+
+  const atMatches = filter
+    ? atMentionSuggestions.filter(matchesFilter)
+    : atMentionSuggestions;
+  const speakerMatches = filter ? speakerSuggestions : recentSpeakers;
+  return [...atMatches, ...speakerMatches];
 }

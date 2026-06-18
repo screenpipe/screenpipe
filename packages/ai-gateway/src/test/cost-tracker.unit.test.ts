@@ -166,33 +166,43 @@ describe('logCost — cache columns with legacy fallback', () => {
 		stream: true,
 	};
 
+	// logCost also bumps the usage-table daily-cost accumulator (migration
+	// 0006) before the cost_log insert — assertions below filter to the
+	// cost_log inserts they're actually about (accumulator behavior is
+	// covered in daily-cost.unit.test.ts).
+	const costLogInserts = (calls: Array<{ sql: string; bindings: any[] }>) =>
+		calls.filter((c) => c.sql.includes('INSERT INTO cost_log'));
+
 	it('writes cache columns when the schema has them', async () => {
 		const { db, calls } = makeMockDB(false);
 		await logCost({ DB: db } as any, entry as any);
-		expect(calls.length).toBe(1);
-		expect(calls[0].sql).toContain('cache_read_tokens');
-		expect(calls[0].sql).toContain('cache_creation_tokens');
+		const inserts = costLogInserts(calls);
+		expect(inserts.length).toBe(1);
+		expect(inserts[0].sql).toContain('cache_read_tokens');
+		expect(inserts[0].sql).toContain('cache_creation_tokens');
 		// bindings: ..., input, output, cache_read, cache_creation, cost, ...
-		expect(calls[0].bindings).toContain(800);
-		expect(calls[0].bindings).toContain(50);
+		expect(inserts[0].bindings).toContain(800);
+		expect(inserts[0].bindings).toContain(50);
 	});
 
 	it('falls back to legacy columns when migration 0004 is not applied (no dropped rows)', async () => {
 		const { db, calls } = makeMockDB(true);
 		await logCost({ DB: db } as any, entry as any);
-		expect(calls.length).toBe(2);
-		expect(calls[1].sql).not.toContain('cache_read_tokens');
+		const inserts = costLogInserts(calls);
+		expect(inserts.length).toBe(2);
+		expect(inserts[1].sql).not.toContain('cache_read_tokens');
 		// the row still landed with token + cost data
-		expect(calls[1].bindings).toContain(1000);
-		expect(calls[1].bindings).toContain(0.001);
+		expect(inserts[1].bindings).toContain(1000);
+		expect(inserts[1].bindings).toContain(0.001);
 	});
 
 	it('omitted cache fields bind as null (pre-cache callers unchanged)', async () => {
 		const { db, calls } = makeMockDB(false);
 		const { cache_read_tokens, cache_creation_tokens, ...legacyEntry } = entry;
 		await logCost({ DB: db } as any, legacyEntry as any);
-		expect(calls.length).toBe(1);
-		expect(calls[0].bindings[7]).toBeNull();
-		expect(calls[0].bindings[8]).toBeNull();
+		const inserts = costLogInserts(calls);
+		expect(inserts.length).toBe(1);
+		expect(inserts[0].bindings[7]).toBeNull();
+		expect(inserts[0].bindings[8]).toBeNull();
 	});
 });

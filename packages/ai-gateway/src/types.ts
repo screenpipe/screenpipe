@@ -85,6 +85,15 @@ export interface RequestBody {
 	max_completion_tokens?: number;
 	tool_choice?: string | { type: 'function'; function: { name: string } };
 	response_format?: ResponseFormat;
+	/**
+	 * Gateway-internal latency tier for the Vertex Gemini lane. Set by the
+	 * router from the request's latency class (see resolveLatencyClass in
+	 * index.ts), NEVER sent by clients and NEVER forwarded upstream — providers
+	 * build their request bodies field-by-field, and only GeminiProvider reads
+	 * this (to add Vertex flex headers). 'flex' = 50% off, best-effort latency,
+	 * for background (pipe/summary) traffic where no user is waiting.
+	 */
+	serviceTier?: 'flex' | 'standard';
 }
 
 type InputSchema = Anthropic.Tool.InputSchema;

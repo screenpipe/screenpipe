@@ -57,6 +57,11 @@ pub struct MeetingStreamingConfig {
     pub language: Option<String>,
     pub local_speaker_name: Option<String>,
     pub persist_finals: bool,
+    /// Domain / proper-noun terms to bias the live transcriber toward (Deepgram
+    /// nova-3 keyterm prompting). Seeded from the user's custom vocabulary; the
+    /// streaming analog of the batch path's keyterms. Empty = no biasing.
+    #[serde(default)]
+    pub keyterms: Vec<String>,
 }
 
 impl Default for MeetingStreamingConfig {
@@ -103,6 +108,7 @@ impl Default for MeetingStreamingConfig {
                 .filter(|s| !s.trim().is_empty()),
             local_speaker_name: env_non_empty("SCREENPIPE_MEETING_LOCAL_SPEAKER_NAME"),
             persist_finals: true,
+            keyterms: Vec::new(),
         }
     }
 }
@@ -135,6 +141,14 @@ impl FromStr for MeetingStreamingProvider {
 }
 
 impl MeetingStreamingConfig {
+    /// Seed the keyterms used to bias the live transcriber (attendee names,
+    /// product/company terms). Carried through provider re-resolution since
+    /// `with_provider` preserves it.
+    pub fn with_keyterms(mut self, keyterms: Vec<String>) -> Self {
+        self.keyterms = keyterms;
+        self
+    }
+
     pub fn with_provider(mut self, provider: MeetingStreamingProvider) -> Self {
         self.provider = provider;
         match self.provider {

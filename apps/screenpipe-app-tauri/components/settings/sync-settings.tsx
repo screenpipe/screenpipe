@@ -983,7 +983,11 @@ export function SyncSettings() {
         });
 
         if (hasSubscription) {
-          if (settings.user && !settings.user.cloud_subscribed) {
+          // Require a session token before persisting cloud_subscribed — never
+          // bake a { cloud_subscribed: true, token: null } user (the early
+          // return above already guarantees a token here; this keeps the
+          // invariant explicit and local).
+          if (settings.user?.token && !settings.user.cloud_subscribed) {
             const engineUpdate: Record<string, any> = {
               user: { ...settings.user, cloud_subscribed: true },
             };
@@ -1238,7 +1242,7 @@ export function SyncSettings() {
       if (res.status === "error") throw new Error(res.error);
       const result = res.data;
       const parsed = typeof result === "string" ? JSON.parse(result) : result;
-      const total = (parsed.frames_deleted || 0) + (parsed.ocr_deleted || 0) + (parsed.audio_transcriptions_deleted || 0) + (parsed.ui_events_deleted || 0);
+      const total = (parsed.frames_deleted || 0) + (parsed.audio_transcriptions_deleted || 0) + (parsed.ui_events_deleted || 0);
       toast({
         title: "local data cleaned",
         description: `removed ${total} records synced from this device`,
