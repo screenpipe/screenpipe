@@ -79,6 +79,10 @@ impl Integration for Zendesk {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         // base_url's {subdomain} resolves from the OAuth token JSON (stamped at
         // connect time) for OAuth connections, or from the manual `subdomain`

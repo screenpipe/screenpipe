@@ -647,7 +647,12 @@ pub async fn oauth_list_instances(
 
 /// Extract email from an id_token JWT by decoding the payload (no signature verification).
 fn extract_email_from_jwt(jwt: &str) -> Option<String> {
-    decode_jwt_payload(jwt)?["email"].as_str().map(String::from)
+    let payload = decode_jwt_payload(jwt)?;
+    payload["email"]
+        .as_str()
+        .or_else(|| payload["preferred_username"].as_str())
+        .or_else(|| payload["upn"].as_str())
+        .map(String::from)
 }
 
 /// Microsoft's well-known tenant ID for **personal** Microsoft accounts
@@ -725,6 +730,61 @@ async fn fetch_provider_identity(
             resp["user"]["email"]
                 .as_str()
                 .or_else(|| resp["user"]["username"].as_str())
+                .map(String::from)
+        }
+        "calcom" => {
+            let resp: serde_json::Value = client
+                .get("https://api.cal.com/v2/me")
+                .bearer_auth(access_token)
+                .header("cal-api-version", "2024-08-13")
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            let data = &resp["data"];
+            data["email"]
+                .as_str()
+                .or_else(|| data["username"].as_str())
+                .or_else(|| data["id"].as_str())
+                .map(String::from)
+        }
+        "calendly" => {
+            let resp: serde_json::Value = client
+                .get("https://api.calendly.com/users/me")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            let resource = &resp["resource"];
+            resource["email"]
+                .as_str()
+                .or_else(|| resource["uri"].as_str())
+                .map(String::from)
+        }
+        "zoom" => {
+            let resp: serde_json::Value = client
+                .get("https://api.zoom.us/v2/users/me")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            resp["email"]
+                .as_str()
+                .or_else(|| resp["id"].as_str())
                 .map(String::from)
         }
         _ => None,

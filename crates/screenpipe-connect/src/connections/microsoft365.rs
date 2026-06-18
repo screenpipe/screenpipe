@@ -96,6 +96,10 @@ impl Integration for Microsoft365 {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://graph.microsoft.com/v1.0",

@@ -67,6 +67,10 @@ impl Integration for GoogleDocs {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             // Drive API lives on www.googleapis.com (/drive/v3/...).

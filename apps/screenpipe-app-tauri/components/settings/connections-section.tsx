@@ -2240,11 +2240,13 @@ const OAUTH_SCOPE_VARIANTS: Record<
 function OAuthPanel({
   integrationId,
   integrationName,
+  supportsOAuthInstances,
   onConnected,
   onDisconnected,
 }: {
   integrationId: string;
   integrationName: string;
+  supportsOAuthInstances: boolean;
   onConnected?: () => void;
   onDisconnected?: () => void;
 }) {
@@ -2348,6 +2350,7 @@ function OAuthPanel({
   };
 
   const connected = accounts.length > 0;
+  const connectDisabled = isSubdomainProvider && !subdomain.trim();
 
   return (
     <div className="space-y-3">
@@ -2436,9 +2439,11 @@ function OAuthPanel({
             </Button>
           </div>
         ) : (
-          <Button onClick={handleConnect} disabled={isSubdomainProvider && !subdomain.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
-            {connected
+          <Button onClick={handleConnect} disabled={connectDisabled} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
+            {connected && supportsOAuthInstances
               ? (<><Plus className="h-3 w-3" />add another account</>)
+              : connected
+                ? (<><LogIn className="h-3 w-3" />reconnect {integrationName}</>)
               : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
           </Button>
         )}
@@ -2468,6 +2473,7 @@ export interface IntegrationInfo {
   fields: IntegrationField[];
   connected: boolean;
   is_oauth: boolean;
+  supports_oauth_instances: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -3892,6 +3898,7 @@ export function ConnectionsSection({
                 <OAuthPanel
                   integrationId={selectedIntegration.id}
                   integrationName={selectedIntegration.name}
+                  supportsOAuthInstances={!!selectedIntegration.supports_oauth_instances}
                   onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
                   onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
                 />

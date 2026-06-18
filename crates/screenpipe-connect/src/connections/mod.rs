@@ -198,6 +198,12 @@ pub trait Integration: Send + Sync {
         &[]
     }
 
+    /// Whether repeated OAuth connects can create distinct account/workspace
+    /// instances instead of overwriting the provider's default token slot.
+    fn supports_oauth_instances(&self) -> bool {
+        false
+    }
+
     /// Background refresh policy. Defaults to "rely on access-token expiry".
     /// Override when the provider expires the refresh token on inactivity.
     fn refresh_policy(&self) -> RefreshPolicy {
@@ -520,6 +526,7 @@ impl ConnectionManager {
                 def,
                 connected,
                 is_oauth,
+                supports_oauth_instances: is_oauth && i.supports_oauth_instances(),
             });
         }
         result
@@ -683,6 +690,8 @@ pub struct ConnectionInfo {
     pub connected: bool,
     /// True if this integration authenticates via OAuth (no manual fields).
     pub is_oauth: bool,
+    /// True if OAuth reconnects can be stored as separate named instances.
+    pub supports_oauth_instances: bool,
 }
 
 type CredentialConnection<'a> = (
