@@ -545,7 +545,12 @@ let DEFAULT_SETTINGS: Settings = {
 			monitorIds: ["default"],
 			audioDevices: ["default"],
 			useSystemDefaultAudio: true,
-			usePiiRemoval: false,
+			// Default ON (#3819): this is the lightweight hot-path regex redaction
+			// in screenpipe-core (emails, phone numbers, SSNs, card numbers, API
+			// keys, etc.) — NOT the heavy async AI model (asyncPiiRedaction stays
+			// off, so no ~2.8GB model download). Privacy-by-default for new installs;
+			// existing users keep whatever they already chose.
+			usePiiRemoval: true,
 			port: 3030,
 			dataDir: "default",
 			disableAudio: false,
@@ -1346,6 +1351,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// signs out while this fetch is in flight, the generation changes and we
 		// abort the write below instead of resurrecting the cleared session.
 		const generation = authGenerationRef.current;
+		const startingToken = settingsRef.current.user?.token ?? null;
 		try {
 			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpi.pe"), {
 				method: "POST",
@@ -1369,7 +1375,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			// The user signed out while this request was in flight — writing
 			// userData now would resurrect the cleared session (the "logout needs
 			// two clicks" bug). Abort silently; the sign-out already won.
-			if (authGenerationRef.current !== generation) {
+			if (
+				authGenerationRef.current !== generation ||
+				(startingToken !== null && settingsRef.current.user?.token !== token)
+			) {
 				console.log("loadUser: sign-out during fetch — not restoring session");
 				return;
 			}

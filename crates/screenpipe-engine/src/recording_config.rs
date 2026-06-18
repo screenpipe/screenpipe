@@ -56,6 +56,12 @@ pub struct RecordingConfig {
     /// setting; consumed when building the text + image worker
     /// policies.
     pub pii_redaction_labels: Vec<String>,
+    /// Render redacted PII as consistent pseudonym tokens
+    /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags.
+    /// Mirrors the `piiRedactionPseudonyms` setting; consumed when
+    /// building the text worker pipeline (issue #4206). Newly-redacted
+    /// rows only; ignored for the Tinfoil backend. Off by default.
+    pub pii_redaction_pseudonyms: bool,
     /// Filter music-dominant audio before transcription using spectral analysis
     pub filter_music: bool,
 
@@ -258,6 +264,7 @@ impl RecordingConfig {
             async_image_pii_redaction: settings.async_image_pii_redaction,
             pii_backend: settings.pii_backend.clone(),
             pii_redaction_labels: settings.pii_redaction_labels.clone(),
+            pii_redaction_pseudonyms: settings.pii_redaction_pseudonyms,
             filter_music: settings.filter_music,
             enable_workflow_events: settings.enable_workflow_events,
             audio_transcription_engine: engine_str

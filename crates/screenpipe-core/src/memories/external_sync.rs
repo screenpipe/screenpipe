@@ -75,6 +75,13 @@ pub struct Destination {
     /// keeps the outer file small and hand-editable while screenpipe owns
     /// the sidecar end-to-end.
     pub sidecar_filename: Option<&'static str>,
+    /// When true, screenpipe owns the *entire* target file — there is no
+    /// user-authored content to preserve, so the writer replaces the whole
+    /// file (via [`write_atomic_full`]) instead of splicing a marker block
+    /// into existing content. Used for dedicated, screenpipe-only notes
+    /// such as a file inside an Obsidian vault. Destinations with this set
+    /// must leave `sidecar_filename` `None` (the target *is* the digest).
+    pub owns_target: bool,
 }
 
 impl Destination {
@@ -83,6 +90,7 @@ impl Destination {
         display_name: "Claude Code",
         filename: "CLAUDE.md",
         sidecar_filename: Some("screenpipe-memories.md"),
+        owns_target: false,
     };
 
     pub const CODEX: Destination = Destination {
@@ -90,6 +98,22 @@ impl Destination {
         display_name: "Codex CLI",
         filename: "AGENTS.md",
         sidecar_filename: None,
+        owns_target: false,
+    };
+
+    /// Obsidian vault note. Unlike Claude Code / Codex — whose `CLAUDE.md` /
+    /// `AGENTS.md` the user co-authors — this file is created and owned
+    /// entirely by screenpipe, so it carries the full digest with no marker
+    /// block. The connection id is deliberately distinct from the
+    /// vault-*writing* `obsidian` integration so the two never share (and
+    /// never clobber) each other's credentials. `filename` is resolved
+    /// relative to `<vault>/<memories_folder>` by the engine's path resolver.
+    pub const OBSIDIAN: Destination = Destination {
+        id: "obsidian-memories",
+        display_name: "Obsidian",
+        filename: "screenpipe-memories.md",
+        sidecar_filename: None,
+        owns_target: true,
     };
 
     pub fn target_path(&self, home: &Path) -> PathBuf {
@@ -100,6 +124,16 @@ impl Destination {
         self.sidecar_filename.map(|f| home.join(f))
     }
 }
+
+// Compile-time invariants for the destination table. An `owns_target`
+// destination must NOT also declare a sidecar — the engine's owned-file write
+// path replaces the whole file and ignores `sidecar_filename`, so the two
+// together would silently drop the sidecar. The co-authored destinations must
+// stay non-owned so their marker-block splice keeps the user's hand edits. A
+// bad edit to the table fails to compile rather than misbehaving at runtime.
+const _: () =
+    assert!(Destination::OBSIDIAN.owns_target && Destination::OBSIDIAN.sidecar_filename.is_none());
+const _: () = assert!(!Destination::CLAUDE_CODE.owns_target && !Destination::CODEX.owns_target);
 
 /// Bound how big the rendered block can get. Above ~200 entries the
 /// signal dies under noise and we start eating Claude Code's context
@@ -188,6 +222,28 @@ pub fn render_digest(entries: &[MemoryEntry], dest: &Destination) -> String {
         out.push('\n');
     }
 
+    out
+}
+
+/// Render the full note screenpipe writes into a [`Destination::owns_target`]
+/// file (today: an Obsidian vault). Because screenpipe owns the whole file
+/// there is no marker block — instead we lead with YAML frontmatter so the
+/// note is first-class in Obsidian's graph and tag pane, then inline the
+/// standard digest body.
+///
+/// Deliberately emits **no** timestamp or other volatile field: the output
+/// is a pure function of `entries`, so an unchanged memory set yields a
+/// byte-identical file and [`write_atomic_full`] short-circuits to a no-op
+/// (the scheduler stays quiet, Obsidian's file watcher doesn't churn, and
+/// sync history doesn't fill with spurious "wrote" events).
+pub fn render_owned_note(entries: &[MemoryEntry], dest: &Destination) -> String {
+    let mut out = String::from(
+        "---\n\
+        title: screenpipe memories\n\
+        tags:\n  - screenpipe\n  - memory\n\
+        ---\n\n",
+    );
+    out.push_str(&render_digest(entries, dest));
     out
 }
 
@@ -385,6 +441,49 @@ mod tests {
             !body.contains('@'),
             "codex outer block must not contain @import directives:\n{}",
             body
+        );
+    }
+
+    #[test]
+    fn obsidian_destination_uses_expected_id_and_filename() {
+        // (owns_target / no-sidecar invariants are enforced at compile time
+        // via the `const _` assertions next to the destination table.)
+        // The id is deliberately distinct from the vault-writing `obsidian`
+        // integration so the two connections never share credentials.
+        assert_eq!(Destination::OBSIDIAN.id, "obsidian-memories");
+        assert_eq!(Destination::OBSIDIAN.filename, "screenpipe-memories.md");
+        assert_eq!(Destination::OBSIDIAN.sidecar_filename, None);
+    }
+
+    #[test]
+    fn owned_note_leads_with_frontmatter_and_inlines_digest() {
+        let entries = vec![entry("durable obsidian fact", 0.9, "2026-01-01T00:00:00Z")];
+        let note = render_owned_note(&entries, &Destination::OBSIDIAN);
+        // Frontmatter must be the very first bytes — Obsidian only parses a
+        // YAML block when it opens the file.
+        assert!(
+            note.starts_with("---\n"),
+            "frontmatter not at file head:\n{}",
+            note
+        );
+        assert!(note.contains("\ntags:\n  - screenpipe\n  - memory\n"));
+        // The digest body is inlined directly (no @import, no marker block).
+        assert!(note.contains("durable obsidian fact"));
+        assert!(!note.contains("@screenpipe-memories.md"));
+        assert!(!note.contains(&marker_start()));
+    }
+
+    #[test]
+    fn owned_note_is_deterministic() {
+        // No timestamps / volatile fields → identical input renders identical
+        // bytes, which is what lets write_atomic_full debounce no-op syncs.
+        let entries = vec![
+            entry("fact one", 0.9, "2026-01-01T00:00:00Z"),
+            entry("fact two", 0.6, "2026-01-02T00:00:00Z"),
+        ];
+        assert_eq!(
+            render_owned_note(&entries, &Destination::OBSIDIAN),
+            render_owned_note(&entries, &Destination::OBSIDIAN),
         );
     }
 

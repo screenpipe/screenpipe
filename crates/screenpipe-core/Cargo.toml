@@ -48,7 +48,6 @@ hex = { workspace = true, optional = true }
 async-trait = { workspace = true }
 screenpipe-secrets = { path = "../screenpipe-secrets", optional = true }
 screenpipe-vault = { path = "../screenpipe-vault", optional = true }
-sqlx = { workspace = true, optional = true }
 # Shared sync primitives. `upload_to_s3` delegates to
 # `screenpipe_sync::HttpPutDirect` so the retry / bytes-pool / cancellation
 # code path is the same one ee/ uses. Gated to the cloud-sync feature so
@@ -70,7 +69,7 @@ default = ["security"]
 # without changing behavior (it's never enabled at compile time).
 cargo-clippy = []
 security = ["dep:regex", "dep:lazy_static"]
-secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault", "dep:sqlx"]
+secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault"]
 cloud-sync = [
     "dep:argon2",
     "dep:chacha20poly1305",

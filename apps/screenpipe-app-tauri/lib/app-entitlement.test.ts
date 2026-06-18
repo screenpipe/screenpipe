@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasAppEntitlement,
   hasCloudEntitlement,
+  hasPersistedEntitlementEvidence,
   isSignedInCloudSubscriber,
+  isTokenHydrationPending,
   needsAppEntitlementRefresh,
   normalizeAppUser,
 } from "@/lib/app-entitlement";
@@ -178,5 +180,44 @@ describe("isSignedInCloudSubscriber", () => {
   it("is false for a missing user", () => {
     expect(isSignedInCloudSubscriber(null)).toBe(false);
     expect(isSignedInCloudSubscriber(undefined)).toBe(false);
+  });
+});
+
+describe("isTokenHydrationPending", () => {
+  // A real sign-out nulls the whole user; a hydration failure leaves the account
+  // id behind while only the secret-store-backed token is missing.
+  it("is true for a signed-in account whose token failed to hydrate", () => {
+    expect(isTokenHydrationPending(user({ id: "u1", token: null }))).toBe(true);
+    expect(isTokenHydrationPending(user({ id: "u1", token: undefined }))).toBe(true);
+  });
+
+  it("is false when the token is present", () => {
+    expect(isTokenHydrationPending(user({ id: "u1", token: "tok" }))).toBe(false);
+  });
+
+  it("is false without an account id (never signed in) and for a null user", () => {
+    expect(isTokenHydrationPending(user({ id: null, token: null }))).toBe(false);
+    expect(isTokenHydrationPending(null)).toBe(false);
+    expect(isTokenHydrationPending(undefined)).toBe(false);
+  });
+});
+
+describe("hasPersistedEntitlementEvidence", () => {
+  it("trusts store.bin signals that survive a token-hydration failure", () => {
+    expect(hasPersistedEntitlementEvidence(user({ cloud_subscribed: true }))).toBe(true);
+    expect(hasPersistedEntitlementEvidence(user({ app_entitled: true }))).toBe(true);
+    expect(
+      hasPersistedEntitlementEvidence(user({ entitlement: { features: { app: true } } })),
+    ).toBe(true);
+    expect(hasPersistedEntitlementEvidence(user({ entitlement: { active: true } }))).toBe(true);
+  });
+
+  it("is false for an account with no entitlement evidence", () => {
+    expect(
+      hasPersistedEntitlementEvidence(
+        user({ cloud_subscribed: false, app_entitled: false, entitlement: null }),
+      ),
+    ).toBe(false);
+    expect(hasPersistedEntitlementEvidence(null)).toBe(false);
   });
 });

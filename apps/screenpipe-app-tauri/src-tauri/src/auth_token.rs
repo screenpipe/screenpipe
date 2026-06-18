@@ -33,7 +33,6 @@ use std::path::Path;
 use std::sync::RwLock;
 
 use screenpipe_secrets::SecretStore;
-use sqlx::SqlitePool;
 
 /// SecretStore row key for the cloud auth token.
 const AUTH_TOKEN_KEY: &str = "cloud.auth_token";
@@ -91,11 +90,15 @@ fn read_encryption_key() -> Option<[u8; 32]> {
 /// Open a [`SecretStore`] over `<data_dir>/db.sqlite`. `key` controls
 /// encryption (matches the `enable_keychain_encryption` open pattern). Returns
 /// `None` if the DB can't be opened (missing parent dir, locked, etc.).
+///
+/// Uses [`SecretStore::open`] so every secret access in the process shares ONE
+/// long-lived, engine-matched pool instead of opening (and dropping) its own —
+/// the ad-hoc-pool churn that corrupts `db.sqlite` (#4263).
 async fn secret_store_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<SecretStore> {
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-    let pool = SqlitePool::connect(&db_url).await.ok()?;
-    SecretStore::new(pool, key).await.ok()
+    SecretStore::open(&db_path.to_string_lossy(), key)
+        .await
+        .ok()
 }
 
 /// Persist (or clear) the token in the SecretStore at `data_dir`.

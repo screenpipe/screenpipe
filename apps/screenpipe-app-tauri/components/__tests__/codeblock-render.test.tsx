@@ -42,17 +42,21 @@ describe("viewer code block rendering", () => {
     const { container } = render(
       <ViewerFileContent path="/tmp/note.md" content={mkText(md)} />
     );
-    // The fix routes block code through the syntax highlighter (PreTag div ->
-    // a <pre> wrapper in our component), preserving newlines as one block.
-    const pre = container.querySelector("pre");
-    expect(pre).not.toBeNull();
-    const text = pre!.textContent || "";
+    // The unified renderer routes block code through the shared
+    // MarkdownCodeBlock, which owns one block container (a <div>, since Prism
+    // renders with PreTag="div") and keeps the newlines as a single legible
+    // block instead of collapsing into a faint inline chip.
+    const block = container.querySelector('[data-testid="markdown-code-block"]');
+    expect(block).not.toBeNull();
+    const text = block!.textContent || "";
     expect(text).toContain("00:00 — Introduction");
     expect(text).toContain("02:00 — Timeline");
-    // Bug signature: faint inline chip used bg-foreground/5 with no text color.
-    // After the fix, block content must NOT be wrapped in that inline chip class.
-    const faintInline = container.querySelector("code.bg-foreground\\/5");
-    expect(faintInline).toBeNull();
+    // Bug signature: the multi-line content collapsing into an inline chip.
+    // There must be no inline <code> chip carrying the block's text.
+    const inlineChips = Array.from(container.querySelectorAll("code")).filter(
+      (el) => !el.closest('[data-testid="markdown-code-block"]'),
+    );
+    expect(inlineChips.some((el) => (el.textContent ?? "").includes("00:00"))).toBe(false);
   });
 
   it("still renders true inline code as a legible chip", () => {

@@ -100,6 +100,28 @@ pub struct OAuthConfig {
     pub redirect_uri_override: Option<&'static str>,
 }
 
+/// One user-selectable access level for an OAuth integration.
+///
+/// Lets the user pick *how much* to grant at connect time (e.g. Slack
+/// send-only vs send+read). The scope strings stay here, server-side — the
+/// frontend only passes a variant `id`, so it can never request arbitrary
+/// scopes. An integration exposes its variants via
+/// [`crate::connections::Integration::oauth_scope_variants`]; when empty, the
+/// connect flow uses [`OAuthConfig::extra_auth_params`] verbatim (no choice).
+pub struct ScopeVariant {
+    /// Stable id passed from the UI (e.g. "send", "read_write").
+    pub id: &'static str,
+    /// Short label shown in the UI.
+    pub label: &'static str,
+    /// One-line description of what this access level grants.
+    pub description: &'static str,
+    /// Auth params used *instead of* `OAuthConfig::extra_auth_params` when this
+    /// variant is selected (e.g. a wider `user_scope` value).
+    pub params: &'static [(&'static str, &'static str)],
+    /// Whether this is the default selection.
+    pub default: bool,
+}
+
 // ---------------------------------------------------------------------------
 // SecretStore key helper
 // ---------------------------------------------------------------------------

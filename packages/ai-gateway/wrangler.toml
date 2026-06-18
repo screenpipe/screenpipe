@@ -47,6 +47,13 @@ WHISPER_URL = ""
 # Legacy compat
 SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 
+# Interactive chat must stay low-latency, so interactive Gemini uses the STANDARD
+# tier, not best-effort flex (flex on the interactive auto lane made chat slow).
+# Background traffic still flexes (isFlexEligible returns true for background
+# regardless of this flag). Set here (not just dashboard) so it persists as the
+# deliberate default across redeploys; FLEX_TIER_ENABLED remains the master switch.
+GEMINI_FLEX_INTERACTIVE = "false"
+
 # Cost / flex tuning knobs — read with a code default, so they live in the CF
 # dashboard (Settings → Variables), not here, and take effect with no redeploy:
 # - FLEX_TIER_ENABLED ("true"): master kill switch for the Vertex Gemini flex tier.

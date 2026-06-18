@@ -104,7 +104,8 @@ link related notes together.
 ## run on a schedule
 
 set this to run automatically about once an hour using whatever scheduling you have
-(claude tasks, codex automations, openclaw/hermes automations, or a system cron job).
+(claude tasks, codex automations, openclaw/hermes automations, a system cron job, or a
+screenpipe pipe — `npx -y screenpipe@latest pipe install <path>` then `... pipe enable <name>`).
 between runs, when i ask you anything, read now.md and the relevant project/person
 files first so you already know what i was doing.
 
@@ -133,6 +134,7 @@ the prompt above tells the agent to schedule itself, but you control the cadence
 - **OpenClaw / Hermes** — their built-in automations / scheduled tasks
 - **Claude Code** — claude tasks
 - **Codex** — codex automations
+- **screenpipe pipe** — run it inside screenpipe itself: save the prompt to `~/.screenpipe/pipes/second-brain/pipe.md` with a `schedule` (e.g. `0 * * * *`), then `npx -y screenpipe@latest pipe install ~/.screenpipe/pipes/second-brain && npx -y screenpipe@latest pipe enable second-brain` (`bunx` / `bun x` work too — see [pipes](/pipes))
 - **anything else** — a plain `cron` / `launchd` / `systemd` timer that re-runs the prompt
 
 hourly is a good default. lighter machines can run every few hours; use `activity-summary` first to keep token usage low.

@@ -48,6 +48,40 @@ export async function waitForAppReady(): Promise<void> {
   await browser.pause(t(3000));
 }
 
+/**
+ * Reload the current webview and wait for the Home page to re-render.
+ *
+ * Shared so the per-spec inline copies don't drift. The bare
+ * `window.location.reload()` + poll pattern was flaky in CI: while the document
+ * is being torn down, `browser.execute(...)` intermittently throws
+ * "WebDriverError: Session ... not found" / "execution context destroyed", and
+ * uncaught that rejects the `waitUntil` and reds the run as "home did not
+ * re-render after reload". Trapping those transient errors inside the poll
+ * (return false -> keep polling) makes the reload robust, matching the proven
+ * home-page wait in `finishOpenHomeWindow`.
+ */
+export async function reloadAndWaitForHome(timeoutMs = t(30000)): Promise<void> {
+  // The reload itself can race the execution-context teardown — ignore.
+  await browser.execute(() => window.location.reload()).catch(() => {});
+  await browser.waitUntil(
+    async () => {
+      try {
+        return (await browser.execute(
+          () => !!document.querySelector('[data-testid="home-page"]')
+        )) as boolean;
+      } catch {
+        // Transient during the reload (session/context not ready) — retry.
+        return false;
+      }
+    },
+    {
+      timeout: timeoutMs,
+      interval: 500,
+      timeoutMsg: 'home did not re-render after reload',
+    }
+  );
+}
+
 type ShowWindowPayload = { Home: { page: null } };
 
 async function finishOpenHomeWindow(): Promise<void> {

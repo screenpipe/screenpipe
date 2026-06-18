@@ -19,9 +19,15 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+hex = { workspace = true }
+# HMAC-SHA256 backs the consistent-pseudonym tokens (issue #4206). Pairs
+# with the existing `sha2`; `rand` seeds the per-install key and
+# `zeroize` wipes it from memory on drop.
+hmac = { workspace = true }
 image = { workspace = true }
 moka = { workspace = true }
 once_cell = { workspace = true }
+rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -29,6 +35,7 @@ sha2 = { workspace = true }
 sha3 = "0.10"
 sqlx = { workspace = true, features = ["chrono"] }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 # Tinfoil enclave attestation: AMD SEV-SNP attestation + Sigstore code-
 # provenance verification + TLS cert pinning for the privacy-filter PII
 # redaction service. See adapters/tinfoil.rs for the threat model
@@ -43,6 +50,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 tempfile = { workspace = true }
 image = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Integration tests implement a counting `Redactor` to assert the frame
+# full_text→accessibility propagation runs detection once (website#291).
+async-trait = { workspace = true }
 
 [[example]]
 name = "v45_phase3_smoke"

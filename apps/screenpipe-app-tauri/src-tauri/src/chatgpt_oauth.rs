@@ -49,30 +49,23 @@ pub struct ChatGptOAuthStatus {
 
 /// Open a connection to the secrets store (same DB as the screenpipe server).
 ///
-/// Uses the same `?mode=rwc` URI pattern as `oauth.rs` and the engine's
-/// `auth_key.rs` — that path is known to coexist with the engine's own
-/// pool on the busy main `db.sqlite`. The previous `SqliteConnectOptions`
-/// builder path failed intermittently with "failed to create secrets
-/// table" against a healthy on-disk schema, hiding the real sqlx error
-/// behind anyhow's single-line Display. Errors here use `{:#}` so the
-/// full chain (e.g. `database is locked`, `connection refused`, `unable
-/// to open database file`) reaches the log instead of the generic
-/// top-level wrapper.
+/// Uses [`SecretStore::open`], which hands back the process-wide shared pool
+/// (engine-matched pragmas: WAL + busy_timeout + mmap off). This replaces the
+/// old per-call `SqlitePool::connect(?mode=rwc)` that coexisted with the
+/// engine's own pool on the busy main `db.sqlite` and intermittently failed
+/// with "database is locked" / "failed to create secrets table" — symptoms of
+/// the ad-hoc-pool WAL-index churn that corrupts the db (#4263). Errors still
+/// use `{:#}` so the full sqlx chain reaches the log.
 async fn open_secret_store() -> Result<screenpipe_secrets::SecretStore, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-
-    let pool = sqlx::SqlitePool::connect(&db_url)
-        .await
-        .map_err(|e| format!("failed to open db at {}: {}", db_path.display(), e))?;
 
     let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
         crate::secrets::KeyResult::Found(k) => Some(k),
         _ => None,
     };
 
-    screenpipe_secrets::SecretStore::new(pool, secret_key)
+    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
         .await
         .map_err(|e| format!("failed to init secret store: {:#}", e))
 }

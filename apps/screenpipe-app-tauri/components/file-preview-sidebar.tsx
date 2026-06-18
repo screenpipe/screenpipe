@@ -70,7 +70,7 @@ export function FilePreviewSidebar({
   }, [content]);
 
   return (
-    <>
+    <div data-testid="file-preview-sidebar" className="flex flex-col flex-1 min-h-0">
       <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
         <div className="flex-1 min-w-0 text-muted-foreground" title={path}>
           <div className="text-xs truncate">{fileName}</div>
@@ -123,6 +123,6 @@ export function FilePreviewSidebar({
         content={content}
         onOpenViewerPath={onReplacePath}
       />
-    </>
+    </div>
   );
 }

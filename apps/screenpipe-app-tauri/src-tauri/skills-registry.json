@@ -1,0 +1,150 @@
+{
+  "_comment": "Curated agent-skills catalog for the in-app skills browser. Each entry points at a folder containing a SKILL.md in a public GitHub repo; the app downloads that folder into the skills store on install. This file is bundled into the app (include_str!) AND fetched at runtime from raw.githubusercontent.com/screenpipe/screenpipe/main/... so the catalog can grow without an app release. `featured` surfaces a skill in the Recommended row; `apps` are case-insensitive app-name keywords used to rank skills against the user's recent app usage. Keep entries high-signal and verified.",
+  "skills": [
+    {
+      "name": "PDF",
+      "description": "Fill, merge, split, and extract text or tables from PDF files.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/pdf",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/pdf",
+      "featured": true,
+      "apps": ["preview", "acrobat", "adobe", "pdf"]
+    },
+    {
+      "name": "Excel",
+      "description": "Create, read, and edit Excel spreadsheets — formulas, formatting, and charts.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/xlsx",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/xlsx",
+      "featured": true,
+      "apps": ["excel", "numbers", "sheets"]
+    },
+    {
+      "name": "Word",
+      "description": "Create, read, and edit Word documents with formatting, tables, and images.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/docx",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/docx",
+      "featured": true,
+      "apps": ["word", "pages", "docs"]
+    },
+    {
+      "name": "PowerPoint",
+      "description": "Build and edit PowerPoint decks — slides, layouts, and speaker notes.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/pptx",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/pptx",
+      "featured": true,
+      "apps": ["powerpoint", "keynote", "slides"]
+    },
+    {
+      "name": "MCP Builder",
+      "description": "Scaffold high-quality MCP servers that expose tools to LLMs.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/mcp-builder",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/mcp-builder",
+      "apps": ["cursor", "code", "terminal", "iterm", "claude"]
+    },
+    {
+      "name": "Skill Creator",
+      "description": "Author, edit, and optimize new SKILL.md skills.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/skill-creator",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/skill-creator",
+      "apps": ["cursor", "code", "terminal", "claude"]
+    },
+    {
+      "name": "Webapp Testing",
+      "description": "Drive and test local web apps with Playwright — verify UI, capture screenshots.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/webapp-testing",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/webapp-testing",
+      "apps": ["chrome", "safari", "arc", "firefox", "cursor", "code"]
+    },
+    {
+      "name": "Frontend Design",
+      "description": "Opinionated guidance for distinctive UI — typography, color, and visual polish.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/frontend-design",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+      "apps": ["figma", "cursor", "code", "chrome", "arc"]
+    },
+    {
+      "name": "Canvas Design",
+      "description": "Create poster-quality visual art as .png and .pdf documents.",
+      "repo": "anthropics/skills",
+      "git_ref": "main",
+      "path": "skills/canvas-design",
+      "source": "anthropic",
+      "repo_url": "https://github.com/anthropics/skills/tree/main/skills/canvas-design",
+      "apps": ["figma", "photoshop", "illustrator", "canva"]
+    },
+    {
+      "name": "Playwright",
+      "description": "Automate a real browser from the terminal — navigation, forms, scraping, screenshots.",
+      "repo": "openai/skills",
+      "git_ref": "main",
+      "path": "skills/.curated/playwright",
+      "source": "openai",
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/playwright",
+      "apps": ["chrome", "safari", "arc", "firefox", "cursor", "code"]
+    },
+    {
+      "name": "Sentry",
+      "description": "Inspect Sentry issues and summarize recent production errors via the Sentry CLI.",
+      "repo": "openai/skills",
+      "git_ref": "main",
+      "path": "skills/.curated/sentry",
+      "source": "openai",
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/sentry",
+      "apps": ["sentry", "chrome", "arc"]
+    },
+    {
+      "name": "Notion Meeting Intelligence",
+      "description": "Prepare meeting agendas and pre-reads from Notion context.",
+      "repo": "openai/skills",
+      "git_ref": "main",
+      "path": "skills/.curated/notion-meeting-intelligence",
+      "source": "openai",
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/notion-meeting-intelligence",
+      "apps": ["notion", "zoom", "meet", "teams", "slack"]
+    },
+    {
+      "name": "Security Best Practices",
+      "description": "Language- and framework-specific security best-practice reviews.",
+      "repo": "openai/skills",
+      "git_ref": "main",
+      "path": "skills/.curated/security-best-practices",
+      "source": "openai",
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/security-best-practices",
+      "apps": ["cursor", "code", "terminal", "iterm"]
+    },
+    {
+      "name": "Transcribe",
+      "description": "Transcribe audio to text with optional diarization and speaker hints.",
+      "repo": "openai/skills",
+      "git_ref": "main",
+      "path": "skills/.curated/transcribe",
+      "source": "openai",
+      "repo_url": "https://github.com/openai/skills/tree/main/skills/.curated/transcribe",
+      "featured": true,
+      "apps": ["zoom", "meet", "teams", "quicktime", "music", "voice"]
+    }
+  ]
+}

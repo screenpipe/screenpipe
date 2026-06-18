@@ -37,7 +37,7 @@
   FileOpen $1 "$PLUGINSDIR\screenpipe-kill.ps1" w
   IfErrors ${_SP_SKIP}
     FileWriteUTF16LE /BOM $1 '$$d = "$INSTDIR"; if (-not $$d.EndsWith([char]92)) { $$d = $$d + [char]92 }$\r$\n'
-    FileWriteUTF16LE $1 'Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.ToLower().StartsWith($$d.ToLower()) } | ForEach-Object { $$p = $$_.ProcessId; Stop-Process -Id $$p -Force -ErrorAction SilentlyContinue; Wait-Process -Id $$p -Timeout 5 -ErrorAction SilentlyContinue }$\r$\n'
+    FileWriteUTF16LE $1 'Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.ToLower().StartsWith($$d.ToLower()) -and $$_.Name -ne "uninstall.exe" } | ForEach-Object { $$p = $$_.ProcessId; Stop-Process -Id $$p -Force -ErrorAction SilentlyContinue; Wait-Process -Id $$p -Timeout 5 -ErrorAction SilentlyContinue }$\r$\n'
     FileClose $1
     DetailPrint "Stopping processes from $INSTDIR..."
     ; Disable WOW64 FS redirection so System32 resolves to the real 64-bit dir.

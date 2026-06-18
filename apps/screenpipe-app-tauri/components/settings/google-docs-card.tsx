@@ -112,7 +112,7 @@ export function GoogleDocsCard() {
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("google-docs", null);
+      const res = await commands.oauthConnect("google-docs", null, null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_docs_connected");
         await fetchAccounts();
