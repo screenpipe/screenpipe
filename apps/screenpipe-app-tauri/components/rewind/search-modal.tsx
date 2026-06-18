@@ -889,11 +889,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     (async () => {
       setIsSearchingTags(true);
       try {
-        // Query only the tags table (tiny — just distinct names), not vision_tags.
-        // count is never displayed, so we don't need the expensive GROUP BY aggregate
-        // over vision_tags. COLLATE NOCASE handles Unicode correctly (SQLite LOWER()
-        // is ASCII-only). LIMIT 500 keeps even low-count unique tags (e.g. per-session
-        // workflow tags with count=1) so specific long queries still find their target.
+        // Query the tags table directly (distinct names only), not vision_tags.
+        // count was only used for ORDER BY and is never displayed, so we drop the
+        // GROUP BY aggregate over vision_tags — that full-table scan is what froze
+        // the UI on large DBs. LIKE is ASCII case-insensitive by default, so the
+        // lowercased query matches regardless of tag casing (ASCII only). LIMIT 500
+        // keeps low-count unique tags (e.g. per-session workflow tags with count=1)
+        // so specific long queries still find their target.
         const safeTagQuery = tagQuery.replace(/'/g, "''");
         const tagsSQL = tagQuery.length > 0
           ? `SELECT name FROM tags WHERE name LIKE '%${safeTagQuery}%' COLLATE NOCASE ORDER BY name LIMIT 500`
