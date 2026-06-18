@@ -362,10 +362,14 @@ export const useChatStore = create<ChatStore>((set) => ({
               existing.lastContentAt ?? 0,
               r.lastContentAt ?? 0,
             ) || undefined,
-            lastViewedAt: Math.max(
-              existing.lastViewedAt ?? 0,
-              r.lastViewedAt ?? 0,
-            ) || undefined,
+            // lastViewedAt: 0 is the "never viewed" sentinel, so it must NOT
+            // be collapsed to undefined — that would force restoreUnread onto
+            // its fallback instead of computing the real (unread) state.
+            lastViewedAt:
+              typeof existing.lastViewedAt === "number" ||
+              typeof r.lastViewedAt === "number"
+                ? Math.max(existing.lastViewedAt ?? 0, r.lastViewedAt ?? 0)
+                : undefined,
             kind: existing.kind ?? r.kind,
             pipeContext: existing.pipeContext ?? r.pipeContext,
             dedupKey: existing.dedupKey ?? r.dedupKey,

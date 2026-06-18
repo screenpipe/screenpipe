@@ -1224,9 +1224,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // foreground/background swaps.
           ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
-          ...((full as any).lastContentAt ? { lastContentAt: (full as any).lastContentAt } : {}),
-          ...(typeof (full as any).lastViewedAt === "number"
-            ? { lastViewedAt: (full as any).lastViewedAt }
+          ...(full.lastContentAt ? { lastContentAt: full.lastContentAt } : {}),
+          ...(typeof full.lastViewedAt === "number"
+            ? { lastViewedAt: full.lastViewedAt }
             : {}),
         });
       } else if (conv.kind || conv.pipeContext) {

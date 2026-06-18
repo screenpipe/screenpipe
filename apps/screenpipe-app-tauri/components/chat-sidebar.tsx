@@ -249,6 +249,16 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         const store = useChatStore.getState();
         const existing = store.sessions[id];
         if (existing) {
+          // The unread watermarks are monotonic: a cross-window mirror must
+          // never rewind them below what this window already knows, or a
+          // slightly-stale disk read (the other window saved first, our own
+          // lastViewedAt patch hasn't flushed yet) would re-light the dot for
+          // a chat we just read. Take the max, same as hydrateFromDisk.
+          const hasContentAt =
+            existing.lastContentAt != null || meta.lastContentAt != null;
+          const hasViewedAt =
+            typeof existing.lastViewedAt === "number" ||
+            typeof meta.lastViewedAt === "number";
           store.actions.patch(id, {
             title: meta.title || existing.title,
             messageCount: meta.messageCount,
@@ -257,9 +267,21 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             ...(meta.lastUserMessageAt
               ? { lastUserMessageAt: meta.lastUserMessageAt }
               : {}),
-            ...(meta.lastContentAt ? { lastContentAt: meta.lastContentAt } : {}),
-            ...(typeof meta.lastViewedAt === "number"
-              ? { lastViewedAt: meta.lastViewedAt }
+            ...(hasContentAt
+              ? {
+                  lastContentAt: Math.max(
+                    existing.lastContentAt ?? 0,
+                    meta.lastContentAt ?? 0,
+                  ),
+                }
+              : {}),
+            ...(hasViewedAt
+              ? {
+                  lastViewedAt: Math.max(
+                    existing.lastViewedAt ?? 0,
+                    meta.lastViewedAt ?? 0,
+                  ),
+                }
               : {}),
             updatedAt: Math.max(existing.updatedAt, meta.updatedAt),
             kind: meta.kind,

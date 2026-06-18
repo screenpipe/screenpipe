@@ -461,6 +461,37 @@ describe("chat-store: unread is computed from timestamps", () => {
 
     expect(useChatStore.getState().sessions.legacy.unread).toBe(false);
   });
+
+  it("hydrateFromDisk merge preserves the never-viewed (0) watermark", () => {
+    // A row already in memory (e.g. a just-finished pipe run) that has
+    // never been viewed: lastViewedAt is the 0 sentinel, so it's unread.
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 200, lastViewedAt: 0 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+
+    // A disk record for the same id arrives via a later hydrate pass. The
+    // merge must keep lastViewedAt as 0 (not collapse it to undefined) so
+    // unread stays computed rather than falling back to the stale flag.
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "A",
+        title: "A",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 2,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        lastViewedAt: 0,
+        kind: "chat",
+      }),
+    ]);
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastViewedAt).toBe(0);
+    expect(session.unread).toBe(true);
+  });
 });
 
 describe("chat-store: cross-window duplicate row collapsing", () => {
