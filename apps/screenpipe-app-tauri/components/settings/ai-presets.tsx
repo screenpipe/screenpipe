@@ -819,6 +819,7 @@ const AISection = ({
     // Use tauriFetch for chatgpt.com and Anthropic to bypass CORS
     const fetchFn = (isChatGpt || isAnthropic) ? tauriFetch : fetch;
 
+    let isStreaming = false;
     const chatStart = performance.now();
     try {
       let chatResponse = await fetchFn(chatUrl, {
@@ -847,6 +848,29 @@ const AISection = ({
             signal: abort.signal,
           });
         }
+
+        // Some OpenAI-compatible servers only accept stream_options when
+        // stream=true, so retry the diagnostics request in streaming mode.
+        const updatedErrText = chatResponse.ok ? "" : await chatResponse.clone().text().catch(() => "");
+        const checkText = updatedErrText || errText;
+        if (!chatResponse.ok && (checkText.toLowerCase().includes("stream_options") || checkText.toLowerCase().includes("stream = true"))) {
+          isStreaming = true;
+          const retryBody = {
+            ...buildChatTestBody(
+              settingsPreset?.model || "",
+              "say hi",
+              50,
+              checkText.toLowerCase().includes("max_completion_tokens") ? "max_completion_tokens" : "max_tokens"
+            ),
+            stream: true,
+          };
+          chatResponse = await fetchFn(chatUrl, {
+            method: "POST",
+            headers: chatHeaders,
+            body: JSON.stringify(retryBody),
+            signal: abort.signal,
+          });
+        }
       }
 
       const latencyMs = Math.round(performance.now() - chatStart);
@@ -866,15 +890,32 @@ const AISection = ({
       }
 
       let reply: string;
-      if (isChatGpt) {
+      if (isChatGpt || isStreaming) {
         // Streaming SSE — just confirm we got a 200 response
         reply = "Stream started OK";
       } else if (isAnthropic) {
-        const chatData = await chatResponse.json();
-        reply = chatData.content?.[0]?.text?.slice(0, 100) || "No response";
+        const chatResponseClone = chatResponse.clone();
+        try {
+          const chatData = await chatResponse.json();
+          reply = chatData.content?.[0]?.text?.slice(0, 100) || "No response";
+        } catch {
+          const text = await chatResponseClone.text().catch(() => "");
+          reply = text.slice(0, 100) || "Text response";
+        }
       } else {
-        const chatData = await chatResponse.json();
-        reply = chatData.choices?.[0]?.message?.content?.slice(0, 100) || "No response";
+        const contentType = chatResponse.headers.get("content-type") || "";
+        if (contentType.includes("event-stream")) {
+          reply = "Stream started OK";
+        } else {
+          const chatResponseClone = chatResponse.clone();
+          try {
+            const chatData = await chatResponse.json();
+            reply = chatData.choices?.[0]?.message?.content?.slice(0, 100) || "No response";
+          } catch {
+            const text = await chatResponseClone.text().catch(() => "");
+            reply = text.slice(0, 100) || "Text response";
+          }
+        }
       }
 
       if (abort.signal.aborted) return;
