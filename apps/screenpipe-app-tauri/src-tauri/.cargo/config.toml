@@ -3,6 +3,13 @@
 
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# pre_build.js downloads OpenBLAS to src-tauri/openblas/ and sets OPENBLAS_PATH
+# in its own process, but that env var is NOT inherited by the cargo subprocess
+# that tauri spawns to compile the Rust code. Setting it here ensures
+# antirez-asr-sys/build.rs can find cblas.h on every cargo invocation.
+# `relative = true` resolves the path from the directory that *contains* .cargo/
+# (i.e. src-tauri/), so "openblas" → src-tauri/openblas.
+OPENBLAS_PATH = { value = "openblas", relative = true }
 # whisper.cpp ggml uses std::filesystem::path which requires macOS 10.15+
 # These are picked up by whisper-rs-sys's cmake build before compilation starts
 # CI can still override via explicit env vars (force = false is default)

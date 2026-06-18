@@ -6,6 +6,7 @@ import { createProvider, resolveModelAlias } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 import { isFlexEligible } from '../utils/latency';
+import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
 import { captureException } from '@sentry/cloudflare';
 
 // Auto model waterfall (INTERACTIVE) — leads with glm-5. Interactive is
@@ -443,6 +444,7 @@ export async function handleChatCompletions(
   body: RequestBody,
   env: Env,
   latency: 'interactive' | 'background' = 'interactive',
+  deviceId: string = '',
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
   // answer the injected system hint below, and Anthropic 400s outright once
@@ -467,12 +469,29 @@ export async function handleChatCompletions(
   const useBackgroundChain = latency === 'background';
 
   if (body.model === 'auto') {
-    const chain = hasImages(body)
+    let chain = hasImages(body)
       ? AUTO_WATERFALL_VISION
       : (useBackgroundChain ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL);
+    // Difficulty router (interactive text only). A/B by device: arm 'on' runs the
+    // router and promotes a tier head (opus for hard, gpt-5-nano for trivial), arm
+    // 'off' is the control baseline (chain unchanged = today's behavior). We tag
+    // router_tier on the response so the cost log can measure ON vs control.
+    let routerTier: string | null = null;
+    if (!hasImages(body) && !useBackgroundChain) {
+      if (routerArm(deviceId, env) === 'on') {
+        const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+        const tier = await routeTier(body.messages, env, { hasTools });
+        routerTier = tier;
+        if (tier !== 'normal') chain = [TIER_HEAD[tier], ...chain.filter((m) => m !== TIER_HEAD[tier])];
+      } else {
+        routerTier = 'control';
+      }
+    }
     const result = await runChain(chain, body, env, 'auto', flexEligible);
     if ('response' in result) {
-      return addCorsHeaders(addModelHeader(result.response, result.model));
+      const resp = addCorsHeaders(addModelHeader(result.response, result.model));
+      if (routerTier) resp.headers.set('x-screenpipe-router-tier', routerTier);
+      return resp;
     }
     const status = result.error?.status || 503;
     const message = result.error?.userMessage || friendlyError(result.lastModel, status, true);

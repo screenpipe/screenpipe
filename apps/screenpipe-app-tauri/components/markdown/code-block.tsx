@@ -13,6 +13,7 @@ import {
 } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import type { Options } from "react-markdown";
 import { cn } from "@/lib/utils";
+import { commands } from "@/lib/utils/tauri";
 
 /**
  * One markdown surface, one code block.
@@ -168,7 +169,7 @@ export const MarkdownCodeBlock = React.memo(function MarkdownCodeBlock({
   const handleCopy = async () => {
     if (!value || copied) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await commands.copyTextToClipboard(value);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch (error) {

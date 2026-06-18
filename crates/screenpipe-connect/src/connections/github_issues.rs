@@ -42,6 +42,10 @@ impl Integration for GithubIssues {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         // GitHub's REST API edge rejects requests with a missing or empty
         // User-Agent before they ever hit auth, returning 403 with body:

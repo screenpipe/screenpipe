@@ -113,9 +113,9 @@ function ErrorState({ message, path }: { message: string; path: string }) {
       </div>
       <pre className="whitespace-pre-wrap break-words mb-4">{message}</pre>
       {path && (
-        <div className="text-foreground/40 break-all">
-          <span className="opacity-60">path: </span>
-          {path}
+        <div className="text-foreground/40 break-all" title={path}>
+          <span className="opacity-60">looked in: </span>
+          {viewerPathBreadcrumb(path)}
         </div>
       )}
     </div>

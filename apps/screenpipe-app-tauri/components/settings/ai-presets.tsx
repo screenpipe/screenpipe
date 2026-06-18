@@ -907,7 +907,6 @@ const AISection = ({
     settingsPreset?.provider !== "openai-chatgpt" &&
     settingsPreset?.provider !== "anthropic" &&
     settingsPreset?.url !== "https://api.screenpipe.com/v1" &&
-    settingsPreset?.url !== "https://api.screenpi.pe/v1" &&
     settingsPreset?.url !== "http://localhost:11434/v1" &&
     settingsPreset?.url !== "embedded";
 
@@ -1517,7 +1516,7 @@ const AISection = ({
                                   await commands.openLoginWindow();
                                 } else {
                                   try {
-                                    const res = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+                                    const res = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.user.token}` },
                                       body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId: settings.user.id, email: settings.user.email }),

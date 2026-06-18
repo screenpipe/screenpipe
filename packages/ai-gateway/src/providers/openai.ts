@@ -204,6 +204,24 @@ export class OpenAIProvider implements AIProvider {
 						if (choice?.finish_reason) {
 							finishReason = choice.finish_reason;
 						}
+						// Forward streamed tool-call fragments (delta.tool_calls:
+						// index/id/function.name + argument chunks). The content
+						// branch below only forwards delta.content, so without this
+						// a tool call (finish_reason "tool_calls") reached Pi as an
+						// empty assistant message → stopReason:"toolUse" with nothing
+						// to run, and background pipes silently no-op'd. Pi
+						// accumulates these in the same OpenAI shape the Anthropic
+						// provider already emits.
+						const toolCalls = choice?.delta?.tool_calls;
+						if (toolCalls && toolCalls.length > 0) {
+							controller.enqueue(
+								new TextEncoder().encode(
+									`data: ${JSON.stringify({
+										choices: [{ delta: { tool_calls: toolCalls } }],
+									})}\n\n`
+								)
+							);
+						}
 						if (body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema') {
 							const content = choice?.delta?.content;
 							if (content) {

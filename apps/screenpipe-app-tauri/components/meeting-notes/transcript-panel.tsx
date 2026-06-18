@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
+import { commands } from "@/lib/utils/tauri";
 import { Button } from "@/components/ui/button";
 import { MediaComponent } from "@/components/rewind/media";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
@@ -640,7 +641,7 @@ export function TranscriptPanel({
       .map((b) => `[${formatClock(b.startMs)}] ${b.speakerName}\n${b.text}`)
       .join("\n\n");
     try {
-      await navigator.clipboard.writeText(text);
+      await commands.copyTextToClipboard(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {

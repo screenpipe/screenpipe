@@ -20,7 +20,7 @@ interface ChangelogEntry {
   commitCount: number;
 }
 
-const CHANGELOG_API = "https://screenpi.pe/api/changelog?limit=50";
+const CHANGELOG_API = "https://screenpipe.com/api/changelog?limit=50";
 
 async function fetchRemote(): Promise<ChangelogEntry[] | null> {
   try {

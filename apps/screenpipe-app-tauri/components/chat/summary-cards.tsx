@@ -140,9 +140,21 @@ export function SummaryCards({
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
 
-  const templates = templatePipes.length > 0 ? templatePipes : FALLBACK_TEMPLATES;
-  const featured = templates.filter((t) => t.featured);
-  const discover = templates.filter((t) => !t.featured);
+  // Curated home grid — kept deliberately small to reduce cognitive load.
+  // Order matters. Definitions come from the app bundle (FALLBACK_TEMPLATES)
+  // and win over engine template pipes, so prompt improvements ship with the
+  // app upgrade even when an older copy of the pipe already exists on disk
+  // (install_builtin_pipes never overwrites an existing pipe.md). The discover
+  // tier is intentionally removed — the metrics showed it earned ~9% of clicks
+  // across 6 cards while doubling the visible surface.
+  const HOME_CARD_SLUGS = ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"];
+  const byName = new Map<string, TemplatePipe>();
+  for (const t of templatePipes) byName.set(t.name, t);
+  for (const t of FALLBACK_TEMPLATES) byName.set(t.name, t);
+  const featured = HOME_CARD_SLUGS.map((slug) => byName.get(slug)).filter(
+    (t): t is TemplatePipe => Boolean(t),
+  );
+  const discover: TemplatePipe[] = [];
 
   const handleCardClick = (pipe: TemplatePipe) => {
     posthog.capture("home_card_clicked", {

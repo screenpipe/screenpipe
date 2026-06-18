@@ -193,6 +193,12 @@ export interface CostLogEntry {
   estimated_cost_usd: number;
   endpoint: string;
   stream: boolean;
+  // Instrumentation (migration 0007). latency_ms = time to response object
+  // (≈ TTFB for stream, total for non-stream). router_tier = the difficulty
+  // router's decision: 'trivial'|'normal'|'hard' (arm on), 'control' (arm off,
+  // A/B baseline), or null (router N/A: vision/background/explicit/off).
+  latency_ms?: number | null;
+  router_tier?: string | null;
 }
 
 /** UTC day string (YYYY-MM-DD) — same convention as usage.last_reset. */
@@ -237,6 +243,31 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
     await bumpDailyCostAccumulator(env, entry.device_id, entry.estimated_cost_usd);
   }
   try {
+    // Newest column set (migration 0007: + latency_ms, router_tier).
+    await env.DB.prepare(
+      `INSERT INTO cost_log (device_id, user_id, tier, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, endpoint, stream, latency_ms, router_tier)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        entry.device_id ?? null,
+        entry.user_id ?? null,
+        entry.tier,
+        entry.provider,
+        entry.model,
+        entry.input_tokens,
+        entry.output_tokens,
+        entry.cache_read_tokens ?? null,
+        entry.cache_creation_tokens ?? null,
+        entry.estimated_cost_usd,
+        entry.endpoint,
+        entry.stream ? 1 : 0,
+        entry.latency_ms ?? null,
+        entry.router_tier ?? null,
+      )
+      .run();
+  } catch (routerColsError) {
+   try {
+    // Migration 0004 applied (cache cols) but not 0007 yet.
     await env.DB.prepare(
       `INSERT INTO cost_log (device_id, user_id, tier, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, endpoint, stream)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -256,7 +287,7 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
         entry.stream ? 1 : 0,
       )
       .run();
-  } catch (error) {
+   } catch (error) {
     try {
       await env.DB.prepare(
         `INSERT INTO cost_log (device_id, user_id, tier, provider, model, input_tokens, output_tokens, estimated_cost_usd, endpoint, stream)
@@ -278,6 +309,7 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
     } catch (fallbackError) {
       console.error('cost logging failed:', fallbackError);
     }
+   }
   }
 }
 

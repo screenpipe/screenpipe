@@ -56,7 +56,7 @@
       "active": true,
       "dialog": false,
       "endpoints": [
-        "https://screenpi.pe/api/app-update/stable/{{target}}-{{arch}}/{{current_version}}"
+        "https://screenpipe.com/api/app-update/stable/{{target}}-{{arch}}/{{current_version}}"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIyQjQ2RkQzMUNBOUFDMTcKUldRWHJLa2MwMiswSWl3RlBGUW5zYUE0Zm0vNFFRRTltNUZZTUVxR2FxUDNtSWdUSHgyL3JNcmcK"
     },
@@ -68,43 +68,43 @@
       },
       "mobile": [
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/auth"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/stripe-connect"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/purchase-successful"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/settings"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/changelog"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/onboarding"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/status"
           ]

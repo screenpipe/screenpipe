@@ -101,6 +101,10 @@ export interface SessionRecord {
    *  This matches how email clients show inboxes — bumped on action,
    *  stable while you're reading. */
   lastUserMessageAt?: number;
+  /** ms since epoch of the most recent actual message append (user or
+   *  assistant). Drives unread detection — immune to non-content writes
+   *  like browser state, status patches, or process-exit saves. */
+  lastContentAt?: number;
   /** User pinned this conversation to the top of the sidebar. */
   pinned: boolean;
   /** Archived conversation hidden from recents. */
@@ -214,11 +218,6 @@ interface ChatStoreActions {
   setPanelSession: (id: string | null) => void;
   /** Toggle the pinned state. */
   togglePinned: (id: string) => void;
-  /** Mark a session as having new unseen assistant activity. The router
-   *  calls this when content lands for a session other than the current
-   *  one. No-op if the session id is the current one (you can't be
-   *  unread for the chat you're looking at). */
-  markUnread: (id: string) => void;
 
   // ── Per-session live content ops ─────────────────────────────────────
   // These mutate the in-flight `messages` / `contentBlocks` /
@@ -293,6 +292,39 @@ interface ChatStoreActions {
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
 type ChatSessionsState = Pick<ChatStoreState, "sessions">;
 
+export function isSessionForeground(
+  state: Pick<ChatStoreState, "currentId" | "panelSessionId">,
+  id: string,
+): boolean {
+  return state.currentId === id || state.panelSessionId === id;
+}
+
+/** Compute unread from timestamps — immune to non-content writes.
+ *  A session is unread when its most recent real message append happened
+ *  AFTER the last time the user viewed it. Falls back to
+ *  lastUserMessageAt for rows hydrated from older on-disk files that
+ *  predate the lastContentAt field. */
+function isUnread(s: SessionRecord): boolean {
+  const content = s.lastContentAt ?? s.lastUserMessageAt ?? 0;
+  return content > (s.lastViewedAt ?? 0);
+}
+
+function restoreUnread(
+  existing: SessionRecord | undefined,
+  merged: SessionRecord,
+): boolean {
+  if (typeof merged.lastViewedAt === "number") return isUnread(merged);
+  return existing?.unread ?? false;
+}
+
+export function getPersistedViewedAt(
+  session: Pick<SessionRecord, "lastViewedAt" | "lastContentAt"> | undefined,
+): number | undefined {
+  if (!session) return undefined;
+  if (typeof session.lastViewedAt === "number") return session.lastViewedAt;
+  return typeof session.lastContentAt === "number" ? 0 : undefined;
+}
+
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
   diskHydrated: false,
@@ -308,19 +340,42 @@ export const useChatStore = create<ChatStore>((set) => ({
         const next: Record<string, SessionRecord> = { ...s.sessions };
         for (const r of records) {
           const existing = next[r.id];
-          next[r.id] = existing
-            ? {
-                ...existing,
-                title: r.title,
-                titleSource: r.titleSource ?? existing.titleSource,
-                preview: r.preview,
-                messageCount: r.messageCount,
-                pinned: existing.pinned || r.pinned,
-                hidden: existing.hidden ?? r.hidden ?? false,
-                // updatedAt: take the larger so memory doesn't get clobbered
-                updatedAt: Math.max(existing.updatedAt, r.updatedAt),
-              }
-            : r;
+          if (!existing) {
+            next[r.id] = r;
+            continue;
+          }
+          const merged: SessionRecord = {
+            ...existing,
+            title: r.title,
+            titleSource: r.titleSource ?? existing.titleSource,
+            preview: r.preview,
+            messageCount: r.messageCount,
+            pinned: existing.pinned || r.pinned,
+            hidden: existing.hidden ?? r.hidden ?? false,
+            // updatedAt: take the larger so memory doesn't get clobbered
+            updatedAt: Math.max(existing.updatedAt, r.updatedAt),
+            lastUserMessageAt: Math.max(
+              existing.lastUserMessageAt ?? 0,
+              r.lastUserMessageAt ?? 0,
+            ) || undefined,
+            lastContentAt: Math.max(
+              existing.lastContentAt ?? 0,
+              r.lastContentAt ?? 0,
+            ) || undefined,
+            // lastViewedAt: 0 is the "never viewed" sentinel, so it must NOT
+            // be collapsed to undefined — that would force restoreUnread onto
+            // its fallback instead of computing the real (unread) state.
+            lastViewedAt:
+              typeof existing.lastViewedAt === "number" ||
+              typeof r.lastViewedAt === "number"
+                ? Math.max(existing.lastViewedAt ?? 0, r.lastViewedAt ?? 0)
+                : undefined,
+            kind: existing.kind ?? r.kind,
+            pipeContext: existing.pipeContext ?? r.pipeContext,
+            dedupKey: existing.dedupKey ?? r.dedupKey,
+          };
+          merged.unread = restoreUnread(existing, merged);
+          next[r.id] = merged;
         }
         return { sessions: next, diskHydrated: true };
       }),
@@ -337,6 +392,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         const merged: SessionRecord = existing
           ? { ...existing, ...record, createdAt: existing.createdAt }
           : record;
+        // Recompute unread from timestamps so it stays consistent.
+        merged.unread = isUnread(merged);
         return { sessions: { ...s.sessions, [record.id]: merged } };
       }),
 
@@ -344,8 +401,13 @@ export const useChatStore = create<ChatStore>((set) => ({
       set((s) => {
         const existing = s.sessions[id];
         if (!existing) return {};
+        const patched = { ...existing, ...partial };
+        // Recompute unread when any timestamp that drives it changed.
+        if ("lastContentAt" in partial || "lastViewedAt" in partial) {
+          patched.unread = isUnread(patched);
+        }
         return {
-          sessions: { ...s.sessions, [id]: { ...existing, ...partial } },
+          sessions: { ...s.sessions, [id]: patched },
         };
       }),
 
@@ -363,13 +425,13 @@ export const useChatStore = create<ChatStore>((set) => ({
     setCurrent: (id) =>
       set((s) => {
         const viewedAt = Date.now();
-        // Viewing a session counts as reading it — clear the unread flag
-        // for the new current. Same atomic update so the row's unread
-        // state can't transiently flicker between the setCurrent call and
-        // a follow-up markRead call.
+        // Viewing a session counts as reading it — lastViewedAt >= any
+        // lastContentAt means isUnread() returns false. Same atomic update
+        // so the row's unread state can't transiently flicker.
         if (id && s.sessions[id]) {
           return {
             currentId: id,
+            panelSessionId: id,
             sessions: {
               ...s.sessions,
               [id]: { ...s.sessions[id], unread: false, lastViewedAt: viewedAt },
@@ -390,24 +452,6 @@ export const useChatStore = create<ChatStore>((set) => ({
             ...s.sessions,
             [id]: { ...existing, pinned: !existing.pinned },
           },
-        };
-      }),
-
-    markUnread: (id) =>
-      set((s) => {
-        const existing = s.sessions[id];
-        if (!existing) return {};
-        // Can't be unread for the chat the user is actively looking at.
-        if (s.currentId === id) return {};
-        // Also a no-op when the chat is still loaded in the (display:none)
-        // panel — the user already read what's there; trailing deltas that
-        // arrive after they navigate to Settings/Pipes/Memories/Timeline
-        // shouldn't re-light the unread dot. The panel keeps streaming in
-        // the background and panelSessionId tracks its current conversation.
-        if (s.panelSessionId === id) return {};
-        if (existing.unread) return {}; // already unread, avoid re-render churn
-        return {
-          sessions: { ...s.sessions, [id]: { ...existing, unread: true } },
         };
       }),
 
@@ -439,16 +483,24 @@ export const useChatStore = create<ChatStore>((set) => ({
         const existing = s.sessions[id];
         if (!existing) return {};
         const messages = [...(existing.messages ?? []), message];
+        const now = Date.now();
+        const patched = {
+          ...existing,
+          messages,
+          messageCount: messages.length,
+          preview: preview ?? existing.preview,
+          updatedAt: now,
+          lastContentAt: now,
+          // Foreground ownership includes the mounted panel session even
+          // when the home section is hidden, so trailing content there
+          // should stay read.
+          ...(isSessionForeground(s, id) ? { lastViewedAt: now } : {}),
+        };
+        patched.unread = isUnread(patched);
         return {
           sessions: {
             ...s.sessions,
-            [id]: {
-              ...existing,
-              messages,
-              messageCount: messages.length,
-              preview: preview ?? existing.preview,
-              updatedAt: Date.now(),
-            },
+            [id]: patched,
           },
         };
       }),
@@ -627,10 +679,10 @@ export const useChatActions = () => useChatStore((s) => s.actions);
 /** Build a fresh SessionRecord from on-disk metadata. Used by both the
  *  boot-time hydrate path and the pipe-run recorder so the sidebar sees
  *  identically-shaped rows whether they were loaded at startup or upserted
- *  the moment a pipe finishes. unread is false: persisted-from-disk rows
- *  aren't user-actionable in the inbox sense. */
+ *  the moment a pipe finishes. Legacy rows that predate `lastViewedAt`
+ *  restore as read because they have no persisted unread watermark. */
 export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
-  return {
+  const record: SessionRecord = {
     id: m.id,
     title: m.title || "untitled",
     titleSource: m.titleSource,
@@ -642,11 +694,17 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     pinned: m.pinned,
     unread: false,
     lastUserMessageAt: m.lastUserMessageAt,
+    lastContentAt: m.lastContentAt,
+    lastViewedAt: m.lastViewedAt,
     kind: m.kind,
     pipeContext: m.pipeContext,
     dedupKey: m.dedupKey,
     presetId: m.presetId,
   };
+  if (typeof m.lastViewedAt === "number") {
+    record.unread = isUnread(record);
+  }
+  return record;
 }
 
 /**

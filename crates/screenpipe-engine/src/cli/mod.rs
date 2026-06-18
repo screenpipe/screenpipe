@@ -14,6 +14,7 @@ pub mod login;
 pub mod mcp;
 pub mod pipe;
 pub mod presets;
+pub mod profile;
 pub mod search;
 pub mod status;
 mod store_file;
@@ -186,14 +187,25 @@ pub enum Command {
         port: u16,
     },
 
+    /// Show per-stage pipeline timing (OCR, DB write, capture FPS, audio
+    /// throughput) from the running server's /health endpoint
+    Profile {
+        /// Output format
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Port of the running server
+        #[arg(short = 'p', long, default_value_t = 3030)]
+        port: u16,
+    },
+
     /// Search screen + audio history directly from the local SQLite DB
     /// (no daemon required — opens `~/.screenpipe/db.sqlite` read-side
     /// via WAL while sp may be writing).
     Search(SearchArgs),
 
     /// Enterprise: query teammates' screen + audio history via
-    /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a
-    /// `team_api_token` minted at https://screenpi.pe/enterprise?tab=tokens.
+    /// `screenpipe.com/api/enterprise/v1/*`. Admin-only — needs a
+    /// `team_api_token` minted at https://screenpipe.com/enterprise?tab=tokens.
     Team {
         #[command(subcommand)]
         subcommand: TeamCommand,
@@ -244,7 +256,7 @@ pub enum Command {
     /// Install a bundle of pipes from a manifest URL
     Install {
         /// Manifest URL (HTTPS, JSON). Defaults to the screenpipe starter bundle.
-        #[arg(default_value = "https://screenpi.pe/start.json")]
+        #[arg(default_value = "https://screenpipe.com/start.json")]
         url: String,
         /// Allow manifests hosted outside the trusted host list
         #[arg(long, default_value_t = false)]
@@ -1770,7 +1782,7 @@ pub struct SearchArgs {
 // =============================================================================
 
 /// Mirrors the `screenpipe-team` skill 1:1 — same endpoints, same vocabulary.
-/// All three variants hit `https://screenpi.pe/api/enterprise/v1/*` directly
+/// All three variants hit `https://screenpipe.com/api/enterprise/v1/*` directly
 /// with the admin's `team_api_token` from `~/.screenpipe/enterprise.json`
 /// (or `SCREENPIPE_TEAM_API_TOKEN` env override). No daemon needed.
 #[derive(Subcommand, Debug)]
@@ -2198,6 +2210,31 @@ mod tests {
         match cli.command {
             Command::Survey => {}
             _ => panic!("expected Survey command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_command_parses_with_defaults() {
+        let cli = Cli::try_parse_from(["screenpipe", "profile"]).unwrap();
+        match cli.command {
+            Command::Profile { json, port } => {
+                assert!(!json);
+                assert_eq!(port, 3030);
+            }
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_command_parses_port_and_json() {
+        let cli =
+            Cli::try_parse_from(["screenpipe", "profile", "--port", "4040", "--json"]).unwrap();
+        match cli.command {
+            Command::Profile { json, port } => {
+                assert!(json);
+                assert_eq!(port, 4040);
+            }
+            _ => panic!("expected Profile command"),
         }
     }
 

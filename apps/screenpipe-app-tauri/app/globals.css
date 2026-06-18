@@ -670,6 +670,86 @@
 }
 
 
+/* TipTap image resize handles (ResizableNodeView) */
+.meeting-note-image {
+  transition: outline 0.15s;
+}
+[data-resize-container] {
+  display: inline-flex;
+  position: relative;
+  line-height: 0;
+}
+/* Strip prose margins so the resize wrapper hugs the image exactly */
+[data-resize-wrapper] > img {
+  margin: 0 !important;
+}
+/* Cap freshly inserted images so they don't fill the screen.
+   Once resized, TipTap sets inline style (width/height) which
+   overrides these defaults automatically via :not([style]). */
+[data-resize-wrapper] > img:not([style]) {
+  max-height: 300px;
+  width: auto;
+}
+[data-resize-handle] {
+  width: 10px;
+  height: 10px;
+  background: hsl(var(--primary));
+  border: 1.5px solid hsl(var(--background));
+  border-radius: 2px;
+  position: absolute;
+  z-index: 10;
+  cursor: nwse-resize !important;
+  opacity: 0;
+  transition: opacity 0.15s;
+  user-select: none !important;
+}
+/* Prevent blue selection overlay on images during click/resize */
+[data-resize-container] img {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+/* Hide ProseMirror node-selection outline on resizable images */
+[data-resize-container].ProseMirror-selectednode,
+[data-resize-container] img.ProseMirror-selectednode {
+  outline: none !important;
+}
+[data-resize-container]:hover [data-resize-handle],
+[data-resize-state="true"] [data-resize-handle] {
+  opacity: 1;
+}
+/* Delete button on image hover */
+[data-image-delete],
+[data-image-delete] * {
+  cursor: pointer !important;
+}
+[data-image-delete] {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: hsl(var(--background) / 0.8);
+  color: hsl(var(--foreground));
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  backdrop-filter: blur(4px);
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+[data-image-delete]:hover {
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+}
+[data-resize-container]:hover [data-image-delete] {
+  opacity: 1;
+}
+
 /* TipTap — show placeholder only on the first empty paragraph of an empty doc.
    Mirrors the muted-foreground/40 styling we use on native textareas. */
 .ProseMirror p.is-editor-empty:first-child::before {

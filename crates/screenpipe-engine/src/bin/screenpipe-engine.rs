@@ -29,6 +29,7 @@ use screenpipe_engine::{
         audio::handle_audio_command,
         mcp::handle_mcp_command,
         pipe::handle_pipe_command,
+        profile::handle_profile_command,
         search::handle_search_command,
         status::handle_status_command,
         sync::{handle_sync_command, start_sync_service},
@@ -317,6 +318,10 @@ async fn main() -> anyhow::Result<()> {
             let local_data_dir = get_base_dir(data_dir)?;
             let _log_guard = Some(setup_logging(&local_data_dir, false, true)?);
             handle_status_command(json, data_dir, port).await?;
+            return Ok(());
+        }
+        Command::Profile { json, port } => {
+            handle_profile_command(json, port).await?;
             return Ok(());
         }
         Command::Search(ref args) => {

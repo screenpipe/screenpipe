@@ -22,6 +22,7 @@ import { ExternalLink, Loader2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { toast } from "@/components/ui/use-toast";
+import { commands } from "@/lib/utils/tauri";
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -134,7 +135,7 @@ export function UserBrowserCard() {
                   try {
                     await openUrl(CHROME_WEBSTORE_URL);
                   } catch {
-                    try { await navigator.clipboard.writeText(CHROME_WEBSTORE_URL); } catch { /* clipboard may be denied */ }
+                    try { await commands.copyTextToClipboard(CHROME_WEBSTORE_URL); } catch { /* clipboard may be denied */ }
                     toast({
                       title: "couldn't open your browser",
                       description: `link copied — paste in Chrome: ${CHROME_WEBSTORE_URL}`,

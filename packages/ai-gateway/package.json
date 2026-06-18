@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260307.1",
+    "@huggingface/transformers": "^4.2.0",
     "@sentry/cli": "^2.50.2",
     "@types/node": "^22.19.15",
     "typescript": "^5.9.3",

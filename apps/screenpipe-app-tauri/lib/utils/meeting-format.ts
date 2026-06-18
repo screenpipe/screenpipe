@@ -72,7 +72,7 @@ export function buildSummarizePrompt(meeting: MeetingRecord): string {
   if (meeting.attendees) parts.push(`attendees: ${meeting.attendees}`);
   if (meeting.note) parts.push(`notes: ${meeting.note}`);
 
-  return `search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items. then suggest which of my connected integrations would be useful to share this with and draft a message for each.\n\nmeeting:\n${parts.join("\n")}`;
+  return `search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items. name any unnamed/generic speakers from the on-screen name tags video-call apps render (GET /search?content_type=ocr over the meeting window, then POST /speakers/update) — do this without asking, only on unambiguous evidence. then offer to push the summary to one of my *connected* apps: GET http://localhost:3030/connections (keep "connected": true), rank by the apps used during the meeting, and ask which to push to before sending anything.\n\nmeeting:\n${parts.join("\n")}`;
 }
 
 /**

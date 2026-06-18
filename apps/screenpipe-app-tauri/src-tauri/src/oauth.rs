@@ -463,7 +463,7 @@ pub async fn oauth_connect(
     // We only fall back to the default slot (None) when the provider hands us
     // no identity to key on (e.g. Notion/QuickBooks/Jira, which key on
     // workspace metadata instead and stay single-account here).
-    let effective_instance = instance.or_else(|| token_data["email"].as_str().map(String::from));
+    let effective_instance = derive_effective_instance(instance, &token_data);
     let store_instance = effective_instance.as_deref();
 
     oauth::write_oauth_token_instance(store.as_ref(), &integration_id, store_instance, &token_data)
@@ -647,7 +647,48 @@ pub async fn oauth_list_instances(
 
 /// Extract email from an id_token JWT by decoding the payload (no signature verification).
 fn extract_email_from_jwt(jwt: &str) -> Option<String> {
-    decode_jwt_payload(jwt)?["email"].as_str().map(String::from)
+    let payload = decode_jwt_payload(jwt)?;
+    payload["email"]
+        .as_str()
+        .or_else(|| payload["preferred_username"].as_str())
+        .or_else(|| payload["upn"].as_str())
+        .map(String::from)
+}
+
+fn derive_effective_instance(
+    explicit_instance: Option<String>,
+    token_data: &serde_json::Value,
+) -> Option<String> {
+    explicit_instance.or_else(|| token_data["email"].as_str().map(String::from))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_effective_instance;
+    use serde_json::json;
+
+    #[test]
+    fn effective_instance_uses_email_identity() {
+        let token_data = json!({
+            "access_token": "at",
+            "email": "zoom-user@example.com",
+        });
+
+        assert_eq!(
+            derive_effective_instance(None, &token_data).as_deref(),
+            Some("zoom-user@example.com")
+        );
+    }
+
+    #[test]
+    fn effective_instance_does_not_use_workspace_metadata() {
+        let token_data = json!({
+            "access_token": "at",
+            "workspace_name": "Acme Workspace",
+        });
+
+        assert_eq!(derive_effective_instance(None, &token_data), None);
+    }
 }
 
 /// Microsoft's well-known tenant ID for **personal** Microsoft accounts
@@ -725,6 +766,61 @@ async fn fetch_provider_identity(
             resp["user"]["email"]
                 .as_str()
                 .or_else(|| resp["user"]["username"].as_str())
+                .map(String::from)
+        }
+        "calcom" => {
+            let resp: serde_json::Value = client
+                .get("https://api.cal.com/v2/me")
+                .bearer_auth(access_token)
+                .header("cal-api-version", "2024-08-13")
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            let data = &resp["data"];
+            data["email"]
+                .as_str()
+                .or_else(|| data["username"].as_str())
+                .or_else(|| data["id"].as_str())
+                .map(String::from)
+        }
+        "calendly" => {
+            let resp: serde_json::Value = client
+                .get("https://api.calendly.com/users/me")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            let resource = &resp["resource"];
+            resource["email"]
+                .as_str()
+                .or_else(|| resource["uri"].as_str())
+                .map(String::from)
+        }
+        "zoom" => {
+            let resp: serde_json::Value = client
+                .get("https://api.zoom.us/v2/users/me")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            resp["email"]
+                .as_str()
+                .or_else(|| resp["id"].as_str())
                 .map(String::from)
         }
         _ => None,

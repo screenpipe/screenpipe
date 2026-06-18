@@ -10,7 +10,7 @@
  * We deliberately do NOT host team management UI inside the desktop app.
  * The full surface (create team, invite members, manage roles, view team
  * activity, browse generated SOPs/workflows) lives on the website. This
- * section is a thin marketing card pointing at https://screenpi.pe/team.
+ * section is a thin marketing card pointing at https://screenpipe.com/team.
  *
  * Build-mode behavior:
  *   - Enterprise build → this section is hidden upstream by the settings
@@ -18,7 +18,7 @@
  *     org on /enterprise on the web.
  *   - Consumer build → render this marketing card. The 3 existing paying
  *     Teams customers (as of 2026-05-28) can manage their team at
- *     screenpi.pe/team-dashboard (linked from the marketing page).
+ *     screenpipe.com/team-dashboard (linked from the marketing page).
  *
  * Replaces the previous in-app e2ee Teams UI (~1000 lines) that handled
  * passphrase-based team creation, invite links, and member management.
@@ -37,7 +37,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Team", keywords: ["org", "organization", "members", "workspace", "seats"] },
 ];
 
-const TEAM_MARKETING_URL = "https://screenpi.pe/team";
+const TEAM_MARKETING_URL = "https://screenpipe.com/team";
 
 export function TeamSection() {
   return (

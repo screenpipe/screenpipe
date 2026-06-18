@@ -7,7 +7,7 @@
 # A build that compiles does NOT catch the regression: ort's `load-dynamic`
 # strategy deadlocks at runtime inside the first `Session::builder()` call on
 # some platforms (Windows x86_64 and ARM64). This builds a tiny standalone crate
-# (ci/ort-smoke) that mirrors screenpipe-audio's per-target ONNX Runtime link
+# (.github/ci/ort-smoke) that mirrors screenpipe-audio's per-target ONNX Runtime link
 # strategy and actually runs the init under a 60s deadline — exit 1 == HANG.
 #
 # Covers the two platforms that lacked any ONNX init coverage (macOS Intel via
@@ -19,13 +19,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "ci/ort-smoke/**"
+      - ".github/ci/ort-smoke/**"
       - "crates/screenpipe-audio/Cargo.toml"
       - "crates/screenpipe-redact/Cargo.toml"
       - ".github/workflows/ort-init-smoke.yml"
   pull_request:
     paths:
-      - "ci/ort-smoke/**"
+      - ".github/ci/ort-smoke/**"
       - "crates/screenpipe-audio/Cargo.toml"
       - "crates/screenpipe-redact/Cargo.toml"
       - ".github/workflows/ort-init-smoke.yml"
@@ -93,8 +93,8 @@ jobs:
         if: matrix.label == 'windows-arm64'
         shell: pwsh
         run: |
-          cargo build --manifest-path ci/ort-smoke/Cargo.toml
-          $exeDir = "ci/ort-smoke/target/debug"
+          cargo build --manifest-path .github/ci/ort-smoke/Cargo.toml
+          $exeDir = ".github/ci/ort-smoke/target/debug"
           Copy-Item "$env:ORT_LIB_LOCATION/onnxruntime.dll" $exeDir -Force
           if (Test-Path "$env:ORT_LIB_LOCATION/onnxruntime_providers_shared.dll") {
             Copy-Item "$env:ORT_LIB_LOCATION/onnxruntime_providers_shared.dll" $exeDir -Force
@@ -103,4 +103,4 @@ jobs:
 
       - name: Smoke-test ONNX Runtime init
         if: matrix.label != 'windows-arm64'
-        run: cargo run --manifest-path ci/ort-smoke/Cargo.toml
+        run: cargo run --manifest-path .github/ci/ort-smoke/Cargo.toml

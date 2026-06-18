@@ -285,6 +285,12 @@ pub struct PipelineHealthInfo {
     pub capture_attempts: u64,
     /// Capture cycles skipped by content dedup (static screen — expected/benign).
     pub dedup_skips: u64,
+    /// Capture cycles skipped because the frame was near-all-black (excluded
+    /// window / asleep / DRM). Benign, but a spike can indicate capture trouble.
+    pub frames_corrupt_black: u64,
+    /// Capture cycles skipped because the frame had a flat green decode-garbage
+    /// band (truncated/partial capture). The field signal for green corruption.
+    pub frames_corrupt_green: u64,
     /// Unix secs of the last capture attempt; consumers derive heartbeat age.
     pub last_capture_attempt_ts: u64,
     pub capture_fps_actual: f64,
@@ -1042,6 +1048,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             silent_loss_rate: vision_snap.silent_loss_rate,
             capture_attempts: vision_snap.capture_attempts,
             dedup_skips: vision_snap.dedup_skips,
+            frames_corrupt_black: vision_snap.frames_corrupt_black,
+            frames_corrupt_green: vision_snap.frames_corrupt_green,
             last_capture_attempt_ts: vision_snap.last_capture_attempt_ts,
             capture_fps_actual: vision_snap.capture_fps_actual,
             avg_ocr_latency_ms: vision_snap.avg_ocr_latency_ms,

@@ -24,7 +24,7 @@ use crate::agents::{
 use crate::pipes::connections::parse_mcp_connection_id;
 use crate::pipes::mcp_access::McpSessionAccessRegistry;
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use cron::Schedule as CronSchedule;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -36,6 +36,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 const PIPE_COMPLETED_EVENT_PREFIX: &str = "pipe_completed:";
+const PIPE_LOG_ACTIVE_KEEP_PER_PIPE: usize = 200;
+const PIPE_LOG_ARCHIVE_AFTER_DAYS: i64 = 14;
+const PIPE_LOG_ARCHIVE_DIR: &str = "archive";
 
 // ---------------------------------------------------------------------------
 // Config & log types
@@ -642,6 +645,201 @@ fn cleanup_orphaned_pid_files(pipes_dir: &Path) {
             }
             remove_pid_file(pipes_dir, &pipe_name);
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PipeLogArchiveSummary {
+    scanned: usize,
+    archived: usize,
+    bytes_archived: u64,
+    failed: usize,
+}
+
+#[derive(Debug)]
+struct PipeLogArchiveCandidate {
+    path: PathBuf,
+    file_name: std::ffi::OsString,
+    timestamp: DateTime<Utc>,
+    size: u64,
+}
+
+fn archive_old_pipe_logs(pipes_dir: &Path) -> PipeLogArchiveSummary {
+    let archive_before = Utc::now() - chrono::Duration::days(PIPE_LOG_ARCHIVE_AFTER_DAYS);
+    archive_old_pipe_logs_with_policy(pipes_dir, PIPE_LOG_ACTIVE_KEEP_PER_PIPE, archive_before)
+}
+
+/// Run [`archive_old_pipe_logs`] on the blocking thread pool so the directory
+/// walk and synchronous file moves never stall the async runtime, even on
+/// installs with a large pre-existing log backlog.
+async fn archive_old_pipe_logs_offloaded(pipes_dir: PathBuf) -> PipeLogArchiveSummary {
+    match tokio::task::spawn_blocking(move || archive_old_pipe_logs(&pipes_dir)).await {
+        Ok(summary) => summary,
+        Err(e) => {
+            warn!("pipe log archive: blocking task failed: {}", e);
+            PipeLogArchiveSummary::default()
+        }
+    }
+}
+
+fn archive_old_pipe_logs_with_policy(
+    pipes_dir: &Path,
+    keep_active_per_pipe: usize,
+    archive_before: DateTime<Utc>,
+) -> PipeLogArchiveSummary {
+    let mut summary = PipeLogArchiveSummary::default();
+    let pipe_entries = match std::fs::read_dir(pipes_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!(
+                "pipe log archive: could not read pipes dir {:?}: {}",
+                pipes_dir, e
+            );
+            summary.failed += 1;
+            return summary;
+        }
+    };
+
+    for pipe_entry in pipe_entries.flatten() {
+        let pipe_dir = pipe_entry.path();
+        if !pipe_dir.is_dir() {
+            continue;
+        }
+
+        let logs_dir = pipe_dir.join("logs");
+        let log_entries = match std::fs::read_dir(&logs_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                warn!("pipe log archive: could not read {:?}: {}", logs_dir, e);
+                summary.failed += 1;
+                continue;
+            }
+        };
+
+        let mut candidates = Vec::new();
+        for log_entry in log_entries.flatten() {
+            let path = log_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            summary.scanned += 1;
+            let metadata = match log_entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    warn!("pipe log archive: could not stat {:?}: {}", path, e);
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let timestamp = pipe_log_timestamp(&path, &metadata);
+
+            candidates.push(PipeLogArchiveCandidate {
+                path,
+                file_name: log_entry.file_name(),
+                timestamp,
+                size: metadata.len(),
+            });
+        }
+
+        candidates.sort_by(|a, b| {
+            b.timestamp
+                .cmp(&a.timestamp)
+                .then_with(|| b.file_name.cmp(&a.file_name))
+        });
+
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            if index < keep_active_per_pipe && candidate.timestamp >= archive_before {
+                continue;
+            }
+
+            let archive_month = candidate.timestamp.format("%Y-%m").to_string();
+            let archive_dir = logs_dir.join(PIPE_LOG_ARCHIVE_DIR).join(archive_month);
+            if let Err(e) = std::fs::create_dir_all(&archive_dir) {
+                warn!(
+                    "pipe log archive: could not create {:?}: {}",
+                    archive_dir, e
+                );
+                summary.failed += 1;
+                continue;
+            }
+
+            let archive_path = unique_pipe_log_archive_path(&archive_dir, &candidate.file_name);
+            match std::fs::rename(&candidate.path, &archive_path) {
+                Ok(()) => {
+                    summary.archived += 1;
+                    summary.bytes_archived += candidate.size;
+                }
+                Err(e) => {
+                    warn!(
+                        "pipe log archive: could not move {:?} to {:?}: {}",
+                        candidate.path, archive_path, e
+                    );
+                    summary.failed += 1;
+                }
+            }
+        }
+    }
+
+    summary
+}
+
+fn pipe_log_timestamp(path: &Path, metadata: &std::fs::Metadata) -> DateTime<Utc> {
+    pipe_log_timestamp_from_name(path)
+        .or_else(|| metadata.modified().ok().map(DateTime::<Utc>::from))
+        .unwrap_or_else(Utc::now)
+}
+
+fn pipe_log_timestamp_from_name(path: &Path) -> Option<DateTime<Utc>> {
+    let stem = path.file_stem()?.to_str()?;
+    let naive = NaiveDateTime::parse_from_str(stem, "%Y%m%d_%H%M%S").ok()?;
+    Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+}
+
+fn unique_pipe_log_archive_path(archive_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let path = archive_dir.join(file_name);
+    if !path.exists() {
+        return path;
+    }
+
+    let original = Path::new(file_name);
+    let stem = original
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("log");
+    let extension = original
+        .extension()
+        .and_then(|extension| extension.to_str());
+
+    for suffix in 1.. {
+        let candidate_name = match extension {
+            Some(extension) => format!("{stem}-{suffix}.{extension}"),
+            None => format!("{stem}-{suffix}"),
+        };
+        let candidate = archive_dir.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded suffix loop should return an unused archive path");
+}
+
+fn log_pipe_archive_summary(context: &str, summary: PipeLogArchiveSummary) {
+    if summary.archived > 0 {
+        info!(
+            "{context}: archived {} pipe log files ({} bytes), scanned {}, failed {}",
+            summary.archived, summary.bytes_archived, summary.scanned, summary.failed
+        );
+    } else if summary.failed > 0 {
+        warn!(
+            "{context}: pipe log archive had {} failures while scanning {} files",
+            summary.failed, summary.scanned
+        );
     }
 }
 
@@ -1499,7 +1697,7 @@ impl PipeManager {
     }
 
     /// Mark orphaned 'running' executions as failed on startup,
-    /// then prune old executions (keep 50 per pipe).
+    /// then prune old executions and archive old disk logs.
     pub async fn startup_recovery(&self) {
         // Clean up orphaned PID files from previous crashes
         cleanup_orphaned_pid_files(&self.pipes_dir);
@@ -1521,6 +1719,11 @@ impl PipeManager {
             // Prune old executions to prevent DB bloat
             self.cleanup_executions().await;
         }
+
+        log_pipe_archive_summary(
+            "startup pipe log archive",
+            archive_old_pipe_logs_offloaded(self.pipes_dir.clone()).await,
+        );
     }
 
     /// Delete old pipe executions, keeping only the newest 50 per pipe.
@@ -4253,7 +4456,7 @@ impl PipeManager {
                     });
                 }
 
-                // Daily cleanup: prune old executions every 24h
+                // Daily cleanup: prune old executions and archive old disk logs every 24h
                 if last_cleanup.elapsed() >= std::time::Duration::from_secs(86400) {
                     if let Some(ref store) = store {
                         match store.cleanup_old_executions(50).await {
@@ -4264,6 +4467,10 @@ impl PipeManager {
                             _ => {}
                         }
                     }
+                    log_pipe_archive_summary(
+                        "scheduler pipe log archive",
+                        archive_old_pipe_logs_offloaded(pipes_dir.clone()).await,
+                    );
                     last_cleanup = Instant::now();
                 }
 
@@ -4312,6 +4519,14 @@ impl PipeManager {
         // Manual pipes are bundled as templates. Scheduled pipes (idea-tracker,
         // obsidian-sync) are available from the pipe store instead.
         let builtins = vec![
+            (
+                "automate-my-work",
+                include_str!("../../assets/pipes/automate-my-work/pipe.md"),
+            ),
+            (
+                "missed-todos",
+                include_str!("../../assets/pipes/missed-todos/pipe.md"),
+            ),
             (
                 "day-recap",
                 include_str!("../../assets/pipes/day-recap/pipe.md"),
@@ -5167,7 +5382,7 @@ impl Drop for PipeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Timelike;
+    use chrono::{TimeZone, Timelike};
 
     // -- scheduler lifecycle tests ------------------------------------------
 
@@ -5213,6 +5428,59 @@ mod tests {
         // cap larger than input keeps everything
         let files = vec![f("a.md", 100)];
         assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn archive_old_pipe_logs_keeps_newest_active_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs_dir = temp.path().join("demo").join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        for name in [
+            "20260101_000000.json",
+            "20260102_000000.json",
+            "20260103_000000.json",
+        ] {
+            std::fs::write(logs_dir.join(name), "{}").unwrap();
+        }
+
+        let cutoff = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let summary = archive_old_pipe_logs_with_policy(temp.path(), 2, cutoff);
+
+        assert_eq!(summary.scanned, 3);
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.failed, 0);
+        assert!(logs_dir.join("20260103_000000.json").exists());
+        assert!(logs_dir.join("20260102_000000.json").exists());
+        assert!(!logs_dir.join("20260101_000000.json").exists());
+        assert!(logs_dir
+            .join("archive/2026-01/20260101_000000.json")
+            .exists());
+
+        let second_pass = archive_old_pipe_logs_with_policy(temp.path(), 2, cutoff);
+        assert_eq!(second_pass.scanned, 2);
+        assert_eq!(second_pass.archived, 0);
+        assert_eq!(second_pass.failed, 0);
+    }
+
+    #[test]
+    fn archive_old_pipe_logs_archives_files_past_cutoff() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs_dir = temp.path().join("demo").join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        std::fs::write(logs_dir.join("20260101_000000.json"), "{}").unwrap();
+        std::fs::write(logs_dir.join("20260120_000000.json"), "{}").unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 15, 0, 0, 0).unwrap();
+        let summary = archive_old_pipe_logs_with_policy(temp.path(), 200, cutoff);
+
+        assert_eq!(summary.scanned, 2);
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.failed, 0);
+        assert!(logs_dir.join("20260120_000000.json").exists());
+        assert!(!logs_dir.join("20260101_000000.json").exists());
+        assert!(logs_dir
+            .join("archive/2026-01/20260101_000000.json")
+            .exists());
     }
 
     #[test]

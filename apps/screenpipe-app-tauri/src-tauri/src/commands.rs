@@ -1515,7 +1515,7 @@ pub fn deep_link_scheme() -> &'static str {
     }
 }
 
-/// Open the screenpi.pe login page.
+/// Open the screenpipe.com login page.
 /// Windows: system browser + registered deep-link scheme handles the redirect.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Linux: in-app WebView that intercepts the screenpipe:// redirect.
@@ -3247,6 +3247,12 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn open_note_path(path: String) -> Result<(), String> {
+    // Citations from the pi agent can be relative (e.g. `.pi/skills/…`); resolve
+    // to the real file so "open in default app" doesn't hand a dangling path to
+    // LaunchServices / Obsidian.
+    let path = crate::viewer::resolve_local_path(&path)
+        .to_string_lossy()
+        .into_owned();
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;

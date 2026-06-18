@@ -105,6 +105,7 @@ import {
   useSettings,
   Settings,
 } from "@/lib/hooks/use-settings";
+import { hasAppEntitlement } from "@/lib/app-entitlement";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
@@ -229,7 +230,7 @@ const getAudioEngineResolution = (
     };
   }
 
-  if (requested === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+  if (requested === "screenpipe-cloud" && !hasAppEntitlement(settings.user as any)) {
     return {
       requested,
       active: fallback,
@@ -1892,10 +1893,13 @@ export function RecordingSettings() {
       settings.audioTranscriptionEngine,
       settings.deepgramApiKey,
       settings.user?.cloud_subscribed,
+      settings.user?.app_entitled,
+      settings.user?.entitlement,
       settings.user?.id,
       settings.user?.token,
     ]
   );
+  const hasCloudTranscriptionAccess = hasAppEntitlement(settings.user as any);
   const languageSupportEngine = audioEngineResolution.active;
   const languageSupportKey =
     getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
@@ -1927,6 +1931,15 @@ export function RecordingSettings() {
         : languageSupportIsLimited
           ? `Restricts transcription to selected languages supported by ${languageSupportLabel}`
           : "Restricts transcription to selected";
+  const selectedLanguageNames = settings.languages
+    .map((code) => supportedLanguageOptions.find((language) => language.code === code)?.name ?? code)
+    .join(", ");
+  const languageTriggerLabel =
+    settings.languages.length === 0
+      ? "Auto-detect"
+      : settings.languages.length <= 2
+        ? selectedLanguageNames
+        : `${settings.languages.length} selected`;
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -2002,14 +2015,16 @@ export function RecordingSettings() {
 
   useEffect(() => {
     const previousSnapshot = languageSelectionSnapshotRef.current;
-    if (previousSnapshot.supportKey !== languageSupportKey) {
+    const supportKeyChanged = previousSnapshot.supportKey !== languageSupportKey;
+    if (supportKeyChanged) {
       languageSelectionsBySupportKeyRef.current[previousSnapshot.supportKey] = [
         ...previousSnapshot.languages,
       ];
     }
 
-    const preferredLanguages =
-      languageSelectionsBySupportKeyRef.current[languageSupportKey];
+    const preferredLanguages = supportKeyChanged
+      ? languageSelectionsBySupportKeyRef.current[languageSupportKey]
+      : undefined;
     const resolvedLanguages = resolveLanguageSelectionForTranscriptionEngine(
       settings.languages,
       languageSupportEngine,
@@ -2291,9 +2306,9 @@ export function RecordingSettings() {
     }
 
     // If trying to use cloud but not subscribed
-    if (value === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+    if (value === "screenpipe-cloud" && !hasCloudTranscriptionAccess) {
       try {
-        const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+        const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -2351,7 +2366,12 @@ export function RecordingSettings() {
   };
 
 
-  const handleLanguageChange = (currentValue: Language) => {
+  const handleLanguageChange = (currentValue: Language | null) => {
+    if (!currentValue) {
+      handleSettingsChange({ languages: [] });
+      return;
+    }
+
     const updatedLanguages = settings.languages.includes(currentValue)
       ? settings.languages.filter((id) => id !== currentValue)
       : [...settings.languages, currentValue];
@@ -2703,8 +2723,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
-                      <SelectItem value="screenpipe-cloud" disabled={!settings.user?.cloud_subscribed}>
-                        Screenpipe Cloud {!settings.user?.cloud_subscribed && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                      <SelectItem value="screenpipe-cloud" disabled={!hasCloudTranscriptionAccess}>
+                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>
@@ -3339,7 +3359,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <Popover open={openLanguages} onOpenChange={setOpenLanguages}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" size="sm" className="h-7 text-xs">
-                    {settings.languages.length > 0 ? `${settings.languages.length} selected` : "Auto-detect"}
+                    {languageTriggerLabel}
                     <ChevronsUpDown className="ml-1 h-3 w-3 opacity-50" />
                   </Button>
                 </PopoverTrigger>
@@ -3349,6 +3369,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <CommandList>
                       <CommandEmpty>No languages found.</CommandEmpty>
                       <CommandGroup>
+                        <CommandItem value="auto-detect" onSelect={() => handleLanguageChange(null)}>
+                          <Check className={cn("mr-2 h-3 w-3", settings.languages.length === 0 ? "opacity-100" : "opacity-0")} />
+                          <span className="text-xs">Auto-detect</span>
+                        </CommandItem>
                         {supportedLanguageOptions.map((language) => (
                           <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code)}>
                             <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code) ? "opacity-100" : "opacity-0")} />

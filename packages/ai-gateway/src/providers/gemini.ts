@@ -243,6 +243,15 @@ export class GeminiProvider implements AIProvider {
 
 										if (part.functionCall) {
 											const funcName = part.functionCall.name;
+											// A nameless function call is unexecutable — Pi would see
+											// stopReason "toolUse" with no tool to run and silently
+											// no-op. Skip rather than forward a malformed tool_call
+											// (mirrors the input-side formatFunctionCallPart guard and
+											// the Anthropic provider's `if (!name) continue`).
+											if (typeof funcName !== 'string' || funcName.length === 0) {
+												console.warn('[Gemini] skipping function call with empty name:', JSON.stringify(part.functionCall));
+												continue;
+											}
 											console.log('[Gemini] Model called function:', funcName, JSON.stringify(part.functionCall.args || {}));
 
 											// Surface every tool call — web_search included — to the client.
@@ -663,6 +672,12 @@ export class GeminiProvider implements AIProvider {
 				content += part.text;
 			}
 			if (part.functionCall) {
+				// Drop nameless function calls (see streaming guard above) so the
+				// non-streaming path can't emit an unexecutable tool_call either.
+				if (typeof part.functionCall.name !== 'string' || part.functionCall.name.length === 0) {
+					console.warn('[Gemini] skipping function call with empty name:', JSON.stringify(part.functionCall));
+					continue;
+				}
 				const sig = part.thoughtSignature || '';
 				const callId = sig
 					? `call_${toolCalls.length}_ts_${btoa(sig)}`

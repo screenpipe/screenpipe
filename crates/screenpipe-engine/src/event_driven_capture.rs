@@ -792,6 +792,10 @@ pub async fn event_driven_capture_loop(
                         "startup capture for monitor {}: frame_id={}, dur={}ms",
                         monitor_id, result.frame_id, result.duration_ms
                     );
+                } else if let Some(kind) = output.corrupt {
+                    // Frame rejected as corrupt (black / green band) — distinct
+                    // counter, not a dedup. Both tick the stall clock.
+                    vision_metrics.record_corrupt_skip(matches!(kind, CorruptKind::GreenBand));
                 } else {
                     // Symmetry with the live loop — startup capture rarely
                     // hits dedup (no prior hash on first frame) but if it
@@ -1467,17 +1471,24 @@ pub async fn event_driven_capture_loop(
                                 monitor_id
                             );
                         } else {
-                            // Content dedup or window filter — capture skipped.
-                            // Tick last_db_write_ts anyway so the health check
-                            // doesn't flag a stall just because the screen is
-                            // static. The pipeline IS healthy; there's just
-                            // nothing new worth writing. Without this, sitting
-                            // on a Zoom call / slide deck / IDE waiting for
-                            // 60+ seconds emits a false-alarm "vision DB
-                            // writes stalled" WARN and (if the user has
-                            // showRestartNotifications enabled) a Tauri
-                            // notification claiming screen capture is broken.
-                            vision_metrics.record_dedup_skip();
+                            // Capture skipped — content dedup, window filter, or
+                            // a corrupt (black / green-band) frame. Either way
+                            // tick last_db_write_ts (record_* both do) so the
+                            // health check doesn't flag a stall just because the
+                            // screen is static / momentarily unusable. The
+                            // pipeline IS healthy; there's nothing worth writing.
+                            // Without this, sitting on a Zoom call / slide deck /
+                            // IDE for 60+ seconds emits a false-alarm "vision DB
+                            // writes stalled" WARN and (if showRestartNotifications
+                            // is enabled) a Tauri notification claiming capture is
+                            // broken. Corrupt frames get their own counter so a
+                            // spike is visible instead of inflating dedup_skips.
+                            if let Some(kind) = output.corrupt {
+                                vision_metrics
+                                    .record_corrupt_skip(matches!(kind, CorruptKind::GreenBand));
+                            } else {
+                                vision_metrics.record_dedup_skip();
+                            }
                             debug!(
                                 "capture skipped DB write for monitor {} (trigger={})",
                                 monitor_id,
@@ -1669,6 +1680,10 @@ struct CaptureOutput {
     image: image::DynamicImage,
     /// Whether elements were deduped (referenced another frame's elements).
     elements_deduped: bool,
+    /// Set when `result` is `None` because the frame was rejected as corrupt
+    /// (rather than skipped by content dedup). Lets the caller record the right
+    /// telemetry counter. `None` on every non-corruption path.
+    corrupt: Option<CorruptKind>,
 }
 
 fn resolve_capture_metadata(
@@ -1901,21 +1916,35 @@ async fn do_capture(
         capture_dur, params.monitor_id
     );
 
-    // When an ignored window covers most of a monitor, SCK replaces its
-    // pixels with black.  The resulting frame is nearly all-black — storing
-    // it wastes the tree walk, OCR, DB write, and produces ugly black frames
-    // in the timeline.  Detect this cheaply by sampling pixels: if >95% are
-    // near-black, skip everything but still return the image so the frame
-    // comparer stays updated (prevents re-triggering on the same black frame).
-    if is_frame_mostly_black(&image) {
-        debug!(
-            "captured frame is mostly black on monitor {} — skipping DB write (likely ignored window covering screen)",
-            params.monitor_id
-        );
+    // Skip frames that are unusable for indexing.  Two cases:
+    //   1. Near-all-black — an ignored window covering the monitor; SCK fills
+    //      its pixels black.
+    //   2. A flat green "garbage" band anchored to the bottom of the frame —
+    //      what a truncated / partially-written capture decodes to (users
+    //      report screenshots whose lower portion is solid green).
+    // Storing either wastes the tree walk, OCR, and DB write and surfaces an
+    // ugly frame in the timeline.  Detect cheaply by sampling pixels, skip the
+    // write, but still return the image so the frame comparer stays updated
+    // (prevents re-triggering on the same bad frame). The caller records the
+    // matching telemetry counter from `corrupt`.
+    if let Some(kind) = frame_corruption(&image) {
+        match kind {
+            // Green is the notable, rarer signal — surface it at warn so it
+            // shows up in shared logs. Black is common (DRM / excluded window).
+            CorruptKind::GreenBand => warn!(
+                "captured frame has a green decode-garbage band on monitor {} — skipping DB write",
+                params.monitor_id
+            ),
+            CorruptKind::Black => debug!(
+                "captured frame is mostly black on monitor {} — skipping DB write",
+                params.monitor_id
+            ),
+        }
         return Ok(CaptureOutput {
             result: None,
             image,
             elements_deduped: false,
+            corrupt: Some(kind),
         });
     }
 
@@ -1962,6 +1991,7 @@ async fn do_capture(
                     result: None,
                     image,
                     elements_deduped: false,
+                    corrupt: None,
                 });
             }
         }
@@ -1984,6 +2014,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         } else if !decision.walk {
             debug!(
@@ -2089,6 +2120,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         }
         TreeWalkResult::NotFound => None,
@@ -2115,6 +2147,7 @@ async fn do_capture(
                     result: None,
                     image,
                     elements_deduped: false,
+                    corrupt: None,
                 });
             }
         }
@@ -2140,6 +2173,7 @@ async fn do_capture(
                             result: None,
                             image,
                             elements_deduped: false,
+                            corrupt: None,
                         });
                     }
                 }
@@ -2166,6 +2200,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         } else if crate::sleep_monitor::screen_is_locked() {
             // Screen was marked locked but now a real app is focused — unlock
@@ -2187,6 +2222,7 @@ async fn do_capture(
             result: None,
             image,
             elements_deduped: false,
+            corrupt: None,
         });
     }
 
@@ -2211,6 +2247,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         }
     }
@@ -2227,6 +2264,7 @@ async fn do_capture(
             result: None,
             image,
             elements_deduped: false,
+            corrupt: None,
         });
     }
 
@@ -2258,6 +2296,7 @@ async fn do_capture(
         result: Some(result),
         image,
         elements_deduped: deduped,
+        corrupt: None,
     })
 }
 
@@ -2338,47 +2377,181 @@ fn query_frontmost_app_name_uncached() -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Cheaply detect if a captured frame is predominantly black.
+/// Grid dimension for the corruption sampler: a ~15×15 grid ≈ 225 points.
+const CORRUPT_GRID: usize = 15;
+
+/// True if `px` is the green a zeroed-chroma / truncated-JPEG fill takes.
 ///
-/// When ScreenCaptureKit excludes an ignored window, the excluded pixels
-/// become black.  If the window covers most of the monitor the frame is
-/// nearly all-black — we want to skip storing it.
+/// Zeroed YUV420 chroma decodes to roughly `(0, 135..255, 0)` in RGB — a
+/// bright green with red and blue both near zero. We keep red/blue low and
+/// require a clear green margin so muddy/olive greens that appear in real
+/// content (foliage, design tools, dark-green themes) don't match. The
+/// flat-color (spread) check in [`sample_frame_corruption`] tightens this
+/// further.
+fn is_garbage_green(px: [u8; 3]) -> bool {
+    let [r, g, b] = px;
+    g >= 100 && r <= 70 && b <= 70 && g >= r.saturating_add(60) && g >= b.saturating_add(60)
+}
+
+/// Result of one cheap pass over a captured frame's sample grid.
+struct FrameCorruption {
+    /// Fraction of sampled pixels that are near-black (`R+G+B < 15`).
+    black_ratio: f64,
+    /// A flat green decode-garbage band is anchored to the bottom of the frame.
+    green_band: bool,
+}
+
+/// Sample a captured frame ONCE and compute every corruption signal we need.
 ///
-/// Strategy: sample a grid of pixels (≈200 points) and check if >95% have
-/// an RGB sum below a threshold.  Real content — even dark-mode apps — has
-/// variation (scrollbars, text, status bar).  Pure SCK-excluded regions are
-/// exactly `(0, 0, 0)` or very close to it.
-fn is_frame_mostly_black(image: &image::DynamicImage) -> bool {
-    let rgb = image.to_rgb8();
-    let (w, h) = rgb.dimensions();
+/// Reads ~225 pixels straight from the `DynamicImage` via `get_pixel` — there
+/// is deliberately **no** `to_rgb8()`, so the whole check is a few hundred
+/// indexed reads with zero per-frame allocation, regardless of resolution (4K
+/// is the same cost as 720p). It runs on every captured frame, so this matters.
+///
+/// Two signals:
+///   * **black** — when ScreenCaptureKit excludes an ignored window (or a
+///     monitor is asleep / shows DRM-protected content), the pixels come back
+///     `(0,0,0)`. >95% near-black ⇒ skip. Real content, even dark mode, has
+///     variation (scrollbars, text, status bar) and won't trip it.
+///   * **green band** — a truncated MJPEG frame / partially written capture
+///     buffer decodes to normal content at the top and a single flat green
+///     fill for every row past the truncation point, always anchored to the
+///     BOTTOM. We require a contiguous run of bottom rows that are (a)
+///     overwhelmingly `is_garbage_green`, (b) a single near-uniform color (a
+///     decode fill, not textured content), (c) ≥20% of the height and ≥3 rows,
+///     and (d) sitting below real content (the top row is NOT green). (d) is
+///     the key false-positive guard: a green-screen backdrop, a green IDE/
+///     terminal, or a flat green design canvas is green *throughout*, so it
+///     never shows the content→green transition a partial decode does, and is
+///     left alone. Skipping a frame is cheap (we re-capture within the capture
+///     interval), so the cost asymmetry favors rejecting only this exact shape.
+fn sample_frame_corruption(image: &image::DynamicImage) -> FrameCorruption {
+    use image::GenericImageView;
+
+    let (w, h) = image.dimensions();
     if w == 0 || h == 0 {
-        return true;
+        // Degenerate frame — treat as black so it's skipped.
+        return FrameCorruption {
+            black_ratio: 1.0,
+            green_band: false,
+        };
     }
 
-    // Sample on a ~15×15 grid ≈ 225 points (sub-microsecond)
-    let step_x = (w / 15).max(1);
-    let step_y = (h / 15).max(1);
+    let step_x = (w / CORRUPT_GRID as u32).max(1);
+    let step_y = (h / CORRUPT_GRID as u32).max(1);
+
     let mut total = 0u32;
     let mut black = 0u32;
+    // Per sampled row: garbage-green fraction + per-row channel min/max.
+    let mut green_frac = [0f64; CORRUPT_GRID];
+    let mut row_min = [[255u8; 3]; CORRUPT_GRID];
+    let mut row_max = [[0u8; 3]; CORRUPT_GRID];
 
+    let mut sampled_rows = 0usize;
     let mut y = 0;
-    while y < h {
+    while y < h && sampled_rows < CORRUPT_GRID {
+        let mut row_total = 0u32;
+        let mut row_green = 0u32;
         let mut x = 0;
         while x < w {
+            let p = image.get_pixel(x, y);
+            let px = [p[0], p[1], p[2]];
             total += 1;
-            let px = rgb.get_pixel(x, y);
-            // Threshold: R+G+B < 15 — catches pure black and near-black
-            // from JPEG compression artifacts but not real dark-mode content.
+            row_total += 1;
             if (px[0] as u16 + px[1] as u16 + px[2] as u16) < 15 {
                 black += 1;
             }
+            if is_garbage_green(px) {
+                row_green += 1;
+                for c in 0..3 {
+                    row_min[sampled_rows][c] = row_min[sampled_rows][c].min(px[c]);
+                    row_max[sampled_rows][c] = row_max[sampled_rows][c].max(px[c]);
+                }
+            }
             x += step_x;
         }
+        green_frac[sampled_rows] = if row_total > 0 {
+            row_green as f64 / row_total as f64
+        } else {
+            0.0
+        };
+        sampled_rows += 1;
         y += step_y;
     }
 
-    let ratio = black as f64 / total as f64;
-    ratio > 0.95
+    let black_ratio = if total > 0 {
+        black as f64 / total as f64
+    } else {
+        1.0
+    };
+
+    // Contiguous run of ≥90%-green rows anchored at the bottom, accumulating
+    // the color spread over only those band rows.
+    let mut band = 0usize;
+    let (mut gmin, mut gmax) = ([255u8; 3], [0u8; 3]);
+    for r in (0..sampled_rows).rev() {
+        if green_frac[r] < 0.9 {
+            break;
+        }
+        band += 1;
+        for c in 0..3 {
+            gmin[c] = gmin[c].min(row_min[r][c]);
+            gmax[c] = gmax[c].max(row_max[r][c]);
+        }
+    }
+    let band_fraction = band as f64 / sampled_rows.max(1) as f64;
+    let spread = (0..3)
+        .map(|c| gmax[c].saturating_sub(gmin[c]))
+        .max()
+        .unwrap_or(255);
+    // (d) real content must sit above the band — the top sampled row is not
+    // green. This is what separates a partial decode from an intentionally
+    // green screen (which is green top-to-bottom).
+    let content_above = sampled_rows > 0 && green_frac[0] < 0.5;
+
+    let green_band = h >= 8 // too short to reason about a band
+        && band >= 3
+        && band_fraction >= 0.20
+        && spread <= 24
+        && content_above;
+
+    FrameCorruption {
+        black_ratio,
+        green_band,
+    }
+}
+
+/// Why a captured frame is unusable for indexing. Surfaced to telemetry so a
+/// spike in black vs green skips is distinguishable (and not folded into the
+/// dedup-skip counter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorruptKind {
+    /// Near-all-black: an excluded/ignored window covering the monitor, a
+    /// sleeping display, or a DRM-protected surface SCK returns as black.
+    Black,
+    /// A flat green decode-garbage band — a truncated / partially-written
+    /// capture. The signal behind the "bottom of my screenshot is green" reports.
+    GreenBand,
+}
+
+/// Classify a captured frame's corruption, if any. One cheap pass computes both
+/// signals (see [`sample_frame_corruption`]); black takes precedence as the
+/// cheaper, more certain signal.
+fn frame_corruption(image: &image::DynamicImage) -> Option<CorruptKind> {
+    let s = sample_frame_corruption(image);
+    if s.black_ratio > 0.95 {
+        Some(CorruptKind::Black)
+    } else if s.green_band {
+        Some(CorruptKind::GreenBand)
+    } else {
+        None
+    }
+}
+
+/// Convenience predicate used by tests.
+#[cfg(test)]
+fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
+    frame_corruption(image).is_some()
 }
 
 #[cfg(test)]
@@ -2952,7 +3125,7 @@ mod tests {
     #[test]
     fn test_all_black_frame_detected() {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(1920, 1080));
-        assert!(is_frame_mostly_black(&img));
+        assert!(is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2963,7 +3136,7 @@ mod tests {
             *px = image::Rgb([120, 130, 140]);
         }
         let img = image::DynamicImage::ImageRgb8(buf);
-        assert!(!is_frame_mostly_black(&img));
+        assert!(!is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2979,7 +3152,7 @@ mod tests {
         let img = image::DynamicImage::ImageRgb8(buf);
         // Menu bar is ~2% of pixels but hits a full grid row (~7% of samples)
         // so the frame is NOT detected as mostly black — correct, it has content.
-        assert!(!is_frame_mostly_black(&img));
+        assert!(!is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2988,7 +3161,7 @@ mod tests {
         let mut buf = image::RgbImage::new(1920, 1080);
         buf.put_pixel(960, 540, image::Rgb([255, 255, 255]));
         let img = image::DynamicImage::ImageRgb8(buf);
-        assert!(is_frame_mostly_black(&img));
+        assert!(is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2999,13 +3172,230 @@ mod tests {
             *px = image::Rgb([30, 30, 30]);
         }
         let img = image::DynamicImage::ImageRgb8(buf);
-        assert!(!is_frame_mostly_black(&img));
+        assert!(!is_frame_corrupt(&img));
     }
 
     #[test]
     fn test_empty_image_detected() {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(0, 0));
-        assert!(is_frame_mostly_black(&img));
+        assert!(is_frame_corrupt(&img));
+    }
+
+    // ---- decode-garbage (green band) corruption detection ----
+
+    /// Solid `content` everywhere, then solid `band` for every row at or below
+    /// `band_top_y`. Mirrors how a truncated decode looks: good content on top,
+    /// flat fill at the bottom.
+    fn frame_with_bottom_band(
+        w: u32,
+        h: u32,
+        band_top_y: u32,
+        content: [u8; 3],
+        band: [u8; 3],
+    ) -> image::DynamicImage {
+        let mut buf = image::RgbImage::new(w, h);
+        for y in 0..h {
+            let color = if y >= band_top_y { band } else { content };
+            for x in 0..w {
+                buf.put_pixel(x, y, image::Rgb(color));
+            }
+        }
+        image::DynamicImage::ImageRgb8(buf)
+    }
+
+    fn solid(w: u32, h: u32, color: [u8; 3]) -> image::DynamicImage {
+        let mut buf = image::RgbImage::new(w, h);
+        for px in buf.pixels_mut() {
+            *px = image::Rgb(color);
+        }
+        image::DynamicImage::ImageRgb8(buf)
+    }
+
+    #[test]
+    fn test_garbage_green_predicate() {
+        // Zeroed-chroma greens across the brightness range all match.
+        assert!(is_garbage_green([0, 135, 0]));
+        assert!(is_garbage_green([0, 255, 0]));
+        assert!(is_garbage_green([30, 150, 30]));
+        // Non-green / balanced colors do not.
+        assert!(!is_garbage_green([0, 0, 0])); // black
+        assert!(!is_garbage_green([200, 200, 200])); // gray
+        assert!(!is_garbage_green([0, 50, 0])); // too dark to be the fill
+        assert!(!is_garbage_green([120, 130, 140])); // typical content
+        assert!(!is_garbage_green([100, 150, 100])); // red too high
+    }
+
+    #[test]
+    fn test_bottom_green_band_over_content_is_corrupt() {
+        // The reported case: top ~60% normal content, bottom ~40% solid green.
+        let img = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 150, 0]);
+        assert!(sample_frame_corruption(&img).green_band);
+        assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_bottom_green_band_quarter_height_is_corrupt() {
+        // ~25% bottom band still trips the ≥20% / ≥3-row threshold.
+        let img = frame_with_bottom_band(1600, 1000, 750, [90, 100, 110], [10, 170, 10]);
+        assert!(sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_high_truncation_leaves_thin_top_content_still_corrupt() {
+        // Truncation near the top: only ~13% real content, the rest green.
+        // Still has the content→green transition, so it's flagged.
+        let img = frame_with_bottom_band(1920, 1080, 140, [120, 130, 140], [0, 150, 0]);
+        assert!(sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_full_frame_green_not_flagged() {
+        // A green IDE/terminal theme, a flat green design canvas, or a
+        // green-screen backdrop is green TOP-TO-BOTTOM — there's no
+        // content→green transition, so we deliberately leave it alone rather
+        // than risk dropping legitimate content. (A fully-green truncated
+        // frame is low-information anyway and gets replaced on the next
+        // capture.)
+        let img = solid(1920, 1080, [0, 160, 0]);
+        assert!(!sample_frame_corruption(&img).green_band);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_black_frame_is_corrupt() {
+        let img = solid(1920, 1080, [0, 0, 0]);
+        assert!(is_frame_corrupt(&img));
+        assert!(!sample_frame_corruption(&img).green_band); // black isn't the green path
+    }
+
+    #[test]
+    fn test_normal_content_not_corrupt() {
+        let img = solid(1920, 1080, [120, 130, 140]);
+        assert!(!sample_frame_corruption(&img).green_band);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_dark_mode_not_corrupt() {
+        let img = solid(1920, 1080, [30, 30, 30]);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_thin_green_dock_not_corrupt() {
+        // A ~7% bottom dock/taskbar in green is real content, not a fill —
+        // band too small to trip the threshold.
+        let img = frame_with_bottom_band(1920, 1080, 1004, [120, 130, 140], [0, 150, 0]);
+        assert!(!sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_top_green_banner_not_corrupt() {
+        // Green only at the TOP (a success banner / green title bar). The band
+        // is anchored to the bottom, so a top-only green region never trips it.
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for y in 0..1080 {
+            let color = if y < 324 {
+                [0, 150, 0]
+            } else {
+                [120, 130, 140]
+            };
+            for x in 0..1920 {
+                buf.put_pixel(x, y, image::Rgb(color));
+            }
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(!sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_textured_green_bottom_not_corrupt() {
+        // Bottom half is green (every pixel passes is_garbage_green) but with
+        // real per-pixel brightness variation (foliage / green-screen with
+        // lighting). Rows are >90% green so a band forms, but the color spread
+        // is far > 24 → NOT a flat decode fill, so it's left alone. This
+        // specifically exercises the uniformity guard.
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for y in 0..1080 {
+            for x in 0..1920 {
+                let color = if y >= 540 {
+                    // g in 110..=229 — always garbage-green, spread ~119 ≫ 24
+                    let g = 110u8.wrapping_add(((x * 7 + y * 3) % 120) as u8);
+                    [10, g, 10]
+                } else {
+                    [120, 130, 140]
+                };
+                buf.put_pixel(x, y, image::Rgb(color));
+            }
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        let s = sample_frame_corruption(&img);
+        assert!(!s.green_band);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_tiny_frame_not_green_corrupt() {
+        // Frames shorter than the band heuristic's floor never trip the green
+        // path (the black check still covers them).
+        let img = solid(10, 4, [0, 150, 0]);
+        assert!(!sample_frame_corruption(&img).green_band);
+    }
+
+    // ---- DRM / black-region edge cases ----
+    // DRM-protected surfaces (Netflix, FairPlay/Widevine) and sleeping monitors
+    // come back from ScreenCaptureKit as black, never green — so the green path
+    // never fires on them, and only a *whole-frame* black trips the skip.
+
+    #[test]
+    fn test_drm_fullscreen_black_skipped() {
+        // Full-screen DRM playback / asleep display ⇒ all-black ⇒ skipped.
+        // (Pre-existing behavior; documents the DRM interaction explicitly.)
+        let img = solid(2560, 1440, [0, 0, 0]);
+        assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_drm_black_region_with_content_kept() {
+        // A DRM video in the lower ~40% (black) with a real desktop above must
+        // NOT drop the whole frame — only the protected region is black, the
+        // rest is indexable content.
+        let img = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 0, 0]);
+        assert!(!sample_frame_corruption(&img).green_band); // black band ≠ green band
+        assert!(!is_frame_corrupt(&img)); // ~40% black is well under the 95% gate
+    }
+
+    #[test]
+    fn test_rgba_frame_sampled_correctly() {
+        // The sampler reads via get_pixel, so an RGBA source (the common SCK
+        // format) must be handled identically to RGB — green band still caught.
+        let mut buf = image::RgbaImage::new(1280, 800);
+        for y in 0..800 {
+            for x in 0..1280 {
+                let c = if y >= 480 {
+                    [0, 150, 0, 255]
+                } else {
+                    [120, 130, 140, 255]
+                };
+                buf.put_pixel(x, y, image::Rgba(c));
+            }
+        }
+        let img = image::DynamicImage::ImageRgba8(buf);
+        assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn frame_corruption_reports_kind_for_telemetry() {
+        // Black and green resolve to distinct kinds so the caller bumps the
+        // right counter; clean and full-green frames classify as None.
+        assert_eq!(
+            frame_corruption(&solid(1920, 1080, [0, 0, 0])),
+            Some(CorruptKind::Black)
+        );
+        let green = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 150, 0]);
+        assert_eq!(frame_corruption(&green), Some(CorruptKind::GreenBand));
+        assert_eq!(frame_corruption(&solid(1920, 1080, [120, 130, 140])), None);
+        assert_eq!(frame_corruption(&solid(1920, 1080, [0, 160, 0])), None);
     }
 
     #[test]

@@ -683,6 +683,7 @@ export function cleanPipeStdout(raw: string): string {
   let textBuf = "";       // accumulates text_delta fragments
   let errorMessage: string | null = null;
   let hasTextDelta = false;
+  let hasExtractedContent = false;
 
   function flushText() {
     if (textBuf) {
@@ -740,6 +741,7 @@ export function cleanPipeStdout(raw: string): string {
             for (const block of msg.content) {
               if (block.type === "text" && block.text) {
                 parts.push(block.text);
+                hasExtractedContent = true;
               }
             }
           }
@@ -754,7 +756,7 @@ export function cleanPipeStdout(raw: string): string {
             if (msg.stopReason === "error" && msg.errorMessage) {
               errorMessage = msg.errorMessage;
             }
-            if (!hasTextDelta && msg.content) {
+            if (!hasTextDelta && !hasExtractedContent && msg.content) {
               for (const block of msg.content) {
                 if (block.type === "text" && block.text) {
                   parts.push(block.text);
@@ -1127,7 +1129,7 @@ export function PipesSection() {
   const sharePipePublic = async (pipe: PipeStatus) => {
     setSharingPublic(pipe.config.name);
     try {
-      const res = await fetch("https://screenpi.pe/api/pipes/share", {
+      const res = await fetch("https://screenpipe.com/api/pipes/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3014,7 +3016,7 @@ export function PipesSection() {
                                   {exec.model && <span className="text-muted-foreground/60 truncate max-w-[100px]">{exec.model}</span>}
                                   {exec.status === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
                                     <div className="ml-auto flex items-center gap-1">
-                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="copy" onClick={() => navigator.clipboard.writeText(cleanPipeStdout(exec.stdout))}>
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="copy" onClick={() => commands.copyTextToClipboard(cleanPipeStdout(exec.stdout))}>
                                         <Copy className="w-3.5 h-3.5" />
                                       </button>
                                       <button className="text-muted-foreground hover:text-foreground p-0.5" title="open in chat" onClick={async () => {
@@ -3068,7 +3070,7 @@ export function PipesSection() {
                                   <div className="relative group">
                                     <button
                                       className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted"
-                                      onClick={() => navigator.clipboard.writeText(cleanPipeStdout(log.stdout))}
+                                      onClick={() => commands.copyTextToClipboard(cleanPipeStdout(log.stdout))}
                                       title="copy"
                                     >
                                       <Copy className="h-3 w-3 text-muted-foreground" />

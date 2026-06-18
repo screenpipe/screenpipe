@@ -71,7 +71,9 @@ import {
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
+  getPersistedViewedAt,
   useChatStore,
+  isSessionForeground,
   sessionRecordFromMeta,
   type SessionStatus,
   type SessionRecord,
@@ -216,6 +218,7 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   // Handles the case where Pi was started outside the chat-storage flow
   // (e.g. resumed from disk before we hydrated).
   if (!existing) {
+    const now = Date.now();
     store.actions.upsert({
       id: sid,
       title: "untitled",
@@ -223,13 +226,13 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
       status: nextStatus ?? "streaming",
       lastError: err ?? undefined,
       messageCount: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       pinned: false,
-      // First-touch session is unread unless the user is already viewing
-      // it (this is also how external triggers — chat-prefill, pipe
-      // events — surface in the sidebar).
-      unread: store.currentId !== sid,
+      unread: false,
+      // Set lastContentAt on first touch only when there's actual content.
+      // isUnread() in the store will compute the correct unread boolean.
+      ...(snippet ? { lastContentAt: now } : {}),
     });
     if (snippet) previewLastEmittedAt.set(sid, Date.now());
     return;
@@ -250,6 +253,9 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   const patch: Partial<SessionRecord> = { updatedAt: Date.now() };
   if (nextStatus) patch.status = nextStatus;
   if (writePreview) patch.preview = snippet!;
+  // Background assistant text should mark the session as having new
+  // unseen content once the user has switched away.
+  if (snippet && !isSessionForeground(store, sid)) patch.lastContentAt = Date.now();
   if (nextStatus === "error" && err) patch.lastError = err;
   if (nextStatus && nextStatus !== "error") patch.lastError = undefined;
 
@@ -269,12 +275,6 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   }
 
   store.actions.patch(sid, patch);
-
-  // Mark as unread if real assistant content arrived for a session that
-  // is NOT the currently-viewed one. The store's markUnread is a no-op
-  // when sid === currentId, so this is safe to call unconditionally on
-  // any event that produced a snippet.
-  if (snippet) store.actions.markUnread(sid);
 }
 
 function handleSessionEvicted(payload: AgentSessionEvictedPayload) {
@@ -752,6 +752,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       // Background saves use fallback titles; AI titles generated in foreground
       const title = existing?.title || derivedTitle;
 
+      const storeSession = useChatStore.getState().sessions[sid];
       let computedLastUserMessageAt: number | undefined;
       for (const message of messages as any[]) {
         if (message?.role !== "user" || typeof message.timestamp !== "number") continue;
@@ -762,14 +763,27 @@ async function persistBackgroundSession(sid: string): Promise<void> {
 
       const lastUserMessageAt =
         computedLastUserMessageAt ??
-        useChatStore.getState().sessions[sid]?.lastUserMessageAt ??
+        storeSession?.lastUserMessageAt ??
         existing?.lastUserMessageAt;
+
+      const lastContentAt =
+        storeSession?.lastContentAt ??
+        existing?.lastContentAt;
+      const lastViewedAt =
+        getPersistedViewedAt(storeSession) ??
+        (typeof existing?.lastViewedAt === "number"
+          ? existing.lastViewedAt
+          : lastContentAt
+            ? 0
+            : undefined);
 
       const conv: ChatConversation = {
         id: sid,
         title,
         ...(existing?.titleSource ? { titleSource: existing.titleSource } : {}),
         ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
+        ...(lastContentAt ? { lastContentAt } : {}),
+        ...(typeof lastViewedAt === "number" ? { lastViewedAt } : {}),
         // Full transcript — see comment in use-chat-conversations.ts
         // saveConversation. The slice(-100) here was silently truncating
         // long backgrounded chats on every agent_end save.

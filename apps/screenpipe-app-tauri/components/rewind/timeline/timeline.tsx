@@ -19,7 +19,7 @@ import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { AppContextPopover } from "./app-context-popover";
 import { TimelineTagToolbar } from "./timeline-tag-toolbar";
 import { extractDomain, FaviconImg } from "./favicon-utils";
-import { localFetch } from "@/lib/api";
+import { localFetch, getApiBaseUrl } from "@/lib/api";
 
 // Global cache: preloads app-icon images so they render instantly on scroll.
 // Maps app name → "loaded" | "error" | Promise (in-flight).
@@ -1789,6 +1789,21 @@ export const TimelineSlider = ({
 														transform: "translate(-50%, -100%) translateY(-8px)",
 													}}
 												>
+													{/* Frame thumbnail preview — fetched lazily from the local API on hover */}
+													{frameId && (
+														<div className="mb-2 w-64 aspect-video rounded-md overflow-hidden bg-muted border border-border/40">
+															{/* eslint-disable-next-line @next/next/no-img-element */}
+															<img
+																src={`${getApiBaseUrl()}/frames/${frameId}`}
+																alt="frame preview"
+																className="w-full h-full object-cover select-none"
+																loading="lazy"
+																draggable={false}
+																data-lm-disable="true"
+																onError={(e) => { e.currentTarget.style.display = "none"; }}
+															/>
+														</div>
+													)}
 													<div className="flex items-center gap-2 mb-1">
 														{(() => {
 															// Use frame's own browser_url, or fall back to group's top domain

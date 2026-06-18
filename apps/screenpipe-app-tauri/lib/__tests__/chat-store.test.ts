@@ -15,11 +15,12 @@ import {
   selectRecentSwitcherSessions,
   getOrCreateEmptyChatId,
   dedupeSessionRecords,
+  sessionRecordFromMeta,
   type SessionRecord,
 } from "../stores/chat-store";
 
 function reset() {
-  useChatStore.setState({ sessions: {}, currentId: null });
+  useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 }
 
 function baseRecord(overrides: Partial<SessionRecord> = {}): SessionRecord {
@@ -261,12 +262,14 @@ describe("chat-store: setCurrent clears unread atomically", () => {
   beforeEach(reset);
 
   it("flips currentId AND clears unread on the new current in one set", () => {
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: true }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", lastContentAt: 100 }));
     useChatStore.getState().actions.setCurrent("A");
     const state = useChatStore.getState();
     expect(state.currentId).toBe("A");
+    expect(state.panelSessionId).toBe("A");
     expect(state.sessions.A.unread).toBe(false);
     expect(typeof state.sessions.A.lastViewedAt).toBe("number");
+    expect(state.sessions.A.lastViewedAt).toBeGreaterThanOrEqual(100);
   });
 });
 
@@ -323,35 +326,171 @@ describe("chat-store: recent switcher ordering", () => {
   });
 });
 
-describe("chat-store: markUnread guards", () => {
+describe("chat-store: unread is computed from timestamps", () => {
   beforeEach(reset);
 
-  it("no-ops when the session is the current one", () => {
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
+  it("session with lastContentAt > lastViewedAt is unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 200, lastViewedAt: 100 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+  });
+
+  it("session with lastContentAt < lastViewedAt is not unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 100, lastViewedAt: 200 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+  });
+
+  it("appendMessage bumps lastContentAt and recomputes unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastViewedAt: 50 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+    useChatStore.getState().actions.appendMessage(
+      "A",
+      { id: "m1", role: "assistant", content: "hello", timestamp: Date.now() },
+    );
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastContentAt).toBeGreaterThan(50);
+    expect(session.unread).toBe(true);
+  });
+
+  it("appendMessage keeps the current session read while it stays open", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastViewedAt: 50 }),
+    );
     useChatStore.getState().actions.setCurrent("A");
-    useChatStore.getState().actions.markUnread("A");
+    useChatStore.getState().actions.appendMessage(
+      "A",
+      { id: "m1", role: "assistant", content: "hello", timestamp: Date.now() },
+    );
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastContentAt).toBeDefined();
+    expect(session.lastViewedAt).toBe(session.lastContentAt);
+    expect(session.unread).toBe(false);
+  });
+
+  it("appendMessage keeps the mounted panel session read when home is hidden", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastViewedAt: 50 }),
+    );
+    useChatStore.setState({ currentId: null, panelSessionId: "A" });
+    useChatStore.getState().actions.appendMessage(
+      "A",
+      { id: "m1", role: "assistant", content: "hello", timestamp: Date.now() },
+    );
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastViewedAt).toBe(session.lastContentAt);
+    expect(session.unread).toBe(false);
+  });
+
+  it("patch with only updatedAt does NOT flip unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 100, lastViewedAt: 200 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+    // Status/preview patches bump updatedAt but should not affect unread.
+    useChatStore.getState().actions.patch("A", { updatedAt: 9_999 });
     expect(useChatStore.getState().sessions.A.unread).toBe(false);
   });
 
-  it("no-ops when the session is loaded in the panel even if currentId was cleared", () => {
-    // Bug: navigating away from /home reset currentId to null. Late deltas
-    // for the still-loaded panel chat then re-marked it unread, even though
-    // the user had read everything on screen. Guard on panelSessionId fixes
-    // that — the panel keeps the chat visible-on-return, so deltas there
-    // don't count as "new since last seen".
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
-    useChatStore.setState({ currentId: null, panelSessionId: "A" });
-    useChatStore.getState().actions.markUnread("A");
+  it("setCurrent sets lastViewedAt and clears unread", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 200 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+    useChatStore.getState().actions.setCurrent("A");
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+    expect(useChatStore.getState().sessions.A.lastViewedAt).toBeGreaterThanOrEqual(200);
+  });
+
+  it("hydrateFromDisk restores unread when persisted lastViewedAt lags content", () => {
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "A",
+        title: "A",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 2,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        lastViewedAt: 150,
+        kind: "chat",
+      }),
+    ]);
+
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+  });
+
+  it("hydrateFromDisk restores read when persisted lastViewedAt catches up", () => {
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "A",
+        title: "A",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 2,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        lastViewedAt: 200,
+        kind: "chat",
+      }),
+    ]);
+
     expect(useChatStore.getState().sessions.A.unread).toBe(false);
   });
 
-  it("DOES mark a different session unread when nav'd away", () => {
-    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
-    useChatStore.getState().actions.upsert(baseRecord({ id: "B", unread: false }));
-    useChatStore.setState({ currentId: null, panelSessionId: "A" });
-    useChatStore.getState().actions.markUnread("B");
-    expect(useChatStore.getState().sessions.A.unread).toBe(false);
-    expect(useChatStore.getState().sessions.B.unread).toBe(true);
+  it("hydrateFromDisk keeps legacy rows read when lastViewedAt was never persisted", () => {
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "legacy",
+        title: "legacy",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 1,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        kind: "chat",
+      }),
+    ]);
+
+    expect(useChatStore.getState().sessions.legacy.unread).toBe(false);
+  });
+
+  it("hydrateFromDisk merge preserves the never-viewed (0) watermark", () => {
+    // A row already in memory (e.g. a just-finished pipe run) that has
+    // never been viewed: lastViewedAt is the 0 sentinel, so it's unread.
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", lastContentAt: 200, lastViewedAt: 0 }),
+    );
+    expect(useChatStore.getState().sessions.A.unread).toBe(true);
+
+    // A disk record for the same id arrives via a later hydrate pass. The
+    // merge must keep lastViewedAt as 0 (not collapse it to undefined) so
+    // unread stays computed rather than falling back to the stale flag.
+    useChatStore.getState().actions.hydrateFromDisk([
+      sessionRecordFromMeta({
+        id: "A",
+        title: "A",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 2,
+        pinned: false,
+        hidden: false,
+        lastContentAt: 200,
+        lastViewedAt: 0,
+        kind: "chat",
+      }),
+    ]);
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.lastViewedAt).toBe(0);
+    expect(session.unread).toBe(true);
   });
 });
 

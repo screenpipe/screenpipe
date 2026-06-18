@@ -191,7 +191,7 @@ export function ArchiveSettings() {
     }
     try {
       const response = await fetch(
-        "https://screenpi.pe/api/cloud-sync/checkout",
+        "https://screenpipe.com/api/cloud-sync/checkout",
         {
           method: "POST",
           headers: {

@@ -32,13 +32,96 @@ describe("provider error copy", () => {
     expect(msg).toContain("ollama pull llama3.2");
   });
 
-  it("does not rewrite cloud provider connection errors", () => {
+  it("maps screenpipe cloud connection errors to a transient-outage message", () => {
+    const msg = buildProviderErrorMessage("Connection error.", {
+      provider: "screenpipe-cloud",
+      model: "auto",
+    });
+
+    expect(msg).toContain("screenpipe cloud");
+    expect(msg?.toLowerCase()).toContain("try again");
+    // does not blame the user's own machine/setup
+    expect(msg?.toLowerCase()).not.toContain("ollama");
+  });
+
+  it("maps the gateway TLS-handshake / send-request signatures the same way", () => {
+    // exact strings observed reaching the app during the 2026-06-18 outage
+    for (const raw of [
+      "tls handshake eof",
+      "error sending request for url (https://api.screenpipe.com/v1/chat/completions)",
+    ]) {
+      expect(
+        buildProviderErrorMessage(raw, { provider: "screenpipe-cloud", model: "auto" })
+      ).toContain("screenpipe cloud");
+    }
+  });
+
+  it("gives a generic connectivity message for other remote providers", () => {
     expect(
-      buildProviderErrorMessage("Connection error.", {
+      buildProviderErrorMessage("Connection error.", { provider: "anthropic", model: "claude-opus-4-8" })
+    ).toContain("anthropic");
+    expect(
+      buildProviderErrorMessage("Connection error.", { provider: "custom", model: "x" })
+    ).toContain("Can't reach the AI provider");
+  });
+
+  it("leaves non-connection cloud errors untouched (quota/auth handled elsewhere)", () => {
+    expect(
+      buildProviderErrorMessage("model_not_allowed", { provider: "screenpipe-cloud", model: "auto" })
+    ).toBeNull();
+    expect(
+      buildProviderErrorMessage('{"resets_at":"2026-06-19T00:00:00Z"}', {
         provider: "screenpipe-cloud",
         model: "auto",
       })
     ).toBeNull();
+  });
+
+  // --- no-regression guard: these strings are handled by dedicated branches at
+  // the call sites (5xx server error, already-processing race, model upgrade,
+  // generic). buildProviderErrorMessage MUST keep returning null for them so it
+  // does not shadow those branches now that it returns non-null for non-ollama.
+  it.each([
+    ["500 Internal server error", "screenpipe-cloud"],
+    ["api_error: something blew up", "screenpipe-cloud"],
+    ["504 Gateway Timeout", "screenpipe-cloud"], // 'Timeout' (one word) != 'timed out'
+    ["403 model_not_allowed", "screenpipe-cloud"],
+    ["agent is already processing a request", "screenpipe-cloud"],
+    ["The AI returned an empty response", "openai"],
+    ["", "anthropic"],
+    ["", "native-ollama"],
+  ])("returns null for non-connection error %j (provider %s)", (raw, provider) => {
+    expect(buildProviderErrorMessage(raw, { provider, model: "auto" })).toBeNull();
+  });
+
+  it("names every remote provider in its connectivity copy", () => {
+    for (const provider of ["openai", "openai-chatgpt", "anthropic"]) {
+      expect(
+        buildProviderErrorMessage("fetch failed", { provider, model: "m" })
+      ).toContain(`(${provider})`);
+    }
+    // custom + unknown/undefined fall back to an unnamed, still-clear message
+    expect(buildProviderErrorMessage("fetch failed", { provider: "custom" })).toBe(
+      "Can't reach the AI provider. Check your internet connection and try again."
+    );
+    expect(buildProviderErrorMessage("fetch failed", null)).toBe(
+      "Can't reach the AI provider. Check your internet connection and try again."
+    );
+  });
+
+  it("is case-insensitive on the gateway signatures", () => {
+    expect(
+      buildProviderErrorMessage("TLS HANDSHAKE EOF", { provider: "screenpipe-cloud" })
+    ).toContain("screenpipe cloud");
+  });
+
+  it("does not regress ollama copy now that other providers are handled", () => {
+    expect(
+      buildProviderErrorMessage("Connection error.", { provider: "native-ollama", model: "gemma4:31b" })
+    ).toContain("Cannot connect to Ollama");
+    expect(
+      buildProviderErrorMessage("model not found", { provider: "native-ollama", model: "llama3.2" })
+    ).toContain("ollama pull llama3.2");
   });
 
   it("keeps the generic no-response copy for non-Ollama providers", () => {

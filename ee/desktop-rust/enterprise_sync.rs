@@ -66,7 +66,7 @@ const RETRY_AFTER_AUTH_FAIL: Duration = Duration::from_secs(60 * 60);
 
 /// Default endpoint. Overridable via `SCREENPIPE_ENTERPRISE_INGEST_URL` for
 /// staging / on-prem.
-pub const DEFAULT_INGEST_URL: &str = "https://screenpi.pe/api/enterprise/ingest";
+pub const DEFAULT_INGEST_URL: &str = "https://screenpipe.com/api/enterprise/ingest";
 
 /// Cursor file in app data dir.
 pub const CURSOR_FILENAME: &str = "enterprise_sync_cursor.json";
@@ -874,7 +874,7 @@ pub const FRAME_MAX_WIDTH: u32 = 1280;
 const FRAME_JPEG_QUALITY: u8 = 70;
 const FRAME_JPEG_QUALITY_FALLBACK: u8 = 50;
 
-/// Derive the control-plane base (e.g. `https://screenpi.pe`) from the
+/// Derive the control-plane base (e.g. `https://screenpipe.com`) from the
 /// configured ingest URL, so staging / on-prem `SCREENPIPE_ENTERPRISE_INGEST_URL`
 /// overrides keep working without a second env var.
 pub fn control_plane_base(ingest_url: &str) -> Option<String> {
@@ -2515,8 +2515,8 @@ mod tests {
     #[test]
     fn control_plane_base_derives_from_ingest_url() {
         assert_eq!(
-            control_plane_base("https://screenpi.pe/api/enterprise/ingest").as_deref(),
-            Some("https://screenpi.pe")
+            control_plane_base("https://screenpipe.com/api/enterprise/ingest").as_deref(),
+            Some("https://screenpipe.com")
         );
         assert_eq!(
             control_plane_base("https://staging.screenpi.pe:8443/api/enterprise/ingest")

@@ -1279,7 +1279,7 @@ export function BrainSection() {
                     variant="ghost"
                     className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={() => {
-                      navigator.clipboard.writeText(memory.content);
+                      commands.copyTextToClipboard(memory.content);
                       setCopiedId(memory.id);
                       setTimeout(() => setCopiedId(null), 2000);
                     }}

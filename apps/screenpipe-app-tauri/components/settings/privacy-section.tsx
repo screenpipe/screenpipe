@@ -835,18 +835,15 @@ export function PrivacySection() {
                   onClick={async () => {
                     if (!liveApiKey) return;
                     try {
-                      await navigator.clipboard.writeText(liveApiKey);
-                    } catch {
-                      const el = document.createElement("textarea");
-                      el.value = liveApiKey;
-                      el.style.position = "fixed";
-                      el.style.opacity = "0";
-                      document.body.appendChild(el);
-                      el.select();
-                      document.execCommand("copy");
-                      document.body.removeChild(el);
+                      await commands.copyTextToClipboard(liveApiKey);
+                      toast({ title: "API key copied to clipboard" });
+                    } catch (error) {
+                      toast({
+                        title: "couldn't copy API key",
+                        description: error instanceof Error ? error.message : String(error),
+                        variant: "destructive",
+                      });
                     }
-                    toast({ title: "API key copied to clipboard" });
                   }}
                 >
                   <Copy className="h-3.5 w-3.5" />
@@ -1531,7 +1528,7 @@ export function PrivacySection() {
  * `team_api_token` is per-admin and grants the `read:devices` /
  * `read:search` / `read:records` scopes that the `screenpipe-team` pi
  * skill calls v1 endpoints with. An admin mints one at
- * https://screenpi.pe/enterprise?tab=tokens, pastes it here, and the
+ * https://screenpipe.com/enterprise?tab=tokens, pastes it here, and the
  * desktop persists it to ~/.screenpipe/enterprise.json. Every new pi
  * chat reads that file at boot and (un)installs the skill accordingly —
  * no app restart needed, just open a new chat. Revoke from the same
@@ -1639,10 +1636,10 @@ function AdminTeamTokenCard() {
                 <button
                   className="underline text-foreground hover:text-foreground/80"
                   onClick={() =>
-                    openUrl("https://screenpi.pe/enterprise?tab=tokens")
+                    openUrl("https://screenpipe.com/enterprise?tab=tokens")
                   }
                 >
-                  screenpi.pe/enterprise → api tokens
+                  screenpipe.com/enterprise → api tokens
                 </button>
                 .
               </p>
@@ -1696,18 +1693,15 @@ function AdminTeamTokenCard() {
             onClick={async () => {
               if (!liveToken) return;
               try {
-                await navigator.clipboard.writeText(liveToken);
-              } catch {
-                const el = document.createElement("textarea");
-                el.value = liveToken;
-                el.style.position = "fixed";
-                el.style.opacity = "0";
-                document.body.appendChild(el);
-                el.select();
-                document.execCommand("copy");
-                document.body.removeChild(el);
+                await commands.copyTextToClipboard(liveToken);
+                toast({ title: "admin token copied to clipboard" });
+              } catch (error) {
+                toast({
+                  title: "couldn't copy admin token",
+                  description: error instanceof Error ? error.message : String(error),
+                  variant: "destructive",
+                });
               }
-              toast({ title: "admin token copied to clipboard" });
             }}
           >
             <Copy className="h-3.5 w-3.5" />

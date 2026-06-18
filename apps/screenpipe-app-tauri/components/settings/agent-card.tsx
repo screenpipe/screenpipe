@@ -179,7 +179,7 @@ function McpSection({ name, mcp }: { name: string; mcp: AgentCardProps["mcp"] })
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(mcp.snippet);
+      await commands.copyTextToClipboard(mcp.snippet);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -266,7 +266,7 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
 
   const copyMd = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(variant.md);
+      await commands.copyTextToClipboard(variant.md);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied SKILL.md to clipboard" });
@@ -278,7 +278,7 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
   const copyCmd = useCallback(async () => {
     if (!variant.cliInstall) return;
     try {
-      await navigator.clipboard.writeText(variant.cliInstall);
+      await commands.copyTextToClipboard(variant.cliInstall);
       setCmdCopied(true);
       setTimeout(() => setCmdCopied(false), 2000);
       toast({ title: "copied install command" });
@@ -985,7 +985,7 @@ function SecondBrainCallout({ name }: { name: string }) {
 
   const copyPrompt = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(SECOND_BRAIN_PROMPT);
+      await commands.copyTextToClipboard(SECOND_BRAIN_PROMPT);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied second-brain prompt", description: `paste it into ${name}` });

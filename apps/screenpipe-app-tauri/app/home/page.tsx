@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
+  isSessionForeground,
   sessionRecordFromMeta,
   useChatStore,
   type SessionStatus,
@@ -257,8 +258,8 @@ function HomeContent() {
             updatedAt,
           });
         }
-        if (unreadHint && store.currentId !== id && store.panelSessionId !== id) {
-          store.actions.markUnread(id);
+        if (unreadHint && !isSessionForeground(store, id)) {
+          store.actions.patch(id, { lastContentAt: Date.now() });
         }
       });
       unlistenFn = unlisten;

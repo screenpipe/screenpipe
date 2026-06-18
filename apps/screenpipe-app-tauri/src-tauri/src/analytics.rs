@@ -83,7 +83,7 @@ impl AnalyticsManager {
 
         match self
             .client
-            .get("https://screenpi.pe/api/attribution")
+            .get("https://screenpipe.com/api/attribution")
             .timeout(Duration::from_secs(5))
             .send()
             .await

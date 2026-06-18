@@ -54,6 +54,10 @@ impl Integration for GoogleCalendar {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://www.googleapis.com",

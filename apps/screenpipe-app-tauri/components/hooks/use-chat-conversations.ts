@@ -38,41 +38,11 @@ import {
   migrateFromStoreBin,
   CHAT_HISTORY_INITIAL_LIMIT,
   conversationDedupKey,
+  updateConversationFlags,
   type ConversationMeta,
 } from "@/lib/chat-storage";
-
-
-// --- Types (mirrored from standalone-chat.tsx) ---
-
-export interface ToolCall {
-  id: string;
-  toolName: string;
-  args: Record<string, any>;
-  result?: string;
-  isError?: boolean;
-  isRunning: boolean;
-}
-
-export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "tool"; toolCall: ToolCall }
-  | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number };
-
-export interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  intent?: "steer";
-  turnIntentId?: string;
-  displayContent?: string;
-  images?: string[];
-  timestamp: number;
-  contentBlocks?: ContentBlock[];
-  model?: string;
-  provider?: string;
-  interruptedBySteer?: boolean;
-  steeredResponse?: boolean;
-}
+import type { ContentBlock, Message } from "@/lib/chat/types";
+export type { ContentBlock, Message, ToolCall } from "@/lib/chat/types";
 
 // --- Hook options ---
 
@@ -224,6 +194,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       pinned: conversation.pinned === true,
       hidden: conversation.hidden === true,
       lastUserMessageAt,
+      lastContentAt: conversation.lastContentAt,
+      lastViewedAt: conversation.lastViewedAt,
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
       titleSource: conversation.titleSource,
@@ -727,12 +699,23 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       ...(await (async () => {
         const { useChatStore } = await import("@/lib/stores/chat-store");
         const sid = piSessionIdRef.current;
-        const fromStore = sid
-          ? useChatStore.getState().sessions[sid]?.lastUserMessageAt
+        const storeSession = sid
+          ? useChatStore.getState().sessions[sid]
           : undefined;
         const lastUserMessageAt =
-          computedLastUserMessageAt ?? fromStore ?? existing?.lastUserMessageAt;
-        return lastUserMessageAt ? { lastUserMessageAt } : {};
+          computedLastUserMessageAt ??
+          storeSession?.lastUserMessageAt ??
+          existing?.lastUserMessageAt;
+        const lastContentAt = storeSession?.lastContentAt ?? existing?.lastContentAt;
+        const lastViewedAt =
+          storeSession?.lastViewedAt ??
+          existing?.lastViewedAt ??
+          (lastContentAt ? 0 : undefined);
+        return {
+          ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
+          ...(lastContentAt ? { lastContentAt } : {}),
+          ...(typeof lastViewedAt === "number" ? { lastViewedAt } : {}),
+        };
       })()),
       // Persist the preset ID so the model selection survives app restart
       // and is restored when switching between chats.
@@ -1001,6 +984,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const { useChatStore } = await import("@/lib/stores/chat-store");
     const store = useChatStore.getState();
     const outgoingSid = piSessionIdRef.current;
+    const viewedAt = Date.now();
 
     // (1) Snapshot OUTGOING session — atomic so router writes that
     //     race against this update can't land between the messages
@@ -1107,6 +1091,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             ...(persisted.hidden === true ? { hidden: true } : {}),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(persisted.lastContentAt ? { lastContentAt: persisted.lastContentAt } : {}),
+            ...(typeof persisted.lastViewedAt === "number"
+              ? { lastViewedAt: persisted.lastViewedAt }
+              : {}),
           });
         } else {
           store.actions.patch(conv.id, {
@@ -1117,6 +1105,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(typeof persisted.lastViewedAt === "number"
+              ? { lastViewedAt: persisted.lastViewedAt }
+              : {}),
           });
         }
       }
@@ -1202,6 +1193,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // foreground/background swaps.
           ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
+          ...(full.lastContentAt ? { lastContentAt: full.lastContentAt } : {}),
+          ...(typeof full.lastViewedAt === "number"
+            ? { lastViewedAt: full.lastViewedAt }
+            : {}),
         });
       } else if (conv.kind || conv.pipeContext) {
         store.actions.patch(conv.id, {
@@ -1216,6 +1211,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }
       store.actions.setMessages(conv.id, messagesForPanel as any);
       store.actions.markHydrated(conv.id);
+    }
+    store.actions.patch(conv.id, { lastViewedAt: viewedAt });
+    try {
+      await updateConversationFlags(conv.id, { lastViewedAt: viewedAt });
+    } catch {
+      // Best-effort: unread clears live immediately; the next full save can
+      // still persist the watermark if this patch fails.
     }
 
     setMessages(messagesForPanel);

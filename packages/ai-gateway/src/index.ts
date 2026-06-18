@@ -166,8 +166,14 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
 			const latency = resolveLatencyClass(request, body, env);
 
-			// Add credit info header if paid via credits
-			let response = await handleChatCompletions(body, env, latency);
+			// Add credit info header if paid via credits. Time it for the cost log
+			// (Date.now advances across the upstream fetch I/O) — ≈ TTFB for stream,
+			// total for non-stream. Includes any router/embed overhead.
+			const reqStart = Date.now();
+			let response = await handleChatCompletions(body, env, latency, authResult.deviceId);
+			const latencyMs = Date.now() - reqStart;
+			// Difficulty-router decision (null unless the router ran) for A/B measurement.
+			const routerTier = response.headers.get('x-screenpipe-router-tier');
 
 			// Attribute cost to the model that actually served the request.
 			// 'auto' and fallback cascades resolve to a concrete model; the
@@ -203,6 +209,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 					}),
 					endpoint: '/v1/chat/completions',
 					stream: true,
+					latency_ms: latencyMs,
+					router_tier: routerTier,
 				})));
 			} else {
 				ctx.waitUntil((async () => {
@@ -231,6 +239,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 							}),
 							endpoint: '/v1/chat/completions',
 							stream: false,
+							latency_ms: latencyMs,
+							router_tier: routerTier,
 						});
 					} catch (e) {
 						console.error('cost log extraction failed:', e);

@@ -766,3 +766,78 @@ async fn frame_fulltext_falls_back_when_no_map() {
     );
     assert!(!a.contains("bob@example.com"), "raw email survived: {a:?}");
 }
+
+/// A target table missing from the schema (binary/DB version skew — the
+/// `ocr_text` retirement is the real-world case) must be disabled, not
+/// retried forever. The worker should log once and keep reconciling the
+/// other targets at full speed.
+///
+/// Repro shape: reconcile a missing target (`Elements` — no `elements`
+/// table here) *before* a present one (`FullText`). The missing target's
+/// error is non-transient; if the worker treated it as transient it would
+/// sleep 2s before reaching `FullText` on every sweep, so `full_text`
+/// wouldn't be redacted within the short window below. With the fix the
+/// missing target is disabled immediately and `full_text` is redacted in
+/// the same sweep.
+#[tokio::test]
+async fn worker_disables_missing_table_and_keeps_reconciling_others() {
+    // Schema WITHOUT an `elements` table — mirrors an engine whose code
+    // still targets a table this DB's schema no longer has.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE frames (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_text TEXT,
+            full_text_redacted_at INTEGER,
+            accessibility_text TEXT,
+            accessibility_redacted_at INTEGER
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO frames (id, full_text) VALUES (1, 'email alice@example.com here')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let redactor = Arc::new(RegexRedactor::new()) as Arc<dyn Redactor>;
+    let cfg = WorkerConfig {
+        batch_size: 16,
+        idle_between_batches: Duration::from_millis(1),
+        poll_interval: Duration::from_millis(20),
+        // Elements first (missing table) then FullText (present).
+        tables: vec![TargetTable::Elements, TargetTable::FullText],
+        ..Default::default()
+    };
+    let worker = Worker::new(pool.clone(), redactor, cfg);
+    let handle = worker.clone().spawn();
+
+    // 400ms ≪ the 2s transient backoff: only reachable if the missing
+    // `elements` target was disabled rather than slept-on every sweep.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    handle.abort();
+
+    let row = sqlx::query("SELECT full_text, full_text_redacted_at FROM frames WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let red: String = row.get(0);
+    let when: Option<i64> = row.get(1);
+    assert!(
+        red.contains("[EMAIL]") && when.is_some(),
+        "full_text must be redacted despite the missing `elements` table — \
+         the missing target should be disabled, not block/spam the rotation (got {red:?})"
+    );
+    // NB: `last_error` is intentionally not asserted here — the successful
+    // `FullText` pass that follows the missing-table error clears it back to
+    // None, so it's racy by design. The timing-bounded redaction above is the
+    // behavioural proof that the missing target was disabled rather than
+    // retried on a 2s backoff ahead of `FullText`.
+}
