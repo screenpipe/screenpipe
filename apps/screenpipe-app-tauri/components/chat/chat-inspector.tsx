@@ -36,15 +36,15 @@ export function ChatInspector({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Compact block at the top, empty space below */}
-      <div className="m-3 rounded-md border border-border/40">
+      <div className="mx-2 my-3 rounded-md border border-border/40">
         {/* Outputs */}
         <div className="px-3 pt-2.5 pb-1">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground/70 font-medium">
             Outputs
           </span>
         </div>
         {outputs.length === 0 ? (
-          <p className="px-3 pb-2.5 text-xs text-muted-foreground">
+          <p className="px-3 pb-2.5 text-[13px] text-muted-foreground">
             No outputs yet
           </p>
         ) : (
@@ -54,9 +54,9 @@ export function ChatInspector({
                 key={output.id || `output-${i}`}
                 type="button"
                 onClick={() => output.path && onOpenFile(output.path)}
-                className="flex items-center gap-2 w-full px-2 py-1 text-xs text-foreground/80 hover:bg-muted/40 rounded-sm text-left"
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-[13px] text-foreground/80 hover:bg-muted/40 rounded-sm text-left"
               >
-                <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 <span className="truncate">
                   {output.path?.split("/").pop() ?? output.title}
                 </span>
@@ -70,17 +70,17 @@ export function ChatInspector({
 
         {/* Sources */}
         <div className="px-3 pt-2 pb-1">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground/70 font-medium">
             Sources
           </span>
         </div>
         {sources.length === 0 ? (
-          <p className="px-3 pb-2.5 text-xs text-muted-foreground">
+          <p className="px-3 pb-2.5 text-[13px] text-muted-foreground">
             No sources yet
           </p>
         ) : (
           <TooltipProvider delayDuration={200}>
-            <div className="flex flex-wrap gap-2 px-3 pb-2.5 pt-0.5">
+            <div className="flex flex-wrap gap-2.5 px-3 pb-2.5 pt-0.5">
               {sources.map((source, i) => (
                 <SourceIcon
                   key={source.id || `source-${i}`}
