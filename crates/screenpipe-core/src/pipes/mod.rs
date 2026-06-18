@@ -669,6 +669,19 @@ fn archive_old_pipe_logs(pipes_dir: &Path) -> PipeLogArchiveSummary {
     archive_old_pipe_logs_with_policy(pipes_dir, PIPE_LOG_ACTIVE_KEEP_PER_PIPE, archive_before)
 }
 
+/// Run [`archive_old_pipe_logs`] on the blocking thread pool so the directory
+/// walk and synchronous file moves never stall the async runtime, even on
+/// installs with a large pre-existing log backlog.
+async fn archive_old_pipe_logs_offloaded(pipes_dir: PathBuf) -> PipeLogArchiveSummary {
+    match tokio::task::spawn_blocking(move || archive_old_pipe_logs(&pipes_dir)).await {
+        Ok(summary) => summary,
+        Err(e) => {
+            warn!("pipe log archive: blocking task failed: {}", e);
+            PipeLogArchiveSummary::default()
+        }
+    }
+}
+
 fn archive_old_pipe_logs_with_policy(
     pipes_dir: &Path,
     keep_active_per_pipe: usize,
@@ -1709,7 +1722,7 @@ impl PipeManager {
 
         log_pipe_archive_summary(
             "startup pipe log archive",
-            archive_old_pipe_logs(&self.pipes_dir),
+            archive_old_pipe_logs_offloaded(self.pipes_dir.clone()).await,
         );
     }
 
@@ -4456,7 +4469,7 @@ impl PipeManager {
                     }
                     log_pipe_archive_summary(
                         "scheduler pipe log archive",
-                        archive_old_pipe_logs(&pipes_dir),
+                        archive_old_pipe_logs_offloaded(pipes_dir.clone()).await,
                     );
                     last_cleanup = Instant::now();
                 }
