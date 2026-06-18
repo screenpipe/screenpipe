@@ -18,7 +18,7 @@ import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
-import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { CONNECTIONS_UPDATED_EVENT, notifyConnectionsUpdated } from "@/lib/connections-events";
 import {
   CONNECTION_CATEGORY_BY_ID,
   CONNECTION_HARDCODED_DESCRIPTIONS,
@@ -898,63 +898,6 @@ function ListRow({ tile, selected, onClick, onTryInChat }: {
             <Plus className="h-4 w-4 text-foreground" />
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function McpSpotlight({
-  enabledCount,
-  totalCount,
-  selected,
-  onClick,
-}: {
-  enabledCount: number;
-  totalCount: number;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const summary = totalCount === 0
-    ? "No servers yet"
-    : `${enabledCount}/${totalCount} enabled`;
-
-  return (
-    <div
-      className={`
-        rounded-xl border bg-card p-3 transition-colors
-        ${selected ? "border-foreground bg-accent" : "border-border"}
-      `}
-    >
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onClick}
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
-        >
-          <IntegrationIcon
-            icon="custom-mcp"
-            className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted"
-          />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-medium text-foreground">MCP servers</h3>
-              {enabledCount > 0 && (
-                <span className="h-2 w-2 rounded-full bg-foreground" />
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">{summary}</p>
-          </div>
-        </button>
-        <Button
-          type="button"
-          size="sm"
-          variant={totalCount === 0 ? "default" : "outline"}
-          onClick={onClick}
-          className="h-8 gap-1.5 text-xs normal-case font-sans tracking-normal"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          {totalCount === 0 ? "Add" : "Manage"}
-        </Button>
       </div>
     </div>
   );
@@ -3392,7 +3335,7 @@ interface ConnectionsSectionProps {
   onFocusRequestConsumed?: () => void;
 }
 
-type ConnectionsView = "connections" | "mcp-servers" | "skills";
+type ConnectionsView = "connections" | "skills";
 
 export function ConnectionsSection({
   focusConnectionId,
@@ -3415,18 +3358,19 @@ export function ConnectionsSection({
     const pending = sessionStorage.getItem("openConnection");
     if (!pending) return;
     sessionStorage.removeItem("openConnection");
-    if (pending === "custom-mcp" || pending === "skills") {
-      setView(pending === "custom-mcp" ? "mcp-servers" : "skills");
+    if (pending === "skills") {
+      setView("skills");
       setSelected(null);
       return;
     }
+    setView("connections");
     setSelected(pending);
   }, []);
 
   useEffect(() => {
     if (!focusRequestId) return;
-    if (focusConnectionId === "custom-mcp" || focusConnectionId === "skills") {
-      setView(focusConnectionId === "custom-mcp" ? "mcp-servers" : "skills");
+    if (focusConnectionId === "skills") {
+      setView("skills");
       setSelected(null);
     } else {
       setView("connections");
@@ -3456,6 +3400,7 @@ export function ConnectionsSection({
   const [krispConnected, setKrispConnected] = useState(false);
   const [plaudConnected, setPlaudConnected] = useState(false);
   const [excalidrawConnected, setExcalidrawConnected] = useState(false);
+  const [customMcpConnected, setCustomMcpConnected] = useState(false);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
 
@@ -3502,17 +3447,25 @@ export function ConnectionsSection({
         setKrispConnected(false);
         setPlaudConnected(false);
         setExcalidrawConnected(false);
+        setCustomMcpConnected(false);
         return;
       }
       const body = await r.json();
       const list = (body?.data ?? []) as { enabled: boolean; url?: string }[];
-      setKrispConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === KRISP_MCP_URL));
-      setPlaudConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === PLAUD_MCP_URL));
-      setExcalidrawConnected(list.some(s => s.enabled && (s.url ?? "").replace(/\/+$/, "") === EXCALIDRAW_MCP_URL));
+      const knownMcpUrls = new Set([KRISP_MCP_URL, PLAUD_MCP_URL, EXCALIDRAW_MCP_URL]);
+      const normalizeMcpUrl = (url?: string) => (url ?? "").replace(/\/+$/, "");
+      setKrispConnected(list.some(s => s.enabled && normalizeMcpUrl(s.url) === KRISP_MCP_URL));
+      setPlaudConnected(list.some(s => s.enabled && normalizeMcpUrl(s.url) === PLAUD_MCP_URL));
+      setExcalidrawConnected(list.some(s => s.enabled && normalizeMcpUrl(s.url) === EXCALIDRAW_MCP_URL));
+      setCustomMcpConnected(list.some(s => {
+        const url = normalizeMcpUrl(s.url);
+        return s.enabled && !!url && !knownMcpUrls.has(url);
+      }));
     }).catch(() => {
       setKrispConnected(false);
       setPlaudConnected(false);
       setExcalidrawConnected(false);
+      setCustomMcpConnected(false);
     });
     if (typeof window !== "undefined" && platform() === "macos") {
       commands.getBrowsersAutomationStatus().then(statuses => {
@@ -3579,6 +3532,15 @@ export function ConnectionsSection({
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
+  useEffect(() => {
+    const handleConnectionsUpdated = () => {
+      refreshStatus();
+      fetchIntegrations();
+    };
+    window.addEventListener(CONNECTIONS_UPDATED_EVENT, handleConnectionsUpdated);
+    return () => window.removeEventListener(CONNECTIONS_UPDATED_EVENT, handleConnectionsUpdated);
+  }, [fetchIntegrations, refreshStatus]);
+
   const refreshIntegrationConnection = useCallback((id: string, connected: boolean) => {
     setIntegrations(prev => prev.map(i => i.id === id ? { ...i, connected } : i));
     notifyConnectionsUpdated();
@@ -3618,6 +3580,7 @@ export function ConnectionsSection({
       { id: "krisp", name: "Krisp", icon: "krisp", connected: krispConnected, detected: detectedConnectionIds.has("krisp") },
       { id: "plaud", name: "Plaud", icon: "plaud", connected: plaudConnected },
       { id: "excalidraw", name: "Excalidraw", icon: "excalidraw", connected: excalidrawConnected },
+      { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: customMcpConnected },
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
     // owned-default is hidden from settings — the agent drives it via the
@@ -3626,7 +3589,7 @@ export function ConnectionsSection({
     // Obsidian card, not a standalone connection tile.
     const hardcodedIds = new Set(hardcoded.map(h => h.id));
     const apiTiles: ConnectionTile[] = integrations
-      .filter(i => !hardcodedIds.has(i.id) && i.id !== "custom-mcp" && i.id !== "skills" && i.id !== "owned-default" && i.id !== "obsidian-memories")
+      .filter(i => !hardcodedIds.has(i.id) && i.id !== "skills" && i.id !== "owned-default" && i.id !== "obsidian-memories")
       .map(i => ({
         id: i.id,
         name: i.name,
@@ -3656,7 +3619,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, krispConnected, plaudConnected, excalidrawConnected, customMcpConnected, inputMonitoringGranted, detectedConnectionIds]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -3767,6 +3730,7 @@ export function ConnectionsSection({
         onConnected={() => setExcalidrawConnected(true)}
         onDisconnected={() => setExcalidrawConnected(false)}
       />;
+      case "custom-mcp": return <CustomMcpCard variant="page" />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
@@ -3851,10 +3815,6 @@ export function ConnectionsSection({
     setView("connections");
     setSelected(null);
   };
-  const openMcpServers = () => {
-    setView("mcp-servers");
-    setSelected(null);
-  };
   const openSkills = () => {
     setView("skills");
     setSelected(null);
@@ -3876,17 +3836,6 @@ export function ConnectionsSection({
             }`}
           >
             Connections
-          </button>
-          <button
-            type="button"
-            onClick={openMcpServers}
-            className={`px-3 py-1.5 text-sm transition-colors duration-150 ${
-              view === "mcp-servers"
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            MCP servers
           </button>
           <button
             type="button"
@@ -3916,18 +3865,6 @@ export function ConnectionsSection({
               className="h-9 pl-8 text-sm font-sans tracking-normal placeholder:font-sans placeholder:tracking-normal"
             />
           </div>
-        </div>
-      ) : null}
-
-      {view === "mcp-servers" ? (
-        <div className="max-w-4xl space-y-8">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">MCP servers</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Connect external tools and data sources for screenpipe agents, chat, and pipes.
-            </p>
-          </div>
-          <CustomMcpCard variant="page" />
         </div>
       ) : null}
 
