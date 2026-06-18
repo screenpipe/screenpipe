@@ -325,11 +325,14 @@ export function BrowserSidebar({
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    const hasOpenDialog = () =>
-      document.querySelectorAll("[role='dialog']").length > 0;
+    // Only target full-page modal dialogs (with backdrop overlay), not small
+    // popovers or dropdown menus. Our DialogOverlay and AlertDialogOverlay
+    // components add data-modal-overlay; popovers/dropdowns don't have one.
+    const hasModalOverlay = () =>
+      document.querySelectorAll("[data-modal-overlay]").length > 0;
 
     const sync = () => {
-      const open = hasOpenDialog();
+      const open = hasModalOverlay();
       if (open && !dialogActiveRef.current) {
         dialogActiveRef.current = true;
         commands.ownedBrowserHide().catch(() => {});
@@ -340,7 +343,7 @@ export function BrowserSidebar({
     };
 
     const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "data-state"] });
+    observer.observe(document.body, { childList: true, subtree: true });
     // Check initial state in case a dialog is already open.
     sync();
 
