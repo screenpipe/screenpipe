@@ -105,6 +105,7 @@ import {
   useSettings,
   Settings,
 } from "@/lib/hooks/use-settings";
+import { hasAppEntitlement } from "@/lib/app-entitlement";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
@@ -229,7 +230,7 @@ const getAudioEngineResolution = (
     };
   }
 
-  if (requested === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+  if (requested === "screenpipe-cloud" && !hasAppEntitlement(settings.user as any)) {
     return {
       requested,
       active: fallback,
@@ -1892,10 +1893,13 @@ export function RecordingSettings() {
       settings.audioTranscriptionEngine,
       settings.deepgramApiKey,
       settings.user?.cloud_subscribed,
+      settings.user?.app_entitled,
+      settings.user?.entitlement,
       settings.user?.id,
       settings.user?.token,
     ]
   );
+  const hasCloudTranscriptionAccess = hasAppEntitlement(settings.user as any);
   const languageSupportEngine = audioEngineResolution.active;
   const languageSupportKey =
     getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
@@ -2302,7 +2306,7 @@ export function RecordingSettings() {
     }
 
     // If trying to use cloud but not subscribed
-    if (value === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+    if (value === "screenpipe-cloud" && !hasCloudTranscriptionAccess) {
       try {
         const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
           method: "POST",
@@ -2719,8 +2723,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
-                      <SelectItem value="screenpipe-cloud" disabled={!settings.user?.cloud_subscribed}>
-                        Screenpipe Cloud {!settings.user?.cloud_subscribed && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                      <SelectItem value="screenpipe-cloud" disabled={!hasCloudTranscriptionAccess}>
+                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>
