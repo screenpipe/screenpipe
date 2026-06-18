@@ -208,7 +208,16 @@ impl PiQueueState {
     /// follow-up prompt can flip `agent_active` back to true before we
     /// finish — the loop guarantees we observe a true "idle" window before
     /// returning success.
+    ///
+    /// `done_notify` uses `notify_waiters()`, which stores no permit: a wake
+    /// fired in the window between our `is_agent_active()` check and the
+    /// `notified()` registration is lost. Capping each wait at `POLL_STEP` so
+    /// the loop re-checks the flag keeps a lost wake from stalling the full
+    /// `timeout` (and then truncating the reply anyway — the very regression
+    /// this guards against). The real deadline is still enforced at the top of
+    /// the loop; mirrors the bounded retry the queue's steer-wait already uses.
     pub async fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
+        const POLL_STEP: std::time::Duration = std::time::Duration::from_secs(1);
         if !self.is_agent_active() {
             return true;
         }
@@ -218,10 +227,11 @@ impl PiQueueState {
             if remaining.is_zero() {
                 return false;
             }
+            let step = remaining.min(POLL_STEP);
             tokio::select! {
                 _ = self.done_notify.notified() => {}
                 _ = self.terminated_notify.notified() => return true,
-                _ = tokio::time::sleep(remaining) => return false,
+                _ = tokio::time::sleep(step) => {}
             }
         }
         true
@@ -970,6 +980,36 @@ mod tests {
 
         let ok = state.wait_for_idle(std::time::Duration::from_secs(2)).await;
         assert!(ok, "should keep waiting until agent is genuinely idle");
+        signaller.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_idle_recovers_when_done_wake_is_lost() {
+        // `done_notify` uses notify_waiters() (no stored permit), so a wake
+        // delivered before the waiter registers is lost. Simulate the worst
+        // case by flipping the agent idle WITHOUT signalling done: the periodic
+        // poll must still observe idle well before the timeout. Without the
+        // POLL_STEP cap this stalled the entire timeout and then truncated the
+        // reply — the exact bug this change guards against.
+        let state = PiQueueState::new();
+        state.mark_agent_active();
+
+        let state_clone = state.clone();
+        let signaller = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            state_clone.mark_agent_idle(); // deliberately NO signal_done()
+        });
+
+        let start = std::time::Instant::now();
+        let ok = state
+            .wait_for_idle(std::time::Duration::from_secs(10))
+            .await;
+        assert!(ok, "poll must observe idle even when the done wake is lost");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "should detect idle within ~1 poll step, not stall to timeout (got {:?})",
+            start.elapsed()
+        );
         signaller.await.unwrap();
     }
 
