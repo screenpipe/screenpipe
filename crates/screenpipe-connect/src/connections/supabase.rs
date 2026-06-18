@@ -62,10 +62,6 @@ impl Integration for Supabase {
         Some(&OAUTH)
     }
 
-    fn supports_oauth_instances(&self) -> bool {
-        true
-    }
-
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         // Base scoped to the project host so pipes can hit any sub-API
         // (/rest, /storage, /auth, /functions, /realtime). Auth via the

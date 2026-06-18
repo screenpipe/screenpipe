@@ -73,10 +73,6 @@ impl Integration for Slack {
         Some(&OAUTH)
     }
 
-    fn supports_oauth_instances(&self) -> bool {
-        true
-    }
-
     fn oauth_scope_variants(&self) -> &'static [ScopeVariant] {
         SCOPE_VARIANTS
     }

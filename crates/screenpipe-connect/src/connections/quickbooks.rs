@@ -47,10 +47,6 @@ impl Integration for QuickBooks {
         Some(&OAUTH)
     }
 
-    fn supports_oauth_instances(&self) -> bool {
-        true
-    }
-
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         // {realmId} is resolved from the OAuth token JSON, which is merged into credentials
         // by the proxy handler in screenpipe-engine/src/connections_api.rs.

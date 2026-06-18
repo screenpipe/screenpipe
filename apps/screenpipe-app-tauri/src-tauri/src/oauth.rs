@@ -463,7 +463,7 @@ pub async fn oauth_connect(
     // We only fall back to the default slot (None) when the provider hands us
     // no identity to key on (e.g. Notion/QuickBooks/Jira, which key on
     // workspace metadata instead and stay single-account here).
-    let effective_instance = instance.or_else(|| token_data["email"].as_str().map(String::from));
+    let effective_instance = derive_effective_instance(instance, &token_data);
     let store_instance = effective_instance.as_deref();
 
     oauth::write_oauth_token_instance(store.as_ref(), &integration_id, store_instance, &token_data)
@@ -653,6 +653,42 @@ fn extract_email_from_jwt(jwt: &str) -> Option<String> {
         .or_else(|| payload["preferred_username"].as_str())
         .or_else(|| payload["upn"].as_str())
         .map(String::from)
+}
+
+fn derive_effective_instance(
+    explicit_instance: Option<String>,
+    token_data: &serde_json::Value,
+) -> Option<String> {
+    explicit_instance.or_else(|| token_data["email"].as_str().map(String::from))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_effective_instance;
+    use serde_json::json;
+
+    #[test]
+    fn effective_instance_uses_email_identity() {
+        let token_data = json!({
+            "access_token": "at",
+            "email": "zoom-user@example.com",
+        });
+
+        assert_eq!(
+            derive_effective_instance(None, &token_data).as_deref(),
+            Some("zoom-user@example.com")
+        );
+    }
+
+    #[test]
+    fn effective_instance_does_not_use_workspace_metadata() {
+        let token_data = json!({
+            "access_token": "at",
+            "workspace_name": "Acme Workspace",
+        });
+
+        assert_eq!(derive_effective_instance(None, &token_data), None);
+    }
 }
 
 /// Microsoft's well-known tenant ID for **personal** Microsoft accounts

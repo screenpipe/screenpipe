@@ -59,10 +59,6 @@ impl Integration for Jira {
         Some(&OAUTH)
     }
 
-    fn supports_oauth_instances(&self) -> bool {
-        true
-    }
-
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             // {cloud_id} is stored in the OAuth JSON at connect time by
