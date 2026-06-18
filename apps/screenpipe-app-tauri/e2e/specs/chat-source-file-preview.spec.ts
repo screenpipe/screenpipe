@@ -13,15 +13,16 @@
  * assistant message and a real on-disk markdown file; no model run involved.
  */
 
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 
-const SESSION = "55555555-5555-5555-5555-555555555555";
 const HEADING = "E2E Preview Heading";
 const CODE_MARKER = "const e2eAnswer";
+const ASSISTANT_TEXT_PREFIX = "Here is what I found in the skill file";
 
 const PREVIEW_MARKDOWN = [
   `# ${HEADING}`,
@@ -35,60 +36,42 @@ const PREVIEW_MARKDOWN = [
   "",
 ].join("\n");
 
-async function emitFromWebview(eventName: string, payload: unknown): Promise<void> {
-  await browser.executeAsync(
-    (name: string, p: unknown, done: (v?: unknown) => void) => {
-      const g = globalThis as unknown as {
-        __TAURI__?: { event?: { emit: (n: string, p: unknown) => Promise<unknown> } };
-        __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> };
-      };
-      const emit = g.__TAURI__?.event?.emit;
-      if (emit) {
-        void emit(name, p).then(() => done()).catch(() => done());
-      } else if (g.__TAURI_INTERNALS__) {
-        void g.__TAURI_INTERNALS__
-          .invoke("plugin:event|emit", { event: name, payload: p })
-          .then(() => done())
-          .catch(() => done());
-      } else {
-        done();
-      }
-    },
-    eventName,
-    payload,
-  );
-}
-
-async function switchToSession(id: string): Promise<void> {
-  await emitFromWebview("chat-load-conversation", { conversationId: id });
-  await browser.pause(t(500));
-}
-
-async function waitForAssistantSeedHook(): Promise<void> {
-  await browser.waitUntil(
-    async () =>
-      (await browser.execute(
-        () => typeof (window as any).__e2eSeedAssistantMessage === "function",
-      )) as boolean,
-    {
-      timeout: t(8_000),
-      interval: 100,
-      timeoutMsg: "E2E assistant seed hook did not mount",
-    },
-  );
-}
-
 async function seedAssistantWithFileSource(
   sessionId: string,
   filePath: string,
+  content: string,
 ): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() => {
+        const g = window as unknown as {
+          __e2eSeedUserMessage?: unknown;
+          __e2eSeedAssistantMessage?: unknown;
+        };
+        return (
+          typeof g.__e2eSeedUserMessage === "function" &&
+          typeof g.__e2eSeedAssistantMessage === "function"
+        );
+      })) as boolean,
+    {
+      timeout: t(10_000),
+      interval: 150,
+      timeoutMsg: "chat e2e seed hooks never appeared",
+    },
+  );
+
   await browser.execute(
-    (sid: string, path: string) => {
-      const seed = (window as any).__e2eSeedAssistantMessage as
-        | ((s: string, payload: unknown) => void)
-        | undefined;
-      seed?.(sid, {
-        content: "Here is what I found in the skill file.",
+    (sid: string, path: string, content: string) => {
+      const g = window as unknown as {
+        __e2eSeedUserMessage: (sessionId: string, text: string) => void;
+        __e2eSeedAssistantMessage: (
+          sessionId: string,
+          payload: { content: string; sourceCitations: unknown[] },
+        ) => void;
+      };
+      g.__e2eSeedUserMessage(sid, "open the seeded file source");
+      g.__e2eSeedAssistantMessage(sid, {
+        content,
         sourceCitations: [
           {
             id: "e2e-file-skill",
@@ -102,30 +85,77 @@ async function seedAssistantWithFileSource(
     },
     sessionId,
     filePath,
+    content,
   );
 }
 
-// The "N sources" footer starts collapsed; click its toggle to reveal the
-// per-source rows.
-async function expandSourcesFooter(): Promise<void> {
+async function waitForSeededAssistant(content: string): Promise<void> {
   await browser.waitUntil(
     async () =>
-      (await browser.execute(() => {
-        const button = Array.from(document.querySelectorAll("button")).find(
-          (el) =>
-            el.getAttribute("aria-expanded") !== null &&
-            /\bsources?\b/i.test(el.textContent ?? ""),
+      (await browser.execute((content: string) =>
+        Array.from(document.querySelectorAll('[data-testid="chat-message-assistant"]'))
+          .some((el) => (el.textContent ?? "").includes(content)),
+      content)) as boolean,
+    {
+      timeout: t(10_000),
+      interval: 150,
+      timeoutMsg: "seeded assistant message never appeared",
+    },
+  );
+}
+
+// The "N sources" footer starts collapsed; click the toggle attached to the
+// seeded assistant message so other source footers cannot steal the click.
+async function expandSeededSourcesFooter(content: string): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute((assistantContent: string) => {
+        const assistantMessage = Array.from(
+          document.querySelectorAll('[data-testid="chat-message-assistant"]'),
+        ).find((el) =>
+          (el.textContent ?? "").includes(assistantContent),
         );
+        const sourceButtons = Array.from(
+          document.querySelectorAll('[data-testid="source-citation-toggle"]'),
+        );
+        const button = assistantMessage
+          ? sourceButtons.find((el) => assistantMessage.contains(el)) ??
+            sourceButtons.find((el) =>
+              Boolean(
+                assistantMessage.compareDocumentPosition(el) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+              ),
+            )
+          : sourceButtons[0];
         if (!button) return false;
         if (button.getAttribute("aria-expanded") === "false") {
           (button as HTMLButtonElement).click();
         }
         return true;
+      }, content)) as boolean,
+    {
+      timeout: t(20_000),
+      interval: 150,
+      timeoutMsg: "seeded sources footer toggle never appeared",
+    },
+  );
+}
+
+async function clickSeededFileSource(): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() => {
+        const row = Array.from(
+          document.querySelectorAll('[data-testid="source-citation-file"]'),
+        ).find((el) => (el.textContent ?? "").includes("Read: e2e-preview.md"));
+        if (!(row instanceof HTMLButtonElement)) return false;
+        row.click();
+        return true;
       })) as boolean,
     {
       timeout: t(8_000),
       interval: 150,
-      timeoutMsg: "sources footer toggle never appeared",
+      timeoutMsg: "seeded file source row never appeared",
     },
   );
 }
@@ -134,32 +164,35 @@ describe("Chat source citations open files in the preview sidebar", function () 
   this.timeout(90_000);
 
   let mdPath = "";
+  let mdDir = "";
+  let sessionId = "";
 
   before(async () => {
-    const dir = mkdtempSync(join(tmpdir(), "screenpipe-e2e-preview-"));
-    mdPath = join(dir, "e2e-preview.md");
+    mdDir = mkdtempSync(join(tmpdir(), "screenpipe-e2e-preview-"));
+    mdPath = join(mdDir, "e2e-preview.md");
     writeFileSync(mdPath, PREVIEW_MARKDOWN, "utf8");
 
     await waitForAppReady();
     await openHomeWindow();
     const home = await $('[data-testid="section-home"]');
     await home.waitForExist({ timeout: t(15_000) });
-    await switchToSession(SESSION);
-    await waitForAssistantSeedHook();
+  });
+
+  after(() => {
+    if (mdDir) rmSync(mdDir, { recursive: true, force: true });
   });
 
   it("renders the file source, opens it on click, and shows rendered markdown + code", async () => {
-    await seedAssistantWithFileSource(SESSION, mdPath);
+    sessionId = randomUUID();
+    const assistantText = `${ASSISTANT_TEXT_PREFIX} ${sessionId}.`;
+    await seedAssistantWithFileSource(sessionId, mdPath, assistantText);
 
     // The seeded assistant message renders.
-    const assistant = await $('[data-testid="chat-message-assistant"]');
-    await assistant.waitForExist({ timeout: t(10_000) });
+    await waitForSeededAssistant(assistantText);
 
     // Expand the "1 source" footer and click the file card.
-    await expandSourcesFooter();
-    const fileCard = await $('[data-testid="source-citation-file"]');
-    await fileCard.waitForExist({ timeout: t(8_000) });
-    await fileCard.click();
+    await expandSeededSourcesFooter(assistantText);
+    await clickSeededFileSource();
 
     // The preview sidebar opens to that file.
     const sidebar = await $('[data-testid="file-preview-sidebar"]');

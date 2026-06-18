@@ -659,9 +659,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(total, 2);
-        assert!(search_els
-            .iter()
-            .any(|e| e.properties.as_deref().is_some_and(|p| p.contains("is_selected"))));
+        assert!(search_els.iter().any(|e| e
+            .properties
+            .as_deref()
+            .is_some_and(|p| p.contains("is_selected"))));
     }
 
     #[tokio::test]

@@ -113,6 +113,7 @@ export function SourceCitationFooter({ citations, className, onOpenFile }: Sourc
     <div className={cn("mt-3 border-t border-border/40 pt-2 text-xs", className)}>
       <button
         type="button"
+        data-testid="source-citation-toggle"
         onClick={() => setExpanded((value) => !value)}
         className="group flex min-w-0 max-w-full items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
         aria-expanded={expanded}

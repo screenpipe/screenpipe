@@ -1351,6 +1351,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// signs out while this fetch is in flight, the generation changes and we
 		// abort the write below instead of resurrecting the cleared session.
 		const generation = authGenerationRef.current;
+		const startingToken = settingsRef.current.user?.token ?? null;
 		try {
 			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpi.pe"), {
 				method: "POST",
@@ -1374,7 +1375,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			// The user signed out while this request was in flight — writing
 			// userData now would resurrect the cleared session (the "logout needs
 			// two clicks" bug). Abort silently; the sign-out already won.
-			if (authGenerationRef.current !== generation) {
+			if (
+				authGenerationRef.current !== generation ||
+				(startingToken !== null && settingsRef.current.user?.token !== token)
+			) {
 				console.log("loadUser: sign-out during fetch — not restoring session");
 				return;
 			}

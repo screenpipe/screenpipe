@@ -218,7 +218,10 @@ const OUTLINE_TEXT_CLIP: usize = 120;
 /// its json|csv|tsv validator.
 pub(crate) fn wants_outline(format: &Option<String>) -> bool {
     matches!(
-        format.as_deref().map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        format
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .as_deref(),
         Some("outline") | Some("tree")
     )
 }
@@ -244,7 +247,12 @@ fn elements_outline_text(elements: &[ElementResponse], total: i64) -> String {
     // A text view's whole point: keep only nodes that carry text.
     let kept: Vec<&ElementResponse> = elements
         .iter()
-        .filter(|e| e.text.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false))
+        .filter(|e| {
+            e.text
+                .as_deref()
+                .map(|t| !t.trim().is_empty())
+                .unwrap_or(false)
+        })
         .collect();
 
     if kept.is_empty() {
@@ -270,7 +278,10 @@ fn elements_outline_text(elements: &[ElementResponse], total: i64) -> String {
     'frames: for fid in &frame_order {
         let els = &by_frame[fid];
         let src = els.first().map(|e| e.source.as_str()).unwrap_or("");
-        out.push_str(&format!("frame {fid} · {src} · {} text elements\n", els.len()));
+        out.push_str(&format!(
+            "frame {fid} · {src} · {} text elements\n",
+            els.len()
+        ));
 
         let mut i = 0;
         while i < els.len() {
@@ -543,9 +554,18 @@ mod tests {
             ..Default::default()
         });
         let out = elements_outline_text(&[a, b, c], 3);
-        assert!(out.contains("AXButton \"Save\" #1 (disabled)"), "got:\n{out}");
-        assert!(out.contains("AXTab \"Inbox\" #2 (selected,focused)"), "got:\n{out}");
-        assert!(out.contains("AXDisclosureTriangle \"Details\" #3 (collapsed)"), "got:\n{out}");
+        assert!(
+            out.contains("AXButton \"Save\" #1 (disabled)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("AXTab \"Inbox\" #2 (selected,focused)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("AXDisclosureTriangle \"Details\" #3 (collapsed)"),
+            "got:\n{out}"
+        );
     }
 
     #[test]
@@ -596,7 +616,10 @@ mod tests {
     fn outline_flags_off_screen_and_drops_bounds() {
         let els = vec![el(7, 9, "AXTextField", Some("Email"), 1, Some(false))];
         let out = elements_outline_text(&els, 1);
-        assert!(out.contains("AXTextField \"Email\" #7 (off-screen)"), "got:\n{out}");
+        assert!(
+            out.contains("AXTextField \"Email\" #7 (off-screen)"),
+            "got:\n{out}"
+        );
         // bounds (floats / keys) must not bloat the outline
         assert!(!out.contains("0.1"));
         assert!(!out.contains("left"));
@@ -609,7 +632,10 @@ mod tests {
             el(2, 200, "AXButton", Some("B"), 0, None),
         ];
         let out = elements_outline_text(&els, 2);
-        assert!(out.contains("frame 100 · accessibility · 1 text elements"), "got:\n{out}");
+        assert!(
+            out.contains("frame 100 · accessibility · 1 text elements"),
+            "got:\n{out}"
+        );
         assert!(out.contains("frame 200 · accessibility · 1 text elements"));
         assert!(out.find("#1").unwrap() < out.find("#2").unwrap());
     }
@@ -617,7 +643,16 @@ mod tests {
     #[test]
     fn outline_caps_body_and_notes_truncation() {
         let els: Vec<ElementResponse> = (0..(OUTLINE_MAX_LINES as i64 + 50))
-            .map(|i| el(i + 1, 9, "AXStaticText", Some(&format!("line {i}")), 1, None))
+            .map(|i| {
+                el(
+                    i + 1,
+                    9,
+                    "AXStaticText",
+                    Some(&format!("line {i}")),
+                    1,
+                    None,
+                )
+            })
             .collect();
         let total = els.len() as i64;
         let out = elements_outline_text(&els, total);
@@ -644,7 +679,16 @@ mod tests {
     fn outline_is_far_cheaper_than_json() {
         // Distinct text so the win is the format itself, not just dedup.
         let els: Vec<ElementResponse> = (0..25)
-            .map(|i| el(i + 1, 9, "AXButton", Some(&format!("Button {i}")), 2, Some(true)))
+            .map(|i| {
+                el(
+                    i + 1,
+                    9,
+                    "AXButton",
+                    Some(&format!("Button {i}")),
+                    2,
+                    Some(true),
+                )
+            })
             .collect();
         let outline = elements_outline_text(&els, 25);
         let json = serde_json::to_string(&els).unwrap();
@@ -669,7 +713,14 @@ mod tests {
         // … marker must appear without slicing a code point.
         let emoji = "🎉".repeat(OUTLINE_TEXT_CLIP + 30);
         let els = vec![
-            el(1, 9, "AXStaticText", Some("café — naïve 日本語 😀"), 1, None),
+            el(
+                1,
+                9,
+                "AXStaticText",
+                Some("café — naïve 日本語 😀"),
+                1,
+                None,
+            ),
             el(2, 9, "AXStaticText", Some(&emoji), 1, None),
         ];
         let out = elements_outline_text(&els, 2);
@@ -716,7 +767,10 @@ mod tests {
             el(3, 100, "AXButton", Some("three"), 0, None),
         ];
         let out = elements_outline_text(&els, 3);
-        assert!(out.contains("frame 100 · accessibility · 2 text elements"), "got:\n{out}");
+        assert!(
+            out.contains("frame 100 · accessibility · 2 text elements"),
+            "got:\n{out}"
+        );
         assert!(out.contains("frame 200 · accessibility · 1 text elements"));
         // #1 and #3 (frame 100) precede #2 (frame 200)
         assert!(out.find("#3").unwrap() < out.find("#2").unwrap());
@@ -737,7 +791,11 @@ mod tests {
         let body: Vec<&str> = out.lines().filter(|l| l.contains('#')).collect();
         assert_eq!(body.len(), 1, "embedded newline split the row: {out:?}");
         // newline collapsed to a space; embedded quotes escaped
-        assert!(body[0].contains("he said \\\"hi\\\" then left"), "got: {}", body[0]);
+        assert!(
+            body[0].contains("he said \\\"hi\\\" then left"),
+            "got: {}",
+            body[0]
+        );
     }
 
     // Reproducible token-measurement harness. Renders JSON-default vs outline
@@ -785,8 +843,22 @@ mod tests {
         ];
         for i in 0..18 {
             typ.push(el(100 + i * 3, 7, "AXGroup", None, 2, Some(true))); // empty noise
-            typ.push(el(101 + i * 3, 7, "AXStaticText", Some(&format!("Sender {i}")), 4, Some(true)));
-            typ.push(el(102 + i * 3, 7, "AXStaticText", Some("Unread"), 4, Some(true))); // dup
+            typ.push(el(
+                101 + i * 3,
+                7,
+                "AXStaticText",
+                Some(&format!("Sender {i}")),
+                4,
+                Some(true),
+            ));
+            typ.push(el(
+                102 + i * 3,
+                7,
+                "AXStaticText",
+                Some("Unread"),
+                4,
+                Some(true),
+            )); // dup
         }
         samples.push(collect("typical_app", typ));
 
@@ -802,7 +874,14 @@ mod tests {
         for d in 0..20 {
             deep.push(el(d as i64 + 1, 4, "AXGroup", None, d, Some(true)));
         }
-        deep.push(el(999, 4, "AXButton", Some("Deeply nested action"), 20, Some(true)));
+        deep.push(el(
+            999,
+            4,
+            "AXButton",
+            Some("Deeply nested action"),
+            20,
+            Some(true),
+        ));
         samples.push(collect("deep_nested", deep));
 
         // 5. OCR-heavy long text
@@ -826,7 +905,14 @@ mod tests {
         let mut multi = Vec::new();
         for f in 0..3 {
             for i in 0..12 {
-                multi.push(el(f * 100 + i, 200 + f, "AXLink", Some(&format!("Result {f}-{i}")), 2, Some(true)));
+                multi.push(el(
+                    f * 100 + i,
+                    200 + f,
+                    "AXLink",
+                    Some(&format!("Result {f}-{i}")),
+                    2,
+                    Some(true),
+                ));
             }
         }
         samples.push(collect("multi_frame", multi));
@@ -837,7 +923,14 @@ mod tests {
             noisy.push(el(i + 1, 6, "AXGroup", None, (i % 8) as i32, Some(true)));
         }
         for i in 0..20 {
-            noisy.push(el(1000 + i, 6, "AXStaticText", Some(&format!("Label {i}")), 3, Some(true)));
+            noisy.push(el(
+                1000 + i,
+                6,
+                "AXStaticText",
+                Some(&format!("Label {i}")),
+                3,
+                Some(true),
+            ));
         }
         samples.push(collect("noisy_structural", noisy));
 
