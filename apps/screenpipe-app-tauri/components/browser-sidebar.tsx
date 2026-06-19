@@ -209,7 +209,10 @@ export function BrowserSidebar({
 
   const effectiveWidth = clampWidth(requestedWidth, availableW);
   const browserPanelOpen = visible && !collapsed && effectiveWidth > 0;
+  const inspectorShouldFloat =
+    inspectorActive && availableW < MIN_CHAT_WIDTH + INSPECTOR_WIDTH;
   const panelOpen = inspectorActive || previewActive || browserPanelOpen;
+  const inlinePanelOpen = panelOpen && !inspectorShouldFloat;
 
   useEffect(() => {
     try {
@@ -218,13 +221,6 @@ export function BrowserSidebar({
       // plugin unavailable in web dev mode
     }
   }, []);
-
-  // Hide the native webview when the inspector takes over the panel area
-  useEffect(() => {
-    if (inspectorActive) {
-      commands.ownedBrowserHide().catch(() => {});
-    }
-  }, [inspectorActive]);
 
   // ---------------------------------------------------------------------------
   // Persistence
@@ -724,6 +720,10 @@ export function BrowserSidebar({
       commands.ownedBrowserHide().catch(() => {});
       return;
     }
+    if (inspectorActive) {
+      commands.ownedBrowserHide().catch(() => {});
+      return;
+    }
     const el = placeholderRef.current;
     if (!el) return;
     schedulePushBounds();
@@ -740,7 +740,14 @@ export function BrowserSidebar({
     return () => {
       ro.disconnect();
     };
-  }, [panelOpen, effectiveWidth, availableW, schedulePushBounds, previewActive]);
+  }, [
+    panelOpen,
+    effectiveWidth,
+    availableW,
+    schedulePushBounds,
+    previewActive,
+    inspectorActive,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Drag-resize
@@ -959,7 +966,7 @@ export function BrowserSidebar({
 
   return (
     <>
-      {panelOpen && (
+      {inlinePanelOpen && (
         <div
           ref={panelRef}
           // Inline flex item beside the chat — pushes the chat column
@@ -1198,6 +1205,15 @@ export function BrowserSidebar({
           )}
         </div>
       )}
+
+      {inspectorShouldFloat && inspectorContent ? (
+        <div
+          className="fixed right-3 top-9 z-40 max-h-[calc(100vh-3.25rem)]"
+          style={{ width: INSPECTOR_WIDTH }}
+        >
+          {inspectorContent}
+        </div>
+      ) : null}
 
       {/* Floating re-open affordance: shown when a URL is saved but the
           panel is collapsed. Pinned to the viewport's top-right corner so

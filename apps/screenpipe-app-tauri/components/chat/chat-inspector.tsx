@@ -36,7 +36,7 @@ export function ChatInspector({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Compact block at the top, empty space below */}
-      <div className="mx-2 my-3 rounded-md border border-border/40">
+      <div className="mx-2 my-3 rounded-md border border-border/40 bg-background">
         {/* Outputs */}
         <div className="px-3 pt-2.5 pb-1">
           <span className="text-[11px] uppercase tracking-wider text-muted-foreground/70 font-medium">
