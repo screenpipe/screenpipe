@@ -712,6 +712,11 @@ export function StandaloneChat({
   const filePreviewOpen = filePreview?.visible === true && !!filePreview.path;
   const sidePanelHasContent = filePreviewOpen || browserPanelState.hasUrl;
   const sidePanelOpen = filePreviewOpen || browserPanelState.open;
+  const inspectorHasContent =
+    inspectorOpen ||
+    messages.length > 0 ||
+    inspectorOutputs.length > 0 ||
+    inspectorSources.length > 0;
 
   const toggleInspector = useCallback(() => {
     if (inspectorOpen) {
@@ -5632,19 +5637,21 @@ export function StandaloneChat({
         }}
         rightActions={
           <div className="relative z-10 flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleInspector();
-              }}
-              className={cn("h-7 w-7", inspectorOpen && "bg-muted")}
-              title="Inspector"
-            >
-              <Settings2 size={14} />
-            </Button>
+            {inspectorHasContent ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleInspector();
+                }}
+                className={cn("h-7 w-7", inspectorOpen && "bg-muted")}
+                title="Inspector"
+              >
+                <Settings2 size={14} />
+              </Button>
+            ) : null}
             {sidePanelHasContent ? (
               <Button
                 variant="ghost"
@@ -5843,7 +5850,7 @@ export function StandaloneChat({
           sendMessage={sendMessage}
           openFilePreview={openFilePreview}
           branchConversation={branchConversation}
-          suppressSourceFooters={inspectorOpen}
+          suppressSourceFooters
         />
 
         <div ref={messagesEndRef} />
