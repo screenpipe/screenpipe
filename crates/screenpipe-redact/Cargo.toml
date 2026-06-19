@@ -80,7 +80,7 @@ default = []
 # load-dynamic at runtime) is NOT baked in here — it is target-conditional
 # in the per-target `[target.….dependencies.ort]` entries below, because
 # ort rc.12 ships no x86_64-apple-darwin prebuilt (Intel uses load-dynamic).
-onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:serde_json", "ort/tls-native", "ort/std"]
+onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "ort/tls-native", "ort/std"]
 # Mac: CoreML execution provider (uses Metal + ANE where available).
 onnx-coreml = ["onnx-cpu", "ort/coreml"]
 # Windows: DirectML EP (any DX12-capable GPU, no CUDA toolkit).
@@ -144,11 +144,12 @@ features = ["onig"]
 optional = true
 
 # Used by the ONNX text adapter to parse `config.json` (the id2label
-# mapping for the 27 BIO tags). Workspace already pulls serde_json
-# transitively; declare explicitly so the dep graph is honest.
+# mapping for the 27 BIO tags) AND by `tree_json` to parse/re-serialize
+# `frames.accessibility_tree_json` for redaction (issue #4116). Workspace
+# already pulls serde_json transitively; declare explicitly so the dep
+# graph is honest. Non-optional: `tree_json` is always compiled.
 [dependencies.serde_json]
 workspace = true
-optional = true
 
 # OPF text redactor (pure-Rust candle port; same model as the v3
 # fine-tune on HF). Pinned to a commit so reproducible across CI

@@ -163,6 +163,16 @@
       "notes": "Opt-in macOS cloud audio fallback seed."
     },
     {
+      "spec": "zz-audio-fallback-reverify.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["auth", "entitlement", "audio-device", "settings"],
+      "features": ["cloud-entitlement-reverify", "audio-engine-fallback", "settings-recording"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "AuthGuard re-verifies cloud entitlement on window focus so a freshly-subscribed user gets cloud transcription without restart (#4339)."
+    },
+    {
       "spec": "chat-composer-isolation.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],

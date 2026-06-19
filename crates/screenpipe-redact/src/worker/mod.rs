@@ -65,8 +65,7 @@ pub struct WorkerConfig {
     /// `idle_between_batches` floor between batches.
     pub max_active_fraction: f64,
     /// Tables to reconcile. Default: all of [`ALL_TARGET_TABLES`]
-    /// (frames:full_text, audio, accessibility, ui_events:keyboard,
-    /// ui_events:clipboard, elements).
+    /// (frames:full_text, audio, accessibility, ui_events, elements).
     pub tables: Vec<TargetTable>,
 }
 
@@ -354,22 +353,100 @@ impl Worker {
 
     /// Dispatch one table. `FullText` gets the per-frame path that also
     /// propagates to `accessibility_text` from a single detection
-    /// (screenpipe/website#291); everything else uses the generic
-    /// per-column path.
+    /// (screenpipe/website#291); `UiEvents` gets the multi-column
+    /// per-row path (issue #4115); everything else uses the generic
+    /// single-column path.
     async fn process_one(&self, table: TargetTable) -> Result<u32, anyhow::Error> {
         match table {
             TargetTable::FullText => self.process_frames_fulltext().await,
+            TargetTable::UiEvents => self.process_ui_events().await,
             other => self.process_table(other).await,
         }
     }
 
+    /// Redact the runtime-authored free-text columns of a `ui_events` row
+    /// in one pass and stamp the single `redacted_at` watermark. Beyond
+    /// `text_content`, the in-scope columns ([`tables::UI_EVENT_TEXT_COLS`]
+    /// = `element_value` + `window_title`) carry user data on EVERY event —
+    /// a click on a filled form field persists its contents in
+    /// `element_value` — so before this path they kept raw PII indefinitely
+    /// even with "AI PII removal" on (issue #4115). The build-time
+    /// developer-authored fields (`element_name` / `element_description`)
+    /// never hold runtime user data and are deliberately skipped to avoid
+    /// wasted redactor CPU/GPU.
+    ///
+    /// All non-empty columns of the batch are flattened into one
+    /// `redact_batch` call (the redactor amortizes a batch better than
+    /// per-column calls), then scattered back to their rows. The watermark
+    /// is stamped per row regardless of whether anything changed, so a row
+    /// with no PII is marked done and never re-fetched. Returns the number
+    /// of rows processed.
+    async fn process_ui_events(&self) -> Result<u32, anyhow::Error> {
+        let rows = tables::fetch_unredacted_ui_events(&self.pool, self.cfg.batch_size).await?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        debug!(
+            count = rows.len(),
+            "redacting ui_events batch (multi-column)"
+        );
+
+        // Flatten every non-empty cell into one batch, remembering where
+        // each output goes (row index, column index).
+        let mut inputs: Vec<String> = Vec::new();
+        let mut coords: Vec<(usize, usize)> = Vec::new();
+        for (ri, row) in rows.iter().enumerate() {
+            for (ci, cell) in row.cols.iter().enumerate() {
+                if let Some(text) = cell {
+                    inputs.push(text.clone());
+                    coords.push((ri, ci));
+                }
+            }
+        }
+
+        // Per-row redacted output, parallel to UI_EVENT_TEXT_COLS; only
+        // the cells that had content get a Some(...) to write back.
+        let ncols = rows[0].cols.len();
+        let mut outputs_by_row: Vec<Vec<Option<String>>> =
+            rows.iter().map(|_| vec![None; ncols]).collect();
+
+        if !inputs.is_empty() {
+            let redacted = self.redactor.redact_batch(&inputs).await?;
+            if redacted.len() != inputs.len() {
+                anyhow::bail!(
+                    "redactor returned {} outputs for {} inputs",
+                    redacted.len(),
+                    inputs.len()
+                );
+            }
+            for ((ri, ci), out) in coords.into_iter().zip(redacted.into_iter()) {
+                outputs_by_row[ri][ci] = Some(out.redacted);
+            }
+        }
+
+        for (row, redacted) in rows.iter().zip(outputs_by_row.iter()) {
+            tables::write_redacted_ui_events(&self.pool, row.id, redacted).await?;
+        }
+
+        let n = rows.len() as u32;
+        let mut s = self.status.lock().await;
+        s.redacted_total += n as u64;
+        s.last_redacted_at = Some(chrono::Utc::now());
+        s.last_error = None;
+        Ok(n)
+    }
+
     /// Redact the per-frame `full_text` search surface and, in the SAME
-    /// detection pass, propagate the result to that frame's
-    /// `accessibility_text` (a coherent substring of `full_text`) — so the
-    /// model runs once for both columns instead of twice. Falls back to
-    /// plain `full_text` redaction (leaving `accessibility_text` to its own
-    /// pass) when the redactor can't yield a value map (e.g. the span-less
-    /// enclave). Returns the number of column writes performed.
+    /// detection pass, propagate the result to that frame's DERIVED copies —
+    /// `accessibility_text`, `accessibility_tree_json` (issue #4116) and
+    /// `window_name`. They are all decompositions of `full_text`, so every
+    /// PII value in them is in the detected map; applying it is pure string
+    /// work (microseconds), the model runs ONCE for the whole frame instead
+    /// of once per column.
+    /// Falls back to driving the redactor over each derived copy directly
+    /// (still no second detection on `full_text`) when the redactor can't
+    /// yield a value map (the span-less enclave). Returns the number of
+    /// column writes performed.
     async fn process_frames_fulltext(&self) -> Result<u32, anyhow::Error> {
         let rows =
             tables::fetch_unredacted_frames_fulltext(&self.pool, self.cfg.batch_size).await?;
@@ -378,11 +455,10 @@ impl Worker {
         }
         debug!(
             count = rows.len(),
-            "redacting frame full_text batch (+ accessibility propagation)"
+            "redacting frame full_text batch (+ derived-copy propagation)"
         );
 
         let mut writes = 0u32;
-        let mut propagated = 0u32;
         for row in &rows {
             match self.redactor.redact_with_map(&row.full_text).await? {
                 Some((out, map)) => {
@@ -394,28 +470,26 @@ impl Worker {
                     )
                     .await?;
                     writes += 1;
-                    // Propagate to the sibling accessibility_text if it
-                    // still needs it — no second detection. accessibility_text
-                    // ⊆ full_text, so all its PII values are in `map`.
-                    if let Some(acc) = row.accessibility_text.as_deref() {
-                        if !acc.is_empty() && row.accessibility_redacted_at.is_none() {
-                            let redacted = map.apply(acc);
-                            tables::write_redacted(
-                                &self.pool,
-                                TargetTable::Accessibility,
-                                row.id,
-                                &redacted,
-                            )
-                            .await?;
-                            writes += 1;
-                            propagated += 1;
-                        }
-                    }
+                    // Propagate the single detection to every derived copy
+                    // that still needs it — no extra model pass.
+                    writes += self.propagate_frame_derived(row, &map).await?;
                 }
                 None => {
-                    // Span-less / no-map redactor: redact full_text the
-                    // plain way; accessibility_text is left to the
-                    // Accessibility pass.
+                    // Span-less / no-map redactor (the Tinfoil enclave, whose
+                    // detections aren't exposed as spans). We can't build a
+                    // map to propagate, so scrub the JSON / window_name
+                    // derived copies by driving the redactor directly —
+                    // CRITICAL: before stamping full_text. The fetch filters
+                    // `full_text_redacted_at IS NULL`, so once full_text is
+                    // stamped the frame is never re-selected; a derived copy
+                    // skipped now would be served raw forever (#4116/#4117).
+                    // A malformed derived blob is warned + skipped inside the
+                    // helper (its watermark stays NULL) but full_text is still
+                    // redacted below — same as the map arm, and it avoids a
+                    // busy-loop re-parsing a permanently-malformed blob.
+                    writes += self.redact_frame_derived_with_redactor(row).await?;
+                    // accessibility_text is left to the Accessibility pass
+                    // (it has its own model-pass fallback target).
                     let out = self.redactor.redact(&row.full_text).await?;
                     tables::write_redacted(
                         &self.pool,
@@ -429,17 +503,127 @@ impl Worker {
             }
         }
 
-        if propagated > 0 {
-            debug!(
-                propagated,
-                "accessibility_text redacted via full_text propagation (no extra model passes)"
-            );
-        }
-
         let mut s = self.status.lock().await;
         s.redacted_total += writes as u64;
         s.last_redacted_at = Some(chrono::Utc::now());
         s.last_error = None;
+        Ok(writes)
+    }
+
+    /// Apply a frame's [`RedactionMap`] to each derived copy that still
+    /// needs redaction (`*_redacted_at IS NULL`): `accessibility_text`,
+    /// `accessibility_tree_json` and `window_name`. Pure string application —
+    /// NO model pass. The tree JSON is scrubbed field-wise (node text),
+    /// preserving structure. A malformed JSON blob is logged and skipped (its
+    /// watermark stays NULL); the row's `full_text` is still stamped, so the
+    /// malformed copy is not retried — it's malformed, retrying can't fix it.
+    /// Returns the number of derived columns written.
+    async fn propagate_frame_derived(
+        &self,
+        row: &tables::FrameTextRow,
+        map: &crate::RedactionMap,
+    ) -> Result<u32, anyhow::Error> {
+        let mut writes = 0u32;
+
+        // accessibility_text ⊆ full_text — apply the map verbatim.
+        if let Some(acc) = row.accessibility_text.as_deref() {
+            if !acc.is_empty() && row.accessibility_redacted_at.is_none() {
+                tables::write_redacted(
+                    &self.pool,
+                    TargetTable::Accessibility,
+                    row.id,
+                    &map.apply(acc),
+                )
+                .await?;
+                writes += 1;
+            }
+        }
+
+        // accessibility_tree_json — scrub node text fields field-wise.
+        if let Some(tree) = row.accessibility_tree_json.as_deref() {
+            if !tree.is_empty() && row.accessibility_tree_redacted_at.is_none() {
+                match crate::tree_json::redact_tree_json(tree, map) {
+                    Ok(Some(json)) => {
+                        tables::write_redacted_tree(&self.pool, row.id, &json).await?;
+                        writes += 1;
+                    }
+                    // Ok(None) means the map was empty — impossible here
+                    // (we're inside the Some(map)-with-detections arm).
+                    Ok(None) => {}
+                    Err(e) => warn!(
+                        frame_id = row.id,
+                        error = %e,
+                        "skipping malformed accessibility_tree_json (leaving it un-stamped)"
+                    ),
+                }
+            }
+        }
+
+        // window_name — short prose, apply the map verbatim.
+        if let Some(wn) = row.window_name.as_deref() {
+            if !wn.is_empty() && row.window_name_redacted_at.is_none() {
+                tables::write_redacted_window_name(&self.pool, row.id, &map.apply(wn)).await?;
+                writes += 1;
+            }
+        }
+
+        Ok(writes)
+    }
+
+    /// Enclave (span-less) path: scrub the frame's JSON / `window_name`
+    /// derived copies by driving the redactor directly — there is no map to
+    /// propagate. `accessibility_text` is intentionally NOT handled here; it
+    /// has its own [`TargetTable::Accessibility`] model-pass fallback.
+    ///
+    /// Returns the number of derived columns written. A malformed JSON blob
+    /// is warned + skipped (its watermark stays NULL) so the caller still
+    /// redacts + stamps `full_text` — same as the map arm. `Err` only on a
+    /// transient redactor failure, which the worker's backoff handles. We do
+    /// NOT abort the whole row on a malformed blob: that would re-parse a
+    /// permanently-malformed blob every sweep AND leave `full_text` (the
+    /// searchable surface) raw forever.
+    async fn redact_frame_derived_with_redactor(
+        &self,
+        row: &tables::FrameTextRow,
+    ) -> Result<u32, anyhow::Error> {
+        let mut writes = 0u32;
+
+        if let Some(tree) = row.accessibility_tree_json.as_deref() {
+            if !tree.is_empty() && row.accessibility_tree_redacted_at.is_none() {
+                match crate::tree_json::redact_tree_json_with_redactor(tree, self.redactor.as_ref())
+                    .await
+                {
+                    Ok(Some(json)) => {
+                        tables::write_redacted_tree(&self.pool, row.id, &json).await?;
+                        writes += 1;
+                    }
+                    // No redactable text → stamp the verbatim blob so the
+                    // row isn't re-scanned for the tree forever.
+                    Ok(None) => {
+                        tables::write_redacted_tree(&self.pool, row.id, tree).await?;
+                        writes += 1;
+                    }
+                    Err(crate::tree_json::TreeRedactError::Json(e)) => warn!(
+                        frame_id = row.id,
+                        error = %e,
+                        "skipping malformed accessibility_tree_json on enclave path \
+                         (leaving it un-stamped)"
+                    ),
+                    Err(e @ crate::tree_json::TreeRedactError::Redact(_)) => {
+                        return Err(e.into());
+                    }
+                }
+            }
+        }
+
+        if let Some(wn) = row.window_name.as_deref() {
+            if !wn.is_empty() && row.window_name_redacted_at.is_none() {
+                let out = self.redactor.redact(wn).await?;
+                tables::write_redacted_window_name(&self.pool, row.id, &out.redacted).await?;
+                writes += 1;
+            }
+        }
+
         Ok(writes)
     }
 

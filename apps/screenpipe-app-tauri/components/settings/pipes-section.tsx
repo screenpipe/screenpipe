@@ -1157,10 +1157,16 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
-      // First load: skip executions for speed. Executions load lazily per-pipe.
+      // Load pipes WITH recent executions inline so the list shows the real
+      // last-run status. Without this the "last run" column always reads
+      // "never run" for pipes that have actually run (the badge is driven by
+      // recent_executions). The engine batches this into one fast per-pipe
+      // index-seek query with stdout/stderr stripped (~30ms for 100 pipes), so
+      // it's cheap enough for the 10s poll. Full output for the expanded RUNS
+      // tab still loads lazily via /pipes/:name/executions.
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5_000);
-      const res = await fetch(`${apiBase}/pipes`, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal }).finally(() => clearTimeout(timeout));
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];

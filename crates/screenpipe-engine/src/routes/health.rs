@@ -110,6 +110,12 @@ fn capture_status(
             "warning",
             "all microphone input devices are paused by the user",
         )
+    } else if audio_status == "no_input_device" {
+        (
+            "no_input_device",
+            "ok",
+            "no microphone detected — audio capture idle, screen recording continues",
+        )
     } else if audio_status == "not_started" {
         (
             "audio_not_started",
@@ -783,6 +789,17 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let audio_never_captured =
         !state.audio_disabled && audio_snap.uptime_secs > 120.0 && audio_snap.chunks_sent == 0;
 
+    // Distinguish "audio enabled but no microphone exists" from "mic present but
+    // not capturing". On machines with no input device (RDP/VM audio loopback,
+    // a desktop with speakers only), audio capture can never produce a chunk —
+    // that is the expected idle state, not a fault. It must not flip /health to
+    // 503 degraded, nor trip the desktop "mic not capturing" stall notification.
+    // Input devices are tagged "(input)" in the device list (output-only devices
+    // like "Remote Audio (output)" are not microphones).
+    let has_input_device = audio_devices
+        .iter()
+        .any(|device| device.to_string().contains("(input)"));
+
     // Detect "active_no_data" condition: device appears active (was selected and in
     // the device list) but the zero-fill watchdog has fired, indicating the stream
     // was hijacked by another app or went silent (Issue #3144). The watchdog
@@ -792,6 +809,12 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     let audio_status = if state.audio_disabled {
         "disabled".to_string()
+    } else if audio_never_captured && !has_input_device {
+        // Audio is on but there is no microphone to capture from — expected idle,
+        // not a failure. Reported distinctly from "not_started" so /health stays
+        // 200 and the desktop stall notification (which keys off "not_started")
+        // does not false-fire on machines without a mic.
+        "no_input_device".to_string()
     } else if audio_never_captured {
         "not_started".to_string()
     } else if stream_hijacked && global_audio_active {
@@ -925,7 +948,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     let (overall_status, message, verbose_instructions, status_code) = if (frame_status == "ok"
         || frame_status == "disabled")
-        && (audio_status == "ok" || audio_status == "disabled")
+        && (audio_status == "ok" || audio_status == "disabled" || audio_status == "no_input_device")
         && !vision_degraded
         && !audio_degraded
     {
@@ -943,8 +966,9 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
             unhealthy_systems.push("vision");
         }
-        if audio_status != "ok" && audio_status != "disabled" {
-            // active_no_data is a degraded state (device hijacked but watchdog recovering)
+        if audio_status != "ok" && audio_status != "disabled" && audio_status != "no_input_device" {
+            // active_no_data is a degraded state (device hijacked but watchdog recovering).
+            // no_input_device is benign (no mic present) and stays out of this list.
             unhealthy_systems.push("audio");
         }
         if audio_degraded && !unhealthy_systems.contains(&"audio") {
@@ -1533,6 +1557,68 @@ mod tests {
         assert_eq!(
             audio_status_2, "ok",
             "audio_status should be 'ok' when stream_timeouts == 0 and device is active"
+        );
+    }
+
+    /// Replicates the audio_status decision + the overall-status gate to prove
+    /// that a machine with no microphone (audio enabled, never captured, zero
+    /// input devices — e.g. RDP loopback "Remote Audio (output)") reports the
+    /// benign "no_input_device" status and keeps /health at 200, instead of the
+    /// old false 503 "degraded: audio not_started".
+    #[test]
+    fn no_microphone_reports_no_input_device_and_stays_healthy() {
+        fn decide_audio_status(
+            audio_disabled: bool,
+            audio_never_captured: bool,
+            has_input_device: bool,
+            global_audio_active: bool,
+            stream_hijacked: bool,
+        ) -> &'static str {
+            if audio_disabled {
+                "disabled"
+            } else if audio_never_captured && !has_input_device {
+                "no_input_device"
+            } else if audio_never_captured {
+                "not_started"
+            } else if stream_hijacked && global_audio_active {
+                "active_no_data"
+            } else if global_audio_active {
+                "ok"
+            } else {
+                "not_started"
+            }
+        }
+
+        // The overall /health gate: audio contributes to "degraded" unless it is
+        // ok / disabled / no_input_device.
+        fn audio_is_degraded(audio_status: &str) -> bool {
+            audio_status != "ok" && audio_status != "disabled" && audio_status != "no_input_device"
+        }
+
+        // No mic: audio on, nothing captured, only an output device present.
+        let only_output = ["Remote Audio (output)"];
+        let has_input = only_output.iter().any(|d| d.contains("(input)"));
+        assert!(!has_input, "output-only device must not count as a mic");
+
+        let status = decide_audio_status(false, true, has_input, false, false);
+        assert_eq!(
+            status, "no_input_device",
+            "no microphone present should report no_input_device, not not_started"
+        );
+        assert!(
+            !audio_is_degraded(status),
+            "no_input_device must NOT mark /health degraded (no false 503 on mic-less machines)"
+        );
+
+        // Regression guard: a real mic that genuinely never captured is still a
+        // fault and must remain degraded.
+        let with_mic = ["Built-in Microphone (input)"];
+        let has_input_real = with_mic.iter().any(|d| d.contains("(input)"));
+        let status_broken = decide_audio_status(false, true, has_input_real, false, false);
+        assert_eq!(status_broken, "not_started");
+        assert!(
+            audio_is_degraded(status_broken),
+            "a present-but-silent mic must still surface as degraded"
         );
     }
 }

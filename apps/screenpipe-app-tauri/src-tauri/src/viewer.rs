@@ -22,11 +22,18 @@ const MAX_VIEWER_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Expand a leading `~` / `~/` to the user's home directory. Leaves every
 /// other path untouched (including bare `~user`, which we don't resolve).
-fn expand_tilde(path: &str) -> PathBuf {
+///
+/// `~\…` is also expanded on Windows, where `\` is the native separator. On
+/// Unix `\` is a valid filename character, so `~\foo` there is a real relative
+/// path, not a home reference, and is left alone.
+pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
     }
-    if let Some(rest) = path.strip_prefix("~/") {
+    let rest = path.strip_prefix("~/");
+    #[cfg(windows)]
+    let rest = rest.or_else(|| path.strip_prefix("~\\"));
+    if let Some(rest) = rest {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);
         }
@@ -445,10 +452,16 @@ mod tests {
         if let Some(home) = dirs::home_dir() {
             assert_eq!(expand_tilde("~"), home);
             assert_eq!(expand_tilde("~/notes/a.md"), home.join("notes/a.md"));
+            // Windows uses `\` as its native separator for home-relative paths.
+            #[cfg(windows)]
+            assert_eq!(expand_tilde("~\\Downloads\\a.mp4"), home.join("Downloads\\a.mp4"));
         }
         // Non-tilde paths pass through untouched.
         assert_eq!(expand_tilde("/abs/x.md"), PathBuf::from("/abs/x.md"));
         assert_eq!(expand_tilde(".pi/skills/x"), PathBuf::from(".pi/skills/x"));
+        // On Unix `\` is a valid filename char, so `~\foo` is NOT home-relative.
+        #[cfg(not(windows))]
+        assert_eq!(expand_tilde("~\\foo.mp4"), PathBuf::from("~\\foo.mp4"));
     }
 
     #[test]

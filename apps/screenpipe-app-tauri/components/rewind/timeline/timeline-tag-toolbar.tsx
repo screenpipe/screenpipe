@@ -10,16 +10,6 @@ import { createPortal } from "react-dom";
 import { toast } from "@/components/ui/use-toast";
 import { clearTimelineCache } from "@/lib/hooks/use-timeline-cache";
 import { clearTextCache } from "@/lib/hooks/use-frame-text-data";
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import posthog from "posthog-js";
 import { PipeAIIcon } from "@/components/pipe-ai-icon";
 import { localFetch } from "@/lib/api";
@@ -262,7 +252,6 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 	const top = anchorRect.y;
 
 	return createPortal(
-		<>
 		<div
 			className="fixed z-[9999] pointer-events-auto"
 			style={{
@@ -292,10 +281,20 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 					<div className="flex items-stretch gap-1 flex-shrink-0">
 					<button
 						onClick={() => setShowDeleteConfirm(true)}
-						className="flex items-center justify-center text-xs px-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0"
+						disabled={isDeleting}
+						className={cn(
+							"flex items-center justify-center text-xs px-1.5 rounded-md transition-colors flex-shrink-0 disabled:cursor-not-allowed",
+							showDeleteConfirm
+								? "text-destructive bg-destructive/10"
+								: "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+						)}
 						title="delete selected range"
 					>
-						<Trash2 className="w-3.5 h-3.5" />
+						{isDeleting ? (
+							<Loader2 className="w-3.5 h-3.5 animate-spin" />
+						) : (
+							<Trash2 className="w-3.5 h-3.5" />
+						)}
 					</button>
 						{onAskAI && (
 							<div
@@ -458,6 +457,43 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 					</div>
 				</div>
 
+				{showDeleteConfirm ? (
+					/* Inline delete confirmation — shown right where the user clicked,
+					   instead of a disconnected centered modal */
+					<div className="flex flex-col gap-2">
+						<p className="text-xs text-muted-foreground leading-relaxed">
+							permanently delete all screen recordings, audio, and transcriptions from{" "}
+							<span className="font-medium text-foreground">{startTime} → {endTime}</span> ({durationStr})? this cannot be undone.
+						</p>
+						<div className="flex items-center justify-end gap-2">
+							<button
+								onClick={() => setShowDeleteConfirm(false)}
+								disabled={isDeleting}
+								className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							>
+								cancel
+							</button>
+							<button
+								onClick={handleDeleteRange}
+								disabled={isDeleting}
+								className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+							>
+								{isDeleting ? (
+									<>
+										<Loader2 className="w-3 h-3 animate-spin" />
+										deleting…
+									</>
+								) : (
+									<>
+										<Trash2 className="w-3 h-3" />
+										delete permanently
+									</>
+								)}
+							</button>
+						</div>
+					</div>
+				) : (
+				<>
 				{/* Existing tags on selection */}
 				{existingTags.length > 0 && (
 					<div className="flex flex-wrap gap-1 max-h-[52px] overflow-y-auto scrollbar-hide">
@@ -520,31 +556,10 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 						add
 					</button>
 				</form>
+				</>
+				)}
 			</div>
-		</div>
-		<AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-			<AlertDialogContent>
-				<AlertDialogHeader>
-					<AlertDialogTitle>delete time range?</AlertDialogTitle>
-					<AlertDialogDescription>
-						this will permanently delete all screen recordings, audio, and
-						transcriptions from {startTime} to {endTime} ({durationStr}).
-						this cannot be undone.
-					</AlertDialogDescription>
-				</AlertDialogHeader>
-				<AlertDialogFooter>
-					<AlertDialogCancel disabled={isDeleting}>cancel</AlertDialogCancel>
-					<AlertDialogAction
-						className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-						disabled={isDeleting}
-						onClick={handleDeleteRange}
-					>
-						{isDeleting ? "deleting..." : "delete permanently"}
-					</AlertDialogAction>
-				</AlertDialogFooter>
-			</AlertDialogContent>
-		</AlertDialog>
-		</>,
+		</div>,
 		document.body
 	);
 }

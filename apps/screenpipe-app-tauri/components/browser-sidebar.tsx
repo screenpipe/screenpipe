@@ -191,6 +191,8 @@ export function BrowserSidebar({
   const boundsRafRef = useRef<number | null>(null);
   /** True while the cookie-consent card is up — pushBounds must not re-show the native webview. */
   const sessionAccessActiveRef = useRef(false);
+  /** True while any Radix dialog/modal is open — pushBounds must not re-show the native webview. */
+  const dialogActiveRef = useRef(false);
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(
     null,
   );
@@ -260,8 +262,9 @@ export function BrowserSidebar({
     const el = placeholderRef.current;
     if (!el) return;
     // Native child webviews sit above HTML — never position/show while the
-    // session-access card is visible (ResizeObserver races with hide()).
-    if (sessionAccessActiveRef.current) {
+    // session-access card or any dialog/modal is visible (the native webview
+    // would cover the HTML overlay otherwise).
+    if (sessionAccessActiveRef.current || dialogActiveRef.current) {
       await commands.ownedBrowserHide().catch(() => {});
       return;
     }
@@ -315,6 +318,37 @@ export function BrowserSidebar({
       commands.ownedBrowserHide().catch(() => {});
     };
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Dialog/modal detection — hide the native webview when any Radix dialog is
+  // open, otherwise it covers the HTML overlay.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    // Only target full-page modal dialogs (with backdrop overlay), not small
+    // popovers or dropdown menus. Our DialogOverlay and AlertDialogOverlay
+    // components add data-modal-overlay; popovers/dropdowns don't have one.
+    const hasModalOverlay = () =>
+      document.querySelectorAll("[data-modal-overlay]").length > 0;
+
+    const sync = () => {
+      const open = hasModalOverlay();
+      if (open && !dialogActiveRef.current) {
+        dialogActiveRef.current = true;
+        commands.ownedBrowserHide().catch(() => {});
+      } else if (!open && dialogActiveRef.current) {
+        dialogActiveRef.current = false;
+        schedulePushBounds();
+      }
+    };
+
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true });
+    // Check initial state in case a dialog is already open.
+    sync();
+
+    return () => observer.disconnect();
+  }, [schedulePushBounds]);
 
   // ---------------------------------------------------------------------------
   // Viewport resize tracking — drives both the JS clamp and re-pushing bounds

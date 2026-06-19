@@ -145,6 +145,15 @@ fn is_permanent_input_error(err: &anyhow::Error) -> bool {
     msg.contains("No default input device detected")
 }
 
+/// Heuristic: does this input device name look like an on-board mic? Used to
+/// prefer the built-in mic over a virtual/aggregate input when failing over a
+/// disconnected pinned device, so we don't grab some random loopback input
+/// when a real microphone is sitting right there.
+fn is_builtin_input(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("built-in") || n.contains("macbook") || n.contains("imac")
+}
+
 /// Grace window before engaging a fallback for a missing pinned input device.
 ///
 /// Bluetooth devices commonly flap for a few seconds during sleep/wake or app
@@ -209,6 +218,12 @@ pub(crate) struct PinnedFallbackInputs<'a> {
     pub running: &'a HashSet<String>,
     pub user_disabled: &'a HashSet<String>,
     pub default_input: Option<&'a str>,
+    /// Currently-available input device names in suffix form (e.g.
+    /// `"MacBook Pro Microphone (input)"`). When the system default is unusable
+    /// as a fail-over target (it IS the dead pinned device, or there is no
+    /// default), the decider falls back to a present device from this set
+    /// rather than capturing nothing. Empty ⇒ no substitute available.
+    pub available_inputs: &'a HashSet<String>,
     pub missing_since: &'a HashMap<String, Instant>,
     pub active: Option<&'a ActivePinnedFallback>,
     pub grace: Duration,
@@ -263,26 +278,56 @@ pub(crate) fn decide_pinned_input_fallback(inputs: PinnedFallbackInputs<'_>) -> 
         return FallbackDecision::Idle;
     };
 
-    let Some(default_name) = inputs.default_input else {
-        return FallbackDecision::Idle;
+    // Prefer the system default as the substitute — it's the user's "normal"
+    // mic. It's only usable if it ISN'T the dead pinned device (Bluetooth
+    // commonly lingers as the registered default while disconnected) and the
+    // user hasn't explicitly disabled it (privacy).
+    let default_usable = inputs
+        .default_input
+        .filter(|d| *d != pinned.as_str() && !inputs.user_disabled.contains(*d));
+
+    let fallback_name = match default_usable {
+        Some(d) => d.to_string(),
+        // Default is unusable (none, == dead pinned, or user-disabled). Rather
+        // than capture NOTHING, fail over to any present input device. This is
+        // the AirPods case: AirPods are both the pinned input and the lingering
+        // system default, yet a built-in mic is sitting right there — capturing
+        // it beats hours of silence until the user manually reconnects.
+        None => {
+            let mut candidates: Vec<String> = inputs
+                .available_inputs
+                .iter()
+                .filter(|name| name.as_str() != pinned.as_str())
+                .filter(|name| !inputs.user_disabled.contains(name.as_str()))
+                .filter(|name| {
+                    crate::core::device::parse_audio_device(name.as_str())
+                        .map(|d| d.device_type == DeviceType::Input)
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            // Deterministic, and prefer an on-board mic over virtual inputs.
+            candidates.sort_unstable();
+            let chosen = candidates
+                .iter()
+                .find(|name| is_builtin_input(name.as_str()))
+                .cloned()
+                .or_else(|| candidates.into_iter().next());
+            match chosen {
+                Some(name) => name,
+                // Genuinely nothing else to capture from (headless box, or the
+                // only other input is user-disabled). Wait for the pinned input.
+                None => return FallbackDecision::Idle,
+            }
+        }
     };
 
-    // No useful fallback target — the default IS the pinned device.
-    if default_name == pinned {
-        return FallbackDecision::Idle;
-    }
-
-    // User explicitly disabled the default mic (e.g. for privacy). Respect that.
-    if inputs.user_disabled.contains(default_name) {
-        return FallbackDecision::Idle;
-    }
-
-    // If the default is already running, adopt it without starting again.
-    let start_fallback = !inputs.running.contains(default_name);
+    // If the chosen substitute is already running, adopt it without restarting.
+    let start_fallback = !inputs.running.contains(&fallback_name);
 
     FallbackDecision::Engage {
         pinned,
-        fallback_name: default_name.to_string(),
+        fallback_name,
         start_fallback,
     }
 }
@@ -1300,12 +1345,24 @@ async fn run_pinned_input_fallback_sweep(
 
     let default_name = default_input_device().ok().map(|d| d.to_string());
 
+    // Currently-available input devices — the universe of substitutes the
+    // decider may fail over to when the system default is unusable as a target.
+    let available_inputs: HashSet<String> = audio_manager
+        .devices()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| d.device_type == DeviceType::Input)
+        .map(|d| d.to_string())
+        .collect();
+
     let decision = decide_pinned_input_fallback(PinnedFallbackInputs {
         use_system_default: false,
         pinned_inputs: &pinned_inputs,
         running: &running,
         user_disabled: &user_disabled,
         default_input: default_name.as_deref(),
+        available_inputs: &available_inputs,
         missing_since,
         active: active.as_ref(),
         grace: Duration::from_secs(PINNED_INPUT_FALLBACK_GRACE_SECS),
@@ -1463,6 +1520,12 @@ impl RestartCooldown {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    lazy_static::lazy_static! {
+        /// Default for builders that don't exercise the fail-over-to-any-available
+        /// path (most fallback tests only care about the system-default target).
+        static ref EMPTY_AVAILABLE_INPUTS: HashSet<String> = HashSet::new();
+    }
 
     #[test]
     fn test_cooldown_allows_restarts_under_limit() {
@@ -1634,6 +1697,7 @@ mod tests {
             running,
             user_disabled,
             default_input,
+            available_inputs: &EMPTY_AVAILABLE_INPUTS,
             missing_since,
             active,
             grace: Duration::from_secs(20),
@@ -1764,10 +1828,13 @@ mod tests {
     }
 
     #[test]
-    fn fallback_skipped_when_default_equals_pinned() {
-        // Edge: the pinned device IS macOS's current default (likely because
-        // AirPods is/was the default before disconnect). Falling back to itself
-        // is a no-op; just wait for it to come back.
+    fn fallback_skipped_when_default_equals_pinned_and_no_other_input() {
+        // The pinned device IS macOS's current default (AirPods was the default
+        // before disconnect) AND no other input is available (empty
+        // available_inputs). Falling back to the dead device itself is a no-op
+        // and there's nothing else to capture from — wait for it to return.
+        // (When another input IS present, see
+        // `fails_over_to_builtin_when_default_equals_dead_pinned`.)
         let pinned = set(&["AirPods (input)"]);
         let running = HashSet::new();
         let now = Instant::now();
@@ -1790,9 +1857,11 @@ mod tests {
     }
 
     #[test]
-    fn fallback_skipped_when_no_default_available() {
-        // No usable system default (unusual — laptop without a built-in mic, or
-        // headless box). Nothing to fall back to.
+    fn fallback_skipped_when_no_default_and_no_other_input() {
+        // No usable system default AND no other available input (headless box,
+        // or a laptop with no built-in mic). Nothing to fall back to.
+        // (When a built-in mic IS present, see
+        // `fails_over_to_builtin_when_no_system_default`.)
         let pinned = set(&["AirPods (input)"]);
         let running = HashSet::new();
         let now = Instant::now();
@@ -1812,6 +1881,155 @@ mod tests {
             now,
         ));
         assert_eq!(decision, FallbackDecision::Idle);
+    }
+
+    // --- Fail over to an available input when the system default is unusable ---
+    //
+    // Regression coverage for the AirPods-disconnect total-audio-loss bug
+    // (ruark@ruark.xyz, 2026-06-18, mac 2.5.50): the only/pinned input was
+    // AirPods, which were ALSO the macOS system default. AirPods disconnected →
+    // the monitor retried the vanished device every ~2s for 24h+ and never
+    // failed over to the built-in mic that was present the whole time; the call
+    // that followed recorded frames=0, samples=0. The decider used to sit Idle
+    // whenever the system default was unusable as a target (it WAS the dead
+    // pinned device, or was None). It now falls over to any present input.
+
+    #[test]
+    fn fails_over_to_builtin_when_default_equals_dead_pinned() {
+        // ruark's exact state: AirPods is pinned AND the lingering system
+        // default; the built-in mic is present. Must fail over to the built-in
+        // rather than capture nothing.
+        let available = set(&["AirPods (input)", "MacBook Pro Microphone (input)"]);
+        let pinned = set(&["AirPods (input)"]);
+        let running = HashSet::new();
+        let no_disabled = HashSet::new();
+        let now = Instant::now();
+        let missing_since: HashMap<String, Instant> = [(
+            "AirPods (input)".to_string(),
+            now.checked_sub(Duration::from_secs(60)).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let mut inputs = build_inputs(
+            &pinned,
+            &running,
+            &no_disabled,
+            Some("AirPods (input)"), // system default == the dead device
+            &missing_since,
+            None,
+            now,
+        );
+        inputs.available_inputs = &available;
+        assert_eq!(
+            decide_pinned_input_fallback(inputs),
+            FallbackDecision::Engage {
+                pinned: "AirPods (input)".to_string(),
+                fallback_name: "MacBook Pro Microphone (input)".to_string(),
+                start_fallback: true,
+            }
+        );
+    }
+
+    #[test]
+    fn fails_over_to_builtin_when_no_system_default() {
+        // CoreAudio briefly reports no default once the only/default device
+        // (AirPods) vanishes. The built-in mic is still physically present.
+        let available = set(&["MacBook Pro Microphone (input)"]);
+        let pinned = set(&["AirPods (input)"]);
+        let running = HashSet::new();
+        let no_disabled = HashSet::new();
+        let now = Instant::now();
+        let missing_since: HashMap<String, Instant> = [(
+            "AirPods (input)".to_string(),
+            now.checked_sub(Duration::from_secs(60)).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let mut inputs = build_inputs(
+            &pinned,
+            &running,
+            &no_disabled,
+            None, // no usable system default reported this instant
+            &missing_since,
+            None,
+            now,
+        );
+        inputs.available_inputs = &available;
+        assert_eq!(
+            decide_pinned_input_fallback(inputs),
+            FallbackDecision::Engage {
+                pinned: "AirPods (input)".to_string(),
+                fallback_name: "MacBook Pro Microphone (input)".to_string(),
+                start_fallback: true,
+            }
+        );
+    }
+
+    #[test]
+    fn fallback_prefers_builtin_over_virtual_input() {
+        // Several substitutes available: pick the on-board mic, not a virtual /
+        // aggregate input (e.g. BlackHole), and do so deterministically.
+        let available = set(&[
+            "Aggregate Device (input)",
+            "BlackHole 2ch (input)",
+            "MacBook Pro Microphone (input)",
+        ]);
+        let pinned = set(&["AirPods (input)"]);
+        let running = HashSet::new();
+        let no_disabled = HashSet::new();
+        let now = Instant::now();
+        let missing_since: HashMap<String, Instant> = [(
+            "AirPods (input)".to_string(),
+            now.checked_sub(Duration::from_secs(60)).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let mut inputs = build_inputs(
+            &pinned,
+            &running,
+            &no_disabled,
+            None,
+            &missing_since,
+            None,
+            now,
+        );
+        inputs.available_inputs = &available;
+        assert_eq!(
+            decide_pinned_input_fallback(inputs),
+            FallbackDecision::Engage {
+                pinned: "AirPods (input)".to_string(),
+                fallback_name: "MacBook Pro Microphone (input)".to_string(),
+                start_fallback: true,
+            }
+        );
+    }
+
+    #[test]
+    fn no_failover_when_only_other_input_is_user_disabled() {
+        // Default unusable (== dead pinned) and the only other present input is
+        // the built-in mic the user disabled for privacy. Respect that — Idle.
+        let available = set(&["AirPods (input)", "MacBook Pro Microphone (input)"]);
+        let pinned = set(&["AirPods (input)"]);
+        let running = HashSet::new();
+        let user_disabled = set(&["MacBook Pro Microphone (input)"]);
+        let now = Instant::now();
+        let missing_since: HashMap<String, Instant> = [(
+            "AirPods (input)".to_string(),
+            now.checked_sub(Duration::from_secs(60)).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+        let mut inputs = build_inputs(
+            &pinned,
+            &running,
+            &user_disabled,
+            Some("AirPods (input)"),
+            &missing_since,
+            None,
+            now,
+        );
+        inputs.available_inputs = &available;
+        assert_eq!(decide_pinned_input_fallback(inputs), FallbackDecision::Idle);
     }
 
     #[test]

@@ -176,14 +176,15 @@ use tokio::time::{sleep, Duration};
 #[tauri::command]
 #[specta::specta]
 async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
-    use std::path::Path;
-
     const MAX_RETRIES: u32 = 3;
     const INITIAL_DELAY_MS: u64 = 100;
 
     debug!("Reading media file: {}", file_path);
 
-    let path = Path::new(file_path);
+    // Media paths can arrive home-relative (e.g. `~/Downloads/clip.mp4`) when the
+    // agent prints a friendly path in chat. `Path::new` does not expand `~`, so
+    // resolve it the same way the in-app file viewer does before touching disk.
+    let path = viewer::expand_tilde(file_path);
 
     // Retry loop to handle files that may be in the process of being written
     let mut last_error = String::new();
@@ -198,7 +199,7 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
         }
 
         if !path.exists() {
-            last_error = format!("File does not exist: {}", file_path);
+            last_error = format!("File does not exist: {}", path.display());
             if attempt < MAX_RETRIES {
                 continue;
             }
@@ -206,7 +207,7 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
         }
 
         // Read file contents
-        match tokio::fs::read(path).await {
+        match tokio::fs::read(&path).await {
             Ok(contents) => {
                 // Check for empty or suspiciously small files (might still be writing)
                 if contents.is_empty() {
