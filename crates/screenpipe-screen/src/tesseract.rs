@@ -6,6 +6,8 @@ use image::{DynamicImage, GenericImageView};
 use rusty_tesseract::{Args, DataOutput, Image};
 use screenpipe_core::{Language, TESSERACT_LANGUAGES};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Once;
 use tracing::warn;
 
 /// Ensure TESSDATA_PREFIX is set so tesseract can find language data files.
@@ -40,10 +42,64 @@ fn ensure_tessdata_prefix() {
     }
 }
 
+/// Locate a tesseract binary bundled next to the engine executable. The npm
+/// CLI ships `tesseract` (+ a `tessdata/` dir) in the same directory as the
+/// `screenpipe` binary, because — unlike the `.deb` (which `depends` on
+/// `tesseract-ocr`) — it has no package manager to pull one in, and hosts
+/// without a system tesseract otherwise crash the OCR path (rusty-tesseract
+/// panics when the subprocess is missing). Returns the dir to prepend to PATH
+/// and, when present, the bundled `tessdata` dir. Pure for unit-testability.
+fn bundled_tesseract(exe_dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    let bin_name = if cfg!(windows) {
+        "tesseract.exe"
+    } else {
+        "tesseract"
+    };
+    if !exe_dir.join(bin_name).exists() {
+        return None;
+    }
+    let tessdata = exe_dir.join("tessdata");
+    let tessdata = tessdata
+        .join("eng.traineddata")
+        .exists()
+        .then(|| exe_dir.join("tessdata"));
+    Some((exe_dir.to_path_buf(), tessdata))
+}
+
+/// One-time: if a tesseract binary is bundled next to our own executable,
+/// prepend its dir to PATH (so rusty-tesseract's `Command::new("tesseract")`
+/// finds it ahead of any system install) and point TESSDATA_PREFIX at the
+/// bundled language data. No-op when nothing is bundled (e.g. the `.deb`/
+/// AppImage paths, or a dev build) — those fall back to `ensure_tessdata_prefix`.
+fn ensure_bundled_tesseract_on_path() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let Some((bin_dir, tessdata)) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            .and_then(|dir| bundled_tesseract(&dir))
+        else {
+            return;
+        };
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let mut entries = vec![bin_dir];
+        entries.extend(std::env::split_paths(&existing));
+        if let Ok(joined) = std::env::join_paths(entries) {
+            std::env::set_var("PATH", joined);
+        }
+        if let Some(tessdata) = tessdata {
+            if std::env::var_os("TESSDATA_PREFIX").is_none() {
+                std::env::set_var("TESSDATA_PREFIX", tessdata);
+            }
+        }
+    });
+}
+
 pub fn perform_ocr_tesseract(
     image: &DynamicImage,
     languages: Vec<Language>,
 ) -> (String, String, Option<f64>) {
+    ensure_bundled_tesseract_on_path();
     ensure_tessdata_prefix();
 
     let language_string = match languages.is_empty() {
@@ -145,5 +201,50 @@ fn calculate_overall_confidence(data_output: &DataOutput) -> f64 {
         (total_conf / count as f32) as f64
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+    }
+
+    #[test]
+    fn bundled_tesseract_none_when_no_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(bundled_tesseract(dir.path()).is_none());
+    }
+
+    #[test]
+    fn bundled_tesseract_binary_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = if cfg!(windows) {
+            "tesseract.exe"
+        } else {
+            "tesseract"
+        };
+        touch(&dir.path().join(bin));
+        let got = bundled_tesseract(dir.path()).expect("binary present");
+        assert_eq!(got.0, dir.path());
+        assert!(got.1.is_none(), "no tessdata bundled");
+    }
+
+    #[test]
+    fn bundled_tesseract_binary_and_tessdata() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = if cfg!(windows) {
+            "tesseract.exe"
+        } else {
+            "tesseract"
+        };
+        touch(&dir.path().join(bin));
+        touch(&dir.path().join("tessdata").join("eng.traineddata"));
+        let (bin_dir, tessdata) = bundled_tesseract(dir.path()).expect("binary present");
+        assert_eq!(bin_dir, dir.path());
+        assert_eq!(tessdata, Some(dir.path().join("tessdata")));
     }
 }
