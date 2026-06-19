@@ -705,40 +705,83 @@ export function StandaloneChat({
     useChatFilePreview(conversationId);
   const { inspectorOpen, setInspectorOpen, outputs: inspectorOutputs, sources: inspectorSources } =
     useChatInspector(conversationId, messages);
+  const [activeSideView, setActiveSideView] = useState<"inspector" | "side" | null>(null);
+  const [browserHiddenBehindInspector, setBrowserHiddenBehindInspector] = useState(false);
   const [browserPanelState, setBrowserPanelState] = useState({
     hasUrl: false,
     open: false,
   });
   const filePreviewOpen = filePreview?.visible === true && !!filePreview.path;
   const sidePanelHasContent = filePreviewOpen || browserPanelState.hasUrl;
-  const sidePanelOpen = filePreviewOpen || browserPanelState.open;
+  const sidePanelOpen = activeSideView === "side" && sidePanelHasContent;
   const inspectorHasContent =
     inspectorOpen ||
     messages.length > 0 ||
     inspectorOutputs.length > 0 ||
     inspectorSources.length > 0;
 
+  useEffect(() => {
+    setActiveSideView(null);
+    setBrowserHiddenBehindInspector(false);
+  }, [conversationId]);
+
   const toggleInspector = useCallback(() => {
-    if (inspectorOpen) {
+    if (inspectorOpen && activeSideView === "inspector") {
       setInspectorOpen(false);
+      if (browserHiddenBehindInspector && browserPanelState.hasUrl) {
+        setActiveSideView("side");
+      } else {
+        setActiveSideView(null);
+      }
+      setBrowserHiddenBehindInspector(false);
     } else {
+      setBrowserHiddenBehindInspector(
+        activeSideView === "side" && browserPanelState.open && !filePreviewOpen,
+      );
       closeFilePreview();
       setInspectorOpen(true);
+      setActiveSideView("inspector");
     }
-  }, [inspectorOpen, closeFilePreview, setInspectorOpen]);
+  }, [
+    activeSideView,
+    browserHiddenBehindInspector,
+    browserPanelState.hasUrl,
+    browserPanelState.open,
+    closeFilePreview,
+    filePreviewOpen,
+    inspectorOpen,
+    setInspectorOpen,
+  ]);
 
   const toggleBrowserPanel = useCallback(() => {
-    if (inspectorOpen) {
-      setInspectorOpen(false);
-      return;
-    }
-    setInspectorOpen(false);
-    if (filePreviewOpen) {
+    if (activeSideView === "side" && filePreviewOpen) {
       closeFilePreview();
+      setActiveSideView(inspectorOpen ? "inspector" : null);
       return;
     }
-    window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle"));
-  }, [closeFilePreview, filePreviewOpen, inspectorOpen, setInspectorOpen]);
+    if (activeSideView === "side" && browserPanelState.hasUrl) {
+      window.dispatchEvent(
+        new CustomEvent("screenpipe:browser-sidebar-toggle", {
+          detail: { action: "toggle" },
+        }),
+      );
+      setActiveSideView(inspectorOpen ? "inspector" : null);
+      return;
+    }
+    setBrowserHiddenBehindInspector(false);
+    setActiveSideView("side");
+    window.dispatchEvent(
+      new CustomEvent("screenpipe:browser-sidebar-toggle", {
+        detail: { action: "show" },
+      }),
+    );
+  }, [
+    activeSideView,
+    browserPanelState.hasUrl,
+    closeFilePreview,
+    filePreviewOpen,
+    inspectorOpen,
+  ]);
 
   const handlePanelStateChange = useCallback(
     (nextState: { hasUrl: boolean; open: boolean }) => {
@@ -748,6 +791,9 @@ export function StandaloneChat({
           ? currentState
           : nextState,
       );
+      if (nextState.open) {
+        setActiveSideView("side");
+      }
     },
     [],
   );
@@ -5662,7 +5708,7 @@ export function StandaloneChat({
                   e.stopPropagation();
                   toggleInspector();
                 }}
-                className={cn("h-7 w-7", inspectorOpen && "bg-muted")}
+                className={cn("h-7 w-7", activeSideView === "inspector" && "bg-muted")}
                 title="Inspector"
               >
                 <Settings2 size={14} />
@@ -6433,14 +6479,21 @@ export function StandaloneChat({
         agentSessionId={piSessionIdRef.current}
         filePreview={filePreview}
         onReplaceFilePreviewPath={openFilePreview}
-        inspectorContent={inspectorOpen ? (
+        inspectorContent={inspectorOpen && activeSideView === "inspector" ? (
           <ChatInspector
             outputs={inspectorOutputs}
             sources={inspectorSources}
-            onOpenFile={(path) => { setInspectorOpen(false); openFilePreview(path); }}
+            onOpenFile={(path) => {
+              setBrowserHiddenBehindInspector(false);
+              setActiveSideView("side");
+              openFilePreview(path);
+            }}
           />
         ) : null}
-        onBecomeVisible={() => setInspectorOpen(false)}
+        onBecomeVisible={() => {
+          setBrowserHiddenBehindInspector(false);
+          setActiveSideView("side");
+        }}
         onPanelStateChange={handlePanelStateChange}
       />
       </div> {/* End of horizontal chat+browser split */}

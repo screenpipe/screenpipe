@@ -925,8 +925,13 @@ export function BrowserSidebar({
     persistState({ collapsed: false });
   }, [persistState]);
 
-  const toggleFromHeader = useCallback(() => {
+  const toggleFromHeader = useCallback((action: "toggle" | "show" = "toggle") => {
     if (!currentUrl) return;
+    if (action === "show") {
+      setVisible(true);
+      expand();
+      return;
+    }
     if (visible && !collapsed) {
       collapse();
     } else {
@@ -936,7 +941,13 @@ export function BrowserSidebar({
   }, [collapsed, collapse, currentUrl, expand, visible]);
 
   useEffect(() => {
-    const handler = () => toggleFromHeader();
+    const handler = (event: Event) => {
+      const action =
+        event instanceof CustomEvent && event.detail?.action === "show"
+          ? "show"
+          : "toggle";
+      toggleFromHeader(action);
+    };
     window.addEventListener("screenpipe:browser-sidebar-toggle", handler);
     return () => {
       window.removeEventListener("screenpipe:browser-sidebar-toggle", handler);
