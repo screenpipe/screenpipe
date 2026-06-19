@@ -512,33 +512,60 @@ describe('Pipes: discover → install → play', function () {
     // No fallback — if we can't find the play button for the installed pipe, fail explicitly
     expect(played).toBe(true);
 
+    // Wait for THIS pipe's row to actually enter the running state — i.e. its
+    // own "stop pipe" button renders. A manual run starts a real pi subprocess
+    // that stays alive for tens of seconds, but runPipe() first awaits any
+    // pending preset save plus a 2s min-delay before POSTing /run, and the row
+    // only flips after the UI's next status poll — so this legitimately takes a
+    // few seconds. Scope strictly to the row (not a global stop-button query or
+    // page text): the scheduler may be running other pipes concurrently, and a
+    // loose match would let the test race ahead before this run registers.
     await browser.waitUntil(
-      async () => {
-        if (await $$('button[title="stop pipe"]').length > 0) return true;
-        const body = (await browser.execute(() => document.body.innerText || '')) as string;
-        return body.toLowerCase().includes('running');
-      },
-      { timeout: 30_000, timeoutMsg: 'Pipe did not enter running state within timeout' }
+      async () =>
+        (await browser.execute((name: string) => {
+          for (const nameBtn of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+            if (nameBtn.textContent?.trim() !== name) continue;
+            const row = nameBtn.closest<HTMLElement>('div.group');
+            if (!row) continue;
+            return !!row.querySelector('button[title="stop pipe"]');
+          }
+          return false;
+        }, installedPipeName)) as boolean,
+      {
+        timeout: 60_000,
+        timeoutMsg: `Pipe "${installedPipeName}" did not enter running state within timeout`,
+      }
     );
 
     const filepath = await saveScreenshot('pipes-running');
     expect(existsSync(filepath)).toBe(true);
 
-    const stopped = await browser.execute((name: string) => {
-      for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
-        if (nameBtn.textContent?.trim() !== name) continue;
-        const row = nameBtn.closest<HTMLElement>('div.group');
-        if (!row) continue;
-        const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
-        if (stopBtn && !stopBtn.disabled) {
-          stopBtn.click();
-          return true;
-        }
+    // Click the row's stop button. Poll-and-click so a brief disabled flicker
+    // (stoppingPipe spinner from an earlier interaction) doesn't lose the race;
+    // returns true on the first successful click and stops.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute((name: string) => {
+          for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
+            if (nameBtn.textContent?.trim() !== name) continue;
+            const row = nameBtn.closest<HTMLElement>('div.group');
+            if (!row) continue;
+            const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
+            if (stopBtn && !stopBtn.disabled) {
+              stopBtn.click();
+              return true;
+            }
+          }
+          return false;
+        }, installedPipeName)) as boolean,
+      {
+        timeout: 10_000,
+        timeoutMsg: `Could not click stop button for "${installedPipeName}"`,
       }
-      return false;
-    }, installedPipeName);
-    expect(stopped).toBe(true);
+    );
 
+    // Stop is best-effort (SIGTERM then a delayed SIGKILL pass), so give the
+    // subprocess time to die and the row to flip back to the run button.
     await browser.waitUntil(
       async () =>
         (await browser.execute((name: string) => {
@@ -553,7 +580,7 @@ describe('Pipes: discover → install → play', function () {
           return false;
         }, installedPipeName)) as boolean,
       {
-        timeout: 30_000,
+        timeout: 60_000,
         timeoutMsg: 'Pipe did not leave running state after clicking stop',
       }
     );
