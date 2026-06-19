@@ -38,8 +38,6 @@ import {
   KeyRound,
   Loader2,
   RotateCw,
-  PanelRightClose,
-  PanelRightOpen,
 } from "lucide-react";
 import {
   loadConversationFile,
@@ -93,6 +91,7 @@ interface BrowserSidebarProps {
   /** Called when an agent navigation event would reveal the browser panel,
    *  so the parent can close the inspector first. */
   onBecomeVisible?: () => void;
+  onPanelStateChange?: (state: { hasUrl: boolean; open: boolean }) => void;
 }
 
 interface SessionAccessEvent {
@@ -167,6 +166,7 @@ export function BrowserSidebar({
   onReplaceFilePreviewPath,
   inspectorContent,
   onBecomeVisible,
+  onPanelStateChange,
 }: BrowserSidebarProps) {
   const { settings, updateSettings } = useSettings();
   const [visible, setVisible] = useState(false);
@@ -927,6 +927,38 @@ export function BrowserSidebar({
     persistState({ collapsed: false });
   }, [persistState]);
 
+  const toggleFromHeader = useCallback(() => {
+    if (!currentUrl) return;
+    if (visible && !collapsed) {
+      collapse();
+    } else {
+      setVisible(true);
+      expand();
+    }
+  }, [collapsed, collapse, currentUrl, expand, visible]);
+
+  useEffect(() => {
+    const handler = () => toggleFromHeader();
+    window.addEventListener("screenpipe:browser-sidebar-toggle", handler);
+    return () => {
+      window.removeEventListener("screenpipe:browser-sidebar-toggle", handler);
+    };
+  }, [toggleFromHeader]);
+
+  useEffect(() => {
+    onPanelStateChange?.({
+      hasUrl: !!currentUrl,
+      open: !!currentUrl && visible && !collapsed && !previewActive && !inspectorActive,
+    });
+  }, [
+    collapsed,
+    currentUrl,
+    inspectorActive,
+    onPanelStateChange,
+    previewActive,
+    visible,
+  ]);
+
   const answerSessionAccess = useCallback(
     async (allow: boolean) => {
       const request = sessionAccessRequest;
@@ -1037,13 +1069,6 @@ export function BrowserSidebar({
                   className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
                 >
                   <RotateCw className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={collapse}
-                  title="Hide panel"
-                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                >
-                  <PanelRightClose className="h-3.5 w-3.5" />
                 </button>
                 {loading && (
                   <div
@@ -1215,18 +1240,6 @@ export function BrowserSidebar({
         </div>
       ) : null}
 
-      {/* Floating re-open affordance: shown when a URL is saved but the
-          panel is collapsed. Pinned to the viewport's top-right corner so
-          it's discoverable regardless of the chat layout state. */}
-      {!inspectorActive && !previewActive && visible && collapsed && currentUrl && (
-        <button
-          onClick={expand}
-          title={`Show browser (${currentUrl})`}
-          className="fixed right-3 top-14 z-20 p-1.5 rounded border border-border/50 bg-background/80 backdrop-blur text-muted-foreground hover:text-foreground hover:bg-muted/60 shadow-sm"
-        >
-          <PanelRightOpen className="h-4 w-4" />
-        </button>
-      )}
     </>
   );
 }

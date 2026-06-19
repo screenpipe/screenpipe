@@ -4,7 +4,6 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { PanelRightClose } from "lucide-react";
 import {
   ViewerFileContent,
   viewerDisplayText,
@@ -22,7 +21,6 @@ interface FilePreviewSidebarProps {
 
 export function FilePreviewSidebar({
   path,
-  onClose,
   onReplacePath,
 }: FilePreviewSidebarProps) {
   const [copyPathToast, setCopyPathToast] = useState(false);
@@ -85,13 +83,6 @@ export function FilePreviewSidebar({
   return (
     <div data-testid="file-preview-sidebar" className="flex flex-col flex-1 min-h-0">
       <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60">
-        <button
-          onClick={onClose}
-          title="Close preview"
-          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-        >
-          <PanelRightClose className="h-3.5 w-3.5" />
-        </button>
         <button
           onClick={copyPath}
           title="Copy file path"

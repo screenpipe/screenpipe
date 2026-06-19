@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useSettings, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, X, ImageIcon, Search, ChevronDown, Plus, Paperclip, Filter, RefreshCw, Sparkles, PanelRight } from "lucide-react";
+import { Loader2, Send, Square, Settings, Settings2, X, ImageIcon, Search, ChevronDown, Plus, Paperclip, Filter, RefreshCw, Sparkles, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { BrowserSidebar } from "@/components/browser-sidebar";
@@ -705,6 +705,13 @@ export function StandaloneChat({
     useChatFilePreview(conversationId);
   const { inspectorOpen, setInspectorOpen, outputs: inspectorOutputs, sources: inspectorSources } =
     useChatInspector(conversationId, messages);
+  const [browserPanelState, setBrowserPanelState] = useState({
+    hasUrl: false,
+    open: false,
+  });
+  const filePreviewOpen = filePreview?.visible === true && !!filePreview.path;
+  const sidePanelHasContent = filePreviewOpen || browserPanelState.hasUrl;
+  const sidePanelOpen = filePreviewOpen || browserPanelState.open;
 
   const toggleInspector = useCallback(() => {
     if (inspectorOpen) {
@@ -714,6 +721,15 @@ export function StandaloneChat({
       setInspectorOpen(true);
     }
   }, [inspectorOpen, closeFilePreview, setInspectorOpen]);
+
+  const toggleBrowserPanel = useCallback(() => {
+    setInspectorOpen(false);
+    if (filePreviewOpen) {
+      closeFilePreview();
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle"));
+  }, [closeFilePreview, filePreviewOpen, setInspectorOpen]);
 
   const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
   const {
@@ -5615,19 +5631,46 @@ export function StandaloneChat({
           await startNewConversation();
         }}
         rightActions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleInspector();
-            }}
-            className={cn("relative z-10 h-7 w-7", inspectorOpen && "bg-muted")}
-            title="Inspector"
-          >
-            <PanelRight size={14} />
-          </Button>
+          <div className="relative z-10 flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleInspector();
+              }}
+              className={cn("h-7 w-7", inspectorOpen && "bg-muted")}
+              title="Inspector"
+            >
+              <Settings2 size={14} />
+            </Button>
+            {sidePanelHasContent ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleBrowserPanel();
+                }}
+                className={cn("h-7 w-7", sidePanelOpen && "bg-muted")}
+                title={
+                  filePreviewOpen
+                    ? "Hide preview"
+                    : browserPanelState.open
+                      ? "Hide browser"
+                      : "Show browser"
+                }
+              >
+                {sidePanelOpen ? (
+                  <PanelRightClose size={14} />
+                ) : (
+                  <PanelRightOpen size={14} />
+                )}
+              </Button>
+            ) : null}
+          </div>
         }
       />
 
@@ -6376,6 +6419,14 @@ export function StandaloneChat({
           />
         ) : null}
         onBecomeVisible={() => setInspectorOpen(false)}
+        onPanelStateChange={(nextState) => {
+          setBrowserPanelState((currentState) =>
+            currentState.hasUrl === nextState.hasUrl &&
+            currentState.open === nextState.open
+              ? currentState
+              : nextState,
+          );
+        }}
       />
       </div> {/* End of horizontal chat+browser split */}
 
