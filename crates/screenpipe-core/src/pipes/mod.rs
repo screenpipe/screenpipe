@@ -3081,7 +3081,7 @@ impl PipeManager {
                     if let Some(ref pid) = active_preset_id {
                         if output.success && !cancelled {
                             self.fallback_registry.record_success(pid);
-                        } else {
+                        } else if !cancelled {
                             self.fallback_registry.record_failure_from_output(
                                 pid,
                                 &output.stderr,
@@ -3188,6 +3188,7 @@ impl PipeManager {
                     }
                 }
             };
+            let cancelled_for_retry = was_cancelled();
 
             // Clean up pipe token from server registry
             if let Some(ref token) = pipe_token {
@@ -3205,7 +3206,9 @@ impl PipeManager {
             // crashes — so gating fallback on it meant the next model silently
             // never ran when the main one timed out or errored (#3914).
             let max_attempts = config.preset.len().min(preset_fallback::MAX_FALLBACK_DEPTH);
-            if let (false, Some(cur_idx)) = (log.success, active_preset_idx) {
+            if let (false, Some(cur_idx), false) =
+                (log.success, active_preset_idx, cancelled_for_retry)
+            {
                 let next_idx = cur_idx + 1;
                 if next_idx < max_attempts {
                     if let Some(next_preset_id) = config.preset.get(next_idx) {
