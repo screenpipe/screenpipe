@@ -345,7 +345,7 @@ pub fn remove_imported_skill(name: String) -> Result<(), String> {
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         // GitHub rejects API requests without a User-Agent.
-        .user_agent("screenpipe-app (+https://screenpi.pe)")
+        .user_agent("screenpipe-app (+https://screenpipe.com)")
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))
 }

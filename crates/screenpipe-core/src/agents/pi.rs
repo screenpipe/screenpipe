@@ -371,6 +371,10 @@ impl PiExecutor {
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
             ),
+            (
+                "render-html-report",
+                include_str!("../../assets/skills/render-html-report/SKILL.md"),
+            ),
         ];
 
         // Clean up deprecated skills from the 8→2 consolidation.
@@ -430,8 +434,12 @@ impl PiExecutor {
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
     /// importer already rejects these names; this guards any folder that reaches
     /// the store another way.
-    const BASELINE_SKILL_NAMES: [&'static str; 3] =
-        ["screenpipe-api", "screenpipe-cli", "screenpipe-team"];
+    const BASELINE_SKILL_NAMES: [&'static str; 4] = [
+        "screenpipe-api",
+        "screenpipe-cli",
+        "screenpipe-team",
+        "render-html-report",
+    ];
 
     /// Mirror the user's imported skills from the global store
     /// (`<data_dir>/skills/<name>/`) into `project_dir/.pi/skills/` so every
@@ -566,6 +574,13 @@ impl PiExecutor {
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
                 Box::new(|_| true), // always installed — pipe & connection management
+            ),
+            (
+                "render-html-report",
+                include_str!("../../assets/skills/render-html-report/SKILL.md"),
+                // Output-formatting skill, not endpoint-gated — always staged,
+                // loaded on-demand by the agent only when the task is visual.
+                Box::new(|_| true),
             ),
         ];
 

@@ -35,6 +35,8 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 
 Required: `start_time`, `end_time`. Optional: `app_name`, `q` (filters memories+snippets, drives `query_status`), `include_recording|memories|snippets|guidance=false` (each defaults true — disable to slim), `max_snippets` (8/12), `max_snippet_chars` (500/1200), `max_memories` (5/20).
 
+For a lean, token-cheap time-tracking sweep across many ranges, also drop the heavy always-on fields: `include_key_texts=false` (the biggest single win — omits the text-heavy `key_texts`), plus `include_apps=false` / `include_windows=false`. Each defaults true and, when false, omits that field entirely; `total_active_minutes` + per-app/window `minutes` + the status triple still come back. e.g. minutes-only: `&include_key_texts=false&include_windows=false`.
+
 `data_status` ∈ `ok|empty_but_recording|no_capture_in_range|not_recording`. Check before claiming "no activity". `query_status` ∈ `not_requested|matched|no_query_matches`. `guidance.next_best_query` is a ready-to-show hint when empty. Escalate to `/search` only for verbatim quotes / frame_ids.
 
 ---

@@ -115,6 +115,15 @@ pub struct PipelineMetrics {
     /// frame so nothing was written. Subtract from `attempts - captured` to isolate
     /// real silent-loss vs. expected static-screen behavior.
     pub dedup_skips: AtomicU64,
+    /// Frames skipped because they were near-all-black (excluded/ignored window
+    /// covering the monitor, asleep display, or DRM-protected surface SCK
+    /// returns as black). Like dedup skips: the pipeline ran, nothing worth
+    /// writing. Tracked separately so a spike is visible in telemetry.
+    pub frames_corrupt_black: AtomicU64,
+    /// Frames skipped because they carried a flat green decode-garbage band (a
+    /// truncated / partially-decoded capture). A non-trivial value here is the
+    /// field signal for the green-corruption reports.
+    pub frames_corrupt_green: AtomicU64,
 
     // --- Rolling window for DB latency ---
     /// Recent DB write latencies in microseconds (rolling window, not lifetime accumulator).
@@ -147,6 +156,8 @@ impl PipelineMetrics {
             last_capture_attempt_ts: AtomicU64::new(0),
             capture_attempts: AtomicU64::new(0),
             dedup_skips: AtomicU64::new(0),
+            frames_corrupt_black: AtomicU64::new(0),
+            frames_corrupt_green: AtomicU64::new(0),
             db_latency_window: Mutex::new(RollingLatencyWindow::new()),
         }
     }
@@ -213,6 +224,27 @@ impl PipelineMetrics {
             .as_secs();
         self.last_db_write_ts.store(now, Ordering::Relaxed);
         self.dedup_skips.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a frame skipped because it was corrupt — near-all-black
+    /// (`is_green == false`) or a flat green decode-garbage band
+    /// (`is_green == true`). Like [`record_dedup_skip`](Self::record_dedup_skip)
+    /// it advances `last_db_write_ts` so a steadily-corrupt screen (e.g. a long
+    /// stretch of fullscreen DRM playback returning black) doesn't trip the
+    /// health-check stall alarm — the pipeline is running fine, there's just
+    /// nothing worth writing. Bumps the matching counter so telemetry can see
+    /// *why* frames are being skipped instead of folding them into dedup.
+    pub fn record_corrupt_skip(&self, is_green: bool) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.last_db_write_ts.store(now, Ordering::Relaxed);
+        if is_green {
+            self.frames_corrupt_green.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.frames_corrupt_black.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Record a frame inserted into DB.
@@ -313,13 +345,23 @@ impl PipelineMetrics {
         let capture_attempts = self.capture_attempts.load(Ordering::Relaxed);
         let dedup_skips = self.dedup_skips.load(Ordering::Relaxed);
         let frames_dropped = self.frames_dropped.load(Ordering::Relaxed);
+        let frames_corrupt_black = self.frames_corrupt_black.load(Ordering::Relaxed);
+        let frames_corrupt_green = self.frames_corrupt_green.load(Ordering::Relaxed);
+        let frames_corrupt = frames_corrupt_black + frames_corrupt_green;
+        // A corrupt-skip is an attempt that intentionally didn't write (same as
+        // a dedup), so it must be subtracted here too — otherwise every skipped
+        // black/green frame would inflate `silent_loss` and falsely trip the
+        // leak canary.
         let silent_loss = capture_attempts
             .saturating_sub(frames_db_written)
             .saturating_sub(dedup_skips)
+            .saturating_sub(frames_corrupt)
             .saturating_sub(frames_dropped);
         // Denominator = cycles that intended to write (attempts minus the
-        // expected static-screen dedups). Guard against divide-by-zero.
-        let write_intent = capture_attempts.saturating_sub(dedup_skips);
+        // expected static-screen dedups and corrupt skips). Guard divide-by-zero.
+        let write_intent = capture_attempts
+            .saturating_sub(dedup_skips)
+            .saturating_sub(frames_corrupt);
         let silent_loss_rate = if write_intent > 0 {
             silent_loss as f64 / write_intent as f64
         } else {
@@ -400,6 +442,8 @@ impl PipelineMetrics {
             last_capture_attempt_ts: self.last_capture_attempt_ts.load(Ordering::Relaxed),
             capture_attempts,
             dedup_skips,
+            frames_corrupt_black,
+            frames_corrupt_green,
         }
     }
 }
@@ -453,6 +497,12 @@ pub struct MetricsSnapshot {
     pub capture_attempts: u64,
     /// Total dedup skips (capture cycle ran but content matched previous frame).
     pub dedup_skips: u64,
+    /// Frames skipped because they were near-all-black (excluded window, asleep
+    /// display, or DRM-protected surface). Subset of capture attempts.
+    pub frames_corrupt_black: u64,
+    /// Frames skipped because of a flat green decode-garbage band (truncated /
+    /// partial capture). Subset of capture attempts; the green-corruption signal.
+    pub frames_corrupt_green: u64,
 }
 
 #[cfg(test)]
@@ -513,6 +563,45 @@ mod tests {
         let s = m.snapshot();
         assert_eq!(s.silent_loss, 0);
         assert_eq!(s.silent_loss_rate, 0.0);
+    }
+
+    #[test]
+    fn corrupt_skips_counted_separately_and_not_counted_as_loss() {
+        let m = PipelineMetrics::new();
+        // 10 attempts: 5 persisted, 2 dedup, 2 black + 1 green corrupt = 10
+        // accounted. Corrupt skips must land in their own counters AND be
+        // subtracted from the residual, or they'd falsely trip silent_loss.
+        for _ in 0..10 {
+            m.record_capture_attempt();
+        }
+        for _ in 0..5 {
+            m.record_db_write(Duration::from_millis(5));
+        }
+        for _ in 0..2 {
+            m.record_dedup_skip();
+        }
+        m.record_corrupt_skip(false); // black
+        m.record_corrupt_skip(false); // black
+        m.record_corrupt_skip(true); // green band
+
+        let s = m.snapshot();
+        assert_eq!(s.frames_corrupt_black, 2);
+        assert_eq!(s.frames_corrupt_green, 1);
+        assert_eq!(s.dedup_skips, 2); // corrupt skips did NOT inflate dedup
+                                      // residual = attempts - written - dedup - corrupt - dropped
+                                      //          = 10 - 5 - 2 - 3 - 0 = 0
+        assert_eq!(s.silent_loss, 0);
+        assert_eq!(s.silent_loss_rate, 0.0);
+    }
+
+    #[test]
+    fn corrupt_skip_advances_db_write_clock() {
+        // Like dedup, a corrupt skip ticks last_db_write_ts so a steadily-black
+        // screen (e.g. fullscreen DRM) doesn't trip the stall alarm.
+        let m = PipelineMetrics::new();
+        assert_eq!(m.last_db_write_ts(), 0);
+        m.record_corrupt_skip(true);
+        assert!(m.last_db_write_ts() > 0);
     }
 
     #[test]

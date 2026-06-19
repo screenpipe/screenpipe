@@ -259,7 +259,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                       <Lock className="h-3 w-3" />pro required
                     </Button>
                     <button
-                      onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                      onClick={() => openUrl("https://screenpipe.com/onboarding")}
                       className="text-[10px] text-muted-foreground hover:text-foreground underline self-start"
                     >
                       upgrade to pro to connect

@@ -839,8 +839,7 @@ export function NoteView({
       // Use Tauri's native clipboard API (arboard) instead of
       // navigator.clipboard.writeText which fails after async operations
       // due to WebKit's user-activation timeout.
-      const res = await commands.copyTextToClipboard(md);
-      if (res.status === "error") throw new Error(res.error);
+      await commands.copyTextToClipboard(md);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied to clipboard" });

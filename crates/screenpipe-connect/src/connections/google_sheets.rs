@@ -65,6 +65,10 @@ impl Integration for GoogleSheets {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://sheets.googleapis.com/v4/spreadsheets",

@@ -72,6 +72,10 @@ impl Integration for Zoom {
         Some(&OAUTH)
     }
 
+    fn supports_oauth_instances(&self) -> bool {
+        true
+    }
+
     fn refresh_policy(&self) -> super::RefreshPolicy {
         // Zoom invalidates refresh tokens after 15h of inactivity (per Zoom
         // OAuth docs, "refresh token TTL"). Force a proactive refresh well

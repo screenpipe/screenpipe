@@ -430,6 +430,41 @@ fn main() {
             .compile("bswap_shim");
     }
 
+    // ARM64 Windows: the OpenBLAS WOA64 package ships with the DLL's PE
+    // internal name set to "openblas.dll", but the file on disk is named
+    // "libopenblas.dll" (to match the MSVC import library). Windows resolves
+    // DLLs by PE internal name at runtime, so the exe crashes with
+    // STATUS_DLL_NOT_FOUND unless "openblas.dll" also exists next to the
+    // binary. The x64 package does not have this mismatch.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64")
+    {
+        println!("cargo:rerun-if-env-changed=OPENBLAS_PATH");
+        if let Ok(openblas) = std::env::var("OPENBLAS_PATH") {
+            let dll_src = std::path::PathBuf::from(&openblas).join("bin").join("libopenblas.dll");
+            if dll_src.exists() {
+                let out_dir = std::env::var("OUT_DIR").unwrap_or_default();
+                // OUT_DIR = target/{profile}/build/{crate}-{hash}/out — three pops → target/{profile}/
+                let mut target_dir = std::path::PathBuf::from(&out_dir);
+                target_dir.pop();
+                target_dir.pop();
+                target_dir.pop();
+                let dll_dst = target_dir.join("openblas.dll");
+                if !dll_dst.exists() {
+                    match std::fs::copy(&dll_src, &dll_dst) {
+                        Ok(_) => println!(
+                            "cargo:warning=openblas: copied libopenblas.dll → {}",
+                            dll_dst.display()
+                        ),
+                        Err(e) => println!(
+                            "cargo:warning=openblas: could not copy openblas.dll: {e}"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
     tauri_build::build()
 }
 

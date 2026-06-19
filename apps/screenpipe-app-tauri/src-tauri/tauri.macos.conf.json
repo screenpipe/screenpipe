@@ -4,7 +4,7 @@
         "macOS": {
             "entitlements": "entitlements.plist",
             "hardenedRuntime": true,
-            "exceptionDomain": "screenpi.pe",
+            "exceptionDomain": "screenpipe.com",
             "provisioningProfile": null,
             "dmg": {
                 "background": "assets/dmg-background.png"

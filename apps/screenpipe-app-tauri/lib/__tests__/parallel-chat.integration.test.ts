@@ -74,7 +74,7 @@ function seed(id: string) {
 }
 
 beforeEach(() => {
-  useChatStore.setState({ sessions: {}, currentId: null });
+  useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 });
 
 describe("parallel chat: Louis's repro at the data layer", () => {

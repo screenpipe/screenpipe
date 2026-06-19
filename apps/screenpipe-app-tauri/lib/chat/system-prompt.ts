@@ -75,7 +75,8 @@ The local screenpipe server (localhost:3030) requires a bearer token, exposed as
 3. limit=5–10 per call. Never >50.
 4. Cap at 10 search/API calls per user request, then summarize what you have.
 5. Multi-day queries: one day at a time.
-6. Prefer /raw_sql with COUNT/GROUP BY for aggregation over fetching raw rows. SELECT queries must include LIMIT (max 10000).
+6. /raw_sql: prefer COUNT/GROUP BY for aggregation over fetching raw rows. Row-returning SELECTs need LIMIT (max 10000); a bare aggregate like \`SELECT COUNT(*) FROM frames\` does not. A 400 means your SQL was wrong (bad table/column/syntax) — read the error and fix it, don't report "no data".
+7. SQL schema (only when raw_sql is actually needed): screen text is \`frames.full_text\` (other cols: app_name, window_name, browser_url, timestamp, text_source) — there is NO \`ocr_text\` table; audio is \`audio_transcriptions.transcription\` (timestamp, speaker_id, start_time); UI elements are \`elements\` (role, text, source).
 
 # Showing media
 

@@ -18,6 +18,33 @@ import {
   screenpipeViewerPathFromHref,
 } from "@/components/markdown";
 
+const DEEPLINK_RECENT_TTL_MS = 1_000;
+const activeDeepLinks = new Set<string>();
+const recentDeepLinks = new Map<string, number>();
+
+function beginDeepLink(url: string): boolean {
+  const now = Date.now();
+  for (const [seenUrl, seenAt] of recentDeepLinks) {
+    if (now - seenAt > DEEPLINK_RECENT_TTL_MS) {
+      recentDeepLinks.delete(seenUrl);
+    }
+  }
+
+  const seenAt = recentDeepLinks.get(url);
+  if (activeDeepLinks.has(url) || (seenAt && now - seenAt <= DEEPLINK_RECENT_TTL_MS)) {
+    console.log("skipping duplicate deep link:", url);
+    return false;
+  }
+
+  activeDeepLinks.add(url);
+  return true;
+}
+
+function finishDeepLink(url: string) {
+  activeDeepLinks.delete(url);
+  recentDeepLinks.set(url, Date.now());
+}
+
 export function DeeplinkHandler() {
   const { toast } = useToast();
   const { setShowChangelogDialog } = useChangelogDialog();
@@ -276,7 +303,12 @@ export function DeeplinkHandler() {
       const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
         console.log("received deep link urls:", urls);
         for (const url of urls) {
-          await processDeepLinkUrl(url);
+          if (!beginDeepLink(url)) continue;
+          try {
+            await processDeepLinkUrl(url);
+          } finally {
+            finishDeepLink(url);
+          }
         }
       });
       return unsubscribeDeepLink;
@@ -293,7 +325,12 @@ export function DeeplinkHandler() {
       // (emitted by the /focus endpoint or the single-instance plugin callback)
       listen<string>("deep-link-received", async (event) => {
         console.log("received deep-link-received event:", event.payload);
-        await processDeepLinkUrl(event.payload);
+        if (!beginDeepLink(event.payload)) return;
+        try {
+          await processDeepLinkUrl(event.payload);
+        } finally {
+          finishDeepLink(event.payload);
+        }
       }),
 
       listen("shortcut-start-recording", async () => {

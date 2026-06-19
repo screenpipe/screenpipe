@@ -32,22 +32,32 @@ fn secret_pools() -> &'static AsyncMutex<HashMap<String, SqlitePool>> {
     SECRET_POOLS.get_or_init(|| AsyncMutex::new(HashMap::new()))
 }
 
-/// Connection options for a secret-store pool. Mirrors the safe subset of the
-/// engine `DatabaseManager` connect options so two pools over the same file
-/// never disagree on journal mode or memory-mapping: WAL with a real
-/// `busy_timeout` (a writer WAITS for the lock instead of failing with
-/// "database is locked"), `synchronous=NORMAL` (safe under WAL), and
-/// `mmap_size=0` (memory-mapped writes are a known corruption source, disabled
-/// fleet-wide — never re-enable on a side pool). `create_if_missing` preserves
-/// the old `?mode=rwc` behavior exactly.
+/// Connection options for a secret-store pool. This pool is a SECOND long-lived
+/// pool over the same `db.sqlite` as the engine `DatabaseManager` pools (same
+/// process in the desktop app), so its WAL-affecting pragmas MUST be identical to
+/// the engine's, or the two pools race checkpoints on the shared `-shm` WAL-index
+/// and corrupt the file ("database disk image is malformed", code 11).
+///
+/// We take those from the single source of truth
+/// [`screenpipe_config::WAL_SAFETY_PRAGMAS`] precisely so this list can never
+/// again drift from the engine pool — the original bug here was an *incomplete*
+/// "safe subset" that set journal mode + synchronous but silently inherited
+/// SQLite's default `wal_autocheckpoint=1000` while the engine used `4000`.
+///
+/// `mmap_size=0` matches the engine (memory-mapped writes are a corruption source,
+/// disabled fleet-wide — never re-enable on a side pool). `busy_timeout` makes a
+/// writer WAIT for the lock instead of failing with "database is locked".
+/// `create_if_missing` preserves the old `?mode=rwc` behavior exactly.
 fn secret_connect_options(db_path: &str) -> SqliteConnectOptions {
-    SqliteConnectOptions::new()
+    let mut options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
         .busy_timeout(Duration::from_secs(5))
-        .pragma("journal_mode", "WAL")
-        .pragma("synchronous", "NORMAL")
-        .pragma("mmap_size", "0")
+        .pragma("mmap_size", "0");
+    for (pragma, value) in screenpipe_config::WAL_SAFETY_PRAGMAS {
+        options = options.pragma(pragma, value);
+    }
+    options
 }
 
 /// Get (or lazily create) the shared pool for `db_path`. Concurrent callers for

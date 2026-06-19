@@ -19,6 +19,77 @@ import { cn } from "@/lib/utils";
 import { imageFileToDataUrl, isNoteImageFile } from "./image-utils";
 import { FormatToolbar, SlashCommandMenu } from "./editor-menus";
 
+/**
+ * Image extension with resize enabled and custom markdown serialization.
+ * When width/height are set (via resize), emits an HTML `<img>` tag so
+ * dimensions survive the markdown round-trip. Otherwise falls back to
+ * standard `![alt](src)` syntax (including for base64 data-URLs).
+ */
+const ResizableImage = Image.extend({
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any) {
+          const { src, alt, title, width, height } = node.attrs;
+          // When the image has been resized (width/height set), emit an
+          // HTML <img> tag so dimensions survive the markdown round-trip.
+          // Attributes are escaped to prevent " in alt/title from
+          // breaking the tag and corrupting the image into raw text.
+          if (width || height) {
+            const parts = [`<img src="${escAttr(src || "")}"`];
+            if (alt) parts.push(`alt="${escAttr(alt)}"`);
+            if (title) parts.push(`title="${escAttr(title)}"`);
+            if (width) parts.push(`width="${escAttr(String(width))}"`);
+            if (height) parts.push(`height="${escAttr(String(height))}"`);
+            parts.push("/>");
+            state.write(parts.join(" "));
+          } else {
+            state.write(
+              `![${state.esc(alt || "")}](${(src || "").replace(/[()]/g, "\\$&")}${title ? ` "${title.replace(/"/g, '\\"')}"` : ""})`,
+            );
+          }
+        },
+        parse: {
+          // markdown-it handles both ![alt](src) and <img> natively
+        },
+      },
+    };
+  },
+
+  addNodeView() {
+    const parentNodeView = this.parent?.();
+    if (!parentNodeView) return null;
+
+    return (props) => {
+      const nodeView = (parentNodeView as Function)(props);
+      const wrapper = (nodeView as any).wrapper as HTMLElement | undefined;
+      if (!wrapper) return nodeView;
+
+      // inject delete button into the wrapper
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.imageDelete = "";
+      btn.setAttribute("aria-label", "Delete image");
+      btn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pos = props.getPos();
+        if (pos === undefined) return;
+        props.editor
+          .chain()
+          .focus()
+          .deleteRange({ from: pos, to: pos + props.node.nodeSize })
+          .run();
+      });
+      wrapper.appendChild(btn);
+
+      return nodeView;
+    };
+  },
+});
+
 export interface NoteEditorProps {
   value: string;
   onChange: (markdown: string) => void;
@@ -51,7 +122,7 @@ const PROSE_CLASSES = [
   "prose-pre:bg-muted prose-pre:text-foreground prose-pre:text-xs prose-pre:rounded prose-pre:border prose-pre:border-border",
   "prose-blockquote:border-l-2 prose-blockquote:border-border prose-blockquote:not-italic prose-blockquote:text-muted-foreground",
   "prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-a:decoration-muted-foreground/50",
-  "prose-img:max-h-[360px] prose-img:w-auto prose-img:rounded prose-img:border prose-img:border-border prose-img:bg-muted",
+  "prose-img:w-auto prose-img:rounded prose-img:border prose-img:border-border prose-img:bg-muted",
   "prose-hr:my-6 prose-hr:border-border",
 ].join(" ");
 
@@ -86,6 +157,10 @@ function NoteEditor(
   // captures a stale callback, without re-creating the editor on every render.
   const onChangeRef = useRef(onChange);
   const editorRef = useRef<Editor | null>(null);
+  // Track the last markdown the editor emitted so the sync effect can tell
+  // whether an incoming `value` originated from the editor itself (skip) vs
+  // an external source like the server or AI summary (apply).
+  const lastEmittedRef = useRef<string | null>(null);
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
@@ -153,11 +228,18 @@ function NoteEditor(
         showOnlyWhenEditable: true,
         showOnlyCurrent: false,
       }),
-      Image.configure({
+      ResizableImage.configure({
         allowBase64: true,
         inline: false,
         HTMLAttributes: {
           class: "meeting-note-image",
+        },
+        resize: {
+          enabled: true,
+          directions: ["bottom-right"],
+          minWidth: 64,
+          minHeight: 64,
+          alwaysPreserveAspectRatio: true,
         },
       }),
       // GFM task lists ("- [ ]") — tiptap-markdown round-trips them, so the
@@ -165,7 +247,7 @@ function NoteEditor(
       TaskList,
       TaskItem.configure({ nested: true }),
       Markdown.configure({
-        html: false,
+        html: true,
         tightLists: true,
         bulletListMarker: "-",
         linkify: true,
@@ -202,7 +284,9 @@ function NoteEditor(
       },
     },
     onUpdate({ editor }) {
-      onChangeRef.current(getMarkdown(editor));
+      const md = getMarkdown(editor);
+      lastEmittedRef.current = md;
+      onChangeRef.current(md);
     },
     onSelectionUpdate({ editor }) {
       // Belt-and-braces: arrow-key navigation and programmatic selection
@@ -219,8 +303,12 @@ function NoteEditor(
   }, [editor]);
 
   // Sync external value → editor without clobbering the user's caret.
+  // Skip when the incoming value is what the editor just emitted (avoids
+  // a needless setContent → reparse cycle that can corrupt base64 images
+  // into literal text when the markdown round-trip isn't byte-identical).
   useEffect(() => {
     if (!editor) return;
+    if (value === lastEmittedRef.current) return;
     const current = getMarkdown(editor);
     if (value === current) return;
 
@@ -267,6 +355,11 @@ function NoteEditor(
 });
 
 NoteEditor.displayName = "NoteEditor";
+
+/** Escape a string for use inside a double-quoted HTML attribute. */
+function escAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 function getMarkdown(editor: Editor): string {
   // tiptap-markdown injects a `markdown` storage at runtime but does not

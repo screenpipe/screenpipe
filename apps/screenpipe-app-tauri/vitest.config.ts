@@ -28,6 +28,7 @@ export default defineConfig({
 			"e2e/**",
 			"src-tauri/target/**",
 			"lib/utils/redact-pii.test.ts",
+			"lib/utils/html-sandbox.test.ts",
 			"lib/utils/meeting-state.test.ts",
 			"lib/utils/sanitize-tool-call-xml.test.ts",
 			"lib/__tests__/team-crypto.test.ts",

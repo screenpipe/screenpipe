@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Copy, Check, Gift, Send, Loader2 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { commands } from "@/lib/utils/tauri";
 
 interface ReferralData {
   code: string;
@@ -36,7 +37,7 @@ export function ReferralCard() {
       setLoading(true);
       try {
         const res = await fetch(
-          `https://screenpi.pe/api/referral?email=${encodeURIComponent(settings.user!.email!)}`
+          `https://screenpipe.com/api/referral?email=${encodeURIComponent(settings.user!.email!)}`
         );
         if (res.status === 404) {
           setNoCode(true);
@@ -62,7 +63,7 @@ export function ReferralCard() {
   const handleCopy = async () => {
     if (!referral) return;
     try {
-      await navigator.clipboard.writeText(referral.link);
+      await commands.copyTextToClipboard(referral.link);
       setCopied(true);
       toast({ title: "referral link copied!" });
       setTimeout(() => setCopied(false), 2000);
@@ -78,7 +79,7 @@ export function ReferralCard() {
     if (!email || !referral || sending) return;
     setSending(true);
     try {
-      const res = await fetch("https://screenpi.pe/api/referral/invite", {
+      const res = await fetch("https://screenpipe.com/api/referral/invite", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

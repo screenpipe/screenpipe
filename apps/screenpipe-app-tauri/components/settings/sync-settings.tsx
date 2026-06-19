@@ -404,7 +404,7 @@ function EncryptionKeyReveal() {
 
   const handleCopy = () => {
     if (password) {
-      navigator.clipboard.writeText(password);
+      commands.copyTextToClipboard(password);
       toast({
         title: "copied to clipboard",
         description: "paste this on your other device to set up sync",
@@ -961,7 +961,7 @@ export function SyncSettings() {
       }
 
       const email = settings.user?.email || "";
-      const response = await fetch(`https://screenpi.pe/api/cloud-sync/subscription?userId=${userId}&email=${encodeURIComponent(email)}`, {
+      const response = await fetch(`https://screenpipe.com/api/cloud-sync/subscription?userId=${userId}&email=${encodeURIComponent(email)}`, {
         headers: {
           "Authorization": `Bearer ${token}`,
         },
@@ -1054,7 +1054,7 @@ export function SyncSettings() {
         return;
       }
 
-      const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+      const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

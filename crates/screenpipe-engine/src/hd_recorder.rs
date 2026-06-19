@@ -280,7 +280,7 @@ mod macos {
                 while let Ok(f) = frames_rx.try_recv() {
                     frame = f;
                 }
-                match tokio::task::spawn_blocking(move || encode_jpeg(frame)).await {
+                match tokio::task::spawn_blocking(move || encode_jpeg(frame, hd_w, hd_h)).await {
                     Ok(Ok(jpeg)) => {
                         if let Ok(mut g) = enc_latest.lock() {
                             *g = Some(Arc::new(jpeg));
@@ -403,10 +403,50 @@ mod macos {
         cmd.spawn().context("spawn hd ffmpeg")
     }
 
-    /// Encode one captured RGBA frame to JPEG bytes for the mjpeg pipe. JPEG has
-    /// no alpha (dropped); the pipe stays small vs raw RGBA. CPU-heavy — always
-    /// run on a blocking thread.
-    fn encode_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>> {
+    /// Encode one captured RGBA frame to JPEG bytes for the mjpeg pipe.
+    ///
+    /// The frame is first normalized to the stream's fixed `(target_w,
+    /// target_h)`. ScreenCaptureKit can briefly deliver a differently-sized
+    /// frame across a display reconfiguration (resolution change, monitor
+    /// (un)plug, sleep/wake); feeding mixed sizes into the constant-dimension
+    /// mjpeg→libx264 pipe is what produces the green-band corruption users
+    /// report (libx264 was initialized at the first frame's size). Resizing to
+    /// the fixed size keeps the pipe single-resolution. On the overwhelmingly
+    /// common path the frame already matches and this is just a cheap
+    /// dimension check.
+    ///
+    /// JPEG has no alpha (dropped); the pipe stays small vs raw RGBA. CPU-heavy
+    /// — always run on a blocking thread.
+    fn encode_jpeg(frame: image::RgbaImage, target_w: u32, target_h: u32) -> Result<Vec<u8>> {
+        // A 0-dimension frame can't be resized or encoded — drop it rather than
+        // feed garbage into the pipe. The caller logs and keeps recording.
+        if frame.width() == 0 || frame.height() == 0 {
+            anyhow::bail!(
+                "empty hd frame {}x{} — skipping",
+                frame.width(),
+                frame.height()
+            );
+        }
+        let frame = if target_w > 0
+            && target_h > 0
+            && (frame.width() != target_w || frame.height() != target_h)
+        {
+            warn!(
+                "hd recorder: frame {}x{} != stream {}x{}, resizing to keep the encoder pipe constant-dimension",
+                frame.width(),
+                frame.height(),
+                target_w,
+                target_h
+            );
+            image::imageops::resize(
+                &frame,
+                target_w,
+                target_h,
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            frame
+        };
         let rgb = image::DynamicImage::ImageRgba8(frame).to_rgb8();
         let mut buf = Vec::new();
         image::DynamicImage::ImageRgb8(rgb)
@@ -429,6 +469,53 @@ mod macos {
             assert_eq!(interval_to_fps(0), 10); // guard
             assert_eq!(interval_to_fps(1000), 1); // 1fps
             assert_eq!(interval_to_fps(5), 60); // clamped to 60
+        }
+
+        fn jpeg_dims(bytes: &[u8]) -> (u32, u32) {
+            image::load_from_memory(bytes)
+                .expect("decode jpeg")
+                .to_rgb8()
+                .dimensions()
+        }
+
+        #[test]
+        fn encode_jpeg_passes_through_matching_dims() {
+            let frame = image::RgbaImage::new(640, 480);
+            let bytes = encode_jpeg(frame, 640, 480).unwrap();
+            assert_eq!(jpeg_dims(&bytes), (640, 480));
+        }
+
+        #[test]
+        fn encode_jpeg_downscales_oversized_frame_to_target() {
+            // SCK delivered a larger frame than the stream config (e.g. a
+            // resolution change) — must be pinned to the stream size so the
+            // mjpeg→libx264 pipe stays constant-dimension.
+            let frame = image::RgbaImage::new(800, 600);
+            let bytes = encode_jpeg(frame, 640, 480).unwrap();
+            assert_eq!(jpeg_dims(&bytes), (640, 480));
+        }
+
+        #[test]
+        fn encode_jpeg_upscales_undersized_frame_to_target() {
+            let frame = image::RgbaImage::new(320, 240);
+            let bytes = encode_jpeg(frame, 640, 480).unwrap();
+            assert_eq!(jpeg_dims(&bytes), (640, 480));
+        }
+
+        #[test]
+        fn encode_jpeg_zero_target_keeps_source_dims() {
+            // Defensive guard: a 0 target never forces a degenerate resize.
+            let frame = image::RgbaImage::new(640, 480);
+            let bytes = encode_jpeg(frame, 0, 0).unwrap();
+            assert_eq!(jpeg_dims(&bytes), (640, 480));
+        }
+
+        #[test]
+        fn encode_jpeg_rejects_empty_frame() {
+            // A 0-dimension frame is dropped (Err) rather than resized into
+            // garbage; the recorder logs and keeps going.
+            let frame = image::RgbaImage::new(0, 0);
+            assert!(encode_jpeg(frame, 640, 480).is_err());
         }
     }
 }

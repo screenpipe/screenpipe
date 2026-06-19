@@ -54,6 +54,21 @@ pub struct ActivitySummaryQuery {
     #[serde(default)]
     pub q: Option<String>,
 
+    /// Include per-app usage (`apps`). Default: true. Disable for a leaner,
+    /// token-cheaper payload when you only need totals or other fields.
+    #[serde(default = "default_true")]
+    pub include_apps: bool,
+    /// Include per-window/tab activity (`windows`). Default: true. Disable to
+    /// drop the window list from the response.
+    #[serde(default = "default_true")]
+    pub include_windows: bool,
+    /// Include sampled screen text (`key_texts`). Default: true. This is the
+    /// heaviest field; disable it (`include_key_texts=false`) for pure
+    /// time-tracking sweeps to cut response tokens substantially. Snippets are
+    /// unaffected — they still sample screen text internally.
+    #[serde(default = "default_true")]
+    pub include_key_texts: bool,
+
     /// Include recording health (last frame/audio timestamps, counts, recent
     /// capture flag). Default: true. Disable to skip one cheap SQL call.
     #[serde(default = "default_true")]
@@ -201,11 +216,17 @@ pub struct ActivityGuidance {
 #[derive(Serialize, OaSchema)]
 pub struct ActivitySummaryResponse {
     // --- existing fields (stable schema for Receipts panel + AI summary) ---
-    pub apps: Vec<AppUsage>,
-    /// Distinct windows/tabs visited with time spent (grouped by app+window)
-    pub windows: Vec<WindowActivity>,
-    /// Key text content sampled across the time range (not just the latest frame)
-    pub key_texts: Vec<KeyText>,
+    /// Per-app usage. Omitted when `include_apps=false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apps: Option<Vec<AppUsage>>,
+    /// Distinct windows/tabs visited with time spent (grouped by app+window).
+    /// Omitted when `include_windows=false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<Vec<WindowActivity>>,
+    /// Key text content sampled across the time range (not just the latest
+    /// frame). This is the heaviest field; omitted when `include_key_texts=false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_texts: Option<Vec<KeyText>>,
     /// Distinct absolute file paths the user had open in editors during the
     /// time range (sourced from `frames.document_path`, populated on macOS
     /// via AXDocument). Empty on Windows/Linux until those platforms grow
@@ -251,6 +272,9 @@ pub struct ActivitySummaryResponse {
 ///
 /// Pass `include_recording=false`, `include_memories=false`,
 /// `include_snippets=false`, or `include_guidance=false` to slim the payload.
+/// For a lean, token-cheap time-tracking sweep also pass `include_apps=false`,
+/// `include_windows=false`, and especially `include_key_texts=false` (the
+/// heaviest field) — each omits its field from the response when disabled.
 #[oasgen]
 pub async fn get_activity_summary(
     State(state): State<Arc<AppState>>,
@@ -325,9 +349,9 @@ pub async fn get_activity_summary(
     };
 
     Ok(JsonResponse(ActivitySummaryResponse {
-        apps: summary_core.apps,
-        windows: summary_core.windows,
-        key_texts: summary_core.key_texts,
+        apps: query.include_apps.then_some(summary_core.apps),
+        windows: query.include_windows.then_some(summary_core.windows),
+        key_texts: query.include_key_texts.then_some(summary_core.key_texts),
         edited_files: summary_core.edited_files,
         audio_summary: summary_core.audio_summary,
         total_frames: summary_core.total_frames,
@@ -1296,6 +1320,9 @@ mod tests {
             end_time: Utc::now(),
             app_name: None,
             q: None,
+            include_apps: true,
+            include_windows: true,
+            include_key_texts: true,
             include_recording: true,
             include_memories: true,
             include_snippets: true,
@@ -1442,6 +1469,9 @@ mod db_tests {
             end_time: "2026-06-02T23:59:59Z".parse().unwrap(),
             app_name: app.map(|s| s.to_string()),
             q: None,
+            include_apps: true,
+            include_windows: true,
+            include_key_texts: true,
             include_recording: true,
             include_memories: false,
             include_snippets: false,
@@ -1954,5 +1984,168 @@ mod db_tests {
             core.total_active_minutes
         );
         assert!(near(app_min(&core, "Arc").unwrap(), 0.5));
+    }
+}
+
+#[cfg(test)]
+mod include_flag_tests {
+    //! Unit tests for the lean-mode `include_apps` / `include_windows` /
+    //! `include_key_texts` toggles. These gate the heavy always-on fields the
+    //! same way the existing `include_recording/memories/snippets/guidance`
+    //! flags gate their fields: when false the field is set to `None` and the
+    //! `skip_serializing_if = "Option::is_none"` attribute drops it from the
+    //! serialized JSON entirely. We test the response serialization (not the
+    //! SQL) because that is exactly the new behavior.
+    use super::*;
+
+    fn sample_response(
+        include_apps: bool,
+        include_windows: bool,
+        include_key_texts: bool,
+    ) -> ActivitySummaryResponse {
+        let apps = vec![AppUsage {
+            name: "Arc".to_string(),
+            frame_count: 3,
+            minutes: 1.0,
+            first_seen: "2026-06-02T10:00:00Z".to_string(),
+            last_seen: "2026-06-02T10:01:00Z".to_string(),
+        }];
+        let windows = vec![WindowActivity {
+            app_name: "Arc".to_string(),
+            window_name: "GitHub".to_string(),
+            browser_url: String::new(),
+            minutes: 1.0,
+            frame_count: 3,
+        }];
+        let key_texts = vec![KeyText {
+            text: "some sampled screen text".to_string(),
+            app_name: "Arc".to_string(),
+            window_name: "GitHub".to_string(),
+            timestamp: "2026-06-02T10:00:30Z".to_string(),
+        }];
+        ActivitySummaryResponse {
+            apps: include_apps.then_some(apps),
+            windows: include_windows.then_some(windows),
+            key_texts: include_key_texts.then_some(key_texts),
+            edited_files: vec![],
+            audio_summary: AudioSummary {
+                segment_count: 0,
+                speakers: vec![],
+                top_transcriptions: vec![],
+            },
+            total_frames: 3,
+            total_active_minutes: 1.0,
+            time_range: TimeRange {
+                start: "2026-06-02T10:00:00Z".to_string(),
+                end: "2026-06-02T11:00:00Z".to_string(),
+            },
+            data_status: "ok".to_string(),
+            query_status: "not_requested".to_string(),
+            recording: None,
+            memories: None,
+            snippets: None,
+            guidance: None,
+        }
+    }
+
+    fn to_json(r: &ActivitySummaryResponse) -> Value {
+        serde_json::to_value(r).expect("serialize response")
+    }
+
+    /// Defaults (all three on) preserve the current full output: every heavy
+    /// field is present, and the always-present totals/status stay put.
+    #[test]
+    fn defaults_keep_all_heavy_fields() {
+        let j = to_json(&sample_response(true, true, true));
+        assert!(j.get("apps").is_some(), "apps must be present by default");
+        assert!(
+            j.get("windows").is_some(),
+            "windows must be present by default"
+        );
+        assert!(
+            j.get("key_texts").is_some(),
+            "key_texts must be present by default"
+        );
+        // Stable always-present fields are unaffected.
+        assert_eq!(j["total_frames"], 3);
+        assert_eq!(j["total_active_minutes"], 1.0);
+        assert_eq!(j["data_status"], "ok");
+    }
+
+    /// The headline lean-mode case: `include_key_texts=false` omits the
+    /// heaviest field while leaving everything else intact.
+    #[test]
+    fn key_texts_false_omits_only_key_texts() {
+        let j = to_json(&sample_response(true, true, false));
+        assert!(
+            j.get("key_texts").is_none(),
+            "key_texts must be omitted when include_key_texts=false"
+        );
+        assert!(j.get("apps").is_some(), "apps unaffected");
+        assert!(j.get("windows").is_some(), "windows unaffected");
+        assert_eq!(j["total_active_minutes"], 1.0);
+    }
+
+    #[test]
+    fn apps_false_omits_only_apps() {
+        let j = to_json(&sample_response(false, true, true));
+        assert!(j.get("apps").is_none(), "apps must be omitted");
+        assert!(j.get("windows").is_some(), "windows unaffected");
+        assert!(j.get("key_texts").is_some(), "key_texts unaffected");
+    }
+
+    #[test]
+    fn windows_false_omits_only_windows() {
+        let j = to_json(&sample_response(true, false, true));
+        assert!(j.get("windows").is_none(), "windows must be omitted");
+        assert!(j.get("apps").is_some(), "apps unaffected");
+        assert!(j.get("key_texts").is_some(), "key_texts unaffected");
+    }
+
+    /// Fully lean sweep: all three heavy fields off, totals/status still there.
+    #[test]
+    fn all_three_false_leaves_lean_payload() {
+        let j = to_json(&sample_response(false, false, false));
+        assert!(j.get("apps").is_none());
+        assert!(j.get("windows").is_none());
+        assert!(j.get("key_texts").is_none());
+        // The whole point: the cheap time-tracking signal survives.
+        assert_eq!(j["total_active_minutes"], 1.0);
+        assert_eq!(j["total_frames"], 3);
+        assert_eq!(j["data_status"], "ok");
+    }
+
+    /// Parse a query string through axum's real `Query` extractor — the exact
+    /// path the live handler uses — so we test deserialization, not a hand-built
+    /// struct.
+    fn parse_query(qs: &str) -> ActivitySummaryQuery {
+        let uri: axum::http::Uri = format!("http://x/activity-summary?{qs}")
+            .parse()
+            .expect("uri");
+        axum::extract::Query::<ActivitySummaryQuery>::try_from_uri(&uri)
+            .expect("parse query")
+            .0
+    }
+
+    /// The three new flags default to `true` when absent from the query string,
+    /// preserving back-compat for callers that pass no params.
+    #[test]
+    fn new_flags_default_to_true() {
+        let q = parse_query("start_time=2026-06-02T10:00:00Z&end_time=2026-06-02T11:00:00Z");
+        assert!(q.include_apps);
+        assert!(q.include_windows);
+        assert!(q.include_key_texts);
+    }
+
+    /// Each flag is parsed independently from the query string.
+    #[test]
+    fn flags_parse_independently() {
+        let q = parse_query(
+            "start_time=2026-06-02T10:00:00Z&end_time=2026-06-02T11:00:00Z\
+             &include_key_texts=false",
+        );
+        assert!(q.include_apps, "include_apps stays default-true");
+        assert!(q.include_windows, "include_windows stays default-true");
+        assert!(!q.include_key_texts, "include_key_texts honored as false");
     }
 }

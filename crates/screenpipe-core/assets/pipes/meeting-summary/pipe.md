@@ -32,6 +32,19 @@ step 2b — also query the screen for what was *shown*: `content_type=ocr` over 
 
 step 2c — *if available*, use the cloud media (video/audio) model for what text alone can't capture: the screenpipe-api skill includes a "Cloud media analysis" block (the `gemma4-e4b` multimodal model) only when cloud media analysis is enabled and the user is signed into screenpipe cloud. when it's there, use it for visual-only content the transcript and OCR miss — diagrams, charts, whiteboards, slide figures, UI demos, screen-shared video. export the meeting (`POST /export` with this `meeting_id`) or ffmpeg-sample a few keyframes, then send up to 4 frames per request as `image_url[]` to `POST /v1/chat/completions` with `"model": "gemma4-e4b"` and ask what they show; it can also take `audio_url` directly for hard-to-transcribe spans. this step is optional — if the block isn't in the skill, or the call returns `503 cloud_token_missing` (signed out), just skip it and summarize from transcript + OCR.
 
+step 2d — name the speakers from the screen (do this every run, don't ask first): video-call apps render each participant's name on their tile, and that text is already in the `content_type=ocr` frames from step 2b. for every speaker still unnamed or generic ("speaker 1", "unknown", "") in the transcript, line up when they were talking with the on-screen name tag showing at that moment and rename them:
+
+  # speakers with no name yet
+  curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+    "http://localhost:3030/speakers/unnamed?limit=20"
+  # apply a confident match
+  curl -s -X POST "http://localhost:3030/speakers/update" \
+    -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"id": <SPEAKER_ID>, "name": "<NAME_FROM_SCREEN>"}'
+
+only rename when the on-screen evidence is unambiguous — never guess from voice alone. note which speakers you renamed (and which you left as-is) in your final message.
+
 step 3 — if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
 
   curl -s -X PUT "http://localhost:3030/meetings/<MEETING_ID>" \
@@ -40,3 +53,19 @@ step 3 — if your summary is worth saving, append it to the meeting note (and r
     -d '{"title": "<NEW_TITLE_OR_OMIT>", "note": "<EXISTING_NOTE>\n\n## Summary\n<YOUR_SUMMARY>"}'
 
 replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder.
+
+step 4 — offer to push the summary into one of the user's connected apps (ask, never push on your own). list what's actually connected, then let them pick with one click:
+
+  curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/connections"   # keep only "connected": true
+
+rank the connected targets by relevance — an app used during the meeting first (Notion, Slack, Linear, …). then post a desktop notification whose action buttons are those targets, so the ask renders as buttons in the UI:
+
+  curl -s -X POST "http://localhost:11435/notify" \
+    -H "Content-Type: application/json" \
+    -d '{"title": "<TITLE> summarized", "body": "<one-line recap> — push it somewhere?", "actions": [
+          {"label": "push to notion", "type": "api", "method": "POST", "url": "http://localhost:3030/connections/notion/proxy/v1/pages", "body": { /* page payload built from the summary */ }},
+          {"label": "review in chat", "type": "pipe", "pipe": "meeting-summary", "open_in_chat": true, "context": {"meeting_id": <ID>}},
+          {"label": "dismiss", "type": "dismiss"}
+        ]}'
+
+each button maps to a connection's endpoint from its `/connections` `description` (`POST /connections/<id>/send` for slack/gmail/telegram/discord, `POST /connections/<id>/proxy/...` for notion/linear/etc.). when a target needs a destination you can't infer (a Notion parent page, a Slack channel), make that button `"review in chat"` so the user confirms specifics before anything leaves the machine. if nothing is connected, skip the notification and just say that connecting an app would let you push summaries next time.

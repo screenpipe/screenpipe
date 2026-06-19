@@ -50,7 +50,7 @@ describe('Home window', () => {
 
       const el = await $(`[data-testid="${sectionTestId}"]`);
       // Sections that fetch remote data on mount (Timeline pulls frames,
-      // Pipes pulls the store catalog from screenpi.pe) need a longer
+      // Pipes pulls the store catalog from screenpipe.com) need a longer
       // budget than chrome-only sections — observed on Linux runners
       // under xvfb where the cold network round-trip alone can eat 8-12s.
       // Pipes was previously 5s × CI multiplier (10s) and reliably

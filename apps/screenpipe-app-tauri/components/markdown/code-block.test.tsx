@@ -12,8 +12,16 @@ import {
 
 // Stub the third-party highlighter so the tests stay deterministic (no async
 // Prism grammar loading) and we can assert which theme object got handed to it.
-const { record } = vi.hoisted(() => ({
+const { record, copyToClipboard } = vi.hoisted(() => ({
   record: { props: null as Record<string, unknown> | null },
+  copyToClipboard: vi.fn().mockResolvedValue(undefined),
+}));
+
+// #4317: the copy button now calls the Tauri clipboard command
+// (commands.copyTextToClipboard), not navigator.clipboard. Mock the binding so
+// the handler doesn't hit a missing Tauri `invoke` under jsdom.
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: { copyTextToClipboard: copyToClipboard },
 }));
 
 vi.mock("react-syntax-highlighter", () => ({
@@ -35,6 +43,7 @@ import {
 describe("MarkdownCodeBlock", () => {
   beforeEach(() => {
     record.props = null;
+    copyToClipboard.mockClear();
     document.documentElement.classList.remove("dark", "light");
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -57,7 +66,7 @@ describe("MarkdownCodeBlock", () => {
   it("copies the raw value to the clipboard when the copy button is clicked", () => {
     render(<MarkdownCodeBlock value="echo hi" language="bash" />);
     fireEvent.click(screen.getByRole("button", { name: /copy code/i }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("echo hi");
+    expect(copyToClipboard).toHaveBeenCalledWith("echo hi");
   });
 
   it("uses the light Prism theme by default", () => {

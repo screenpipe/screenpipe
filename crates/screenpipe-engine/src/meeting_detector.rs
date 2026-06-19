@@ -513,8 +513,14 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "gotomeeting.exe",
                 ],
                 browser_url_patterns: &[
+                    // Public Jitsi host. NOTE: a bare "jitsi" substring used to
+                    // live here too, but it matched any URL containing the word
+                    // (e.g. github.com/jitsi/jitsi-meet), making the browser a
+                    // meeting candidate and letting an unrelated tab's "Leave"
+                    // button fire a phantom meeting (#4246). Self-hosted Jitsi on
+                    // a custom domain is no longer auto-detected by hostname; the
+                    // public service still is.
                     "meet.jit.si",
-                    "jitsi",
                     "riverside.fm",
                     "gather.town",
                     "app.gather.town",
@@ -2092,6 +2098,52 @@ fn contains_normalized_term(haystack: &str, term_lower: &str) -> bool {
     haystack.to_lowercase().contains(term_lower)
 }
 
+/// Return the part of a URL before the query string (`?`) and fragment (`#`).
+/// Meeting URL patterns are host/path shaped, so matching should ignore params:
+/// `https://x.com/p?to=meet.google.com` is an unrelated page, not a Meet call.
+fn url_without_query_or_fragment(url: &str) -> &str {
+    let end = url.find(['?', '#']).unwrap_or(url.len());
+    &url[..end]
+}
+
+/// Decide whether a browser window belongs to a meeting profile, given its page
+/// URL (when the browser exposes it) and window title.
+///
+/// URL-first: when a URL is known, ONLY the URL is matched against
+/// `browser_url_patterns` (query/fragment stripped). Page titles are never
+/// searched for URL patterns — titles carry arbitrary text (an Amazon listing
+/// for a "Meeting Owl … Certified for Microsoft Teams … Works with Zoom, Google
+/// Meet" camera, the jitsi-meet GitHub repo, or "meet - App on Amazon Appstore")
+/// and matching meeting patterns there produces phantom meetings (#4246).
+///
+/// `browser_title_patterns` (anchored, see `browser_title_matches_pattern`) are
+/// a fallback used ONLY when no URL is available — e.g. Arc, which titles its
+/// window "Meet" but does not expose the tab URL via AXDocument. When a URL IS
+/// available and is not a meeting URL, the page title is not evidence of a
+/// meeting.
+fn browser_window_matches_meeting(
+    url: Option<&str>,
+    title: Option<&str>,
+    profile: &MeetingDetectionProfile,
+) -> bool {
+    let ids = &profile.app_identifiers;
+    if let Some(u) = url.map(str::trim).filter(|u| !u.is_empty()) {
+        let doc = url_without_query_or_fragment(u);
+        return ids
+            .browser_url_patterns
+            .iter()
+            .any(|p| contains_case_insensitive(doc, p));
+    }
+    if let Some(t) = title {
+        let t_lower = t.to_lowercase();
+        return ids
+            .browser_title_patterns
+            .iter()
+            .any(|p| browser_title_matches_pattern(&t_lower, p));
+    }
+    false
+}
+
 fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -2278,11 +2330,16 @@ fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
             let window = &windows[i];
             let _ = window.set_messaging_timeout_secs(0.2);
 
-            // Primary: check AXDocument attribute (actual page URL, most reliable)
+            // Primary: check AXDocument attribute (actual page URL, most reliable).
+            // Match only against the scheme+host+path, never the query/fragment:
+            // a meeting URL carried as a `?redirect=…` / `#…` parameter on an
+            // unrelated page is not the page you're on, and matching it makes the
+            // browser a phantom meeting candidate (#4246).
             if let Some(doc) = get_ax_string_attr(window, cidre::ax::attr::document()) {
+                let doc_for_match = url_without_query_or_fragment(&doc);
                 if url_patterns
                     .iter()
-                    .any(|p| contains_case_insensitive(&doc, p))
+                    .any(|p| contains_case_insensitive(doc_for_match, p))
                 {
                     return true;
                 }
@@ -2643,28 +2700,13 @@ async fn db_find_browser_meetings(
             if !has_url_patterns && !has_title_patterns {
                 continue;
             }
-            // Check URL patterns against window_name AND browser_url
-            let url_match = has_url_patterns
-                && profile
-                    .app_identifiers
-                    .browser_url_patterns
-                    .iter()
-                    .any(|p| {
-                        contains_case_insensitive(window_name, p)
-                            || browser_url
-                                .as_deref()
-                                .is_some_and(|url| contains_case_insensitive(url, p))
-                    });
-            // See `browser_title_matches_pattern` for the matching rules.
-            let title_match = has_title_patterns && {
-                let window_lower = window_name.to_lowercase();
-                profile
-                    .app_identifiers
-                    .browser_title_patterns
-                    .iter()
-                    .any(|p| browser_title_matches_pattern(&window_lower, p))
-            };
-            if url_match || title_match {
+            // URL-first: match meeting patterns against the page URL, not the
+            // window title. Page titles carry arbitrary text (e.g. an Amazon
+            // listing "Meeting Owl … Certified for Microsoft Teams … Zoom,
+            // Google Meet", or "meet - App on Amazon Appstore"); matching meeting
+            // patterns there produced phantom meetings (#4246). Title patterns
+            // are used only when the browser exposes no URL (Arc).
+            if browser_window_matches_meeting(browser_url.as_deref(), Some(window_name), profile) {
                 #[cfg(target_os = "macos")]
                 let pid = cidre::objc::ar_pool(|| -> i32 {
                     let ws = cidre::ns::Workspace::shared();
@@ -4279,6 +4321,167 @@ mod tests {
                  (regression of the cal.com false-positive class)"
             );
         }
+    }
+
+    #[test]
+    fn test_generic_profile_jitsi_is_host_qualified() {
+        // #4246: a bare "jitsi" substring matched any URL containing the word
+        // (e.g. github.com/jitsi/...), making the browser a phantom meeting
+        // candidate. Lock in that only the public host pattern remains.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        assert!(
+            !patterns.contains(&"jitsi"),
+            "bare 'jitsi' substring must not be a URL pattern (matches unrelated URLs like github.com/jitsi/...)"
+        );
+        assert!(
+            patterns.contains(&"meet.jit.si"),
+            "the public Jitsi host pattern must remain"
+        );
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_jitsi_in_unrelated_url() {
+        // Concrete #4246 regression set: ordinary browsing that contains the
+        // word "jitsi" (or is just an unrelated page) must NOT match.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://github.com/jitsi/jitsi-meet",
+            "https://github.com/screenpipe/screenpipe/issues",
+            "https://news.ycombinator.com/item?id=jitsi",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "unrelated URL {url:?} must NOT match a meeting profile (#4246)"
+            );
+        }
+        // A real Jitsi call URL must still match.
+        assert!(url_matches_any_pattern(
+            "https://meet.jit.si/MyStandupRoom",
+            patterns
+        ));
+    }
+
+    #[test]
+    fn test_url_without_query_or_fragment_strips_params() {
+        assert_eq!(
+            url_without_query_or_fragment("https://x.com/page?ref=meet.google.com/abc"),
+            "https://x.com/page"
+        );
+        assert_eq!(
+            url_without_query_or_fragment("https://meet.google.com/abc-defg-hij#pinned"),
+            "https://meet.google.com/abc-defg-hij"
+        );
+        // No query/fragment → unchanged.
+        assert_eq!(
+            url_without_query_or_fragment("https://zoom.us/j/123"),
+            "https://zoom.us/j/123"
+        );
+    }
+
+    #[test]
+    fn test_meeting_url_in_query_does_not_match_after_stripping() {
+        // A meeting URL carried in a query param (share/redirect link) must not
+        // count as being on that meeting page — this mirrors the AXDocument
+        // matching in `has_browser_meeting_url`.
+        let url = "https://app.example.com/redirect?to=https://meet.google.com/abc-defg-hij";
+        assert!(contains_case_insensitive(url, "meet.google.com"));
+        assert!(!contains_case_insensitive(
+            url_without_query_or_fragment(url),
+            "meet.google.com"
+        ));
+        // The genuine page URL still matches after stripping.
+        let real = "https://meet.google.com/abc-defg-hij?authuser=0";
+        assert!(contains_case_insensitive(
+            url_without_query_or_fragment(real),
+            "meet.google.com"
+        ));
+    }
+
+    /// Returns true if ANY profile considers this browser window a meeting.
+    fn any_profile_matches(url: Option<&str>, title: Option<&str>) -> bool {
+        load_detection_profiles()
+            .iter()
+            .any(|p| browser_window_matches_meeting(url, title, p))
+    }
+
+    #[test]
+    fn test_4246_real_browsing_titles_do_not_trigger_meetings() {
+        // The exact (window_title, browser_url) pairs screenpipe captured for
+        // Safari when the phantom fired (#4246). The titles are full of meeting
+        // keywords — an Amazon conference-camera shopping spree and the
+        // jitsi-meet GitHub repo — but NONE of these pages is a meeting.
+        let real_browsing: &[(&str, Option<&str>)] = &[
+            (
+                "Amazon.com: Owl Labs Meeting Owl 3 - 360° 1080p HD Conference Room Camera, \
+                 AI-Driven Speaker-Tracking, 18-Foot Mic Pickup - Certified for Microsoft Teams \
+                 - Works with Zoom, Google Meet - Plug & Play Setup : Electronics",
+                Some("https://www.amazon.com/Owl-360-Degree-Conference-Microphone-Automatic/dp/B0B193JVDJ/ref=pd_sbs"),
+            ),
+            (
+                "Amazon.com : Meeting Owl 4+ 360-Degree, 4K Smart Video Conference Camera, \
+                 Microphone, and Speaker (Certified for Microsoft Teams) : Electronics",
+                Some("https://www.amazon.com/Owl-360-Degree-Conference-Microphone-Equalizing/dp/B0D4FB77HG/ref=sr_1_1_sspa?keywords=meeting"),
+            ),
+            (
+                "meet - App on Amazon Appstore",
+                Some("https://www.amazon.com/amrit-meet/dp/B013JLWFDG/ref=sr_1_10?keywords=meet"),
+            ),
+            // Captured row where the window title and URL came from different
+            // tabs — title says "meet …" but the URL is a GitHub page. URL-first
+            // matching must trust the URL, not the stray title.
+            (
+                "meet - App on Amazon Appstore",
+                Some("https://github.com/screenpipe/screenpipe/issues"),
+            ),
+            ("Amazon.com : zoom", Some("https://www.amazon.com/s?k=zoom")),
+            (
+                "About Jitsi Meet | Free Video Conferencing Solutions",
+                Some("https://jitsi.org/jitsi-meet/"),
+            ),
+            (
+                "GitHub - jitsi/jitsi-meet: Jitsi Meet - Secure, Simple and Scalable Video Conferences",
+                Some("https://github.com/jitsi/jitsi-meet"),
+            ),
+            (
+                "Issues · screenpipe/screenpipe · GitHub",
+                Some("https://github.com/screenpipe/screenpipe/issues"),
+            ),
+        ];
+        for (title, url) in real_browsing {
+            assert!(
+                !any_profile_matches(*url, Some(title)),
+                "phantom #4246: browsing {title:?} (url {url:?}) must NOT be detected as a meeting"
+            );
+        }
+    }
+
+    #[test]
+    fn test_real_browser_meetings_still_detected() {
+        // Genuine meeting URLs must still match (no regression from the
+        // URL-first change).
+        assert!(any_profile_matches(
+            Some("https://meet.google.com/abc-defg-hij"),
+            Some("Meet - abc-defg-hij - Google Chrome")
+        ));
+        assert!(any_profile_matches(
+            Some("https://zoom.us/j/123?pwd=xyz"),
+            Some("Zoom Meeting")
+        ));
+        assert!(any_profile_matches(
+            Some("https://app.slack.com/huddle/T123/C456"),
+            Some("Slack")
+        ));
+        // Arc exposes no tab URL — the title "Meet" is the only signal and must
+        // still work via the title-pattern fallback.
+        assert!(any_profile_matches(None, Some("Meet")));
+        assert!(any_profile_matches(None, Some("Meet - abc-defg-hij - Arc")));
+        // But with a URL present, a "Meet"-ish title alone must NOT match.
+        assert!(!any_profile_matches(
+            Some("https://www.amazon.com/amrit-meet/dp/B013JLWFDG"),
+            Some("meet - App on Amazon Appstore")
+        ));
     }
 
     // ── State machine tests ────────────────────────────────────────────

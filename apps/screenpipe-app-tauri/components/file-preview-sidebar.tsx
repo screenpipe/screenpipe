@@ -29,34 +29,47 @@ export function FilePreviewSidebar({
   const [copyContentToast, setCopyContentToast] = useState(false);
   const content = useViewerFileContent(path);
 
-  const fileName = useMemo(() => viewerDisplayName(path, content), [content, path]);
-  const breadcrumb = useMemo(() => viewerPathBreadcrumb(path), [path]);
+  // The backend resolves relative agent paths (e.g. `.pi/skills/…`) to a real
+  // file and echoes the resolved location back on `content.path`. Prefer it so
+  // the breadcrumb, copy-path, open, and reveal all act on the real file rather
+  // than the bare relative string the citation carried.
+  const effectivePath = useMemo(
+    () => (content && "path" in content && content.path ? content.path : path),
+    [content, path],
+  );
+  const notFound = content?.kind === "error";
+
+  const fileName = useMemo(
+    () => viewerDisplayName(effectivePath, content),
+    [content, effectivePath],
+  );
+  const breadcrumb = useMemo(() => viewerPathBreadcrumb(effectivePath), [effectivePath]);
 
   const openInDefault = useCallback(async () => {
     try {
-      await commands.openNotePath(path);
+      await commands.openNotePath(effectivePath);
     } catch (e) {
       console.error("open preview path failed", e);
     }
-  }, [path]);
+  }, [effectivePath]);
 
   const revealInFinder = useCallback(async () => {
     try {
-      await commands.revealInDefaultBrowser(path);
+      await commands.revealInDefaultBrowser(effectivePath);
     } catch (e) {
       console.error("reveal preview path failed", e);
     }
-  }, [path]);
+  }, [effectivePath]);
 
   const copyPath = useCallback(async () => {
     try {
-      await commands.copyTextToClipboard(path);
+      await commands.copyTextToClipboard(effectivePath);
       setCopyPathToast(true);
       setTimeout(() => setCopyPathToast(false), 1200);
     } catch (e) {
       console.error("copy preview path failed", e);
     }
-  }, [path]);
+  }, [effectivePath]);
 
   const copyContent = useCallback(async () => {
     if (!content || content.kind !== "text" || !content.text) return;
@@ -80,20 +93,24 @@ export function FilePreviewSidebar({
             </div>
           )}
         </div>
-        <button
-          onClick={openInDefault}
-          title="Open file"
-          className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-        >
-          open
-        </button>
-        <button
-          onClick={revealInFinder}
-          title="Reveal file"
-          className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-        >
-          reveal
-        </button>
+        {!notFound && (
+          <>
+            <button
+              onClick={openInDefault}
+              title="Open file"
+              className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            >
+              open
+            </button>
+            <button
+              onClick={revealInFinder}
+              title="Reveal file"
+              className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            >
+              reveal
+            </button>
+          </>
+        )}
         {content?.kind === "text" && content.text !== "" && (
           <button
             onClick={copyContent}

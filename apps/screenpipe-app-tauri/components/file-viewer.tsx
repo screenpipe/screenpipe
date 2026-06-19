@@ -20,6 +20,8 @@ import {
   createCodeMarkdownComponents,
   useSyntaxTheme,
 } from "@/components/markdown/code-block";
+import { hasHumanRenderMarker, isHtmlFileName } from "@/lib/utils/html-sandbox";
+import { HtmlPreviewFrame } from "./file-viewer-html-frame";
 
 export type ViewerContent =
   | {
@@ -113,9 +115,9 @@ function ErrorState({ message, path }: { message: string; path: string }) {
       </div>
       <pre className="whitespace-pre-wrap break-words mb-4">{message}</pre>
       {path && (
-        <div className="text-foreground/40 break-all">
-          <span className="opacity-60">path: </span>
-          {path}
+        <div className="text-foreground/40 break-all" title={path}>
+          <span className="opacity-60">looked in: </span>
+          {viewerPathBreadcrumb(path)}
         </div>
       )}
     </div>
@@ -205,10 +207,28 @@ export function ViewerFileContent({
   className,
 }: ViewerFileContentProps) {
   const codeStyle = useSyntaxTheme();
+  const [showRendered, setShowRendered] = useState(false);
+
+  // Reset to source-first whenever the previewed file changes, so switching
+  // documents never silently keeps a rendered frame mounted.
+  useEffect(() => {
+    setShowRendered(false);
+  }, [path]);
 
   const detection = useMemo(() => {
     if (!content || content.kind !== "text") return null;
     return detectKind(content.name);
+  }, [content]);
+
+  // An HTML file is offered as a live, sandboxed render ONLY when its producer
+  // explicitly opted in via the marker. Unmarked .html stays source-only.
+  const renderableHtml = useMemo(() => {
+    if (!content || content.kind !== "text" || content.text === "") return false;
+    // A >10MB file is truncated server-side and could be cut mid-tag — never
+    // offer a rendered preview of a partial document. Source view + the
+    // existing truncation banner cover that case.
+    if (content.truncated) return false;
+    return isHtmlFileName(content.name) && hasHumanRenderMarker(content.text);
   }, [content]);
 
   const renderedText = useMemo(() => {
@@ -326,7 +346,43 @@ export function ViewerFileContent({
         </article>
       )}
 
-      {content?.kind === "text" && content.text !== "" && isCode && (
+      {content?.kind === "text" && renderableHtml && (
+        <div className="space-y-3">
+          <div className="font-mono text-[10px] tracking-wide uppercase text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
+            <span>
+              html document · sandboxed{showRendered ? " · rendered" : " · source"}
+            </span>
+            <button
+              data-testid="html-render-toggle"
+              onClick={() => setShowRendered((v) => !v)}
+              className="underline opacity-80 hover:opacity-100"
+            >
+              {showRendered ? "view source" : "preview rendered ↗"}
+            </button>
+          </div>
+          {showRendered ? (
+            <HtmlPreviewFrame html={content.text} onOpenExternal={handleLinkOpen} />
+          ) : (
+            <SyntaxHighlighter
+              language="html"
+              style={codeStyle as never}
+              customStyle={{
+                margin: 0,
+                padding: 0,
+                background: "transparent",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+              codeTagProps={{ style: { fontFamily: "inherit" } }}
+              wrapLongLines={false}
+            >
+              {content.text}
+            </SyntaxHighlighter>
+          )}
+        </div>
+      )}
+
+      {content?.kind === "text" && content.text !== "" && isCode && !renderableHtml && (
         <SyntaxHighlighter
           language={detection?.lang}
           style={codeStyle as never}
@@ -344,7 +400,10 @@ export function ViewerFileContent({
         </SyntaxHighlighter>
       )}
 
-      {content?.kind === "text" && content.text !== "" && detection?.kind === "text" && (
+      {content?.kind === "text" &&
+        content.text !== "" &&
+        detection?.kind === "text" &&
+        !renderableHtml && (
         <pre className="whitespace-pre-wrap break-words text-[12px] leading-relaxed font-mono">
           {renderedText}
         </pre>

@@ -609,7 +609,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     });
 
     try {
-      const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+      const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

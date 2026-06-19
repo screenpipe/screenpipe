@@ -14,7 +14,7 @@ import {
 } from "../team-crypto";
 import { encodePlainConfig, parsePlainConfigValue } from "../team-pipes";
 
-const API = "https://screenpi.pe/api/team";
+const API = "https://screenpipe.com/api/team";
 
 // key stored under "team_key_<team_id>" in ~/.screenpipe/store.bin
 // this is the same Tauri secure store used for settings, auth tokens, etc.

@@ -6,6 +6,7 @@ import { createProvider, resolveModelAlias } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 import { isFlexEligible } from '../utils/latency';
+import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
 import { captureException } from '@sentry/cloudflare';
 
 // Auto model waterfall (INTERACTIVE) — leads with glm-5. Interactive is
@@ -323,9 +324,19 @@ async function tryModel(
 }
 
 /**
- * Run a chain of models in order, returning the first success. Each
- * model is wrapped in tryModel; only transient failures advance to the
- * next entry, fatal errors bubble out immediately.
+ * Run a chain of models in order, returning the first success.
+ *
+ * A chain exists precisely to fall back, so we try EVERY entry and only fail
+ * once the chain is exhausted — even on a "fatal" (non-transient) error. A
+ * model-specific reject (e.g. gpt-5.4's stricter tool_call-id length limit, a
+ * region block, or a model-not-enabled) routinely succeeds on the next entry
+ * (glm-5/Gemini accept what OpenAI rejected). Before, a 400 broke the loop and
+ * the whole request hard-failed despite a working fallback being one line down
+ * (gpt-5.4 background pipes, SCREENPIPE-AI-PROXY auto_fatal, 600+/day).
+ *
+ * The `transient` flag still governs Sentry noise inside tryModel; here it no
+ * longer controls cascade. Cost: a genuinely universal failure now tries the
+ * whole (short) chain before surfacing — acceptable for a fallback chain.
  */
 async function runChain(
   chain: string[],
@@ -344,7 +355,7 @@ async function runChain(
       return { response, model };
     } catch (error: any) {
       lastError = error;
-      if (!error?.transient) break; // fatal — don't keep trying
+      // keep going — the next model in the chain may accept this request.
     }
   }
   return { error: lastError, lastModel };
@@ -376,8 +387,8 @@ export function friendlyError(model: string, status: number, fellThrough: boolea
     // model won't help; point the user at the real fix instead of a bare
     // "request failed (404)". (#3786)
     return fellThrough
-      ? `No available model accepted the request. "${model}" and the fallbacks may not be enabled on your account or API key. Pick a different model, or check your provider access.`
-      : `"${model}" isn't available on your account or API key (${status}). Pick a different model, or check that your provider or key has access to it.`;
+      ? `No available model could complete this request (${status}). It may contain an unsupported parameter or a malformed tool call, or the models may not be enabled on your account or API key. Try simplifying the request or picking a different model.`
+      : `"${model}" couldn't complete this request (${status}) — it may contain an unsupported parameter or tool call, or not be enabled on your account or API key. Pick a different model, or check your provider access.`;
   }
   if (status === 401 || status === 403) {
     return `Your provider rejected the request for "${model}" (${status}). Check that the API key in your AI preset is valid and has access to this model.`;
@@ -443,6 +454,7 @@ export async function handleChatCompletions(
   body: RequestBody,
   env: Env,
   latency: 'interactive' | 'background' = 'interactive',
+  deviceId: string = '',
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
   // answer the injected system hint below, and Anthropic 400s outright once
@@ -467,12 +479,29 @@ export async function handleChatCompletions(
   const useBackgroundChain = latency === 'background';
 
   if (body.model === 'auto') {
-    const chain = hasImages(body)
+    let chain = hasImages(body)
       ? AUTO_WATERFALL_VISION
       : (useBackgroundChain ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL);
+    // Difficulty router (interactive text only). A/B by device: arm 'on' runs the
+    // router and promotes a tier head (opus for hard, gpt-5-nano for trivial), arm
+    // 'off' is the control baseline (chain unchanged = today's behavior). We tag
+    // router_tier on the response so the cost log can measure ON vs control.
+    let routerTier: string | null = null;
+    if (!hasImages(body) && !useBackgroundChain) {
+      if (routerArm(deviceId, env) === 'on') {
+        const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+        const tier = await routeTier(body.messages, env, { hasTools });
+        routerTier = tier;
+        if (tier !== 'normal') chain = [TIER_HEAD[tier], ...chain.filter((m) => m !== TIER_HEAD[tier])];
+      } else {
+        routerTier = 'control';
+      }
+    }
     const result = await runChain(chain, body, env, 'auto', flexEligible);
     if ('response' in result) {
-      return addCorsHeaders(addModelHeader(result.response, result.model));
+      const resp = addCorsHeaders(addModelHeader(result.response, result.model));
+      if (routerTier) resp.headers.set('x-screenpipe-router-tier', routerTier);
+      return resp;
     }
     const status = result.error?.status || 503;
     const message = result.error?.userMessage || friendlyError(result.lastModel, status, true);

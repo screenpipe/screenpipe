@@ -48,6 +48,51 @@ export async function handleABTestAdmin(request: Request, env: Env): Promise<Res
   return createSuccessResponse(summary);
 }
 
+function parseLanguageValues(values: Array<string | null>): string[] {
+  const seen = new Set<string>();
+  const languages: string[] = [];
+
+  for (const value of values) {
+    for (const language of (value || '').split(',')) {
+      const normalized = language.trim();
+      const lower = normalized.toLowerCase();
+      if (!normalized || lower === 'true' || lower === 'false' || lower === 'auto' || lower === 'auto-detect') {
+        continue;
+      }
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        languages.push(normalized);
+      }
+    }
+  }
+
+  return languages;
+}
+
+function getTranscriptionLanguages(request: Request, fallback: string[] = []): string[] {
+  const url = new URL(request.url);
+  const queryLanguages = parseLanguageValues([
+    ...url.searchParams.getAll('language'),
+    ...url.searchParams.getAll('languages'),
+    ...url.searchParams.getAll('detect_language'),
+  ]);
+  if (queryLanguages.length > 0) {
+    return queryLanguages;
+  }
+
+  const headerLanguages = parseLanguageValues([
+    request.headers.get('language'),
+    request.headers.get('languages'),
+    request.headers.get('detect_language'),
+  ]);
+  return headerLanguages.length > 0 ? headerLanguages : fallback;
+}
+
+function getSampleRate(request: Request, fallback = '16000'): string {
+  const url = new URL(request.url);
+  return url.searchParams.get('sample_rate') || request.headers.get('sample_rate') || fallback;
+}
+
 /**
  * Handles transcription with A/B test routing between Deepgram and self-hosted Whisper.
  * Falls back to Deepgram if Whisper fails.
@@ -60,8 +105,8 @@ async function handleDeepgramTranscription(
 ): Promise<Response> {
   try {
     const audioBuffer = await request.arrayBuffer();
-    const languages = request.headers.get('detect_language')?.split(',') || [];
-    const sampleRate = request.headers.get('sample_rate') || '16000';
+    const languages = getTranscriptionLanguages(request);
+    const sampleRate = getSampleRate(request);
     const contentType = request.headers.get('Content-Type') || 'audio/wav';
 
     const abReq: TranscriptionRequest = { audioBuffer, contentType, sampleRate, languages };
@@ -89,8 +134,8 @@ async function handleDeepgramTranscription(
 async function handleGoogleTranscription(request: Request, env: Env): Promise<Response> {
   try {
     const audioBuffer = await request.arrayBuffer();
-    const languages = request.headers.get('detect_language')?.split(',') || ['en-US'];
-    const sampleRate = parseInt(request.headers.get('sample_rate') || '16000', 10);
+    const languages = getTranscriptionLanguages(request, ['en-US']);
+    const sampleRate = parseInt(getSampleRate(request), 10);
 
     const vertexProvider = new VertexAIProvider(
       env.VERTEX_SERVICE_ACCOUNT_JSON,
@@ -192,7 +237,7 @@ async function handleGoogleTranscription(request: Request, env: Env): Promise<Re
 async function handleChirp2Transcription(request: Request, env: Env): Promise<Response> {
   try {
     const audioBuffer = await request.arrayBuffer();
-    const languages = request.headers.get('detect_language')?.split(',') || ['en-US'];
+    const languages = getTranscriptionLanguages(request, ['en-US']);
 
     const vertexProvider = new VertexAIProvider(
       env.VERTEX_SERVICE_ACCOUNT_JSON,

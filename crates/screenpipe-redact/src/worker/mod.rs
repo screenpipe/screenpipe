@@ -203,6 +203,20 @@ impl Worker {
         }
         let mut corruption_logged = false;
 
+        // A "no such table/column" error is non-transient and table-specific:
+        // the schema this binary expects doesn't match the DB it opened, so
+        // retrying that target can never succeed. This happens during version
+        // skew — e.g. an older engine sharing a `db.sqlite` that a newer one
+        // already migrated. The `ocr_text` table (retired 2026-06) hit this
+        // exactly: a pre-retirement binary kept its `Ocr` target and spammed
+        // `no such table: ocr_text` every 2s forever. Detect it, disable that
+        // one target for the process lifetime, and keep reconciling the rest.
+        fn is_missing_object<E: std::fmt::Display + ?Sized>(e: &E) -> bool {
+            let msg = e.to_string().to_lowercase();
+            msg.contains("no such table") || msg.contains("no such column")
+        }
+        let mut disabled: Vec<TargetTable> = Vec::new();
+
         loop {
             if self.paused.load(std::sync::atomic::Ordering::SeqCst) {
                 self.set_paused(true).await;
@@ -219,6 +233,11 @@ impl Worker {
 
             let mut any_work = false;
             for table in &self.cfg.tables {
+                // Permanently skip a target whose table/column isn't in this
+                // schema — see `is_missing_object` and the Err arm below.
+                if disabled.contains(table) {
+                    continue;
+                }
                 // Race the table work against shutdown so a long redact batch
                 // doesn't hold us through tokio teardown.
                 let batch_start = std::time::Instant::now();
@@ -262,6 +281,23 @@ impl Worker {
                         {
                             let mut s = self.status.lock().await;
                             s.last_error = Some(e.to_string());
+                        }
+                        if is_missing_object(&e) {
+                            // Non-transient and scoped to this one target: the
+                            // table or a column it reads isn't in this schema
+                            // (binary/DB version skew). Retrying spins a core
+                            // and floods the log, so disable just this target
+                            // for the run and move on — the others reconcile
+                            // normally. Logged once per target via the disable.
+                            warn!(
+                                table = ?table,
+                                error = %e,
+                                "target table/column missing from this schema — disabling its \
+                                 reconciliation for this run (binary predates a migration that \
+                                 retired it?); upgrade screenpipe to clear this"
+                            );
+                            disabled.push(*table);
+                            continue;
                         }
                         if is_db_corruption(&e) {
                             // Non-transient: the DB is corrupt and every table

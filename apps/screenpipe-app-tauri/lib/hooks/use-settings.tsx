@@ -159,6 +159,12 @@ export interface ChatConversation {
 	 *  sidebar sort order. Persisted so that order survives app restart;
 	 *  derived from messages on first hydration if not set on disk yet. */
 	lastUserMessageAt?: number;
+	/** ms since epoch of the most recent actual message append (user or
+	 *  assistant). Drives unread detection — immune to non-content writes. */
+	lastContentAt?: number;
+	/** ms since epoch of the most recent time this chat was actually opened.
+	 *  A value of `0` means "never viewed" for persisted unread restore. */
+	lastViewedAt?: number;
 	/** Conversation type — defaults to "chat" when missing (back-compat
 	 *  with older on-disk files). See `ConversationKind`. */
 	kind?: ConversationKind;
@@ -1113,7 +1119,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		};
 	}, []);
 
-	// Install global fetch interceptor to catch 401s from screenpi.pe
+	// Install global fetch interceptor to catch 401s from screenpipe.com
 	const settingsRef = useRef(settings);
 	settingsRef.current = settings;
 
@@ -1353,7 +1359,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		const generation = authGenerationRef.current;
 		const startingToken = settingsRef.current.user?.token ?? null;
 		try {
-			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpi.pe"), {
+			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpipe.com"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",

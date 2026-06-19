@@ -24,6 +24,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Meeting, deduplicateAudioItems } from "@/lib/hooks/use-meetings";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch } from "@/lib/api";
+import { commands } from "@/lib/utils/tauri";
 
 // Extended audio item with timestamp for conversation view
 interface AudioItemWithTimestamp extends AudioData {
@@ -452,7 +453,7 @@ export function AudioTranscript({
 			return `[${time}] ${name}: ${item.audio.transcription || "(no transcription)"}`;
 		});
 
-		navigator.clipboard.writeText(lines.join("\n")).then(() => {
+		commands.copyTextToClipboard(lines.join("\n")).then(() => {
 			setCopied(true);
 			setTimeout(() => setCopied(false), 2000);
 		});

@@ -10975,7 +10975,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.49"
+version = "2.5.53"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11047,7 +11047,6 @@ dependencies = [
  "sha2 0.10.9",
  "specta",
  "specta-typescript",
- "sqlx",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -11097,7 +11096,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11172,7 +11171,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11184,7 +11183,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11223,7 +11222,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11260,7 +11259,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
- "sqlx",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -11274,7 +11272,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11299,7 +11297,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11367,7 +11365,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11383,7 +11381,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11418,7 +11416,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -11429,7 +11427,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11473,6 +11471,7 @@ dependencies = [
  "chrono",
  "keyring",
  "rand 0.9.2",
+ "screenpipe-config",
  "serde",
  "serde_json",
  "sqlx",
@@ -11482,7 +11481,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11502,7 +11501,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "argon2",
  "chacha20poly1305",

@@ -111,7 +111,7 @@ function ReferralSection() {
 
   const handleCopy = async () => {
     if (!referralLink) return;
-    await navigator.clipboard.writeText(referralLink);
+    await commands.copyTextToClipboard(referralLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -120,7 +120,7 @@ function ReferralSection() {
     if (!inviteEmail || !referralLink || sending) return;
     setSending(true);
     try {
-      const res = await fetch("https://screenpi.pe/api/referral/invite", {
+      const res = await fetch("https://screenpipe.com/api/referral/invite", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

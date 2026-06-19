@@ -34,7 +34,7 @@ use tokio::time::interval;
 pub async fn install_specific_version(app: &tauri::AppHandle, version: &str) -> Result<(), String> {
     let target_arch = get_target_arch();
     let rollback_url = format!(
-        "https://screenpi.pe/api/app-update/rollback/{}/{}",
+        "https://screenpipe.com/api/app-update/rollback/{}/{}",
         target_arch, version
     );
 
@@ -873,7 +873,7 @@ impl UpdatesManager {
             let _ = self
                 .app
                 .opener()
-                .open_url("https://screenpi.pe/download", None::<&str>);
+                .open_url("https://screenpipe.com/download", None::<&str>);
         } else {
             // Open GitHub releases
             let _ = self.app.opener().open_url(
@@ -966,7 +966,7 @@ fn check_whats_new(app: &tauri::AppHandle) {
 
         let body = if release_notes.is_empty() {
             format!(
-                "screenpipe updated to **v{}**! check the [changelog](https://screenpi.pe/changelog) for details.",
+                "screenpipe updated to **v{}**! check the [changelog](https://screenpipe.com/changelog) for details.",
                 current_version
             )
         } else {
@@ -978,7 +978,7 @@ fn check_whats_new(app: &tauri::AppHandle) {
                 release_notes
             };
             format!(
-                "screenpipe updated to **v{}**!\n\n{}\n\n[full changelog](https://screenpi.pe/changelog)",
+                "screenpipe updated to **v{}**!\n\n{}\n\n[full changelog](https://screenpipe.com/changelog)",
                 current_version, truncated
             )
         };

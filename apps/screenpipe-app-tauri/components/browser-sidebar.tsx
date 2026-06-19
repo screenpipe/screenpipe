@@ -362,6 +362,17 @@ export function BrowserSidebar({
         // themselves with the foreground conversation id; ownerless events are
         // treated as stale/legacy and ignored.
         if (isForeignNavigation(owner, conversationId, agentSessionId)) {
+          if (typeof window !== "undefined") {
+            (window as any).__e2eOwnedBrowserLastNavigate = {
+              accepted: false,
+              conversationId,
+              agentSessionId,
+              owner,
+              navigationId,
+              reveal,
+              url,
+            };
+          }
           // Diagnostic for the "agent navigated but the sidebar never opened"
           // report: a *tagged* navigation we dropped because its owner matched
           // neither the on-screen conversation nor its agent's session. Surfaces
@@ -376,6 +387,17 @@ export function BrowserSidebar({
           return;
         }
         if (!navigationId) return;
+        if (typeof window !== "undefined") {
+          (window as any).__e2eOwnedBrowserLastNavigate = {
+            accepted: true,
+            conversationId,
+            agentSessionId,
+            owner,
+            navigationId,
+            reveal,
+            url,
+          };
+        }
         setSessionAccessRequest(null);
         setSessionAccessAnswer(null);
         setV20CookieBlock(null);

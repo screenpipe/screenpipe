@@ -257,7 +257,7 @@ export default function OverlayPage() {
   const sendLogs = async () => {
     setIsSendingLogs(true);
     try {
-      const BASE_URL = "https://screenpi.pe";
+      const BASE_URL = "https://screenpipe.com";
       const machineId = localStorage?.getItem("machineId") || crypto.randomUUID();
       try { localStorage?.setItem("machineId", machineId); } catch {}
       const identifier = settings.user?.id || machineId;

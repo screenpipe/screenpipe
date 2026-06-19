@@ -58,43 +58,43 @@
       },
       "mobile": [
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/auth"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/stripe-connect"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/purchase-successful"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/settings"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/changelog"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/onboarding"
           ]
         },
         {
-          "host": "screenpi.pe",
+          "host": "screenpipe.com",
           "pathPrefix": [
             "/status"
           ]

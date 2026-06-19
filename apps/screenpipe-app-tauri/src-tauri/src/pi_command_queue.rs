@@ -133,6 +133,11 @@ pub struct PiQueueState {
     /// Prevents the drain loop from writing the next queued prompt during
     /// the brief `agent_end` → `agent_start` transition.
     steer_in_flight: AtomicBool,
+    /// Tool calls that have been requested by the assistant but have not yet
+    /// emitted their matching result. Pi can emit `agent_end` at tool-use
+    /// boundaries, so this keeps Rust from treating the turn as complete while
+    /// the shell/read/edit tool is still running.
+    active_tool_calls: std::sync::Mutex<HashSet<String>>,
 }
 
 impl PiQueueState {
@@ -148,6 +153,7 @@ impl PiQueueState {
             queued_payloads: std::sync::Mutex::new(HashMap::new()),
             agent_active: AtomicBool::new(false),
             steer_in_flight: AtomicBool::new(false),
+            active_tool_calls: std::sync::Mutex::new(HashSet::new()),
         })
     }
 
@@ -191,6 +197,41 @@ impl PiQueueState {
         self.steer_in_flight.load(Ordering::SeqCst)
     }
 
+    pub fn mark_tool_active(&self, tool_call_id: impl Into<String>) {
+        if let Ok(mut active) = self.active_tool_calls.lock() {
+            active.insert(tool_call_id.into());
+        }
+        self.done_notify.notify_waiters();
+    }
+
+    pub fn mark_tool_idle(&self, tool_call_id: &str) {
+        if let Ok(mut active) = self.active_tool_calls.lock() {
+            active.remove(tool_call_id);
+        }
+        self.done_notify.notify_waiters();
+    }
+
+    pub fn has_active_tools(&self) -> bool {
+        self.active_tool_calls
+            .lock()
+            .map(|active| !active.is_empty())
+            .unwrap_or(true)
+    }
+
+    pub fn has_active_turn_work(&self) -> bool {
+        self.is_agent_active() || self.is_steer_in_flight() || self.has_active_tools()
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.has_active_turn_work() || !self.queued.borrow().is_empty()
+    }
+
+    pub fn signal_done_if_idle(&self) {
+        if !self.has_active_turn_work() {
+            self.signal_done();
+        }
+    }
+
     /// Called by the stdout reader when the process terminates (EOF).
     pub fn signal_terminated(&self) {
         let _ = self.alive.send(false);
@@ -204,6 +245,9 @@ impl PiQueueState {
         }
         if let Ok(mut cancelled) = self.cancelled.lock() {
             cancelled.clear();
+        }
+        if let Ok(mut active_tools) = self.active_tool_calls.lock() {
+            active_tools.clear();
         }
         // Clear the agent-active flag so a future restart doesn't start out
         // in a stuck "active" state if the process died mid-stream.
@@ -538,15 +582,16 @@ pub fn spawn_queue(
                     // before pi-mono actually starts streaming.
                     {
                         let mut died_during_wait = false;
-                        while is_prompt
-                            && (state.is_agent_active() || state.is_steer_in_flight())
-                        {
+                        while is_prompt && state.has_active_turn_work() {
                             // When only steer_in_flight holds us (agent finished
                             // but steer's agent_start hasn't arrived yet), use a
                             // short 30s timeout. If agent_start never fires (Pi
                             // rejected the steer silently), force-clear and let
                             // the queue proceed.
-                            if state.is_steer_in_flight() && !state.is_agent_active() {
+                            if state.is_steer_in_flight()
+                                && !state.is_agent_active()
+                                && !state.has_active_tools()
+                            {
                                 tokio::select! {
                                     _ = state.done_notify.notified() => {}
                                     _ = state.terminated_notify.notified() => {
@@ -982,6 +1027,149 @@ mod tests {
         let _ = child.wait();
     }
 
+    /// Pi can emit `agent_end` when an assistant turn asks for a tool, before
+    /// that tool result exists. The queue must still treat the prompt as
+    /// busy, otherwise a follow-up can race the running shell/read/edit tool.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_active_tool_blocks_drain_loop_after_agent_end() {
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat as a fake pi stdin");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue(stdin, state.clone(), 0);
+
+        state.mark_agent_active();
+        state.mark_tool_active("tool-1");
+        state.mark_agent_idle();
+        state.signal_done_if_idle();
+        assert!(
+            state.has_active_turn_work(),
+            "tool work keeps the turn busy after agent_end"
+        );
+
+        let (_id, mut reply_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "queued-after-tool" }),
+                WaitMode::Prompt,
+                "queued-after-tool".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        let blocked =
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut reply_rx).await;
+        assert!(
+            blocked.is_err(),
+            "follow-up must stay queued while a tool is still running"
+        );
+
+        state.mark_tool_idle("tool-1");
+        state.signal_done_if_idle();
+
+        let released = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx)
+            .await
+            .expect("follow-up must be released once the tool completes")
+            .expect("reply channel stayed open");
+        assert!(
+            released.is_ok(),
+            "follow-up should be written after the tool finishes, got {released:?}"
+        );
+
+        state.signal_terminated();
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Reproduces the Rust-level shape behind a Pi restart while a chat turn is
+    /// mid-flight: the active prompt has been written, a follow-up is parked
+    /// behind `agent_active`, then the process is terminated. This is what
+    /// `PiManager::stop()` triggers when `pi_start_inner` restarts the same
+    /// session.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_mid_turn_process_termination_fails_queued_followup() {
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat as a fake pi stdin");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue(stdin, state.clone(), 0);
+
+        let (_first_id, first_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "active-turn" }),
+                WaitMode::Prompt,
+                "active-turn".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue first prompt");
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), first_rx)
+            .await
+            .expect("first prompt write should be acknowledged")
+            .expect("first reply channel stayed open");
+        assert!(first.is_ok(), "first prompt should be written, got {first:?}");
+        assert!(
+            state.is_agent_active(),
+            "prompt writes mark the active turn before agent_start arrives"
+        );
+
+        let (_queued_id, mut queued_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "queued-follow-up" }),
+                WaitMode::Prompt,
+                "queued-follow-up".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        let blocked =
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut queued_rx).await;
+        assert!(
+            blocked.is_err(),
+            "follow-up must stay queued while the previous turn is active"
+        );
+
+        state.signal_terminated();
+
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(5), queued_rx)
+            .await
+            .expect("queued prompt should be failed by process termination")
+            .expect("queued reply channel stayed open");
+        assert!(
+            matches!(queued, Err(ref err) if err.contains("Pi process")),
+            "process death while waiting on an active turn loses the queued follow-up: {queued:?}"
+        );
+        assert!(
+            !state.is_agent_active(),
+            "termination clears the active-turn flag for the dead process"
+        );
+
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
     /// Process death must clear the steer guard. Otherwise a steer that dies
     /// before its `agent_start` arrives would leave `steer_in_flight` set, and
     /// every subsequent queued prompt would eat the full 30s fallback timeout.
@@ -997,6 +1185,19 @@ mod tests {
         assert!(
             !state.is_steer_in_flight(),
             "process termination must clear the in-flight steer guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_signal_terminated_clears_active_tools() {
+        let state = PiQueueState::new();
+        state.mark_tool_active("tool-1");
+        assert!(state.has_active_tools(), "tool guard should be set");
+
+        state.signal_terminated();
+        assert!(
+            !state.has_active_tools(),
+            "process termination must clear active tool guards"
         );
     }
 }

@@ -738,7 +738,7 @@ if the input is sparse, just describe what little you have warmly. don't apologi
   const sendLogs = async () => {
     setIsSendingLogs(true);
     try {
-      const BASE_URL = "https://screenpi.pe";
+      const BASE_URL = "https://screenpipe.com";
       const machineId =
         localStorage?.getItem("machineId") || crypto.randomUUID();
       try {

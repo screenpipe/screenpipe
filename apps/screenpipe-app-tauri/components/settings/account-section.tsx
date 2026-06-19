@@ -37,7 +37,7 @@ import { Card } from "../ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { localFetch } from "@/lib/api";
+import { syncFetchOrThrow } from "@/lib/sync-fetch";
 import { listen } from "@tauri-apps/api/event";
 import { ReferralCard } from "./referral-card";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
@@ -132,7 +132,7 @@ export function AccountSection() {
         // New subscription checkout ($50/mo Pro). Pass the Clerk token so the
         // session pins customer_email + metadata.user_id to this account — the
         // webhook then links the sub even if a different email is used at Stripe.
-        const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
+        const response = await fetch("https://screenpipe.com/api/subscription/checkout", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -158,7 +158,7 @@ export function AccountSection() {
             pollCount++;
             try {
               const subResponse = await fetch(
-                `https://screenpi.pe/api/cloud-sync/subscription?userId=${settings.user?.id}&email=${encodeURIComponent(settings.user?.email || "")}`,
+                `https://screenpipe.com/api/cloud-sync/subscription?userId=${settings.user?.id}&email=${encodeURIComponent(settings.user?.email || "")}`,
                 {
                   headers: { Authorization: `Bearer ${settings.user?.token}` },
                 }
@@ -350,8 +350,8 @@ export function AccountSection() {
                     onClick={async () => {
                       setPipeSyncing(true);
                       try {
-                        await localFetch("/sync/pipes/pull", { method: "POST" });
-                        await localFetch("/sync/pipes/push", { method: "POST" });
+                        await syncFetchOrThrow("/sync/pipes/pull", { method: "POST" });
+                        await syncFetchOrThrow("/sync/pipes/push", { method: "POST" });
                         toast({ title: "pipes synced" });
                       } catch (e) {
                         toast({
@@ -415,8 +415,8 @@ export function AccountSection() {
                     onClick={async () => {
                       setMemoriesSyncing(true);
                       try {
-                        await localFetch("/sync/memories/pull", { method: "POST" });
-                        await localFetch("/sync/memories/push", { method: "POST" });
+                        await syncFetchOrThrow("/sync/memories/pull", { method: "POST" });
+                        await syncFetchOrThrow("/sync/memories/push", { method: "POST" });
                         toast({ title: "memories synced" });
                       } catch (e) {
                         toast({
@@ -483,8 +483,8 @@ export function AccountSection() {
                     onClick={async () => {
                       setConnectionsSyncing(true);
                       try {
-                        await localFetch("/sync/connections/pull", { method: "POST" });
-                        await localFetch("/sync/connections/push", { method: "POST" });
+                        await syncFetchOrThrow("/sync/connections/pull", { method: "POST" });
+                        await syncFetchOrThrow("/sync/connections/push", { method: "POST" });
                         toast({ title: "connections synced" });
                       } catch (e) {
                         toast({

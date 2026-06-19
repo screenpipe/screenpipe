@@ -56,7 +56,7 @@ export function useFrameActions(opts: {
 			});
 			return;
 		}
-		await navigator.clipboard.writeText(text);
+		await commands.copyTextToClipboard(text);
 		toast({ title: "copied text", description: "text copied to clipboard" });
 	}, [debouncedFrame?.frameId, frameContext?.text, textPositions]);
 

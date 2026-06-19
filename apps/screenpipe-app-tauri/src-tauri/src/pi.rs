@@ -358,6 +358,78 @@ pub(crate) struct RpcResponse {
 /// Shared between PiManager (sender side) and the stdout reader thread (resolver side).
 type PendingResponses = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<RpcResponse>>>>;
 
+fn pi_session_has_in_flight_work(
+    queue_state: Option<&Arc<crate::pi_command_queue::PiQueueState>>,
+    pending_responses: &PendingResponses,
+) -> bool {
+    let pending_rpc = pending_responses
+        .lock()
+        .map(|pending| !pending.is_empty())
+        .unwrap_or(true);
+    pending_rpc || queue_state.map(|state| state.is_busy()).unwrap_or(false)
+}
+
+fn event_tool_call_ids(event: &Value) -> Vec<String> {
+    match event.get("type").and_then(|t| t.as_str()) {
+        Some("tool_execution_start") | Some("tool_execution_end") => event
+            .get("toolCallId")
+            .and_then(|id| id.as_str())
+            .map(|id| vec![id.to_string()])
+            .unwrap_or_default(),
+        Some("message_update") => {
+            let Some(update) = event.get("assistantMessageEvent") else {
+                return Vec::new();
+            };
+            if update.get("type").and_then(|t| t.as_str()) != Some("toolcall_end") {
+                return Vec::new();
+            }
+            update
+                .get("toolCall")
+                .and_then(|tool_call| tool_call.get("id"))
+                .and_then(|id| id.as_str())
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default()
+        }
+        Some("message_end") => {
+            let Some(message) = event.get("message") else {
+                return Vec::new();
+            };
+            match message.get("role").and_then(|role| role.as_str()) {
+                Some("assistant")
+                    if message.get("stopReason").and_then(|reason| reason.as_str())
+                        == Some("toolUse") =>
+                {
+                    message
+                        .get("content")
+                        .and_then(|content| content.as_array())
+                        .map(|content| {
+                            content
+                                .iter()
+                                .filter(|item| {
+                                    item.get("type").and_then(|t| t.as_str()) == Some("toolCall")
+                                })
+                                .filter_map(|item| {
+                                    item.get("id")
+                                        .or_else(|| item.get("toolCallId"))
+                                        .and_then(|id| id.as_str())
+                                        .map(|id| id.to_string())
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+                Some("toolResult") => message
+                    .get("toolCallId")
+                    .and_then(|id| id.as_str())
+                    .map(|id| vec![id.to_string()])
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[allow(dead_code)]
 pub struct PiManager {
     child: Option<Child>,
@@ -465,6 +537,10 @@ impl PiManager {
 
     pub fn is_running(&mut self) -> bool {
         self.check_alive()
+    }
+
+    fn has_in_flight_work(&self) -> bool {
+        pi_session_has_in_flight_work(self.queue_state.as_ref(), &self.pending_responses)
     }
 }
 
@@ -1514,6 +1590,16 @@ pub async fn pi_start_inner(
     if let Some(m) = pool.sessions.get_mut(&sid) {
         if m.is_running() {
             let old_pid = m.child.as_ref().map(|c| c.id());
+            if m.has_in_flight_work() {
+                warn!(
+                    "Refusing to restart busy pi instance (pid {:?}) for session '{}'",
+                    old_pid, sid
+                );
+                return Err(format!(
+                    "Pi session '{}' is still working; retry the restart after the current turn finishes",
+                    sid
+                ));
+            }
             info!(
                 "Stopping existing pi instance (pid {:?}) for session '{}' to start new one",
                 old_pid, sid
@@ -2005,7 +2091,7 @@ pub async fn pi_start_inner(
                     }
                     Some("agent_end") => {
                         qs.mark_agent_idle();
-                        qs.signal_done();
+                        qs.signal_done_if_idle();
                     }
                     Some("message_start") => {
                         // Native steer may not emit agent_start — it goes
@@ -2018,12 +2104,57 @@ pub async fn pi_start_inner(
                             qs.clear_steer_in_flight();
                         }
                     }
+                    Some("message_end") => {
+                        if let Some(event) = parsed.as_ref() {
+                            let ids = event_tool_call_ids(event);
+                            let role = event
+                                .get("message")
+                                .and_then(|message| message.get("role"))
+                                .and_then(|role| role.as_str());
+                            match role {
+                                Some("assistant") => {
+                                    for id in ids {
+                                        qs.mark_tool_active(id);
+                                    }
+                                }
+                                Some("toolResult") => {
+                                    for id in ids {
+                                        qs.mark_tool_idle(&id);
+                                    }
+                                    qs.signal_done_if_idle();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some("message_update") => {
+                        if let Some(event) = parsed.as_ref() {
+                            for id in event_tool_call_ids(event) {
+                                qs.mark_tool_active(id);
+                            }
+                        }
+                    }
+                    Some("tool_execution_start") => {
+                        if let Some(event) = parsed.as_ref() {
+                            for id in event_tool_call_ids(event) {
+                                qs.mark_tool_active(id);
+                            }
+                        }
+                    }
+                    Some("tool_execution_end") => {
+                        if let Some(event) = parsed.as_ref() {
+                            for id in event_tool_call_ids(event) {
+                                qs.mark_tool_idle(&id);
+                            }
+                        }
+                        qs.signal_done_if_idle();
+                    }
                     Some("response") => {
                         // Only meaningful for new_session/abort — those don't
                         // fire agent_start/agent_end. Suppress while a prompt
-                        // is mid-stream so the queue never advances on an ACK
-                        // while the assistant is still replying.
-                        if !qs.is_agent_active() {
+                        // or tool is mid-turn so the queue never advances on
+                        // an ACK while the assistant is still working.
+                        if !qs.has_active_turn_work() {
                             // Note: this runs on a std::thread (not tokio),
                             // so use std::thread::spawn + std::thread::sleep.
                             let qs = qs.clone();
@@ -3052,6 +3183,112 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn parses_tool_call_ids_from_pi_events() {
+        let assistant_tool_call = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": [
+                    {"type": "text", "text": "checking"},
+                    {"type": "toolCall", "id": "tool-1", "name": "bash"}
+                ]
+            }
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&assistant_tool_call),
+            vec!["tool-1".to_string()]
+        );
+
+        let assistant_tool_update = json!({
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "toolcall_end",
+                "toolCall": {
+                    "type": "toolCall",
+                    "id": "tool-1",
+                    "name": "bash",
+                    "arguments": { "command": "ls" }
+                }
+            }
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&assistant_tool_update),
+            vec!["tool-1".to_string()]
+        );
+
+        let assistant_stop_with_historical_tool = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "stop",
+                "content": [
+                    {"type": "toolCall", "id": "tool-2", "name": "bash"}
+                ]
+            }
+        });
+        assert!(
+            super::event_tool_call_ids(&assistant_stop_with_historical_tool).is_empty()
+        );
+
+        let tool_result = json!({
+            "type": "message_end",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "tool-1",
+                "content": [{"type": "text", "text": "done"}]
+            }
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&tool_result),
+            vec!["tool-1".to_string()]
+        );
+
+        let tool_end = json!({
+            "type": "tool_execution_end",
+            "toolCallId": "tool-1",
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&tool_end),
+            vec!["tool-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn pi_session_busy_tracks_queue_tools_and_pending_rpc() {
+        let pending: super::PendingResponses =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let queue_state = crate::pi_command_queue::PiQueueState::new();
+
+        assert!(!super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+
+        queue_state.mark_agent_active();
+        assert!(super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+        queue_state.mark_agent_idle();
+
+        queue_state.mark_tool_active("tool-1");
+        assert!(super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+        queue_state.mark_tool_idle("tool-1");
+        assert!(!super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert("req_1".to_string(), tx);
+        assert!(super::pi_session_has_in_flight_work(None, &pending));
+    }
 
     fn write_package_json(package_dir: &std::path::Path, name: &str, version: &str) {
         std::fs::create_dir_all(package_dir).expect("create package dir");

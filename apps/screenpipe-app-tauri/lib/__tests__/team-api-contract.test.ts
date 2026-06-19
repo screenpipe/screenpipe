@@ -40,7 +40,7 @@ describe("team API contract", () => {
         });
       });
 
-      await mockFetch("https://screenpi.pe/api/team/create", {
+      await mockFetch("https://screenpipe.com/api/team/create", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${MOCK_TOKEN}`,
