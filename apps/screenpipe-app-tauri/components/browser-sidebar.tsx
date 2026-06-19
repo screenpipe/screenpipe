@@ -83,7 +83,6 @@ interface BrowserSidebarProps {
     visible: boolean;
     previousMode: "browser" | "hidden";
   } | null;
-  onCloseFilePreview?: () => void;
   onReplaceFilePreviewPath?: (path: string) => void;
   /** When set, rendered in place of the browser/file-preview content inside
    *  the same panel container (same width, drag handle, background). */
@@ -162,7 +161,6 @@ export function BrowserSidebar({
   conversationId,
   agentSessionId,
   filePreview,
-  onCloseFilePreview,
   onReplaceFilePreviewPath,
   inspectorContent,
   onBecomeVisible,
@@ -1232,7 +1230,7 @@ export function BrowserSidebar({
 
       {inspectorShouldFloat && inspectorContent ? (
         <div
-          className="fixed right-3 top-9 z-40 max-h-[calc(100vh-3.25rem)]"
+          className="fixed right-3 top-9 z-40 max-h-[calc(100vh-3.25rem)] overflow-y-auto"
           style={{ width: INSPECTOR_WIDTH }}
         >
           {inspectorContent}

@@ -6432,7 +6432,6 @@ export function StandaloneChat({
         // this chat's own agent navigations even if `conversationId` state lags.
         agentSessionId={piSessionIdRef.current}
         filePreview={filePreview}
-        onCloseFilePreview={closeFilePreview}
         onReplaceFilePreviewPath={openFilePreview}
         inspectorContent={inspectorOpen ? (
           <ChatInspector
