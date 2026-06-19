@@ -120,6 +120,10 @@ describe("Search request priority", function () {
     const keywordIndex = log.findIndex(
       (entry) => entry.pathname === "/search/keyword",
     );
+    expect(keywordIndex).toBeGreaterThanOrEqual(0);
+
+    // Secondary requests are allowed after the keyword request. They must not
+    // be ahead of it, because that recreates the large-DB first-result stall.
     const secondaryBeforeKeyword = log
       .slice(0, keywordIndex)
       .filter((entry) => entry.pathname !== "/search/keyword");

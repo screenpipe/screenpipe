@@ -22,6 +22,7 @@ import { commands } from "@/lib/utils/tauri";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
+import { buildBoundedFacetSql, sanitizeFts5Query } from "@/lib/search/facet-sql";
 
 interface SpeakerResult {
   id: number;
@@ -136,20 +137,6 @@ const CHAT_BUCKET_LABELS: Record<string, string> = {
   older: "older",
 };
 const CHAT_BUCKET_ORDER = ["today", "yesterday", "week", "older"] as const;
-
-function sanitizeFts5Query(query: string): string {
-  return query
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((token) => token.replace(/[\\"]/g, "").trim())
-    .filter(Boolean)
-    .map((token) => `"${token}"`)
-    .join(" ");
-}
-
-function escapeSqlString(value: string): string {
-  return value.replace(/'/g, "''");
-}
 
 function useSuggestions(isOpen: boolean) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -528,6 +515,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     uiEventResults,
     isSearchingUiEvents,
     isSearching,
+    searchQuery,
     searchKeywords,
     resetSearch,
     setCurrentResultIndex,
@@ -592,7 +580,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setFacetsLoading(false);
       return;
     }
-    const escapedFtsQuery = escapeSqlString(ftsQuery);
+    const facetSql = buildBoundedFacetSql(ftsQuery);
 
     // Fire all three facet queries in parallel
     const fetchFacet = async (sql: string) => {
@@ -605,13 +593,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       return resp.ok ? resp.json() : [];
     };
 
-    // App facet (single frames_fts query)
+    // App facet over a bounded FTS match set. Counts are approximate for very
+    // common terms, but this keeps cold-cache facet work from scanning every hit.
     fetchFacet(
-      `SELECT app_name as app, COUNT(*) as cnt
-       FROM frames_fts
-       WHERE frames_fts MATCH '${escapedFtsQuery}'
-       AND app_name != ''
-       GROUP BY app_name ORDER BY cnt DESC LIMIT 15`
+      facetSql.app
     ).then((rows: { app: string; cnt: number }[]) => {
       if (!cancelled) setFacetApps(rows.map(r => [r.app, r.cnt]));
     }).catch(() => {}).finally(onFacetDone);
@@ -619,12 +604,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     // Domain facet (frames_fts joined with frames for browser_url)
     // Note: FTS5 tables cannot be aliased, must use full table name in MATCH
     fetchFacet(
-      `SELECT f.browser_url as url, COUNT(*) as cnt
-       FROM frames_fts
-       JOIN frames f ON f.id = frames_fts.rowid
-       WHERE frames_fts MATCH '${escapedFtsQuery}'
-       AND f.browser_url IS NOT NULL AND f.browser_url != ''
-       GROUP BY f.browser_url ORDER BY cnt DESC LIMIT 200`
+      facetSql.domain
     ).then((rows: { url: string; cnt: number }[]) => {
       if (cancelled) return;
       // Aggregate by domain
@@ -640,12 +620,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
     // Time facet — bucket by date (frames_fts)
     fetchFacet(
-      `SELECT DATE(f.timestamp) as d, MIN(f.timestamp) as ts, COUNT(*) as cnt
-       FROM frames_fts
-       JOIN frames f ON f.id = frames_fts.rowid
-       WHERE frames_fts MATCH '${escapedFtsQuery}'
-       GROUP BY DATE(f.timestamp)
-       ORDER BY d DESC LIMIT 30`
+      facetSql.time
     ).then((rows: { d: string; ts: string; cnt: number }[]) => {
       if (cancelled) return;
       setFacetTimeRanges(buildTimeRanges(rows.map(r => ({ dateKey: r.d, timestamp: r.ts, count: r.cnt }))));
@@ -745,15 +720,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const filteredSpeakerTranscriptionsRef = useRef(filteredSpeakerTranscriptions);
   filteredSpeakerTranscriptionsRef.current = filteredSpeakerTranscriptions;
 
-  // Load chats only inside the chats tab. Normal "All" search should not make
-  // the chat archive compete with the first OCR/accessibility results.
+  // Load chats in the chats tab immediately. In "All", wait until the keyword
+  // pass has settled so chat archive search does not compete with first paint.
   useEffect(() => {
     if (!isOpen || isTagSearch || isPeopleSearch) return;
     const q = debouncedQuery.trim();
-    if (contentFilter === "chats") {
+    const keywordPassSettled = q.length >= 3 && searchQuery === q && !isSearching;
+    if (contentFilter === "chats" || (q && keywordPassSettled)) {
       void loadChats(q);
     }
-  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats]);
+  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats, searchQuery, isSearching]);
 
   // Chat results are already bounded / searched in chat-storage.
   const filteredChats = useMemo(() => {
