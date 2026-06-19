@@ -456,7 +456,7 @@ mod tests {
         }
 
         async fn run_impl(&self, shared_pid: Option<SharedPid>) -> anyhow::Result<AgentOutput> {
-            self.started.notify_waiters();
+            self.started.notify_one();
 
             match self.mode {
                 FakePublishMode::Immediate => {

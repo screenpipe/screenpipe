@@ -1258,6 +1258,9 @@ impl PiExecutor {
         // completed, honor it immediately against the fresh process group.
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
             if install_spawned_pid(sp, p) {
+                // If the child is still entering setsid(), this first TERM can
+                // race the new process group; kill_process_group's delayed
+                // SIGKILL pass covers that short window.
                 let _ = kill_process_group(p);
             }
         }
@@ -1406,6 +1409,9 @@ impl PiExecutor {
         // completed, honor it immediately against the fresh process group.
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
             if install_spawned_pid(sp, p) {
+                // If the child is still entering setsid(), this first TERM can
+                // race the new process group; kill_process_group's delayed
+                // SIGKILL pass covers that short window.
                 let _ = kill_process_group(p);
             }
         }

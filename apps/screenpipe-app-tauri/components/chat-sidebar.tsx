@@ -565,6 +565,14 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
           description: result.error,
           variant: "destructive",
         });
+      } else if (result.ok) {
+        toast({
+          title: "stopping pipe",
+          description:
+            result.status === "stop_pending"
+              ? `${pipeName} will stop as soon as the agent subprocess finishes spawning`
+              : `${pipeName} is shutting down`,
+        });
       }
     } catch {
       // best-effort — the user can retry; if the pipe already finished
