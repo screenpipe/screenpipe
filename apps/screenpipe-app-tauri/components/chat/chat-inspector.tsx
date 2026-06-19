@@ -34,7 +34,7 @@ export function ChatInspector({
   onOpenFile,
 }: ChatInspectorProps) {
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
       {/* Compact block at the top, empty space below */}
       <div className="mx-2 my-3 rounded-md border border-border/40 bg-background">
         {/* Outputs */}
