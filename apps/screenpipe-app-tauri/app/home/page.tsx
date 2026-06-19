@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
+  isSessionForeground,
   sessionRecordFromMeta,
   useChatStore,
   type SessionStatus,
@@ -257,8 +258,8 @@ function HomeContent() {
             updatedAt,
           });
         }
-        if (unreadHint && store.currentId !== id && store.panelSessionId !== id) {
-          store.actions.markUnread(id);
+        if (unreadHint && !isSessionForeground(store, id)) {
+          store.actions.patch(id, { lastContentAt: Date.now() });
         }
       });
       unlistenFn = unlisten;
@@ -919,7 +920,7 @@ function HomeContent() {
               // top-0.5 + items-center puts each icon's center at y≈15px,
               // matching the vertical center of the macOS traffic lights
               // (which sit at y≈14).
-              "fixed top-0.5 z-20 flex items-center gap-1.5",
+              "fixed top-1 z-[46] flex items-center gap-1.5",
               reserveTrafficLights ? "left-[78px]" : "left-2"
             )}
           >
@@ -930,7 +931,9 @@ function HomeContent() {
                   aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
                   className={cn(
                     "p-1 rounded-md transition-colors",
-                    isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    sidebarCollapsed && activeSection === "timeline"
+                      ? "backdrop-blur-sm bg-background/80 shadow-sm text-muted-foreground hover:text-foreground hover:bg-background"
+                      : isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   )}
                 >
                   {sidebarCollapsed
@@ -979,6 +982,7 @@ function HomeContent() {
               meetingLoading={meetingLoading}
               onToggleMeeting={() => void toggleMeeting()}
               isTranslucent={isTranslucent}
+              floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
             />
           </div>
 
@@ -986,13 +990,13 @@ function HomeContent() {
               strip above (toggle + status dot) is the entire collapsed
               chrome, Claude-style. */}
           {!sidebarCollapsed && (
-          <AppSidebar className="pl-4">
+          <AppSidebar className="pl-1">
             {/* Navigation.
                 Outer flex column has no overflow — the chat-list section
                 inside owns its own scroll, otherwise the team promo +
                 bottom items would be pushed below the fold by long
                 conversation lists. */}
-            <div className="p-2 flex-1 flex flex-col min-h-0">
+            <div className="pt-2 pr-2 pb-2 flex-1 flex flex-col min-h-0">
               {/* Main sections */}
               <div className="space-y-0.5 shrink-0">
                 {mainSections.map((section) => {
@@ -1194,7 +1198,7 @@ function HomeContent() {
                 activeSection !== "home" && "hidden"
               )}
             >
-              <StandaloneChat className="h-full" hideInlineHistory />
+              <StandaloneChat className="h-full" hideInlineHistory sidebarCollapsed={sidebarCollapsed} />
             </div>
 
             {/* Non-chat sections render on top when active. */}

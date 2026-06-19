@@ -29,6 +29,7 @@ use screenpipe_engine::{
         audio::handle_audio_command,
         mcp::handle_mcp_command,
         pipe::handle_pipe_command,
+        profile::handle_profile_command,
         search::handle_search_command,
         status::handle_status_command,
         sync::{handle_sync_command, start_sync_service},
@@ -317,6 +318,10 @@ async fn main() -> anyhow::Result<()> {
             let local_data_dir = get_base_dir(data_dir)?;
             let _log_guard = Some(setup_logging(&local_data_dir, false, true)?);
             handle_status_command(json, data_dir, port).await?;
+            return Ok(());
+        }
+        Command::Profile { json, port } => {
+            handle_profile_command(json, port).await?;
             return Ok(());
         }
         Command::Search(ref args) => {
@@ -1190,10 +1195,21 @@ async fn main() -> anyhow::Result<()> {
         let h = runtime.spawn(async move {
             let mut shutdown_rx = shutdown_tx_clone2.subscribe();
 
-            // Start VisionManager
+            // Start VisionManager. A failure here must NOT abort this task.
+            // `VisionManager::start()` returns Err when zero monitors are
+            // enumerated at boot — lid closed at login, screen locked, or a
+            // transient TCC/ScreenCaptureKit race (list_monitors swallows
+            // those to an empty set). Returning here used to leave vision
+            // permanently dead for the whole process lifetime, because every
+            // retry/recovery path lives inside the monitor watcher spawned
+            // below (it re-calls VisionManager::start() whenever status !=
+            // Running — see monitor_watcher.rs). Log and fall through so the
+            // watcher gets a chance to recover once a display appears.
             if let Err(e) = vm_clone.start().await {
-                error!("Failed to start VisionManager: {:?}", e);
-                return;
+                error!(
+                    "Failed to start VisionManager (monitor watcher will retry): {:?}",
+                    e
+                );
             }
 
             // Start MonitorWatcher for dynamic detection (with audio DRM pause support)
@@ -1404,6 +1420,8 @@ async fn main() -> anyhow::Result<()> {
         pipe_store,
         config.port,
     );
+    let mcp_session_access = screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
+    pipe_manager.set_mcp_session_access(mcp_session_access.clone());
     // Wire pipe permission token registry (bridges PipeManager ↔ server middleware)
     pipe_manager.set_token_registry(std::sync::Arc::new(
         screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
@@ -1433,19 +1451,7 @@ async fn main() -> anyhow::Result<()> {
             let ss = secret_store_for_check.clone();
             let dir = screenpipe_dir_for_check.clone();
             Box::pin(async move {
-                let mut missing = Vec::new();
-                for conn_id in required {
-                    let configured = screenpipe_connect::connections::is_connection_configured(
-                        ss.as_deref(),
-                        &dir,
-                        &conn_id,
-                    )
-                    .await;
-                    if !configured {
-                        missing.push(conn_id);
-                    }
-                }
-                missing
+                screenpipe_connect::missing_pipe_connections(ss.as_deref(), &dir, &required).await
             })
         }));
     }
@@ -1465,6 +1471,7 @@ async fn main() -> anyhow::Result<()> {
     let shared_pipe_manager = std::sync::Arc::new(tokio::sync::Mutex::new(pipe_manager));
     let server = server
         .with_pipe_manager(shared_pipe_manager.clone())
+        .with_mcp_session_access(mcp_session_access)
         .with_high_fps_controller(high_fps_controller.clone());
 
     // Install pi agent in background
@@ -1794,8 +1801,8 @@ async fn main() -> anyhow::Result<()> {
     // Start calendar-assisted speaker identification
     let _speaker_id_handle = start_speaker_identification(db.clone(), config.user_name.clone());
 
-    // Periodic WAL checkpoint to prevent unbounded WAL growth
-    db.start_wal_maintenance();
+    // WAL checkpoint maintenance now starts inside DatabaseManager::new(), so
+    // every caller (CLI + in-process desktop app) gets it — no explicit call here.
 
     let server_future = server.start();
     pin_mut!(server_future);
@@ -1862,7 +1869,7 @@ async fn main() -> anyhow::Result<()> {
             },
             pipeline::{Pipeline, PipelineConfig},
             worker::{Worker, WorkerConfig, ALL_TARGET_TABLES},
-            Redactor, TextRedactionPolicy,
+            Pseudonymizer, Redactor, TextRedactionPolicy,
         };
         use std::sync::Arc;
 
@@ -1887,6 +1894,26 @@ async fn main() -> anyhow::Result<()> {
         //      regex-redacted text into the source columns).
         let pool = db.pool.clone();
         let labels = config.pii_redaction_labels.clone();
+        // Consistent-pseudonym tokens (issue #4206), opt-in. Loads (or
+        // creates on first run) the per-install key under the data dir;
+        // on any IO error we log and fall back to static `[LABEL]` tags
+        // rather than block the worker.
+        let pseudonymizer = if config.pii_redaction_pseudonyms {
+            match Pseudonymizer::load_or_create(&config.data_dir) {
+                Ok(p) => {
+                    info!("text-PII redaction: consistent pseudonyms ON (issue #4206)");
+                    Some(Arc::new(p))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "couldn't load pseudonym key ({e}); rendering static [LABEL] tags instead"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         tokio::spawn(async move {
             // Per-label allow-list from the `piiRedactionLabels` setting
             // (default ["secret"]). Local adapters filter client-side via
@@ -1973,6 +2000,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             };
+            // Opt-in pseudonym tokens (no-op when `pseudonymizer` is None
+            // or the adapter is span-less, i.e. tinfoil).
+            let pipeline = pipeline.with_pseudonyms(pseudonymizer);
             let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;
 
             let worker_cfg = WorkerConfig {

@@ -205,7 +205,14 @@ async function fetchNativeCalendar(
       `/connections/calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`,
     );
     if (!res.ok) return null;
-    const body = (await res.json()) as { data?: RawNativeEvent[] };
+    const body = (await res.json()) as {
+      data?: RawNativeEvent[];
+      connected?: boolean;
+    };
+    // The engine reports "no native calendar here" (unsupported platform /
+    // no OS appointment store) as 200 + connected:false instead of a 500.
+    // That is "provider unavailable", not "connected with zero events".
+    if (body.connected === false) return null;
     const arr = body.data ?? [];
     return arr
       .map(normalizeNative)
@@ -240,10 +247,14 @@ async function fetchNativeProvider(
   hoursBack: number,
   hoursAhead: number,
 ): Promise<ProviderCalendarResult> {
+  let statusKnown = false;
+  let statusAvailable = false;
   let statusConnected = false;
   try {
     const status = await commands.calendarStatus();
     if (status.status === "ok") {
+      statusKnown = true;
+      statusAvailable = status.data.available;
       statusConnected =
         status.data.available &&
         status.data.authorized &&
@@ -251,6 +262,16 @@ async function fetchNativeProvider(
     }
   } catch {
     // Fall through to the HTTP route below.
+  }
+
+  // No native calendar on this platform (Linux) or no OS appointment store
+  // (some Windows setups): the HTTP probe can only fail. This poller runs
+  // every 60s — skip the guaranteed-failing request instead of generating a
+  // log entry per minute forever. Unauthorized-but-available (macOS pending
+  // permission) still probes: reads can succeed right after an in-process
+  // grant even while the cached OS status lags.
+  if (statusKnown && !statusAvailable) {
+    return { source: "native", connected: false, ok: true, events: [] };
   }
 
   const events = await fetchNativeCalendar(hoursBack, hoursAhead);

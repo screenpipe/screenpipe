@@ -21,6 +21,46 @@ static DEPLOYMENT_APP_UI_HIDDEN: Lazy<bool> =
 /// admin's choices from `GET /api/enterprise/policy` (`syncStreams` field) on
 /// the 5-min poll and pushes them in via `set_sync_streams`. The sync state
 /// machine in `enterprise_sync::run_one_sync` reads this on every tick.
+/// How many frame images (screenshots) may leave this device — the org's
+/// dashboard choice, never hardcoded. A MODE rather than a bool because some
+/// customers want every frame centralized (their storage, their call) while
+/// the default stays fail-closed:
+///   Off   → no frame images ever leave the device (default)
+///   Cited → on-demand only: upload exactly the frame_ids cloud pipes cite
+///   All   → continuous: the server auto-cites every ingested frame and the
+///           device drains the manifest in larger batches
+/// Screen pixels are a NEW data class vs the text streams, so unknown or
+/// legacy values parse conservatively — only an explicit opt-in enables it.
+/// The upload endpoint enforces the same gate server-side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrameImagesMode {
+    #[default]
+    Off,
+    Cited,
+    All,
+}
+
+impl FrameImagesMode {
+    /// Parse the wire/policy value. Accepts the canonical mode strings plus
+    /// the legacy boolean spelling from policies saved before the mode
+    /// existed ("true" → Cited). Anything else is Off — fail closed.
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "cited" | "true" => Self::Cited,
+            "all" => Self::All,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Cited => "cited",
+            Self::All => "all",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncStreams {
     pub frames: bool,
@@ -28,6 +68,7 @@ pub struct SyncStreams {
     pub ui_events: bool,
     pub memories: bool,
     pub snapshots: bool,
+    pub frame_images: FrameImagesMode,
 }
 
 impl Default for SyncStreams {
@@ -38,6 +79,7 @@ impl Default for SyncStreams {
             ui_events: true,
             memories: true,
             snapshots: true,
+            frame_images: FrameImagesMode::Off,
         }
     }
 }
@@ -157,8 +199,10 @@ pub fn set_enterprise_policy(hidden_sections: Vec<String>) {
 }
 
 /// Called by the frontend after fetching the `syncStreams` block from
-/// `/api/enterprise/policy`. Flat booleans rather than a struct so the
-/// specta-generated TS binding stays trivial.
+/// `/api/enterprise/policy`. Flat params rather than a struct so the
+/// specta-generated TS binding stays trivial. `frame_images` is the mode
+/// string ("off" | "cited" | "all"; legacy "true" accepted) — parsed
+/// fail-closed by FrameImagesMode::parse.
 #[tauri::command]
 #[specta::specta]
 pub fn set_sync_streams(
@@ -167,23 +211,27 @@ pub fn set_sync_streams(
     ui_events: bool,
     memories: bool,
     snapshots: bool,
+    frame_images: String,
 ) {
+    let frame_images = FrameImagesMode::parse(&frame_images);
     let next = SyncStreams {
         frames,
         audio,
         ui_events,
         memories,
         snapshots,
+        frame_images,
     };
     if let Ok(mut guard) = SYNC_STREAMS.write() {
         if *guard != next {
             tracing::info!(
-                "enterprise: sync streams updated frames={} audio={} ui={} memories={} snapshots={}",
+                "enterprise: sync streams updated frames={} audio={} ui={} memories={} snapshots={} frame_images={}",
                 frames,
                 audio,
                 ui_events,
                 memories,
                 snapshots,
+                frame_images.as_str(),
             );
         }
         *guard = next;
@@ -283,13 +331,37 @@ mod tests {
         // Touches the global static; reset to defaults after to avoid
         // poisoning sibling tests that read current_sync_streams.
         let _guard = sync_streams_test_lock();
-        set_sync_streams(false, true, false, true, false);
+        set_sync_streams(false, true, false, true, false, "off".to_string());
         let s = current_sync_streams();
         assert!(!s.frames);
         assert!(s.audio);
         assert!(!s.ui_events);
         assert!(s.memories);
         assert!(!s.snapshots);
-        set_sync_streams(true, true, true, true, true);
+        set_sync_streams(true, true, true, true, true, "off".to_string());
+    }
+}
+
+#[cfg(test)]
+mod frame_images_mode_tests {
+    use super::FrameImagesMode;
+
+    #[test]
+    fn parse_canonical_modes_and_legacy_booleans() {
+        assert_eq!(FrameImagesMode::parse("off"), FrameImagesMode::Off);
+        assert_eq!(FrameImagesMode::parse("cited"), FrameImagesMode::Cited);
+        assert_eq!(FrameImagesMode::parse("all"), FrameImagesMode::All);
+        // legacy boolean spellings from pre-mode policies
+        assert_eq!(FrameImagesMode::parse("true"), FrameImagesMode::Cited);
+        assert_eq!(FrameImagesMode::parse("false"), FrameImagesMode::Off);
+        // case/whitespace tolerant
+        assert_eq!(FrameImagesMode::parse(" ALL "), FrameImagesMode::All);
+    }
+
+    #[test]
+    fn parse_is_fail_closed_for_junk() {
+        for junk in ["", "yes", "1", "on", "enabled", "frames"] {
+            assert_eq!(FrameImagesMode::parse(junk), FrameImagesMode::Off, "{junk}");
+        }
     }
 }

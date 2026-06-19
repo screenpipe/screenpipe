@@ -243,7 +243,10 @@ mod imp {
     fn create_session_safe(model_path: &std::path::Path) -> Result<Session, RedactError> {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             || -> Result<Session, ort::Error> {
-                let builder = Session::builder()?
+                // `mut`: rc.12's commit_from_file takes &mut self. Under the
+                // coreml/directml features the binding is shadowed below.
+                #[allow(unused_mut)]
+                let mut builder = Session::builder()?
                     .with_optimization_level(GraphOptimizationLevel::Level3)?
                     // Background batch worker — never busy-spin between ops. With
                     // CoreML active the graph is partitioned ANE/CPU and a spinning
@@ -261,24 +264,18 @@ mod imp {
                 // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
                 // faster than the legacy default and keeps the work off the CPU/GPU.
                 #[cfg(feature = "onnx-coreml")]
-                let builder = builder.with_execution_providers([
-                    ort::execution_providers::CoreMLExecutionProvider::default()
-                        .with_model_format(
-                            ort::execution_providers::coreml::CoreMLModelFormat::MLProgram,
-                        )
-                        .with_compute_units(
-                            ort::execution_providers::coreml::CoreMLComputeUnits::All,
-                        )
+                let mut builder = builder.with_execution_providers([
+                    ort::ep::CoreML::default()
+                        .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+                        .with_compute_units(ort::ep::coreml::ComputeUnits::All)
                         .with_subgraphs(true)
                         .build(),
-                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                    ort::ep::CPU::default().build(),
                 ])?;
                 #[cfg(feature = "onnx-directml")]
-                let builder = builder.with_execution_providers([
-                    ort::execution_providers::DirectMLExecutionProvider::default()
-                        .with_device_id(0)
-                        .build(),
-                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                let mut builder = builder.with_execution_providers([
+                    ort::ep::DirectML::default().with_device_id(0).build(),
+                    ort::ep::CPU::default().build(),
                 ])?;
                 builder.commit_from_file(model_path)
             },
@@ -370,7 +367,7 @@ mod imp {
                 .session
                 .lock()
                 .map_err(|_| RedactError::Runtime("rfdetr session mutex poisoned".into()))?;
-            let input_name = session.inputs[0].name.clone();
+            let input_name = session.inputs()[0].name().to_string();
             let outputs = session
                 .run(
                     ort::inputs![input_name => TensorRef::from_array_view(input.view())
@@ -458,7 +455,7 @@ mod imp {
     fn detect_input_size(session: &Session) -> Option<u32> {
         // inputs[0].shape is Vec<Option<i64>>-ish in ort 2.0-rc; use
         // the last dim, fall back to None if it isn't a static int.
-        let shape = &session.inputs.first()?.input_type;
+        let shape = session.inputs().first()?.dtype();
         let s = format!("{shape:?}");
         // Cheap parse: look for a known square size in the shape.
         // Keep this in sync with every shipped model: v8=320, v9=384,

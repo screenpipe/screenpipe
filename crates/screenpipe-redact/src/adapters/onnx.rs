@@ -776,16 +776,24 @@ mod runtime {
     fn build_session(model_path: &std::path::Path) -> Result<Session, RedactError> {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             || -> Result<Session, ort::Error> {
-                let builder = Session::builder()?
+                // `mut`: rc.12's commit_from_file takes &mut self. Under
+                // onnx-directml the binding is shadowed below (hence allow).
+                #[allow(unused_mut)]
+                let mut builder = Session::builder()?
                     .with_optimization_level(GraphOptimizationLevel::Level3)?
                     // This session serves a background batch worker — never let the
                     // intra-op pool busy-spin between ops. A spinning full-width
                     // pool burned ~4 cores in ThreadPoolTempl::WorkerLoop while the
                     // redaction backlog drained (340% CPU regression after 3b9a1a105).
                     .with_intra_op_spinning(false)?
-                    // Half the cores is enough for a background batch worker and
-                    // keeps the drain from monopolizing the machine.
-                    .with_intra_threads((num_cpus_physical() / 2).max(2))?;
+                    // A quarter of the cores (min 1) is plenty for this
+                    // background batch worker and caps the height of each CPU
+                    // burst — combined with the worker's per-batch duty-cycle
+                    // cooldown the redaction backlog drains as a low flat band
+                    // instead of pinning half the machine. Latency is a
+                    // non-goal here: nothing waits on this redactor
+                    // synchronously.
+                    .with_intra_threads((num_cpus_physical() / 4).max(1))?;
                 // NO CoreML EP here, deliberately: this text model is int8-quantized
                 // RoBERTa with dynamic sequence lengths, and the ANE compiler rejects
                 // every layer ("E5RT: unbounded dimension is not supported"), so
@@ -793,11 +801,9 @@ mod runtime {
                 // EP handoff overhead. The image model (rfdetr.rs, fixed-size input)
                 // is the one that actually runs on the ANE.
                 #[cfg(feature = "onnx-directml")]
-                let builder = builder.with_execution_providers([
-                    ort::execution_providers::DirectMLExecutionProvider::default()
-                        .with_device_id(0)
-                        .build(),
-                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                let mut builder = builder.with_execution_providers([
+                    ort::ep::DirectML::default().with_device_id(0).build(),
+                    ort::ep::CPU::default().build(),
                 ])?;
                 builder.commit_from_file(model_path)
             },

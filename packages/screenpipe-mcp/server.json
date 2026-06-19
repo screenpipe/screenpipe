@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.screenpipe/screenpipe-mcp",
+  "title": "screenpipe",
+  "description": "Search your local screen recordings, audio transcripts, and computer activity from screenpipe.",
+  "repository": {
+    "url": "https://github.com/screenpipe/screenpipe",
+    "source": "github",
+    "subfolder": "packages/screenpipe-mcp"
+  },
+  "version": "0.18.12",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "screenpipe-mcp",
+      "version": "0.18.12",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

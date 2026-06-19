@@ -370,17 +370,15 @@ async fn do_local_cleanup(
                 {
                     Ok(result) => {
                         let batch_total = result.frames_deleted
-                            + result.ocr_deleted
                             + result.audio_transcriptions_deleted
                             + result.ui_events_deleted;
 
                         if batch_total > 0 {
                             any_deleted = true;
                             info!(
-                                "retention: batch deleted frames={} ocr={} audio={} ui_events={} \
+                                "retention: batch deleted frames={} audio={} ui_events={} \
                                  (video_files={} snapshot_files={} audio_files={})",
                                 result.frames_deleted,
-                                result.ocr_deleted,
                                 result.audio_transcriptions_deleted,
                                 result.ui_events_deleted,
                                 result.video_files.len(),

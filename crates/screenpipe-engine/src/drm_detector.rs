@@ -79,6 +79,9 @@ const DRM_APPS: &[&str] = &[
     "hulu",
     "prime video",
     "apple tv",
+    // macOS native Apple TV app reports its name as just "TV"; matched exactly
+    // (see is_drm_app) so we don't flag unrelated apps that merely contain "tv".
+    "tv",
     "peacock",
     "paramount+",
     "hbo max",
@@ -95,8 +98,10 @@ const DRM_APPS: &[&str] = &[
 pub fn is_drm_app(app_name: &str) -> bool {
     let lower = app_name.to_lowercase();
     for &drm in DRM_APPS {
-        if drm == "max" {
-            if lower == "max" {
+        // "max" and "tv" are short, generic names — match them exactly so we
+        // don't flag unrelated apps (e.g. "3ds Max", "Plex TV").
+        if drm == "max" || drm == "tv" {
+            if lower == drm {
                 return true;
             }
         } else if lower.contains(drm) {
@@ -642,6 +647,9 @@ mod tests {
         assert!(is_drm_app("Crunchyroll"));
         assert!(is_drm_app("Max"));
         assert!(is_drm_app("max"));
+        // macOS native Apple TV app reports its name as just "TV".
+        assert!(is_drm_app("TV"));
+        assert!(is_drm_app("tv"));
     }
 
     #[test]
@@ -653,6 +661,14 @@ mod tests {
         assert!(!is_drm_app("Max Mustermann"));
         assert!(!is_drm_app("3ds Max"));
         assert!(!is_drm_app("Terminal"));
+        // "tv" is matched exactly — apps merely containing "tv" must not be flagged.
+        assert!(!is_drm_app("Plex TV"));
+        assert!(!is_drm_app("DevTools"));
+        // App/tab names that merely end in "tv" must not match (review feedback):
+        // is_drm_app is called on the app/owner name, and only the bare native
+        // Apple TV app reports its name as exactly "TV".
+        assert!(!is_drm_app("Tella TV"));
+        assert!(!is_drm_app("screenpipe tv"));
     }
 
     #[test]

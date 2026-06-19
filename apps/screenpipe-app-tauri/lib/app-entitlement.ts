@@ -171,6 +171,46 @@ export function hasCloudEntitlement(user: AppUser | null | undefined) {
   return user?.cloud_subscribed === true || hasEntitlementFeature(user, "cloud");
 }
 
+// Whether the account UI should treat this user as a *signed-in* cloud subscriber
+// — i.e. render the "active" plan card with the live cross-device sync toggles.
+//
+// Requires a session token, not just `cloud_subscribed`. Since #3943 the token
+// lives in an encrypted secret store and is hydrated asynchronously; if that
+// hydration fails (keychain denied, secret store cleared) the plaintext user
+// persisted in store.bin can still carry `cloud_subscribed: true` (and an `id`).
+// Gating the card on `cloud_subscribed` alone then renders a "Business · active"
+// card under the "not logged in" header (which keys off the token) — the exact
+// contradiction this guards. The card must key off the same signal as the
+// header: the token. Note `id` is intentionally NOT accepted here (unlike the
+// broader `isLoggedInProUser` in use-settings) because `id` survives a token
+// hydration failure and would re-introduce the desync.
+export function isSignedInCloudSubscriber(user: AppUser | null | undefined): boolean {
+  return !!user?.token && user?.cloud_subscribed === true;
+}
+
+// A signed-in account whose token is momentarily missing is in a transient
+// secret-store hydration failure (see `hydrateCloudToken` / #3943), NOT a real
+// sign-out. A real sign-out nulls the whole `user`; here the account `id` (and
+// the rest of the persisted profile) survives in store.bin while only the token
+// — which lives in the encrypted secret store (the db.sqlite `secrets` table) —
+// failed to load. A corrupt or locked secrets table is the common cause. The
+// recording gate uses this to avoid treating a DB blip as "logged out".
+export function isTokenHydrationPending(user: AppUser | null | undefined): boolean {
+  return !!user && !!user.id && !user.token;
+}
+
+// store.bin keeps these entitlement signals even when the token doesn't hydrate,
+// so they're evidence the (now tokenless) account was a paying user — used to
+// fail the recording gate OPEN on a transient token loss instead of walling a
+// subscriber out mid-session.
+export function hasPersistedEntitlementEvidence(user: AppUser | null | undefined): boolean {
+  if (!user) return false;
+  if (user.cloud_subscribed === true) return true;
+  if (user.app_entitled === true) return true;
+  const entitlement = asEntitlement(user.entitlement);
+  return entitlement?.features?.app === true || entitlement?.active === true;
+}
+
 export function needsAppEntitlementRefresh(user: AppUser | null | undefined) {
   if (!user?.token || hasLegacyPaidAccess(user)) return false;
 

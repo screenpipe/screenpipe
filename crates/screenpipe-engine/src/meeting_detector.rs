@@ -23,7 +23,9 @@
 //! and non-meeting contexts (Slack chat, etc.). A mute button counts only when
 //! accompanied by a leave/hangup signal (see `min_signals_required`).
 
-use crate::meeting_telemetry::{capture_detection_decision, MeetingDetectionScanSummary};
+use crate::meeting_telemetry::{
+    capture_detection_decision, capture_detection_outcome, MeetingDetectionScanSummary,
+};
 use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
@@ -511,8 +513,14 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "gotomeeting.exe",
                 ],
                 browser_url_patterns: &[
+                    // Public Jitsi host. NOTE: a bare "jitsi" substring used to
+                    // live here too, but it matched any URL containing the word
+                    // (e.g. github.com/jitsi/jitsi-meet), making the browser a
+                    // meeting candidate and letting an unrelated tab's "Leave"
+                    // button fire a phantom meeting (#4246). Self-hosted Jitsi on
+                    // a custom domain is no longer auto-detected by hostname; the
+                    // public service still is.
                     "meet.jit.si",
-                    "jitsi",
                     "riverside.fm",
                     "gather.town",
                     "app.gather.town",
@@ -1729,6 +1737,62 @@ fn is_browser_app(app_name: &str) -> bool {
             .any(|b| contains_case_insensitive(app_name, b))
 }
 
+/// Whether recent output audio should keep an `Ending` meeting alive.
+///
+/// `recent_output_chunk` comes from the DB (`has_recent_output_audio`), which
+/// matches *any* `(output)` audio chunk in the window — but the system-audio tap
+/// writes those continuously even while silent. On its own it therefore pins a
+/// meeting "live" forever once the call ended (controls gone, tap still running),
+/// so the meeting never auto-finalizes (it flaps Active<->Ending). We additionally
+/// require `recent_voice_activity` (RMS-gated, from the capture pipeline) so a
+/// quiet stretch lets the grace timer run out and the meeting end normally, while
+/// a genuinely audible call (tab-switched / minimized / screen-sharing) stays alive.
+fn output_audio_keeps_meeting_alive(
+    recent_output_chunk: bool,
+    recent_voice_activity: bool,
+) -> bool {
+    recent_output_chunk && recent_voice_activity
+}
+
+/// Audio/calendar liveness that keeps a meeting alive when its call-control UI
+/// is hidden (tab switch, minimize, screen-share, transient process-scan miss).
+///
+/// Shared by BOTH keep-alive sites — the apps-present (Ending-only) path and the
+/// no-apps (Active|Ending) path — so the silence-gating can never drift between
+/// them. The caller ANDs in the state guard; this is just the liveness signal.
+/// Pure + `pub` so the eval harness exercises the real composition.
+pub fn audio_or_calendar_keepalive(
+    recent_output_chunk: bool,
+    recent_voice_activity: bool,
+    calendar_active: bool,
+) -> bool {
+    output_audio_keeps_meeting_alive(recent_output_chunk, recent_voice_activity) || calendar_active
+}
+
+/// True when a transition is an Active<->Ending oscillation (a "flap") — the
+/// end-detection-health signal. `was_active`/`was_ending` are captured from the
+/// prior state *before* it is consumed by the transition fn; typed `matches!`
+/// on `next` keeps it rename-safe (a state rename is a compile error).
+fn is_active_ending_flap(was_active: bool, was_ending: bool, next: &MeetingState) -> bool {
+    let now_active = matches!(next, MeetingState::Active { .. });
+    let now_ending = matches!(next, MeetingState::Ending { .. });
+    (was_active && now_ending) || (was_ending && now_active)
+}
+
+/// Fetch the just-ended meeting and emit the privacy-safe outcome telemetry.
+/// Shared by every auto-end site so the metric covers them uniformly.
+/// Best-effort: a failed lookup just skips the event.
+async fn capture_meeting_outcome(
+    db: &DatabaseManager,
+    meeting_id: i64,
+    end_reason: &'static str,
+    flap_count: u32,
+) {
+    if let Ok(meeting) = db.get_meeting_by_id(meeting_id).await {
+        capture_detection_outcome(&meeting, end_reason, flap_count);
+    }
+}
+
 /// Advance the state machine based on scan results.
 ///
 /// Returns the new state plus an optional action to perform (DB insert/update).
@@ -2034,6 +2098,52 @@ fn contains_normalized_term(haystack: &str, term_lower: &str) -> bool {
     haystack.to_lowercase().contains(term_lower)
 }
 
+/// Return the part of a URL before the query string (`?`) and fragment (`#`).
+/// Meeting URL patterns are host/path shaped, so matching should ignore params:
+/// `https://x.com/p?to=meet.google.com` is an unrelated page, not a Meet call.
+fn url_without_query_or_fragment(url: &str) -> &str {
+    let end = url.find(['?', '#']).unwrap_or(url.len());
+    &url[..end]
+}
+
+/// Decide whether a browser window belongs to a meeting profile, given its page
+/// URL (when the browser exposes it) and window title.
+///
+/// URL-first: when a URL is known, ONLY the URL is matched against
+/// `browser_url_patterns` (query/fragment stripped). Page titles are never
+/// searched for URL patterns — titles carry arbitrary text (an Amazon listing
+/// for a "Meeting Owl … Certified for Microsoft Teams … Works with Zoom, Google
+/// Meet" camera, the jitsi-meet GitHub repo, or "meet - App on Amazon Appstore")
+/// and matching meeting patterns there produces phantom meetings (#4246).
+///
+/// `browser_title_patterns` (anchored, see `browser_title_matches_pattern`) are
+/// a fallback used ONLY when no URL is available — e.g. Arc, which titles its
+/// window "Meet" but does not expose the tab URL via AXDocument. When a URL IS
+/// available and is not a meeting URL, the page title is not evidence of a
+/// meeting.
+fn browser_window_matches_meeting(
+    url: Option<&str>,
+    title: Option<&str>,
+    profile: &MeetingDetectionProfile,
+) -> bool {
+    let ids = &profile.app_identifiers;
+    if let Some(u) = url.map(str::trim).filter(|u| !u.is_empty()) {
+        let doc = url_without_query_or_fragment(u);
+        return ids
+            .browser_url_patterns
+            .iter()
+            .any(|p| contains_case_insensitive(doc, p));
+    }
+    if let Some(t) = title {
+        let t_lower = t.to_lowercase();
+        return ids
+            .browser_title_patterns
+            .iter()
+            .any(|p| browser_title_matches_pattern(&t_lower, p));
+    }
+    false
+}
+
 fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -2220,11 +2330,16 @@ fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
             let window = &windows[i];
             let _ = window.set_messaging_timeout_secs(0.2);
 
-            // Primary: check AXDocument attribute (actual page URL, most reliable)
+            // Primary: check AXDocument attribute (actual page URL, most reliable).
+            // Match only against the scheme+host+path, never the query/fragment:
+            // a meeting URL carried as a `?redirect=…` / `#…` parameter on an
+            // unrelated page is not the page you're on, and matching it makes the
+            // browser a phantom meeting candidate (#4246).
             if let Some(doc) = get_ax_string_attr(window, cidre::ax::attr::document()) {
+                let doc_for_match = url_without_query_or_fragment(&doc);
                 if url_patterns
                     .iter()
-                    .any(|p| contains_case_insensitive(&doc, p))
+                    .any(|p| contains_case_insensitive(doc_for_match, p))
                 {
                     return true;
                 }
@@ -2585,28 +2700,13 @@ async fn db_find_browser_meetings(
             if !has_url_patterns && !has_title_patterns {
                 continue;
             }
-            // Check URL patterns against window_name AND browser_url
-            let url_match = has_url_patterns
-                && profile
-                    .app_identifiers
-                    .browser_url_patterns
-                    .iter()
-                    .any(|p| {
-                        contains_case_insensitive(window_name, p)
-                            || browser_url
-                                .as_deref()
-                                .is_some_and(|url| contains_case_insensitive(url, p))
-                    });
-            // See `browser_title_matches_pattern` for the matching rules.
-            let title_match = has_title_patterns && {
-                let window_lower = window_name.to_lowercase();
-                profile
-                    .app_identifiers
-                    .browser_title_patterns
-                    .iter()
-                    .any(|p| browser_title_matches_pattern(&window_lower, p))
-            };
-            if url_match || title_match {
+            // URL-first: match meeting patterns against the page URL, not the
+            // window title. Page titles carry arbitrary text (e.g. an Amazon
+            // listing "Meeting Owl … Certified for Microsoft Teams … Zoom,
+            // Google Meet", or "meet - App on Amazon Appstore"); matching meeting
+            // patterns there produced phantom meetings (#4246). Title patterns
+            // are used only when the browser exposes no URL (Arc).
+            if browser_window_matches_meeting(browser_url.as_deref(), Some(window_name), profile) {
                 #[cfg(target_os = "macos")]
                 let pid = cidre::objc::ar_pool(|| -> i32 {
                     let ws = cidre::ns::Workspace::shared();
@@ -2718,6 +2818,10 @@ pub async fn run_meeting_detection_loop(
     // it for the rest of this detector lifetime. Cleared on app restart,
     // which is fine — the DB filter takes over from there.
     let mut last_explicit_stop_id: Option<i64> = None;
+    // Count Active<->Ending oscillations for the current meeting so end-detection
+    // health is observable (a clean auto end flaps ~0; sustained flapping flags a
+    // call that lost its controls but kept getting revived). Reset per meeting.
+    let mut flap_count: u32 = 0;
 
     info!(
         "meeting v2: detection loop started (base_interval={:?}, profiles={}, ignored_apps={})",
@@ -2965,12 +3069,29 @@ pub async fn run_meeting_detection_loop(
                 state,
                 MeetingState::Active { .. } | MeetingState::Ending { .. }
             ) {
-                db.has_recent_output_audio(30).await.unwrap_or(false)
-                    || has_active_calendar_event(&calendar_events, Utc::now())
+                // Same silence-gating as the apps-present path (shared helper):
+                // a recent (output) chunk must be paired with RMS-gated voice
+                // activity, else the continuously-written silent tap chunks would
+                // keep an ended call alive forever here too.
+                let recent_output_chunk = db.has_recent_output_audio(30).await.unwrap_or(false);
+                let recent_voice_activity = detector.as_ref().map_or(true, |d| {
+                    d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
+                });
+                let calendar_active = has_active_calendar_event(&calendar_events, Utc::now());
+                audio_or_calendar_keepalive(
+                    recent_output_chunk,
+                    recent_voice_activity,
+                    calendar_active,
+                )
             } else {
                 false
             };
+            let was_active = matches!(state, MeetingState::Active { .. });
+            let was_ending = matches!(state, MeetingState::Ending { .. });
             let (new_state, ended_id) = handle_no_apps_running(state, keep_alive);
+            if is_active_ending_flap(was_active, was_ending, &new_state) {
+                flap_count = flap_count.saturating_add(1);
+            }
             state = new_state;
             if let Some(meeting_id) = ended_id {
                 let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
@@ -2979,6 +3100,15 @@ pub async fn run_meeting_detection_loop(
                     .await
                 {
                     Ok(()) => {
+                        // End-detection health telemetry (privacy-safe buckets only).
+                        capture_meeting_outcome(
+                            db.as_ref(),
+                            meeting_id,
+                            "auto_timeout",
+                            flap_count,
+                        )
+                        .await;
+                        flap_count = 0;
                         if let Err(e) = screenpipe_events::send_event(
                             "meeting_ended",
                             serde_json::json!({ "meeting_id": meeting_id }),
@@ -3053,23 +3183,37 @@ pub async fn run_meeting_detection_loop(
         // This applies to both browser meetings (e.g., Google Meet via Arc) and
         // native meeting apps (e.g., Zoom). Audio activity is a strong signal
         // that the user is still in the meeting even if UI controls are hidden.
-        let has_output_audio = if matches!(state, MeetingState::Ending { .. }) {
-            db.has_recent_output_audio(30).await.unwrap_or(false)
-        } else {
-            false
-        };
-        // A meeting also stays alive while a scheduled (non-all-day) calendar event
-        // is in progress: controls vanish during screen-share / minimize, but the
-        // event is strong evidence the meeting is still going. This only sustains an
-        // already-detected meeting (it never starts one), so a "Lunch" calendar
-        // entry can't trigger recording on its own. `has_output_audio` is kept
-        // separate so detection-decision telemetry stays audio-accurate.
-        let keep_alive = has_output_audio
-            || (matches!(state, MeetingState::Ending { .. })
-                && has_active_calendar_event(&calendar_events, Utc::now()));
+        // Audio-only liveness, kept separate so detection-decision telemetry stays
+        // audio-accurate. Only queried in Ending (the `&&` short-circuits the DB
+        // call otherwise). RMS-gated: a silent (output) chunk alone must not count.
+        let in_ending = matches!(state, MeetingState::Ending { .. });
+        let recent_output_chunk =
+            in_ending && db.has_recent_output_audio(30).await.unwrap_or(false);
+        // No detector wired (tests / detector disabled) -> default true.
+        let recent_voice_activity = detector.as_ref().map_or(true, |d| {
+            d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
+        });
+        let has_output_audio =
+            output_audio_keeps_meeting_alive(recent_output_chunk, recent_voice_activity);
+        // Keep an Ending meeting alive when controls are hidden but the call is still
+        // live: the audio liveness above OR an active (non-all-day) calendar event
+        // (sustains an already-detected meeting; never starts one). Same shared
+        // helper as the no-apps path so the gating can't drift between them.
+        let calendar_active = in_ending && has_active_calendar_event(&calendar_events, Utc::now());
+        let keep_alive = audio_or_calendar_keepalive(
+            recent_output_chunk,
+            recent_voice_activity,
+            calendar_active,
+        );
 
-        // 3. Advance state machine
+        // 3. Advance state machine. Capture the prev variant before the move so we
+        // can count Active<->Ending oscillation (end-detection health telemetry).
+        let was_active = matches!(state, MeetingState::Active { .. });
+        let was_ending = matches!(state, MeetingState::Ending { .. });
         let (new_state, action) = advance_state(state, &scan_results, keep_alive);
+        if is_active_ending_flap(was_active, was_ending, &new_state) {
+            flap_count = flap_count.saturating_add(1);
+        }
         state = new_state;
 
         // Adaptive interval based on state, gated on recent audio when Idle.
@@ -3088,6 +3232,8 @@ pub async fn run_meeting_detection_loop(
         if let Some(action) = action {
             match action {
                 StateAction::StartMeeting { app } => {
+                    // Fresh meeting -> reset the flap counter for outcome telemetry.
+                    flap_count = 0;
                     // Calendar enrichment: find overlapping calendar event
                     let (cal_title, cal_attendees) =
                         find_overlapping_calendar_event(&calendar_events);
@@ -3225,6 +3371,15 @@ pub async fn run_meeting_detection_loop(
                         {
                             Ok(()) => {
                                 info!("meeting v2: meeting ended (id={})", meeting_id);
+                                // End-detection health telemetry (privacy-safe buckets only).
+                                capture_meeting_outcome(
+                                    db.as_ref(),
+                                    meeting_id,
+                                    "auto_timeout",
+                                    flap_count,
+                                )
+                                .await;
+                                flap_count = 0;
                                 // Emit event so triggered pipes can react
                                 if let Err(e) = screenpipe_events::send_event(
                                     "meeting_ended",
@@ -3534,6 +3689,20 @@ async fn insert_new_meeting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_audio_keepalive_requires_real_voice_not_just_a_chunk() {
+        // The system-audio tap writes a recent (output) chunk continuously, even
+        // during silence — that alone must NOT keep an ended call alive, or a
+        // detected meeting never auto-finalizes (flaps Active<->Ending forever).
+        assert!(!output_audio_keeps_meeting_alive(true, false));
+        // A genuinely audible call (controls hidden: tab-switch / minimize /
+        // screen-share) stays alive.
+        assert!(output_audio_keeps_meeting_alive(true, true));
+        // No recent output chunk at all -> never kept alive by this signal.
+        assert!(!output_audio_keeps_meeting_alive(false, true));
+        assert!(!output_audio_keeps_meeting_alive(false, false));
+    }
 
     // ── audio-gated scan cadence tests ─────────────────────────────────
     // These pin the CPU optimisation: with apps open but no recent audio the
@@ -4152,6 +4321,167 @@ mod tests {
                  (regression of the cal.com false-positive class)"
             );
         }
+    }
+
+    #[test]
+    fn test_generic_profile_jitsi_is_host_qualified() {
+        // #4246: a bare "jitsi" substring matched any URL containing the word
+        // (e.g. github.com/jitsi/...), making the browser a phantom meeting
+        // candidate. Lock in that only the public host pattern remains.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        assert!(
+            !patterns.contains(&"jitsi"),
+            "bare 'jitsi' substring must not be a URL pattern (matches unrelated URLs like github.com/jitsi/...)"
+        );
+        assert!(
+            patterns.contains(&"meet.jit.si"),
+            "the public Jitsi host pattern must remain"
+        );
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_jitsi_in_unrelated_url() {
+        // Concrete #4246 regression set: ordinary browsing that contains the
+        // word "jitsi" (or is just an unrelated page) must NOT match.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://github.com/jitsi/jitsi-meet",
+            "https://github.com/screenpipe/screenpipe/issues",
+            "https://news.ycombinator.com/item?id=jitsi",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "unrelated URL {url:?} must NOT match a meeting profile (#4246)"
+            );
+        }
+        // A real Jitsi call URL must still match.
+        assert!(url_matches_any_pattern(
+            "https://meet.jit.si/MyStandupRoom",
+            patterns
+        ));
+    }
+
+    #[test]
+    fn test_url_without_query_or_fragment_strips_params() {
+        assert_eq!(
+            url_without_query_or_fragment("https://x.com/page?ref=meet.google.com/abc"),
+            "https://x.com/page"
+        );
+        assert_eq!(
+            url_without_query_or_fragment("https://meet.google.com/abc-defg-hij#pinned"),
+            "https://meet.google.com/abc-defg-hij"
+        );
+        // No query/fragment → unchanged.
+        assert_eq!(
+            url_without_query_or_fragment("https://zoom.us/j/123"),
+            "https://zoom.us/j/123"
+        );
+    }
+
+    #[test]
+    fn test_meeting_url_in_query_does_not_match_after_stripping() {
+        // A meeting URL carried in a query param (share/redirect link) must not
+        // count as being on that meeting page — this mirrors the AXDocument
+        // matching in `has_browser_meeting_url`.
+        let url = "https://app.example.com/redirect?to=https://meet.google.com/abc-defg-hij";
+        assert!(contains_case_insensitive(url, "meet.google.com"));
+        assert!(!contains_case_insensitive(
+            url_without_query_or_fragment(url),
+            "meet.google.com"
+        ));
+        // The genuine page URL still matches after stripping.
+        let real = "https://meet.google.com/abc-defg-hij?authuser=0";
+        assert!(contains_case_insensitive(
+            url_without_query_or_fragment(real),
+            "meet.google.com"
+        ));
+    }
+
+    /// Returns true if ANY profile considers this browser window a meeting.
+    fn any_profile_matches(url: Option<&str>, title: Option<&str>) -> bool {
+        load_detection_profiles()
+            .iter()
+            .any(|p| browser_window_matches_meeting(url, title, p))
+    }
+
+    #[test]
+    fn test_4246_real_browsing_titles_do_not_trigger_meetings() {
+        // The exact (window_title, browser_url) pairs screenpipe captured for
+        // Safari when the phantom fired (#4246). The titles are full of meeting
+        // keywords — an Amazon conference-camera shopping spree and the
+        // jitsi-meet GitHub repo — but NONE of these pages is a meeting.
+        let real_browsing: &[(&str, Option<&str>)] = &[
+            (
+                "Amazon.com: Owl Labs Meeting Owl 3 - 360° 1080p HD Conference Room Camera, \
+                 AI-Driven Speaker-Tracking, 18-Foot Mic Pickup - Certified for Microsoft Teams \
+                 - Works with Zoom, Google Meet - Plug & Play Setup : Electronics",
+                Some("https://www.amazon.com/Owl-360-Degree-Conference-Microphone-Automatic/dp/B0B193JVDJ/ref=pd_sbs"),
+            ),
+            (
+                "Amazon.com : Meeting Owl 4+ 360-Degree, 4K Smart Video Conference Camera, \
+                 Microphone, and Speaker (Certified for Microsoft Teams) : Electronics",
+                Some("https://www.amazon.com/Owl-360-Degree-Conference-Microphone-Equalizing/dp/B0D4FB77HG/ref=sr_1_1_sspa?keywords=meeting"),
+            ),
+            (
+                "meet - App on Amazon Appstore",
+                Some("https://www.amazon.com/amrit-meet/dp/B013JLWFDG/ref=sr_1_10?keywords=meet"),
+            ),
+            // Captured row where the window title and URL came from different
+            // tabs — title says "meet …" but the URL is a GitHub page. URL-first
+            // matching must trust the URL, not the stray title.
+            (
+                "meet - App on Amazon Appstore",
+                Some("https://github.com/screenpipe/screenpipe/issues"),
+            ),
+            ("Amazon.com : zoom", Some("https://www.amazon.com/s?k=zoom")),
+            (
+                "About Jitsi Meet | Free Video Conferencing Solutions",
+                Some("https://jitsi.org/jitsi-meet/"),
+            ),
+            (
+                "GitHub - jitsi/jitsi-meet: Jitsi Meet - Secure, Simple and Scalable Video Conferences",
+                Some("https://github.com/jitsi/jitsi-meet"),
+            ),
+            (
+                "Issues · screenpipe/screenpipe · GitHub",
+                Some("https://github.com/screenpipe/screenpipe/issues"),
+            ),
+        ];
+        for (title, url) in real_browsing {
+            assert!(
+                !any_profile_matches(*url, Some(title)),
+                "phantom #4246: browsing {title:?} (url {url:?}) must NOT be detected as a meeting"
+            );
+        }
+    }
+
+    #[test]
+    fn test_real_browser_meetings_still_detected() {
+        // Genuine meeting URLs must still match (no regression from the
+        // URL-first change).
+        assert!(any_profile_matches(
+            Some("https://meet.google.com/abc-defg-hij"),
+            Some("Meet - abc-defg-hij - Google Chrome")
+        ));
+        assert!(any_profile_matches(
+            Some("https://zoom.us/j/123?pwd=xyz"),
+            Some("Zoom Meeting")
+        ));
+        assert!(any_profile_matches(
+            Some("https://app.slack.com/huddle/T123/C456"),
+            Some("Slack")
+        ));
+        // Arc exposes no tab URL — the title "Meet" is the only signal and must
+        // still work via the title-pattern fallback.
+        assert!(any_profile_matches(None, Some("Meet")));
+        assert!(any_profile_matches(None, Some("Meet - abc-defg-hij - Arc")));
+        // But with a URL present, a "Meet"-ish title alone must NOT match.
+        assert!(!any_profile_matches(
+            Some("https://www.amazon.com/amrit-meet/dp/B013JLWFDG"),
+            Some("meet - App on Amazon Appstore")
+        ));
     }
 
     // ── State machine tests ────────────────────────────────────────────

@@ -316,7 +316,7 @@ function GoogleCalendarConnect({
     setBusy(true);
     setStatusText(null);
     try {
-      const result = await commands.oauthConnect("google-calendar", null);
+      const result = await commands.oauthConnect("google-calendar", null, null);
       if (result.status === "ok" && result.data.connected) {
         await onConnected();
         onClose();
@@ -349,7 +349,7 @@ function GoogleCalendarConnect({
             <Lock className="h-3.5 w-3.5" />pro required
           </Button>
           <button
-            onClick={() => openUrl("https://screenpi.pe/onboarding")}
+            onClick={() => openUrl("https://screenpipe.com/onboarding")}
             className="text-xs text-muted-foreground hover:text-foreground underline self-start"
           >
             upgrade to pro to connect

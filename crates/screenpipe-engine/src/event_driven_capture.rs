@@ -30,6 +30,30 @@ use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, warn};
 
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
+
+fn warm_visual_wait_duration(elapsed: Duration) -> Duration {
+    WARM_VISUAL_CHECK_INTERVAL
+        .saturating_sub(elapsed)
+        .min(WARM_FOCUS_BACKSTOP_INTERVAL)
+}
+
+async fn wait_for_warm_focus_or_timeout(
+    focus_controller: &Arc<crate::focus_aware_controller::FocusAwareController>,
+    monitor_id: u32,
+    duration: Duration,
+) {
+    if duration.is_zero() {
+        return;
+    }
+
+    let notify = focus_controller.notify_for(monitor_id);
+    tokio::select! {
+        _ = notify.notified() => {}
+        _ = tokio::time::sleep(duration) => {}
+    }
+}
 
 /// Stable configuration for a single capture invocation.
 ///
@@ -43,6 +67,7 @@ pub struct CaptureParams<'a> {
     pub snapshot_writer: &'a SnapshotWriter,
     pub tree_walker_config: &'a TreeWalkerConfig,
     pub window_filters: WindowFilters,
+    pub ignored_patterns: Vec<WindowPattern>,
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
     pub languages: &'a [screenpipe_core::Language],
@@ -315,12 +340,26 @@ impl Default for EventDrivenCaptureConfig {
 /// Idle detection still polls the ActivityFeed at ~50ms intervals;
 /// typing-pause / scroll-stop bursts now flow through the UI recorder
 /// so the resulting frame can be linked back to the originating row.
+/// Idle-capture interval cap while a meeting is active. Outside meetings the
+/// idle fallback is 30s (a slide can sit uncaptured that long if the visual
+/// detector's pixel threshold doesn't trip); during a call we force a capture
+/// at least this often so shared screens / slides are covered on a *guaranteed*
+/// floor rather than only when `VisualChange` happens to fire. Idle captures
+/// bypass content dedup (they're a workflow-checkpoint trigger), so this also
+/// writes through an unchanged AX-text hash. ~12 frames/min — bounded, and only
+/// during meetings.
+const MEETING_IDLE_CAPTURE_INTERVAL_MS: u64 = 5_000;
+
 pub struct EventDrivenCapture {
     config: EventDrivenCaptureConfig,
     /// Time of last capture
     last_capture: Instant,
     /// Time reference for periodic idle captures.
     last_idle_reference: Instant,
+    /// Whether a meeting is currently active (mirrors the HD snapshot's
+    /// `meeting`). Caps the idle-capture interval to
+    /// `MEETING_IDLE_CAPTURE_INTERVAL_MS` while true.
+    in_meeting: bool,
 }
 
 impl EventDrivenCapture {
@@ -330,6 +369,20 @@ impl EventDrivenCapture {
             config,
             last_capture: now,
             last_idle_reference: now,
+            in_meeting: false,
+        }
+    }
+
+    /// Effective idle-capture interval, capped while in a meeting. Uses `min`
+    /// so it never *raises* an already-shorter interval set by HD or an
+    /// aggressive power profile.
+    fn effective_idle_capture_interval_ms(&self) -> u64 {
+        if self.in_meeting {
+            self.config
+                .idle_capture_interval_ms
+                .min(MEETING_IDLE_CAPTURE_INTERVAL_MS)
+        } else {
+            self.config.idle_capture_interval_ms
         }
     }
 
@@ -347,7 +400,7 @@ impl EventDrivenCapture {
 
     /// Phase the next idle capture without changing the normal debounce clock.
     pub fn phase_next_idle_capture(&mut self, delay: Duration) {
-        let idle_interval = Duration::from_millis(self.config.idle_capture_interval_ms);
+        let idle_interval = Duration::from_millis(self.effective_idle_capture_interval_ms());
         let now = Instant::now();
         self.last_idle_reference = if delay >= idle_interval {
             now
@@ -359,7 +412,7 @@ impl EventDrivenCapture {
     /// Check if we need an idle capture (no capture for too long).
     pub fn needs_idle_capture(&self) -> bool {
         self.last_idle_reference.elapsed()
-            >= Duration::from_millis(self.config.idle_capture_interval_ms)
+            >= Duration::from_millis(self.effective_idle_capture_interval_ms())
     }
 
     /// Poll timer-driven state and return a trigger if a capture should happen.
@@ -655,6 +708,11 @@ pub async fn event_driven_capture_loop(
     // the video / slide-flip / demo-replay case the AX-text dedup otherwise
     // suppresses. Stays false when no controller is wired.
     let mut hd_active = false;
+    // Whether the meeting detector currently reports an active call. Read from
+    // the same per-tick HD snapshot as `hd_active`. Lets visual-change frames
+    // (slides, screen-share, demos) bypass AX-hash dedup during meetings even
+    // when no HD session is running. Stays false when no controller is wired.
+    let mut in_meeting = false;
 
     let capture_params = CaptureParams {
         db: &db,
@@ -668,6 +726,7 @@ pub async fn event_driven_capture_loop(
             &tree_walker_config.included_windows,
             &tree_walker_config.ignored_urls,
         ),
+        ignored_patterns: WindowPattern::parse_list(&tree_walker_config.ignored_windows),
         use_pii_removal,
         pause_on_drm_content,
         languages: &languages,
@@ -698,6 +757,7 @@ pub async fn event_driven_capture_loop(
                 &mut walk_budget,
                 false, // screenshot enabled on startup
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
+                false, // not in a meeting at startup
             ),
         )
         .await
@@ -717,6 +777,13 @@ pub async fn event_driven_capture_loop(
                     }
                     vision_metrics.record_capture();
                     vision_metrics.record_db_write(Duration::from_millis(result.duration_ms));
+                    // OCR metrics: record once per OCR run (each run = cache miss).
+                    if let Some(ocr_ms) = result.ocr_duration_ms {
+                        vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
+                        if result.ocr_was_empty {
+                            vision_metrics.record_ocr_empty();
+                        }
+                    }
                     if let Some(ref cache) = hot_frame_cache {
                         push_to_hot_cache(cache, result, &device_name, &CaptureTrigger::Manual)
                             .await;
@@ -725,6 +792,10 @@ pub async fn event_driven_capture_loop(
                         "startup capture for monitor {}: frame_id={}, dur={}ms",
                         monitor_id, result.frame_id, result.duration_ms
                     );
+                } else if let Some(kind) = output.corrupt {
+                    // Frame rejected as corrupt (black / green band) — distinct
+                    // counter, not a dedup. Both tick the stall clock.
+                    vision_metrics.record_corrupt_skip(matches!(kind, CorruptKind::GreenBand));
                 } else {
                     // Symmetry with the live loop — startup capture rarely
                     // hits dedup (no prior hash on first frame) but if it
@@ -813,8 +884,10 @@ pub async fn event_driven_capture_loop(
                     // The full-rate Active path costs far more (OCR + DB +
                     // a11y tree walk) — Warm does a screenshot + 15×15 sample
                     // diff and only progresses if the diff crosses threshold.
-                    if last_warm_visual_check.elapsed() < Duration::from_secs(5) {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    let warm_wait = warm_visual_wait_duration(last_warm_visual_check.elapsed());
+                    if !warm_wait.is_zero() {
+                        wait_for_warm_focus_or_timeout(&focus_controller, monitor_id, warm_wait)
+                            .await;
                         continue;
                     }
                     last_warm_visual_check = Instant::now();
@@ -822,7 +895,12 @@ pub async fn event_driven_capture_loop(
                     // Without a comparer (visual_check disabled globally),
                     // we can't cheaply detect change — idle.
                     let Some(ref mut comparer) = frame_comparer else {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        wait_for_warm_focus_or_timeout(
+                            &focus_controller,
+                            monitor_id,
+                            warm_visual_wait_duration(Duration::ZERO),
+                        )
+                        .await;
                         continue;
                     };
 
@@ -844,13 +922,23 @@ pub async fn event_driven_capture_loop(
                                 // Fall through to normal capture path with
                                 // warm_trigger_override set.
                             } else {
-                                tokio::time::sleep(Duration::from_millis(250)).await;
+                                wait_for_warm_focus_or_timeout(
+                                    &focus_controller,
+                                    monitor_id,
+                                    warm_visual_wait_duration(Duration::ZERO),
+                                )
+                                .await;
                                 continue;
                             }
                         }
                         Err(e) => {
                             debug!("warm visual check failed on monitor {}: {}", monitor_id, e);
-                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            wait_for_warm_focus_or_timeout(
+                                &focus_controller,
+                                monitor_id,
+                                warm_visual_wait_duration(Duration::ZERO),
+                            )
+                            .await;
                             continue;
                         }
                     }
@@ -1012,6 +1100,11 @@ pub async fn event_driven_capture_loop(
             // Source of truth for dedup-bypass this tick. Read from the same
             // snapshot as the interval install so the two can't disagree.
             hd_active = snap.active;
+            in_meeting = snap.meeting.unwrap_or(false);
+            // Cap the idle-capture interval while in a meeting so the shared
+            // screen is captured on a guaranteed floor, not just when the
+            // visual detector trips.
+            state.in_meeting = in_meeting;
             if let Some(new_ms) = high_fps.on_controller_state(
                 snap.effective_interval_ms(),
                 state.config.min_capture_interval_ms,
@@ -1291,6 +1384,7 @@ pub async fn event_driven_capture_loop(
                         &mut walk_budget,
                         screenshot_disabled,
                         hd_active,
+                        in_meeting,
                     ),
                 )
                 .await;
@@ -1332,6 +1426,15 @@ pub async fn event_driven_capture_loop(
                             vision_metrics.record_capture();
                             vision_metrics
                                 .record_db_write(Duration::from_millis(result.duration_ms));
+                            // OCR metrics: record once per OCR run. Each run is a
+                            // cache miss (no OCR result cache exists). `ocr_duration_ms`
+                            // is Some only when OCR actually ran for this frame.
+                            if let Some(ocr_ms) = result.ocr_duration_ms {
+                                vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
+                                if result.ocr_was_empty {
+                                    vision_metrics.record_ocr_empty();
+                                }
+                            }
 
                             if let Some(ref cache) = hot_frame_cache {
                                 push_to_hot_cache(cache, result, &device_name, &trigger).await;
@@ -1368,17 +1471,24 @@ pub async fn event_driven_capture_loop(
                                 monitor_id
                             );
                         } else {
-                            // Content dedup or window filter — capture skipped.
-                            // Tick last_db_write_ts anyway so the health check
-                            // doesn't flag a stall just because the screen is
-                            // static. The pipeline IS healthy; there's just
-                            // nothing new worth writing. Without this, sitting
-                            // on a Zoom call / slide deck / IDE waiting for
-                            // 60+ seconds emits a false-alarm "vision DB
-                            // writes stalled" WARN and (if the user has
-                            // showRestartNotifications enabled) a Tauri
-                            // notification claiming screen capture is broken.
-                            vision_metrics.record_dedup_skip();
+                            // Capture skipped — content dedup, window filter, or
+                            // a corrupt (black / green-band) frame. Either way
+                            // tick last_db_write_ts (record_* both do) so the
+                            // health check doesn't flag a stall just because the
+                            // screen is static / momentarily unusable. The
+                            // pipeline IS healthy; there's nothing worth writing.
+                            // Without this, sitting on a Zoom call / slide deck /
+                            // IDE for 60+ seconds emits a false-alarm "vision DB
+                            // writes stalled" WARN and (if showRestartNotifications
+                            // is enabled) a Tauri notification claiming capture is
+                            // broken. Corrupt frames get their own counter so a
+                            // spike is visible instead of inflating dedup_skips.
+                            if let Some(kind) = output.corrupt {
+                                vision_metrics
+                                    .record_corrupt_skip(matches!(kind, CorruptKind::GreenBand));
+                            } else {
+                                vision_metrics.record_dedup_skip();
+                            }
                             debug!(
                                 "capture skipped DB write for monitor {} (trigger={})",
                                 monitor_id,
@@ -1417,6 +1527,11 @@ pub async fn event_driven_capture_loop(
                         // on systems where capture fundamentally can't work
                         // (e.g. Wayland without ZwlrScreencopy).
                         state.mark_captured();
+
+                        // Count the lost frame so telemetry can see it. Without
+                        // this the error path was invisible — `frames_dropped`
+                        // stayed 0 fleet-wide and the only signal was a log line.
+                        vision_metrics.record_drop_error();
 
                         if consecutive_capture_errors == 1 {
                             // First failure — log at error level (shows in Sentry)
@@ -1461,8 +1576,15 @@ pub async fn event_driven_capture_loop(
                     Err(_timeout) => {
                         consecutive_capture_errors += 1;
                         state.mark_captured();
+
+                        // Count the lost frame. This path drops a frame whose
+                        // JPEG may already be on disk (orphaned, no DB row) —
+                        // it is the silent-vision-loss path and was previously
+                        // uncounted, so `frames_dropped` read 0 fleet-wide.
+                        vision_metrics.record_drop_timeout();
                         warn!(
-                            "event capture timed out (trigger={}, monitor={}) — DB pool may be saturated",
+                            "event capture timed out after {:?} (trigger={}, monitor={}) — frame dropped; likely a stuck DB write / saturated write pool or a slow a11y/OCR step",
+                            CAPTURE_OPERATION_TIMEOUT,
                             trigger.as_str(),
                             monitor_id
                         );
@@ -1558,6 +1680,10 @@ struct CaptureOutput {
     image: image::DynamicImage,
     /// Whether elements were deduped (referenced another frame's elements).
     elements_deduped: bool,
+    /// Set when `result` is `None` because the frame was rejected as corrupt
+    /// (rather than skipped by content dedup). Lets the caller record the right
+    /// telemetry counter. `None` on every non-corruption path.
+    corrupt: Option<CorruptKind>,
 }
 
 fn resolve_capture_metadata(
@@ -1639,22 +1765,11 @@ fn resolve_capture_metadata(
 /// Returns `true` if this capture should be skipped (too recent).
 fn terminal_ocr_throttled(app_name: &str) -> bool {
     const INTERVAL: Duration = Duration::from_secs(30);
-    let n = app_name.to_lowercase();
-    // Mirror the app_prefers_ocr list in paired_capture.rs: terminals whose
-    // AX tree is raw buffer / window chrome and OCR is the only useful source.
-    let is_ocr_only = n.contains("wezterm")
-        || n.contains("alacritty")
-        || n.contains("kitty")
-        || n.contains("hyper")
-        || n.contains("warp");
-    // Electron editors whose AX tree is frequently empty/thin. OCR would run
-    // as a fallback on every capture otherwise — prohibitively expensive on a
-    // fullscreen Obsidian editor.
-    let is_electron_editor = n == "obsidian";
-    if !is_ocr_only && !is_electron_editor {
+    if !is_ocr_heavy_app(app_name) {
         return false;
     }
 
+    let app_key = app_name.to_lowercase();
     static LAST_CAPTURE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
     let map = LAST_CAPTURE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = match map.lock() {
@@ -1663,13 +1778,40 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
         Err(_) => return false,
     };
     let now = Instant::now();
-    match guard.get(&n) {
+    match guard.get(&app_key) {
         Some(&last) if now.duration_since(last) < INTERVAL => true,
         _ => {
-            guard.insert(n, now);
+            guard.insert(app_key, now);
             false
         }
     }
+}
+
+/// Apps whose accessibility tree tends to be thin, making OCR fallback expensive.
+fn is_ocr_heavy_app(app_name: &str) -> bool {
+    contains_ascii_case_insensitive(app_name, "wezterm")
+        || contains_ascii_case_insensitive(app_name, "alacritty")
+        || contains_ascii_case_insensitive(app_name, "kitty")
+        || contains_ascii_case_insensitive(app_name, "hyper")
+        || contains_ascii_case_insensitive(app_name, "warp")
+        || app_name.eq_ignore_ascii_case("obsidian")
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn is_lock_screen_app(app_name: &str) -> bool {
+    app_name.eq_ignore_ascii_case("loginwindow")
+        || app_name.eq_ignore_ascii_case("screensaverengine")
+        || app_name.eq_ignore_ascii_case("lockscreen")
 }
 
 /// Decide whether content dedup applies to this capture attempt.
@@ -1686,8 +1828,24 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
 ///   clipboard actions, and shortcut keypresses must leave a durable checkpoint
 ///   even when visible text is unchanged.
 /// - the 30s time-floor has elapsed: forces a write even if the hash matches.
-fn dedup_applies(trigger: &CaptureTrigger, hd_active: bool, since_last_db_write: Duration) -> bool {
+/// - `in_meeting` + a `VisualChange` trigger: while a meeting is detected, a
+///   visual change means the shared screen / slide / video moved pixels even
+///   though the AX-tree text is unchanged — exactly the content the meeting
+///   summary needs. Hash dedup keyed on AX text would otherwise drop it, so we
+///   let these through at the visual-change cadence. This is a lighter-weight,
+///   meeting-scoped version of HD's full dedup bypass: it only fires while the
+///   detector reports `is_in_meeting()` AND only for visual-change triggers, so
+///   it can't bloat normal-desktop capture (a playing video on the desktop is
+///   still deduped; the same video shared in a call is not).
+fn dedup_applies(
+    trigger: &CaptureTrigger,
+    hd_active: bool,
+    in_meeting: bool,
+    since_last_db_write: Duration,
+) -> bool {
+    let meeting_visual_change = in_meeting && matches!(trigger, CaptureTrigger::VisualChange);
     !hd_active
+        && !meeting_visual_change
         && !is_workflow_checkpoint_trigger(trigger)
         && since_last_db_write < Duration::from_secs(30)
 }
@@ -1726,8 +1884,8 @@ fn bypasses_capture_throttles(trigger: &CaptureTrigger) -> bool {
 /// `CaptureOutput.result` will be `None` in that case — the caller should still
 /// update the frame comparer with the image but skip DB/metrics work.
 ///
-/// `hd_active` bypasses content dedup entirely for this capture — see
-/// [`dedup_applies`].
+/// `hd_active` bypasses content dedup entirely for this capture; `in_meeting`
+/// bypasses it only for visual-change triggers — see [`dedup_applies`].
 #[allow(clippy::too_many_arguments)]
 async fn do_capture(
     params: &CaptureParams<'_>,
@@ -1738,6 +1896,7 @@ async fn do_capture(
     walk_budget: &mut screenpipe_a11y::budget::AppWalkBudget,
     screenshot_disabled: bool,
     hd_active: bool,
+    in_meeting: bool,
 ) -> Result<CaptureOutput> {
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
@@ -1757,21 +1916,35 @@ async fn do_capture(
         capture_dur, params.monitor_id
     );
 
-    // When an ignored window covers most of a monitor, SCK replaces its
-    // pixels with black.  The resulting frame is nearly all-black — storing
-    // it wastes the tree walk, OCR, DB write, and produces ugly black frames
-    // in the timeline.  Detect this cheaply by sampling pixels: if >95% are
-    // near-black, skip everything but still return the image so the frame
-    // comparer stays updated (prevents re-triggering on the same black frame).
-    if is_frame_mostly_black(&image) {
-        debug!(
-            "captured frame is mostly black on monitor {} — skipping DB write (likely ignored window covering screen)",
-            params.monitor_id
-        );
+    // Skip frames that are unusable for indexing.  Two cases:
+    //   1. Near-all-black — an ignored window covering the monitor; SCK fills
+    //      its pixels black.
+    //   2. A flat green "garbage" band anchored to the bottom of the frame —
+    //      what a truncated / partially-written capture decodes to (users
+    //      report screenshots whose lower portion is solid green).
+    // Storing either wastes the tree walk, OCR, and DB write and surfaces an
+    // ugly frame in the timeline.  Detect cheaply by sampling pixels, skip the
+    // write, but still return the image so the frame comparer stays updated
+    // (prevents re-triggering on the same bad frame). The caller records the
+    // matching telemetry counter from `corrupt`.
+    if let Some(kind) = frame_corruption(&image) {
+        match kind {
+            // Green is the notable, rarer signal — surface it at warn so it
+            // shows up in shared logs. Black is common (DRM / excluded window).
+            CorruptKind::GreenBand => warn!(
+                "captured frame has a green decode-garbage band on monitor {} — skipping DB write",
+                params.monitor_id
+            ),
+            CorruptKind::Black => debug!(
+                "captured frame is mostly black on monitor {} — skipping DB write",
+                params.monitor_id
+            ),
+        }
         return Ok(CaptureOutput {
             result: None,
             image,
             elements_deduped: false,
+            corrupt: Some(kind),
         });
     }
 
@@ -1818,6 +1991,7 @@ async fn do_capture(
                     result: None,
                     image,
                     elements_deduped: false,
+                    corrupt: None,
                 });
             }
         }
@@ -1840,6 +2014,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         } else if !decision.walk {
             debug!(
@@ -1861,20 +2036,77 @@ async fn do_capture(
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
 
-    // Record walk cost for adaptive budget before consuming the result
-    if let TreeWalkResult::Found(ref snap) = tree_walk_result {
-        walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
-        if snap.walk_duration > std::time::Duration::from_millis(100) {
-            let next = walk_budget.should_walk(&snap.app_name);
-            debug!(
-                "walk budget: {}ms for {} → tier={:?} (next: max_nodes={}, timeout={}ms)",
-                snap.walk_duration.as_millis(),
-                snap.app_name,
-                next.tier,
-                next.max_nodes,
-                next.timeout.as_millis(),
-            );
+    // Record walk cost for adaptive budget before consuming the result, and
+    // feed the a11y health/analytics accumulator (ax_* counters) for EVERY
+    // walk outcome. Found → stored/deduped/empty (deduped when the content
+    // hash matches the previous frame under the same dedup gate used below);
+    // NotFound → error. Skipped windows are intentionally NOT counted as walk
+    // attempts — they're user/incognito filters, not real walks.
+    match tree_walk_result {
+        TreeWalkResult::Found(ref snap) => {
+            walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
+            if snap.walk_duration > std::time::Duration::from_millis(100) {
+                let next = walk_budget.should_walk(&snap.app_name);
+                debug!(
+                    "walk budget: {}ms for {} → tier={:?} (next: max_nodes={}, timeout={}ms)",
+                    snap.walk_duration.as_millis(),
+                    snap.app_name,
+                    next.tier,
+                    next.max_nodes,
+                    next.timeout.as_millis(),
+                );
+            }
+
+            use screenpipe_a11y::tree::TruncationReason;
+            if snap.text_content.is_empty() {
+                crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Empty);
+            } else {
+                let duration_ms = snap.walk_duration.as_millis() as u64;
+                let node_count = snap.node_count as u64;
+                let max_depth = snap.max_depth_reached as u64;
+                // UTF-8 byte length (O(1)) as a cheap text-volume proxy —
+                // avoids an O(n) char-count scan on the capture path.
+                let text_chars = snap.text_content.len() as u64;
+                let truncated = snap.truncated;
+                let truncated_timeout = matches!(snap.truncation_reason, TruncationReason::Timeout);
+                let truncated_max_nodes =
+                    matches!(snap.truncation_reason, TruncationReason::MaxNodes);
+                // Mirror the downstream content-dedup gate: a non-empty walk
+                // whose hash matches the previous frame (and which is dedup
+                // eligible) won't be stored — count it as deduped.
+                let is_dedup =
+                    dedup_applies(trigger, hd_active, in_meeting, last_db_write.elapsed())
+                        && previous_content_hash
+                            .is_some_and(|prev| prev == snap.content_hash as i64 && prev != 0);
+                let outcome = if is_dedup {
+                    crate::ui_recorder::TreeWalkOutcome::Deduped {
+                        duration_ms,
+                        node_count,
+                        max_depth,
+                        text_chars,
+                        truncated,
+                        truncated_timeout,
+                        truncated_max_nodes,
+                    }
+                } else {
+                    crate::ui_recorder::TreeWalkOutcome::Stored {
+                        duration_ms,
+                        node_count,
+                        max_depth,
+                        text_chars,
+                        truncated,
+                        truncated_timeout,
+                        truncated_max_nodes,
+                    }
+                };
+                crate::ui_recorder::record_tree_walk(outcome);
+            }
         }
+        TreeWalkResult::NotFound => {
+            crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Error);
+        }
+        // Skipped: user filter / incognito — not a walk attempt, don't count.
+        TreeWalkResult::Skipped(_) => {}
     }
 
     let tree_snapshot = match tree_walk_result {
@@ -1888,6 +2120,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         }
         TreeWalkResult::NotFound => None,
@@ -1898,17 +2131,14 @@ async fn do_capture(
     // matches an ignored-window pattern, bail out now to prevent OCR from
     // capturing text from an excluded window (e.g. startup capture while
     // Bitwarden is focused but AX hadn't initialized yet).
-    // Parse ignored-window patterns once per capture — the two gates below
-    // (tree-missing fallback + post-resolution final gate) share this slice.
-    let ignored_patterns = WindowPattern::parse_list(&params.tree_walker_config.ignored_windows);
-
+    // Reuse the ignored-window patterns parsed at capture-loop startup.
     if tree_snapshot.is_none() {
         if let Some(ref app) = trigger_app {
             let app_lower = app.to_lowercase();
             // Without window title we can only fire legacy unscoped patterns;
             // scoped `App::Title` patterns defer to the post-resolution gate
             // below where the full pair is known.
-            if window_pattern::matches_any(&ignored_patterns, &app_lower, "") {
+            if window_pattern::matches_any(&params.ignored_patterns, &app_lower, "") {
                 debug!(
                     "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
                     app, params.monitor_id
@@ -1917,6 +2147,7 @@ async fn do_capture(
                     result: None,
                     image,
                     elements_deduped: false,
+                    corrupt: None,
                 });
             }
         }
@@ -1925,7 +2156,7 @@ async fn do_capture(
     // Content dedup: skip capture if accessibility text hasn't changed.
     // Never dedup Idle/Manual triggers, bypass entirely during HD sessions, and
     // force a write every 30s even if the hash matches — see `dedup_applies`.
-    let dedup_eligible = dedup_applies(trigger, hd_active, last_db_write.elapsed());
+    let dedup_eligible = dedup_applies(trigger, hd_active, in_meeting, last_db_write.elapsed());
     if dedup_eligible {
         if let Some(ref snap) = tree_snapshot {
             if !snap.text_content.is_empty() {
@@ -1942,6 +2173,7 @@ async fn do_capture(
                             result: None,
                             image,
                             elements_deduped: false,
+                            corrupt: None,
                         });
                     }
                 }
@@ -1958,11 +2190,7 @@ async fn do_capture(
     // Also update the global SCREEN_IS_LOCKED flag so subsequent loop iterations
     // skip the screenshot entirely (saves CPU).
     if let Some(ref app) = app_name_owned {
-        let app_lower = app.to_lowercase();
-        if app_lower == "loginwindow"
-            || app_lower == "screensaverengine"
-            || app_lower == "lockscreen"
-        {
+        if is_lock_screen_app(app) {
             warn!(
                 "skipping capture: lock screen app '{}' on monitor {}",
                 app, params.monitor_id
@@ -1972,6 +2200,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         } else if crate::sleep_monitor::screen_is_locked() {
             // Screen was marked locked but now a real app is focused — unlock
@@ -1993,6 +2222,7 @@ async fn do_capture(
             result: None,
             image,
             elements_deduped: false,
+            corrupt: None,
         });
     }
 
@@ -2008,7 +2238,7 @@ async fn do_capture(
             .as_deref()
             .unwrap_or_default()
             .to_lowercase();
-        if window_pattern::matches_any(&ignored_patterns, &check_app, &check_win) {
+        if window_pattern::matches_any(&params.ignored_patterns, &check_app, &check_win) {
             debug!(
                 "skipping capture: resolved app='{}' / window='{}' matches ignored pattern on monitor {}",
                 check_app, check_win, params.monitor_id
@@ -2017,6 +2247,7 @@ async fn do_capture(
                 result: None,
                 image,
                 elements_deduped: false,
+                corrupt: None,
             });
         }
     }
@@ -2033,6 +2264,7 @@ async fn do_capture(
             result: None,
             image,
             elements_deduped: false,
+            corrupt: None,
         });
     }
 
@@ -2064,6 +2296,7 @@ async fn do_capture(
         result: Some(result),
         image,
         elements_deduped: deduped,
+        corrupt: None,
     })
 }
 
@@ -2144,52 +2377,210 @@ fn query_frontmost_app_name_uncached() -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Cheaply detect if a captured frame is predominantly black.
+/// Grid dimension for the corruption sampler: a ~15×15 grid ≈ 225 points.
+const CORRUPT_GRID: usize = 15;
+
+/// True if `px` is the green a zeroed-chroma / truncated-JPEG fill takes.
 ///
-/// When ScreenCaptureKit excludes an ignored window, the excluded pixels
-/// become black.  If the window covers most of the monitor the frame is
-/// nearly all-black — we want to skip storing it.
+/// Zeroed YUV420 chroma decodes to roughly `(0, 135..255, 0)` in RGB — a
+/// bright green with red and blue both near zero. We keep red/blue low and
+/// require a clear green margin so muddy/olive greens that appear in real
+/// content (foliage, design tools, dark-green themes) don't match. The
+/// flat-color (spread) check in [`sample_frame_corruption`] tightens this
+/// further.
+fn is_garbage_green(px: [u8; 3]) -> bool {
+    let [r, g, b] = px;
+    g >= 100 && r <= 70 && b <= 70 && g >= r.saturating_add(60) && g >= b.saturating_add(60)
+}
+
+/// Result of one cheap pass over a captured frame's sample grid.
+struct FrameCorruption {
+    /// Fraction of sampled pixels that are near-black (`R+G+B < 15`).
+    black_ratio: f64,
+    /// A flat green decode-garbage band is anchored to the bottom of the frame.
+    green_band: bool,
+}
+
+/// Sample a captured frame ONCE and compute every corruption signal we need.
 ///
-/// Strategy: sample a grid of pixels (≈200 points) and check if >95% have
-/// an RGB sum below a threshold.  Real content — even dark-mode apps — has
-/// variation (scrollbars, text, status bar).  Pure SCK-excluded regions are
-/// exactly `(0, 0, 0)` or very close to it.
-fn is_frame_mostly_black(image: &image::DynamicImage) -> bool {
-    let rgb = image.to_rgb8();
-    let (w, h) = rgb.dimensions();
+/// Reads ~225 pixels straight from the `DynamicImage` via `get_pixel` — there
+/// is deliberately **no** `to_rgb8()`, so the whole check is a few hundred
+/// indexed reads with zero per-frame allocation, regardless of resolution (4K
+/// is the same cost as 720p). It runs on every captured frame, so this matters.
+///
+/// Two signals:
+///   * **black** — when ScreenCaptureKit excludes an ignored window (or a
+///     monitor is asleep / shows DRM-protected content), the pixels come back
+///     `(0,0,0)`. >95% near-black ⇒ skip. Real content, even dark mode, has
+///     variation (scrollbars, text, status bar) and won't trip it.
+///   * **green band** — a truncated MJPEG frame / partially written capture
+///     buffer decodes to normal content at the top and a single flat green
+///     fill for every row past the truncation point, always anchored to the
+///     BOTTOM. We require a contiguous run of bottom rows that are (a)
+///     overwhelmingly `is_garbage_green`, (b) a single near-uniform color (a
+///     decode fill, not textured content), (c) ≥20% of the height and ≥3 rows,
+///     and (d) sitting below real content (the top row is NOT green). (d) is
+///     the key false-positive guard: a green-screen backdrop, a green IDE/
+///     terminal, or a flat green design canvas is green *throughout*, so it
+///     never shows the content→green transition a partial decode does, and is
+///     left alone. Skipping a frame is cheap (we re-capture within the capture
+///     interval), so the cost asymmetry favors rejecting only this exact shape.
+fn sample_frame_corruption(image: &image::DynamicImage) -> FrameCorruption {
+    use image::GenericImageView;
+
+    let (w, h) = image.dimensions();
     if w == 0 || h == 0 {
-        return true;
+        // Degenerate frame — treat as black so it's skipped.
+        return FrameCorruption {
+            black_ratio: 1.0,
+            green_band: false,
+        };
     }
 
-    // Sample on a ~15×15 grid ≈ 225 points (sub-microsecond)
-    let step_x = (w / 15).max(1);
-    let step_y = (h / 15).max(1);
+    let step_x = (w / CORRUPT_GRID as u32).max(1);
+    let step_y = (h / CORRUPT_GRID as u32).max(1);
+
     let mut total = 0u32;
     let mut black = 0u32;
+    // Per sampled row: garbage-green fraction + per-row channel min/max.
+    let mut green_frac = [0f64; CORRUPT_GRID];
+    let mut row_min = [[255u8; 3]; CORRUPT_GRID];
+    let mut row_max = [[0u8; 3]; CORRUPT_GRID];
 
+    let mut sampled_rows = 0usize;
     let mut y = 0;
-    while y < h {
+    while y < h && sampled_rows < CORRUPT_GRID {
+        let mut row_total = 0u32;
+        let mut row_green = 0u32;
         let mut x = 0;
         while x < w {
+            let p = image.get_pixel(x, y);
+            let px = [p[0], p[1], p[2]];
             total += 1;
-            let px = rgb.get_pixel(x, y);
-            // Threshold: R+G+B < 15 — catches pure black and near-black
-            // from JPEG compression artifacts but not real dark-mode content.
+            row_total += 1;
             if (px[0] as u16 + px[1] as u16 + px[2] as u16) < 15 {
                 black += 1;
             }
+            if is_garbage_green(px) {
+                row_green += 1;
+                for c in 0..3 {
+                    row_min[sampled_rows][c] = row_min[sampled_rows][c].min(px[c]);
+                    row_max[sampled_rows][c] = row_max[sampled_rows][c].max(px[c]);
+                }
+            }
             x += step_x;
         }
+        green_frac[sampled_rows] = if row_total > 0 {
+            row_green as f64 / row_total as f64
+        } else {
+            0.0
+        };
+        sampled_rows += 1;
         y += step_y;
     }
 
-    let ratio = black as f64 / total as f64;
-    ratio > 0.95
+    let black_ratio = if total > 0 {
+        black as f64 / total as f64
+    } else {
+        1.0
+    };
+
+    // Contiguous run of ≥90%-green rows anchored at the bottom, accumulating
+    // the color spread over only those band rows.
+    let mut band = 0usize;
+    let (mut gmin, mut gmax) = ([255u8; 3], [0u8; 3]);
+    for r in (0..sampled_rows).rev() {
+        if green_frac[r] < 0.9 {
+            break;
+        }
+        band += 1;
+        for c in 0..3 {
+            gmin[c] = gmin[c].min(row_min[r][c]);
+            gmax[c] = gmax[c].max(row_max[r][c]);
+        }
+    }
+    let band_fraction = band as f64 / sampled_rows.max(1) as f64;
+    let spread = (0..3)
+        .map(|c| gmax[c].saturating_sub(gmin[c]))
+        .max()
+        .unwrap_or(255);
+    // (d) real content must sit above the band — the top sampled row is not
+    // green. This is what separates a partial decode from an intentionally
+    // green screen (which is green top-to-bottom).
+    let content_above = sampled_rows > 0 && green_frac[0] < 0.5;
+
+    let green_band = h >= 8 // too short to reason about a band
+        && band >= 3
+        && band_fraction >= 0.20
+        && spread <= 24
+        && content_above;
+
+    FrameCorruption {
+        black_ratio,
+        green_band,
+    }
+}
+
+/// Why a captured frame is unusable for indexing. Surfaced to telemetry so a
+/// spike in black vs green skips is distinguishable (and not folded into the
+/// dedup-skip counter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorruptKind {
+    /// Near-all-black: an excluded/ignored window covering the monitor, a
+    /// sleeping display, or a DRM-protected surface SCK returns as black.
+    Black,
+    /// A flat green decode-garbage band — a truncated / partially-written
+    /// capture. The signal behind the "bottom of my screenshot is green" reports.
+    GreenBand,
+}
+
+/// Classify a captured frame's corruption, if any. One cheap pass computes both
+/// signals (see [`sample_frame_corruption`]); black takes precedence as the
+/// cheaper, more certain signal.
+fn frame_corruption(image: &image::DynamicImage) -> Option<CorruptKind> {
+    let s = sample_frame_corruption(image);
+    if s.black_ratio > 0.95 {
+        Some(CorruptKind::Black)
+    } else if s.green_band {
+        Some(CorruptKind::GreenBand)
+    } else {
+        None
+    }
+}
+
+/// Convenience predicate used by tests.
+#[cfg(test)]
+fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
+    frame_corruption(image).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warm_visual_wait_duration_tracks_remaining_cadence_with_backstop() {
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(0)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(2)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_millis(4_750)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(5)),
+            Duration::from_secs(0)
+        );
+        assert_eq!(
+            warm_visual_wait_duration(Duration::from_secs(8)),
+            Duration::from_secs(0)
+        );
+    }
 
     #[test]
     fn test_capture_trigger_as_str() {
@@ -2252,10 +2643,17 @@ mod tests {
         let recent = Duration::from_secs(5);
         let stale = Duration::from_secs(31);
 
-        // Baseline: a change-driven trigger within the 30s floor → dedup applies.
-        assert!(dedup_applies(&CaptureTrigger::VisualChange, false, recent));
+        // Baseline (not in a meeting): a change-driven trigger within the 30s
+        // floor → dedup applies.
+        assert!(dedup_applies(
+            &CaptureTrigger::VisualChange,
+            false,
+            false,
+            recent
+        ));
         assert!(dedup_applies(
             &CaptureTrigger::Click { x: 10, y: 20 },
+            false,
             false,
             recent
         ));
@@ -2265,6 +2663,7 @@ mod tests {
                 target: None,
             },
             false,
+            false,
             recent
         ));
         assert!(!dedup_applies(
@@ -2273,29 +2672,84 @@ mod tests {
                 target: None,
             },
             false,
+            false,
             recent
         ));
-        assert!(!dedup_applies(&CaptureTrigger::TypingPause, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::ScrollStop, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::KeyPress, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Clipboard, false, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::TypingPause,
+            false,
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::ScrollStop,
+            false,
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::KeyPress,
+            false,
+            false,
+            recent
+        ));
+        assert!(!dedup_applies(
+            &CaptureTrigger::Clipboard,
+            false,
+            false,
+            recent
+        ));
 
         // HD active → dedup is bypassed even for an otherwise-eligible trigger.
         // This is the fix: video/demo replay moves pixels but not AX text, so
         // the hash would dedup it away without this bypass.
-        assert!(!dedup_applies(&CaptureTrigger::VisualChange, true, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::VisualChange,
+            true,
+            false,
+            recent
+        ));
         assert!(!dedup_applies(
             &CaptureTrigger::Click { x: 10, y: 20 },
+            true,
+            false,
+            recent
+        ));
+
+        // In a meeting (no HD session): a VisualChange bypasses AX-hash dedup so
+        // slides / screen-share / shared video get captured at the visual-change
+        // cadence instead of being dropped when the AX text is unchanged.
+        assert!(!dedup_applies(
+            &CaptureTrigger::VisualChange,
+            false,
+            true,
+            recent
+        ));
+        // …but the meeting bypass is scoped to visual changes only — a Click in
+        // a meeting whose AX text is unchanged still dedups (no flood).
+        assert!(dedup_applies(
+            &CaptureTrigger::Click { x: 10, y: 20 },
+            false,
             true,
             recent
         ));
 
         // Idle/Manual are always dedup-exempt (timeline floor), HD or not.
-        assert!(!dedup_applies(&CaptureTrigger::Idle, false, recent));
-        assert!(!dedup_applies(&CaptureTrigger::Manual, false, recent));
+        assert!(!dedup_applies(&CaptureTrigger::Idle, false, false, recent));
+        assert!(!dedup_applies(
+            &CaptureTrigger::Manual,
+            false,
+            false,
+            recent
+        ));
 
         // 30s time-floor: once it elapses, write through regardless.
-        assert!(!dedup_applies(&CaptureTrigger::VisualChange, false, stale));
+        assert!(!dedup_applies(
+            &CaptureTrigger::VisualChange,
+            false,
+            false,
+            stale
+        ));
     }
 
     #[test]
@@ -2327,6 +2781,36 @@ mod tests {
         let config = EventDrivenCaptureConfig::default();
         assert!(config.capture_on_keystroke);
         assert!(config.capture_on_clipboard);
+    }
+
+    #[test]
+    fn ascii_contains_matches_case_insensitively() {
+        assert!(contains_ascii_case_insensitive("Warp", "warp"));
+        assert!(contains_ascii_case_insensitive(
+            "com.github.wezterm",
+            "WEZTERM"
+        ));
+        assert!(contains_ascii_case_insensitive("Alacritty", "acrit"));
+        assert!(!contains_ascii_case_insensitive(
+            "Visual Studio Code",
+            "warp"
+        ));
+    }
+
+    #[test]
+    fn ocr_heavy_app_detection_is_case_insensitive() {
+        assert!(is_ocr_heavy_app("WezTerm"));
+        assert!(is_ocr_heavy_app("com.mitchellh.ghostty.WARP"));
+        assert!(is_ocr_heavy_app("Obsidian"));
+        assert!(!is_ocr_heavy_app("Chrome"));
+    }
+
+    #[test]
+    fn lock_screen_app_detection_is_case_insensitive() {
+        assert!(is_lock_screen_app("loginwindow"));
+        assert!(is_lock_screen_app("ScreenSaverEngine"));
+        assert!(is_lock_screen_app("LOCKSCREEN"));
+        assert!(!is_lock_screen_app("Finder"));
     }
 
     #[test]
@@ -2376,6 +2860,39 @@ mod tests {
 
         state.mark_captured();
         assert!(!state.needs_idle_capture());
+    }
+
+    #[test]
+    fn meeting_caps_the_idle_capture_interval() {
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 30_000, // normal 30s floor
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+
+        // ~6s since the last capture — past the meeting cap, well under 30s.
+        let six_s_ago = Instant::now()
+            .checked_sub(Duration::from_millis(
+                MEETING_IDLE_CAPTURE_INTERVAL_MS + 1_000,
+            ))
+            .unwrap_or(Instant::now());
+
+        // Not in a meeting: 6s < 30s → no idle capture yet.
+        state.last_idle_reference = six_s_ago;
+        assert!(!state.needs_idle_capture());
+
+        // In a meeting: the interval is capped to MEETING_IDLE_CAPTURE_INTERVAL_MS,
+        // so 6s > 5s → fire a guaranteed idle capture.
+        state.in_meeting = true;
+        assert!(state.needs_idle_capture());
+
+        // The cap only ever shortens: an already-tighter interval (HD / power
+        // profile) is left alone, not raised to 5s.
+        state.config.idle_capture_interval_ms = 1_000;
+        state.last_idle_reference = Instant::now()
+            .checked_sub(Duration::from_millis(1_200))
+            .unwrap_or(Instant::now());
+        assert!(state.needs_idle_capture());
     }
 
     #[test]
@@ -2608,7 +3125,7 @@ mod tests {
     #[test]
     fn test_all_black_frame_detected() {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(1920, 1080));
-        assert!(is_frame_mostly_black(&img));
+        assert!(is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2619,7 +3136,7 @@ mod tests {
             *px = image::Rgb([120, 130, 140]);
         }
         let img = image::DynamicImage::ImageRgb8(buf);
-        assert!(!is_frame_mostly_black(&img));
+        assert!(!is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2635,7 +3152,7 @@ mod tests {
         let img = image::DynamicImage::ImageRgb8(buf);
         // Menu bar is ~2% of pixels but hits a full grid row (~7% of samples)
         // so the frame is NOT detected as mostly black — correct, it has content.
-        assert!(!is_frame_mostly_black(&img));
+        assert!(!is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2644,7 +3161,7 @@ mod tests {
         let mut buf = image::RgbImage::new(1920, 1080);
         buf.put_pixel(960, 540, image::Rgb([255, 255, 255]));
         let img = image::DynamicImage::ImageRgb8(buf);
-        assert!(is_frame_mostly_black(&img));
+        assert!(is_frame_corrupt(&img));
     }
 
     #[test]
@@ -2655,13 +3172,230 @@ mod tests {
             *px = image::Rgb([30, 30, 30]);
         }
         let img = image::DynamicImage::ImageRgb8(buf);
-        assert!(!is_frame_mostly_black(&img));
+        assert!(!is_frame_corrupt(&img));
     }
 
     #[test]
     fn test_empty_image_detected() {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(0, 0));
-        assert!(is_frame_mostly_black(&img));
+        assert!(is_frame_corrupt(&img));
+    }
+
+    // ---- decode-garbage (green band) corruption detection ----
+
+    /// Solid `content` everywhere, then solid `band` for every row at or below
+    /// `band_top_y`. Mirrors how a truncated decode looks: good content on top,
+    /// flat fill at the bottom.
+    fn frame_with_bottom_band(
+        w: u32,
+        h: u32,
+        band_top_y: u32,
+        content: [u8; 3],
+        band: [u8; 3],
+    ) -> image::DynamicImage {
+        let mut buf = image::RgbImage::new(w, h);
+        for y in 0..h {
+            let color = if y >= band_top_y { band } else { content };
+            for x in 0..w {
+                buf.put_pixel(x, y, image::Rgb(color));
+            }
+        }
+        image::DynamicImage::ImageRgb8(buf)
+    }
+
+    fn solid(w: u32, h: u32, color: [u8; 3]) -> image::DynamicImage {
+        let mut buf = image::RgbImage::new(w, h);
+        for px in buf.pixels_mut() {
+            *px = image::Rgb(color);
+        }
+        image::DynamicImage::ImageRgb8(buf)
+    }
+
+    #[test]
+    fn test_garbage_green_predicate() {
+        // Zeroed-chroma greens across the brightness range all match.
+        assert!(is_garbage_green([0, 135, 0]));
+        assert!(is_garbage_green([0, 255, 0]));
+        assert!(is_garbage_green([30, 150, 30]));
+        // Non-green / balanced colors do not.
+        assert!(!is_garbage_green([0, 0, 0])); // black
+        assert!(!is_garbage_green([200, 200, 200])); // gray
+        assert!(!is_garbage_green([0, 50, 0])); // too dark to be the fill
+        assert!(!is_garbage_green([120, 130, 140])); // typical content
+        assert!(!is_garbage_green([100, 150, 100])); // red too high
+    }
+
+    #[test]
+    fn test_bottom_green_band_over_content_is_corrupt() {
+        // The reported case: top ~60% normal content, bottom ~40% solid green.
+        let img = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 150, 0]);
+        assert!(sample_frame_corruption(&img).green_band);
+        assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_bottom_green_band_quarter_height_is_corrupt() {
+        // ~25% bottom band still trips the ≥20% / ≥3-row threshold.
+        let img = frame_with_bottom_band(1600, 1000, 750, [90, 100, 110], [10, 170, 10]);
+        assert!(sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_high_truncation_leaves_thin_top_content_still_corrupt() {
+        // Truncation near the top: only ~13% real content, the rest green.
+        // Still has the content→green transition, so it's flagged.
+        let img = frame_with_bottom_band(1920, 1080, 140, [120, 130, 140], [0, 150, 0]);
+        assert!(sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_full_frame_green_not_flagged() {
+        // A green IDE/terminal theme, a flat green design canvas, or a
+        // green-screen backdrop is green TOP-TO-BOTTOM — there's no
+        // content→green transition, so we deliberately leave it alone rather
+        // than risk dropping legitimate content. (A fully-green truncated
+        // frame is low-information anyway and gets replaced on the next
+        // capture.)
+        let img = solid(1920, 1080, [0, 160, 0]);
+        assert!(!sample_frame_corruption(&img).green_band);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_black_frame_is_corrupt() {
+        let img = solid(1920, 1080, [0, 0, 0]);
+        assert!(is_frame_corrupt(&img));
+        assert!(!sample_frame_corruption(&img).green_band); // black isn't the green path
+    }
+
+    #[test]
+    fn test_normal_content_not_corrupt() {
+        let img = solid(1920, 1080, [120, 130, 140]);
+        assert!(!sample_frame_corruption(&img).green_band);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_dark_mode_not_corrupt() {
+        let img = solid(1920, 1080, [30, 30, 30]);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_thin_green_dock_not_corrupt() {
+        // A ~7% bottom dock/taskbar in green is real content, not a fill —
+        // band too small to trip the threshold.
+        let img = frame_with_bottom_band(1920, 1080, 1004, [120, 130, 140], [0, 150, 0]);
+        assert!(!sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_top_green_banner_not_corrupt() {
+        // Green only at the TOP (a success banner / green title bar). The band
+        // is anchored to the bottom, so a top-only green region never trips it.
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for y in 0..1080 {
+            let color = if y < 324 {
+                [0, 150, 0]
+            } else {
+                [120, 130, 140]
+            };
+            for x in 0..1920 {
+                buf.put_pixel(x, y, image::Rgb(color));
+            }
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(!sample_frame_corruption(&img).green_band);
+    }
+
+    #[test]
+    fn test_textured_green_bottom_not_corrupt() {
+        // Bottom half is green (every pixel passes is_garbage_green) but with
+        // real per-pixel brightness variation (foliage / green-screen with
+        // lighting). Rows are >90% green so a band forms, but the color spread
+        // is far > 24 → NOT a flat decode fill, so it's left alone. This
+        // specifically exercises the uniformity guard.
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for y in 0..1080 {
+            for x in 0..1920 {
+                let color = if y >= 540 {
+                    // g in 110..=229 — always garbage-green, spread ~119 ≫ 24
+                    let g = 110u8.wrapping_add(((x * 7 + y * 3) % 120) as u8);
+                    [10, g, 10]
+                } else {
+                    [120, 130, 140]
+                };
+                buf.put_pixel(x, y, image::Rgb(color));
+            }
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        let s = sample_frame_corruption(&img);
+        assert!(!s.green_band);
+        assert!(!is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_tiny_frame_not_green_corrupt() {
+        // Frames shorter than the band heuristic's floor never trip the green
+        // path (the black check still covers them).
+        let img = solid(10, 4, [0, 150, 0]);
+        assert!(!sample_frame_corruption(&img).green_band);
+    }
+
+    // ---- DRM / black-region edge cases ----
+    // DRM-protected surfaces (Netflix, FairPlay/Widevine) and sleeping monitors
+    // come back from ScreenCaptureKit as black, never green — so the green path
+    // never fires on them, and only a *whole-frame* black trips the skip.
+
+    #[test]
+    fn test_drm_fullscreen_black_skipped() {
+        // Full-screen DRM playback / asleep display ⇒ all-black ⇒ skipped.
+        // (Pre-existing behavior; documents the DRM interaction explicitly.)
+        let img = solid(2560, 1440, [0, 0, 0]);
+        assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn test_drm_black_region_with_content_kept() {
+        // A DRM video in the lower ~40% (black) with a real desktop above must
+        // NOT drop the whole frame — only the protected region is black, the
+        // rest is indexable content.
+        let img = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 0, 0]);
+        assert!(!sample_frame_corruption(&img).green_band); // black band ≠ green band
+        assert!(!is_frame_corrupt(&img)); // ~40% black is well under the 95% gate
+    }
+
+    #[test]
+    fn test_rgba_frame_sampled_correctly() {
+        // The sampler reads via get_pixel, so an RGBA source (the common SCK
+        // format) must be handled identically to RGB — green band still caught.
+        let mut buf = image::RgbaImage::new(1280, 800);
+        for y in 0..800 {
+            for x in 0..1280 {
+                let c = if y >= 480 {
+                    [0, 150, 0, 255]
+                } else {
+                    [120, 130, 140, 255]
+                };
+                buf.put_pixel(x, y, image::Rgba(c));
+            }
+        }
+        let img = image::DynamicImage::ImageRgba8(buf);
+        assert!(is_frame_corrupt(&img));
+    }
+
+    #[test]
+    fn frame_corruption_reports_kind_for_telemetry() {
+        // Black and green resolve to distinct kinds so the caller bumps the
+        // right counter; clean and full-green frames classify as None.
+        assert_eq!(
+            frame_corruption(&solid(1920, 1080, [0, 0, 0])),
+            Some(CorruptKind::Black)
+        );
+        let green = frame_with_bottom_band(1920, 1080, 648, [120, 130, 140], [0, 150, 0]);
+        assert_eq!(frame_corruption(&green), Some(CorruptKind::GreenBand));
+        assert_eq!(frame_corruption(&solid(1920, 1080, [120, 130, 140])), None);
+        assert_eq!(frame_corruption(&solid(1920, 1080, [0, 160, 0])), None);
     }
 
     #[test]

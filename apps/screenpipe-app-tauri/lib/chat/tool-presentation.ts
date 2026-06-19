@@ -258,6 +258,13 @@ export function classifyCurl(cmd: string): CurlPresentation | null {
     }
     return { label: "Ran JS in agent browser" };
   }
+  if (path.startsWith("/connections/browsers/") && path.endsWith("/act")) {
+    const body = curlBodyJson(cmd);
+    const action = body && typeof body.action === "string" ? body.action : "act";
+    const ref = body && typeof body.ref === "string" ? ` #${body.ref.replace(/^#/, "")}` : "";
+    const verb = action.charAt(0).toUpperCase() + action.slice(1);
+    return { label: `${verb}${ref} in agent browser` };
+  }
   if (path.startsWith("/connections/browsers/")) return { label: "Agent browser action" };
 
   if (path === "/connections") {

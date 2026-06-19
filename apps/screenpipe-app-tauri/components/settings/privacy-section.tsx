@@ -29,6 +29,7 @@ import {
   Copy,
   ClipboardX,
   Keyboard,
+  MousePointerClick,
   FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ import { Switch } from "@/components/ui/switch";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { WindowPicker } from "./window-picker";
+import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
@@ -286,6 +288,12 @@ export function PrivacySection() {
   // useEnterprisePolicy.applyPiiPolicy on every policy poll).
   const { getManagedValue } = useEnterprisePolicy();
   const managedPiiBackend = getManagedValue("piiBackend");
+  // Same idea for input capture: the admin can force keyboard/click rows on
+  // or off org-wide (applied by useEnterprisePolicy.applyInputCapturePolicy).
+  // These settings are inverted ("disable…"), so ManagedSwitch — which assumes
+  // checked == managed value — doesn't fit; lock the switches manually.
+  const managedKeyboardCapture = getManagedValue("disableKeyboardCapture");
+  const managedClickCapture = getManagedValue("disableClickCapture");
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -552,6 +560,20 @@ export function PrivacySection() {
     handleSettingsChange({ piiRedactionLabels: ordered } as Partial<Settings>, true);
   };
 
+  // Consistent pseudonyms (issue #4206): render redacted values as
+  // stable tokens (e.g. [PERSON_1a2b3c4d]) instead of generic tags, so
+  // the same value stays correlatable across the timeline without being
+  // exposed. One-way + local; opt-in, default off.
+  const piiRedactionPseudonyms = Boolean(
+    settings.piiRedactionPseudonyms ?? false,
+  );
+  const handlePseudonymsToggle = (checked: boolean) => {
+    handleSettingsChange(
+      { piiRedactionPseudonyms: checked } as Partial<Settings>,
+      true,
+    );
+  };
+
   const handleIncognitoToggle = (checked: boolean) => {
     handleSettingsChange({ ignoreIncognitoWindows: checked }, true);
   };
@@ -570,6 +592,12 @@ export function PrivacySection() {
     // UI is "Capture keyboard" on/off. Settings store inverts to match
     // the CLI flag name (--disable-keyboard-capture).
     handleSettingsChange({ disableKeyboardCapture: !checked }, true);
+  };
+
+  const handleClickCaptureToggle = (checked: boolean) => {
+    // UI is "Capture clicks" on/off. Settings store inverts to match
+    // the CLI flag name (--disable-click-capture).
+    handleSettingsChange({ disableClickCapture: !checked }, true);
   };
 
   const handleRecordWhileLockedToggle = (checked: boolean) => {
@@ -807,18 +835,15 @@ export function PrivacySection() {
                   onClick={async () => {
                     if (!liveApiKey) return;
                     try {
-                      await navigator.clipboard.writeText(liveApiKey);
-                    } catch {
-                      const el = document.createElement("textarea");
-                      el.value = liveApiKey;
-                      el.style.position = "fixed";
-                      el.style.opacity = "0";
-                      document.body.appendChild(el);
-                      el.select();
-                      document.execCommand("copy");
-                      document.body.removeChild(el);
+                      await commands.copyTextToClipboard(liveApiKey);
+                      toast({ title: "API key copied to clipboard" });
+                    } catch (error) {
+                      toast({
+                        title: "couldn't copy API key",
+                        description: error instanceof Error ? error.message : String(error),
+                        variant: "destructive",
+                      });
                     }
-                    toast({ title: "API key copied to clipboard" });
                   }}
                 >
                   <Copy className="h-3.5 w-3.5" />
@@ -1012,15 +1037,53 @@ export function PrivacySection() {
                   <HelpTooltip text="when on, screenpipe records what you type (your keystrokes). off by default. the accessibility tree and OCR still capture on-screen text either way, so Rewind and Ask keep working — this only controls the raw keystroke stream, where passwords, API keys, and secrets you type would otherwise be logged." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Off by default. Records the raw keystroke stream (secrets
-                  often get typed). On-screen text is still captured.
+                  {managedKeyboardCapture !== undefined
+                    ? "Managed by your organization."
+                    : "Off by default. Records the raw keystroke stream (secrets often get typed). On-screen text is still captured."}
                 </p>
               </div>
             </div>
             <Switch
               id="captureKeyboard"
-              checked={!(settings.disableKeyboardCapture ?? true)}
+              checked={
+                managedKeyboardCapture !== undefined
+                  ? managedKeyboardCapture === "false"
+                  : !(settings.disableKeyboardCapture ?? true)
+              }
+              disabled={managedKeyboardCapture !== undefined}
               onCheckedChange={handleKeyboardCaptureToggle}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Click capture toggle */}
+      <Card>
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <MousePointerClick className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Capture clicks
+                  <HelpTooltip text="when on, screenpipe records mouse click events (where and what you clicked). on by default — clicks carry no text payload and power workflow analysis and task mining. turning this off only skips the click rows; clicks still trigger screen captures." />
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {managedClickCapture !== undefined
+                    ? "Managed by your organization."
+                    : "On by default. Click events power workflow analysis; no text is recorded."}
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="captureClicks"
+              checked={
+                managedClickCapture !== undefined
+                  ? managedClickCapture === "false"
+                  : !(settings.disableClickCapture ?? false)
+              }
+              disabled={managedClickCapture !== undefined}
+              onCheckedChange={handleClickCaptureToggle}
             />
           </div>
         </CardContent>
@@ -1224,6 +1287,29 @@ export function PrivacySection() {
                   Unselected types stay visible so your timeline remains
                   searchable. Secrets are always removed in both modes.
                 </p>
+
+                <label className="flex items-start gap-2 text-xs cursor-pointer pt-2 mt-1.5 border-t border-border">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={piiRedactionPseudonyms}
+                    onChange={(e) => handlePseudonymsToggle(e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium text-foreground">
+                      Consistent pseudonyms
+                    </span>
+                    <span className="text-muted-foreground">
+                      {" "}— replace each value with a stable token like{" "}
+                      <code>[PERSON_1a2b3c4d5e6f]</code> instead of a generic{" "}
+                      <code>[PERSON]</code>, so the same person or value stays
+                      linkable across your timeline without being exposed.
+                      One-way and on-device — the original can&apos;t be
+                      recovered. Applies to newly-recorded activity going
+                      forward.
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
           </CardContent>
@@ -1406,25 +1492,15 @@ export function PrivacySection() {
         </LockedSetting>
       </div>
 
-      {/* Floating apply & restart button */}
-      {hasUnsavedChanges && (
-        <div className="sticky bottom-4 flex justify-end pointer-events-none z-50">
-          <Button
-            onClick={handleUpdate}
-            disabled={isUpdating || Object.keys(validationErrors).length > 0}
-            size="sm"
-            data-testid="privacy-apply-restart"
-            className="pointer-events-auto flex items-center gap-1.5 h-9 px-4 text-sm bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 shadow-lg"
-          >
-            {isUpdating ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Apply & Restart
-          </Button>
-        </div>
-      )}
+      {/* Floating apply & restart bar */}
+      <ApplyRestartBar
+        visible={hasUnsavedChanges}
+        onApply={handleUpdate}
+        isUpdating={isUpdating}
+        disabled={Object.keys(validationErrors).length > 0}
+        message="unsaved privacy changes. restart to apply."
+        testId="privacy-apply-restart"
+      />
       <WindowPicker
         open={picker !== null}
         onOpenChange={(o) => {
@@ -1452,7 +1528,7 @@ export function PrivacySection() {
  * `team_api_token` is per-admin and grants the `read:devices` /
  * `read:search` / `read:records` scopes that the `screenpipe-team` pi
  * skill calls v1 endpoints with. An admin mints one at
- * https://screenpi.pe/enterprise?tab=tokens, pastes it here, and the
+ * https://screenpipe.com/enterprise?tab=tokens, pastes it here, and the
  * desktop persists it to ~/.screenpipe/enterprise.json. Every new pi
  * chat reads that file at boot and (un)installs the skill accordingly —
  * no app restart needed, just open a new chat. Revoke from the same
@@ -1560,10 +1636,10 @@ function AdminTeamTokenCard() {
                 <button
                   className="underline text-foreground hover:text-foreground/80"
                   onClick={() =>
-                    openUrl("https://screenpi.pe/enterprise?tab=tokens")
+                    openUrl("https://screenpipe.com/enterprise?tab=tokens")
                   }
                 >
-                  screenpi.pe/enterprise → api tokens
+                  screenpipe.com/enterprise → api tokens
                 </button>
                 .
               </p>
@@ -1617,18 +1693,15 @@ function AdminTeamTokenCard() {
             onClick={async () => {
               if (!liveToken) return;
               try {
-                await navigator.clipboard.writeText(liveToken);
-              } catch {
-                const el = document.createElement("textarea");
-                el.value = liveToken;
-                el.style.position = "fixed";
-                el.style.opacity = "0";
-                document.body.appendChild(el);
-                el.select();
-                document.execCommand("copy");
-                document.body.removeChild(el);
+                await commands.copyTextToClipboard(liveToken);
+                toast({ title: "admin token copied to clipboard" });
+              } catch (error) {
+                toast({
+                  title: "couldn't copy admin token",
+                  description: error instanceof Error ? error.message : String(error),
+                  variant: "destructive",
+                });
               }
-              toast({ title: "admin token copied to clipboard" });
             }}
           >
             <Copy className="h-3.5 w-3.5" />

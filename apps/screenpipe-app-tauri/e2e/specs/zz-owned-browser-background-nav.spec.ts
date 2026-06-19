@@ -70,6 +70,16 @@ import { authHeaders, getLocalApiConfig } from "../helpers/api-utils.js";
 
 const canDriveOwnedBrowser = process.platform !== "linux";
 
+// A background eval/navigate must keep the owned browser HIDDEN. That holds on
+// macOS (WKWebView runs JS while hidden) but NOT on Windows: a hidden WebView2
+// controller no-ops the script, so `show_native_for_background_eval`
+// (owned_browser.rs) reveals the webview to run it — making "stays hidden during
+// a background navigate" structurally unachievable on Windows (the visibility
+// assert flips to true). Skip the hidden-visibility guarantee on Windows; Linux
+// already skips owned-browser entirely. Follow-up for the #4262 owner: an
+// off-screen host that runs JS on WebView2 would restore this on Windows.
+const canHideBackgroundDrive = canDriveOwnedBrowser && process.platform !== "win32";
+
 // ---------------------------------------------------------------------------
 // Per-chat ownership regression
 // ---------------------------------------------------------------------------
@@ -95,12 +105,15 @@ const canDriveOwnedBrowser = process.platform !== "linux";
 // and disrupts the in-flight persist, so the disk write is an unreliable signal
 // — the *visible* leak is the actual reported symptom. As in the block below,
 // commands are issued from a SECOND window because attaching the child to `home`
-// destroys home's WebDriver handle. On the fixed build the foreign navigation is
-// gated, so nothing attaches and `home` survives for the block below.
+// destroys home's WebDriver handle. The foreign navigation is gated at the
+// sidebar so it never reveals; and the backend's lazy headless attach lands the
+// child on a dedicated OFF-SCREEN host window (not `home`), so `home` still
+// survives for the block below.
 const OWN_CHAT = "33333333-cccc-cccc-cccc-cccccccccccc";
 const FOREIGN_OWNER = "pipe:e2e-background-poster";
 const CHATS_DIR = join(homedir(), ".screenpipe", "chats");
 const FOREIGN_URL = "https://example.com/e2e-foreign-pipe";
+const OWN_URL = "https://example.com/e2e-own-chat";
 const BROWSER_CHAT_A = "44444444-dddd-dddd-dddd-dddddddddddd";
 const BROWSER_CHAT_B = "55555555-eeee-eeee-eeee-eeeeeeeeeeee";
 const PLAIN_CHAT = "66666666-ffff-ffff-ffff-ffffffffffff";
@@ -183,20 +196,6 @@ async function readBrowserStateCacheUrl(
   }, `screenpipe:browser-state:${chatId}`)) as string | null;
 }
 
-async function waitForChatSeedHook(): Promise<void> {
-  await browser.waitUntil(
-    async () =>
-      (await browser.execute(
-        () => typeof (window as any).__e2eSeedUserMessage === "function",
-      )) as boolean,
-    {
-      timeout: t(10_000),
-      interval: 100,
-      timeoutMsg: "E2E chat seed hook did not mount",
-    },
-  );
-}
-
 /** Capture every `chat-current-session` the page emits so the test can prove
  *  which conversation the on-screen BrowserSidebar is actually bound to. The
  *  gate is `owner && conversationId && owner !== conversationId`, so a null
@@ -220,20 +219,6 @@ async function installSessionCapture(): Promise<void> {
       .then(() => done())
       .catch(() => done());
   });
-}
-
-async function seedChat(sessionId: string, text: string): Promise<void> {
-  await browser.execute(
-    (sid: string, msg: string) => {
-      const fn = (window as any).__e2eSeedUserMessage as (
-        s: string,
-        t: string,
-      ) => void;
-      fn(sid, msg);
-    },
-    sessionId,
-    text,
-  );
 }
 
 async function loadChatIntoHome(conversationId: string): Promise<void> {
@@ -270,6 +255,115 @@ async function waitForActiveConversation(id: string): Promise<void> {
       timeout: t(15_000),
       interval: 150,
       timeoutMsg: `home chat never became conversation ${id}`,
+    },
+  );
+}
+
+async function waitForOwnedBrowserNavigateReady(id: string): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        (cid: string) =>
+          (window as any).__e2eOwnedBrowserNavigateReady?.conversationId === cid,
+        id,
+      )) as boolean,
+    {
+      timeout: t(15_000),
+      interval: 150,
+      timeoutMsg: `home browser sidebar never registered conversation ${id}`,
+    },
+  );
+}
+
+async function prepareHomeConversation(conversationId: string): Promise<void> {
+  await openHomeWindow();
+  await installSessionCapture();
+  await loadChatIntoHome(conversationId);
+  await waitForActiveConversation(conversationId);
+  await waitForOwnedBrowserNavigateReady(conversationId);
+}
+
+async function openSearchCommandWindow(): Promise<void> {
+  await showWindow({ Search: { query: null } });
+  await waitForWindowHandle("search", t(10_000));
+  await browser.switchToWindow("search");
+  await browser.pause(t(800));
+}
+
+async function emitOwnedBrowserNavigateInHome(
+  url: string,
+  owner: string,
+): Promise<string> {
+  const navigationId = `e2e-${Date.now()}`;
+  await browser.executeAsync(
+    (
+      payload: {
+        url: string;
+        owner: string;
+        navigationId: string;
+        reveal: boolean;
+      },
+      done: (v?: unknown) => void,
+    ) => {
+      (window as any).__e2eOwnedBrowserLastNavigate = null;
+      const emit = (window as any).__TAURI__?.event?.emit as
+        | ((n: string, p: unknown) => Promise<unknown>)
+        | undefined;
+      if (!emit) {
+        done();
+        return;
+      }
+      void emit("owned-browser:navigate", payload)
+        .then(() => done())
+        .catch(() => done());
+    },
+    { url, owner, navigationId, reveal: false },
+  );
+  return navigationId;
+}
+
+async function waitForAcceptedOwnedBrowserNavigate(
+  navigationId: string,
+): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        (expectedNavigationId: string) => {
+          const last = (window as any).__e2eOwnedBrowserLastNavigate;
+          return (
+            last?.accepted === true &&
+            last?.navigationId === expectedNavigationId
+          );
+        },
+        navigationId,
+      )) as boolean,
+    {
+      timeout: t(10_000),
+      interval: 150,
+      timeoutMsg: `home browser sidebar did not accept navigation ${navigationId}`,
+    },
+  );
+}
+
+async function waitForDroppedOwnedBrowserNavigate(
+  navigationId: string,
+): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        (expectedNavigationId: string) => {
+          const last = (window as any).__e2eOwnedBrowserLastNavigate;
+          return (
+            last?.accepted === false &&
+            last?.navigationId === expectedNavigationId
+          );
+        },
+        navigationId,
+      )) as boolean,
+    {
+      timeout: t(10_000),
+      interval: 150,
+      timeoutMsg: `home browser sidebar did not drop navigation ${navigationId}`,
     },
   );
 }
@@ -332,7 +426,6 @@ describe("Owned browser — per-chat navigation ownership", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
-    await waitForChatSeedHook();
     removeChatFile(OWN_CHAT);
   });
 
@@ -342,25 +435,19 @@ describe("Owned browser — per-chat navigation ownership", function () {
     await openHomeWindow().catch(() => {});
   });
 
-  (canDriveOwnedBrowser ? it : it.skip)(
+  (canHideBackgroundDrive ? it : it.skip)(
     "does not reveal a background pipe's navigation in a chat that did not open it",
     async () => {
       // 1. Bind the home chat layer to OWN_CHAT and prove it via
       //    chat-current-session (the gate falls through on a null conversationId,
       //    so this keeps the assertion honest on the fixed build).
-      await installSessionCapture();
-      await seedChat(OWN_CHAT, "(e2e) owned-browser ownership probe");
-      await browser.pause(t(200));
-      await loadChatIntoHome(OWN_CHAT);
-      await waitForActiveConversation(OWN_CHAT);
+      writeSeedChatFile(OWN_CHAT, "(e2e) owned-browser ownership probe");
+      await prepareHomeConversation(OWN_CHAT);
 
       // 2. Drive owned-browser commands from a SECOND window: a regression
       //    attaches the native child to `home`, destroying home's WebDriver
       //    handle, so we must not be issuing commands through it.
-      await showWindow({ Search: { query: null } });
-      await waitForWindowHandle("search", t(10_000));
-      await browser.switchToWindow("search");
-      await browser.pause(t(800));
+      await openSearchCommandWindow();
 
       // 3. Hidden baseline.
       await invokeOrThrow("owned_browser_hide");
@@ -399,6 +486,35 @@ describe("Owned browser — per-chat navigation ownership", function () {
       );
     },
   );
+
+  // Positive counterpart for the ownership gate. A navigation tagged with the
+  // ON-SCREEN chat's own owner must be accepted by the home sidebar. Keep this
+  // non-destructive: a full native reveal attaches the child webview to `home`
+  // and poisons later tests that still need the home handle. The final block in
+  // this file remains the one destructive native-visibility check.
+  (canDriveOwnedBrowser ? it : it.skip)(
+    "accepts the on-screen chat's own agent navigation",
+    async () => {
+      writeSeedChatFile(OWN_CHAT, "(e2e) owned-browser reveal probe");
+      await prepareHomeConversation(OWN_CHAT);
+
+      // Hidden baseline.
+      await invokeOrThrow("owned_browser_hide");
+      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        false,
+      );
+
+      // Navigate tagged with OWN_CHAT — the agent of the chat on screen. The
+      // ownership gate must let it through. Use reveal=false so this check does
+      // not attach the native child to `home` before the later home-dependent
+      // tests run.
+      const navigationId = await emitOwnedBrowserNavigateInHome(OWN_URL, OWN_CHAT);
+      await waitForAcceptedOwnedBrowserNavigate(navigationId);
+      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        false,
+      );
+    },
+  );
 });
 
 describe("Owned browser — fast chat switching keeps pipe state out of other chats", function () {
@@ -429,7 +545,6 @@ describe("Owned browser — fast chat switching keeps pipe state out of other ch
   (canDriveOwnedBrowser ? it : it.skip)(
     "does not persist a pipe-driven browser URL into another browser chat or a plain chat during fast switching",
     async () => {
-      await installSessionCapture();
       writeSeedChatFile(
         BROWSER_CHAT_A,
         "(e2e) browser chat A",
@@ -442,8 +557,8 @@ describe("Owned browser — fast chat switching keeps pipe state out of other ch
       );
       writeSeedChatFile(PLAIN_CHAT, "(e2e) plain chat");
 
-      await loadChatIntoHome(BROWSER_CHAT_A);
-      await waitForActiveConversation(BROWSER_CHAT_A);
+      await prepareHomeConversation(BROWSER_CHAT_A);
+      await openSearchCommandWindow();
       await browser.pause(t(800));
       await invokeOrThrow("owned_browser_hide");
       expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
@@ -452,8 +567,8 @@ describe("Owned browser — fast chat switching keeps pipe state out of other ch
 
       const { port, key } = await getLocalApiConfig();
 
-      await loadChatIntoHome(PLAIN_CHAT);
-      await waitForActiveConversation(PLAIN_CHAT);
+      await prepareHomeConversation(PLAIN_CHAT);
+      await openSearchCommandWindow();
       const navigateStatus = await postNavigateAs(
         port,
         key,
@@ -466,19 +581,31 @@ describe("Owned browser — fast chat switching keeps pipe state out of other ch
         false,
       );
 
-      await loadChatIntoHome(BROWSER_CHAT_B);
-      await waitForActiveConversation(BROWSER_CHAT_B);
-      await loadChatIntoHome(PLAIN_CHAT);
-      await waitForActiveConversation(PLAIN_CHAT);
-      await postEvalWithUrlAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
-      await browser.pause(t(1_200));
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
-        false,
-      );
-      await loadChatIntoHome(BROWSER_CHAT_A);
-      await waitForActiveConversation(BROWSER_CHAT_A);
-      await loadChatIntoHome(BROWSER_CHAT_B);
-      await waitForActiveConversation(BROWSER_CHAT_B);
+      await prepareHomeConversation(BROWSER_CHAT_B);
+      await prepareHomeConversation(PLAIN_CHAT);
+      if (canHideBackgroundDrive) {
+        await openSearchCommandWindow();
+        await postEvalWithUrlAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
+        await browser.pause(t(1_200));
+        expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+          false,
+        );
+      } else {
+        // Windows WebView2 cannot run hidden eval-by-url without briefly showing
+        // the owned browser. That makes the native visibility assertion
+        // destructive on the shared runner session, so cover the same ownership
+        // gate at the sidebar event boundary instead.
+        const navigationId = await emitOwnedBrowserNavigateInHome(
+          FOREIGN_URL,
+          FOREIGN_OWNER,
+        );
+        await waitForDroppedOwnedBrowserNavigate(navigationId);
+        expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+          false,
+        );
+      }
+      await prepareHomeConversation(BROWSER_CHAT_A);
+      await prepareHomeConversation(BROWSER_CHAT_B);
       await browser.pause(t(1_000));
 
       const chatA = loadChatFile(BROWSER_CHAT_A);

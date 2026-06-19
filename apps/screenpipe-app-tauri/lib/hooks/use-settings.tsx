@@ -13,7 +13,7 @@ import posthog from "posthog-js";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
-import { normalizeAppUser } from "@/lib/app-entitlement";
+import { hasAppEntitlement, normalizeAppUser } from "@/lib/app-entitlement";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
@@ -159,6 +159,12 @@ export interface ChatConversation {
 	 *  sidebar sort order. Persisted so that order survives app restart;
 	 *  derived from messages on first hydration if not set on disk yet. */
 	lastUserMessageAt?: number;
+	/** ms since epoch of the most recent actual message append (user or
+	 *  assistant). Drives unread detection — immune to non-content writes. */
+	lastContentAt?: number;
+	/** ms since epoch of the most recent time this chat was actually opened.
+	 *  A value of `0` means "never viewed" for persisted unread restore. */
+	lastViewedAt?: number;
 	/** Conversation type — defaults to "chat" when missing (back-compat
 	 *  with older on-disk files). See `ConversationKind`. */
 	kind?: ConversationKind;
@@ -182,6 +188,10 @@ export interface ChatConversation {
 	/** Title source priority: user > ai > fallback. Used to prevent
 	 *  lower-priority titles from overwriting higher-priority ones. */
 	titleSource?: "user" | "ai" | "fallback";
+	/** The AI preset ID last used in this conversation. Used to restore
+	 *  the model selection when switching between chats. Persisted to disk
+	 *  so the selection survives app restart. */
+	presetId?: string;
 }
 
 export interface ChatHistoryStore {
@@ -277,6 +287,8 @@ export type Settings = SettingsStore & {
 	disableClipboardCapture?: boolean;
 	/** Skip keyboard / typed-text capture in the UI recorder. Defaults to true (keyboard capture OFF) — the a11y tree + OCR still capture on-screen text, this only drops the raw keystroke stream where secrets get typed. */
 	disableKeyboardCapture?: boolean;
+	/** Skip mouse-click rows in the UI recorder. Defaults to false (click capture ON) — clicks carry no text payload and drive workflow/task mining. Clicks still wake event-driven capture when disabled. */
+	disableClickCapture?: boolean;
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
 	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
 	experimentalCoreaudioSystemAudio?: boolean;
@@ -297,6 +309,11 @@ export type Settings = SettingsStore & {
 	translucentSidebar?: boolean;
 	/** Hide model "thinking" reasoning blocks in chat (default: true) */
 	hideThinkingBlocks?: boolean;
+	/** Show the chat suggestion chips above the input — the "follow up"
+	 *  questions and the connection-aware suggested prompts. The single inline
+	 *  X on the chips flips this to false; re-enable from Settings → Display.
+	 *  Default true. */
+	showChatSuggestions?: boolean;
 	/** Auto-generate chat titles with the LLM after the first message.
 	 *  Costs one extra inference per new chat. Disable to save tokens —
 	 *  chats fall back to a title derived from the first message (default: true) */
@@ -315,6 +332,9 @@ export type Settings = SettingsStore & {
 		audioCaptureStalled?: boolean;
 		/** In-app /notify when audio is captured but no live transcript arrives within 60s. Default true. */
 		liveTranscriptStalled?: boolean;
+		/** Toast on informational power-profile transitions (Balanced / Saver), e.g. when unplugging AC.
+		 *  Critical AudioPaused/FullPause alerts always fire regardless. Default true. */
+		powerModeChanges?: boolean;
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */
@@ -478,8 +498,13 @@ const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
 
 const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
 
+// "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
+// OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
+// every paying user — not just Cloud Sync subscribers — gets Screenpipe Cloud
+// transcription on by default. Still requires a token/id so the cloud engine can
+// authenticate against api.screenpipe.com.
 const isLoggedInProUser = (user: User | null | undefined) =>
-	user?.cloud_subscribed === true && Boolean(user.token || user.id);
+	hasAppEntitlement(user as any) && Boolean(user?.token || user?.id);
 
 const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	if (!isLoggedInProUser(settings.user)) return settings;
@@ -488,8 +513,14 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	// If the user picked a non-default, non-cloud engine, they've configured audio
 	// themselves — don't flip live-meeting on or rewrite the provider behind their back.
 	// V2 marker is intentionally left unset so a later switch back to default re-evaluates.
+	// Both platform defaults count as "untouched": macOS seeds whisper-turbo, while
+	// Windows/Linux seed parakeet — without the latter, paid users on those platforms
+	// would never be auto-switched to cloud.
+	const isPlatformDefaultEngine =
+		settings.audioTranscriptionEngine === DEFAULT_AUDIO_ENGINE ||
+		settings.audioTranscriptionEngine === "parakeet";
 	const userChoseCustomEngine =
-		settings.audioTranscriptionEngine !== DEFAULT_AUDIO_ENGINE &&
+		!isPlatformDefaultEngine &&
 		settings.audioTranscriptionEngine !== "screenpipe-cloud";
 	if (userChoseCustomEngine) return settings;
 
@@ -520,10 +551,20 @@ let DEFAULT_SETTINGS: Settings = {
 			monitorIds: ["default"],
 			audioDevices: ["default"],
 			useSystemDefaultAudio: true,
-			usePiiRemoval: false,
+			// Default ON (#3819): this is the lightweight hot-path regex redaction
+			// in screenpipe-core (emails, phone numbers, SSNs, card numbers, API
+			// keys, etc.) — NOT the heavy async AI model (asyncPiiRedaction stays
+			// off, so no ~2.8GB model download). Privacy-by-default for new installs;
+			// existing users keep whatever they already chose.
+			usePiiRemoval: true,
 			port: 3030,
 			dataDir: "default",
 			disableAudio: false,
+			// New installs capture audio only during detected meetings (saves cloud
+			// transcription cost, disk, and CPU). Existing installs are NOT backfilled
+			// — they have no stored value, so the serde/UI "always" fallback keeps them
+			// on continuous capture without rewriting their settings.
+			audioCaptureMode: "meetings-only",
 			ignoredWindows: [
 			],
 			includedWindows: [],
@@ -596,6 +637,7 @@ let DEFAULT_SETTINGS: Settings = {
 			pauseOnDrmContent: false,
 			disableClipboardCapture: true,
 			disableKeyboardCapture: true,
+			disableClickCapture: false,
 			keepComputerAwake: false,
 			experimentalCoreaudioSystemAudio: false,
 			windowsInputAecEnabled: false,
@@ -660,6 +702,65 @@ export const saveAndEncrypt = async (store: Store) => {
 	await commands.reencryptStore().catch(() => {});
 };
 
+/**
+ * #3943: persist settings WITHOUT the cloud auth token in plaintext.
+ *
+ * The Clerk JWT must never land in store.bin (or its .last-good snapshot). When
+ * the settings being saved carry a token, mirror it to the authoritative
+ * encrypted secret store FIRST (so it's never lost), then write a stripped copy
+ * to disk. A token-less save never clears the secret store — only explicit
+ * logout (`setCloudToken(null)`) does — so a save during a transient
+ * pre-hydration state can't sign the user out.
+ */
+async function setSettingsStripped(store: Store, settings: Settings) {
+	const token = settings?.user?.token;
+	// Default to "safe to write as-is" when there's no token to protect.
+	let persisted = !token;
+	if (token) {
+		try {
+			const res = await commands.setCloudToken(token);
+			if (res.status === "ok") {
+				persisted = true;
+			} else {
+				console.warn("cloud token not persisted to secret store:", res.error);
+			}
+		} catch (e) {
+			console.warn("failed to mirror cloud token to secret store:", e);
+		}
+	}
+	// Only strip the plaintext token from store.bin once it's safely in the
+	// encrypted secret store. If persistence failed, keep it on disk so the user
+	// isn't silently signed out on the next restart (#3943).
+	const toPersist =
+		token && persisted
+			? { ...settings, user: { ...settings.user, token: undefined } }
+			: settings;
+	await store.set("settings", toPersist);
+}
+
+/**
+ * #3943: the cloud auth token no longer lives in store.bin (it's in the
+ * encrypted secret store). Neither `store.get("settings")` nor the cross-window
+ * `onKeyChange` broadcast carries it, so hydrate it back into the in-memory
+ * settings here. Every reader of `settings.user.token` (the account "logged in"
+ * indicator, the auth auto-refresh effect, the engine Bearer path) then keeps
+ * working unchanged across windows. Without this on the broadcast path, a login
+ * in one window ships a token-stripped user to every window (including the one
+ * that just logged in), so they all render "not logged in". Mutates in place and
+ * returns the same object for convenience.
+ */
+async function hydrateCloudToken(settings: Settings): Promise<Settings> {
+	if (settings.user && !settings.user.token) {
+		try {
+			const token = await commands.getCloudToken();
+			if (token) settings.user.token = token;
+		} catch (e) {
+			console.warn("failed to hydrate cloud token from secret store:", e);
+		}
+	}
+	return settings;
+}
+
 // Store utilities similar to Cap's implementation
 function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
@@ -668,6 +769,9 @@ function createSettingsStore() {
 		if (!settings) {
 			return createDefaultSettingsObject();
 		}
+
+		// #3943: re-hydrate the cloud token that no longer persists in store.bin.
+		await hydrateCloudToken(settings);
 
 		// Migration: Ensure existing users have deviceId for free tier tracking
 		let needsUpdate = false;
@@ -713,6 +817,13 @@ function createSettingsStore() {
 			settings.appendTypedTextToMeetingNote = true;
 			needsUpdate = true;
 		}
+
+		// NOTE: audioCaptureMode is intentionally NOT backfilled for existing
+		// installs. Their stored settings have no value for it, so the engine's
+		// serde default ("always") and the UI's `?? "always"` fallback keep them on
+		// continuous capture — without writing anything to their store. Only brand-new
+		// installs default to "meetings-only" (via createDefaultSettingsObject, which
+		// get() returns directly when there are no stored settings).
 
 		// Migration: Add default presets if user has none
 		if (!settings.aiPresets || settings.aiPresets.length === 0) {
@@ -876,7 +987,7 @@ function createSettingsStore() {
 
 		// Save migrations if needed
 		if (needsUpdate) {
-			await store.set("settings", settings);
+			await setSettingsStripped(store, settings);
 			await saveAndEncrypt(store);
 		}
 
@@ -895,7 +1006,7 @@ function createSettingsStore() {
 			}
 			newSettings = applyProCloudAudioDefaults(newSettings);
 		}
-		await store.set("settings", newSettings);
+		await setSettingsStripped(store, newSettings);
 		await saveAndEncrypt(store);
 	};
 
@@ -913,8 +1024,15 @@ function createSettingsStore() {
 
 	const listen = (callback: (settings: Settings) => void) => {
 		return getStore().then((store) => {
-			return store.onKeyChange("settings", (newValue: Settings | null | undefined) => {
-				callback(newValue || createDefaultSettingsObject());
+			// #3943: the broadcast value is token-stripped (see setSettingsStripped),
+			// so hydrate the cloud token before handing settings to React, mirroring
+			// get(). A monotonic seq drops a slow hydration that a newer broadcast
+			// (e.g. a logout fired right after a login) has already superseded.
+			let seq = 0;
+			return store.onKeyChange("settings", async (newValue: Settings | null | undefined) => {
+				const mySeq = ++seq;
+				const next = await hydrateCloudToken(newValue || createDefaultSettingsObject());
+				if (mySeq === seq) callback(next);
 			});
 		});
 	};
@@ -1001,7 +1119,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		};
 	}, []);
 
-	// Install global fetch interceptor to catch 401s from screenpi.pe
+	// Install global fetch interceptor to catch 401s from screenpipe.com
 	const settingsRef = useRef(settings);
 	settingsRef.current = settings;
 
@@ -1239,8 +1357,9 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// signs out while this fetch is in flight, the generation changes and we
 		// abort the write below instead of resurrecting the cleared session.
 		const generation = authGenerationRef.current;
+		const startingToken = settingsRef.current.user?.token ?? null;
 		try {
-			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpi.pe"), {
+			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpipe.com"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -1262,7 +1381,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			// The user signed out while this request was in flight — writing
 			// userData now would resurrect the cleared session (the "logout needs
 			// two clicks" bug). Abort silently; the sign-out already won.
-			if (authGenerationRef.current !== generation) {
+			if (
+				authGenerationRef.current !== generation ||
+				(startingToken !== null && settingsRef.current.user?.token !== token)
+			) {
 				console.log("loadUser: sign-out during fetch — not restoring session");
 				return;
 			}

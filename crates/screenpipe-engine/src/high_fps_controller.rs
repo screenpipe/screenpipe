@@ -41,7 +41,7 @@
 //! Active sessions are NOT persisted — they're explicitly ephemeral, the
 //! whole point of the redesign.
 
-use std::sync::atomic::{AtomicI8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -154,8 +154,11 @@ pub struct HighFpsSnapshot {
     pub remaining_secs: Option<u64>,
     /// Current default-mode preference.
     pub default_mode: DefaultMode,
-    /// Whether the v2 meeting detector currently reports `in_meeting`.
-    /// `None` when no detector is wired (audio disabled).
+    /// Whether a meeting is currently active. Reflects the v2 meeting detector
+    /// when one is wired (CLI/standalone engine), otherwise the event-tracked
+    /// flag fed by `meeting_started`/`meeting_ended` (the desktop app builds
+    /// the controller without a detector handle). `None` only when neither
+    /// signal is available.
     pub meeting: Option<bool>,
 }
 
@@ -179,6 +182,12 @@ pub struct HighFpsController {
     /// Detector is its own atomic — the `meeting` field of snapshot reads
     /// it directly without crossing the inner lock.
     detector: Option<Arc<MeetingDetector>>,
+    /// Event-tracked meeting state, used when no `detector` handle is wired
+    /// (the desktop app). Set from `meeting_started`/`meeting_ended` via
+    /// [`HighFpsController::set_in_meeting`] and read by `snapshot().meeting`.
+    /// Lets the capture loop bypass AX-hash dedup for visual changes during a
+    /// call even in the app build.
+    event_in_meeting: AtomicBool,
 }
 
 impl HighFpsController {
@@ -192,6 +201,7 @@ impl HighFpsController {
             default_mode: AtomicI8::new(default_mode.as_i8()),
             interval_ms: AtomicU64::new(interval_ms.max(MIN_INTERVAL_MS)),
             detector,
+            event_in_meeting: AtomicBool::new(false),
         }
     }
 
@@ -203,7 +213,13 @@ impl HighFpsController {
         let now = Instant::now();
         let interval_ms = self.interval_ms.load(Ordering::Relaxed);
         let default_mode = DefaultMode::from_i8(self.default_mode.load(Ordering::Relaxed));
-        let meeting = self.detector.as_ref().map(|d| d.is_in_meeting());
+        // Detector wins when present (CLI/standalone). The app has no detector
+        // handle and drives meeting state through events, so fall back to the
+        // event-tracked flag there.
+        let meeting = match self.detector.as_ref() {
+            Some(d) => Some(d.is_in_meeting()),
+            None => Some(self.event_in_meeting.load(Ordering::Relaxed)),
+        };
 
         let mut guard = self
             .inner
@@ -432,6 +448,17 @@ impl HighFpsController {
         let clamped = interval_ms.max(MIN_INTERVAL_MS);
         self.interval_ms.store(clamped, Ordering::Relaxed);
         clamped
+    }
+
+    /// Record meeting start/stop from `meeting_started`/`meeting_ended` events.
+    /// The desktop app builds this controller without a detector handle (the
+    /// detector lives on the AudioManager and is recreated per capture
+    /// session), so this is what makes `snapshot().meeting` meaningful there —
+    /// and what lets the capture loop bypass AX-hash dedup for visual changes
+    /// during a call. A no-op on the value reported by CLI/standalone builds,
+    /// where a real detector already drives `meeting`.
+    pub fn set_in_meeting(&self, in_meeting: bool) {
+        self.event_in_meeting.store(in_meeting, Ordering::Relaxed);
     }
 }
 
@@ -776,7 +803,23 @@ mod tests {
         ));
         c.start_timer_session(Duration::from_secs(600));
         assert!(c.snapshot().active);
-        assert_eq!(c.snapshot().meeting, None);
+        // No detector + no event signal yet → not in a meeting (Some(false),
+        // the event-tracked default), not the old `None`.
+        assert_eq!(c.snapshot().meeting, Some(false));
+    }
+
+    #[test]
+    fn event_in_meeting_drives_meeting_without_detector() {
+        // The desktop app builds the controller with no detector and feeds
+        // meeting state through meeting_started/meeting_ended. set_in_meeting
+        // must make snapshot().meeting reflect that so the capture loop can
+        // bypass AX-hash dedup for visual changes during the call.
+        let c = Arc::new(HighFpsController::new(None, DefaultMode::Ask, 100));
+        assert_eq!(c.snapshot().meeting, Some(false));
+        c.set_in_meeting(true);
+        assert_eq!(c.snapshot().meeting, Some(true));
+        c.set_in_meeting(false);
+        assert_eq!(c.snapshot().meeting, Some(false));
     }
 
     /// Stress: many concurrent writers + readers must never panic or return

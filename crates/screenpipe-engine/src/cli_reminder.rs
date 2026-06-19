@@ -14,8 +14,8 @@ use std::env;
 use std::time::Duration;
 
 const REMINDER_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const DESKTOP_APP_URL: &str = "https://screenpi.pe";
-const SURVEY_URL: &str = "https://screenpi.pe/survey";
+const DESKTOP_APP_URL: &str = "https://screenpipe.com";
+const SURVEY_URL: &str = "https://screenpipe.com/survey/cli";
 const NPM_LATEST_URL: &str = "https://registry.npmjs.org/screenpipe/latest";
 
 /// Spawn the background reminder loop. Safe to call once at CLI startup.
@@ -138,7 +138,7 @@ fn print_install_bundle_tip() {
     );
     eprintln!(
         "       {}",
-        "npx screenpipe install https://screenpi.pe/start.json"
+        "npx screenpipe install https://screenpipe.com/start.json"
             .green()
             .bold(),
     );
@@ -158,7 +158,7 @@ fn print_login_tip() {
 fn print_survey_tip() {
     eprintln!();
     eprintln!(
-        "  {} tell us what you think of screenpipe:",
+        "  {} help shape the screenpipe CLI. what do you use it for? (60s)",
         "survey:".cyan().bold(),
     );
     eprintln!("       {}", "npx screenpipe survey".green().bold());

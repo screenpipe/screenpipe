@@ -1416,10 +1416,13 @@ impl SettingsStore {
         settings.user_id = self
             .user
             .token
-            .as_ref()
+            .clone()
             .filter(|t| !t.is_empty())
-            .or(self.user.id.as_ref().filter(|id| !id.is_empty()))
-            .cloned()
+            // #3943: the token no longer persists in store.bin; fall back to the
+            // secret-store-backed cache (seeded at startup and on every sign-in)
+            // so the engine still gets the cloud Bearer.
+            .or_else(crate::auth_token::cached_cloud_token)
+            .or_else(|| self.user.id.clone().filter(|id| !id.is_empty()))
             .unwrap_or_default();
         // Fallback chain: userName setting → cloud name → cloud email
         settings.user_name = settings
@@ -1507,6 +1510,29 @@ impl SettingsStore {
         entitlement_checked_recently(entitlement) && entitlement_active(entitlement)
     }
 
+    fn cloud_transcription_entitled(&self) -> bool {
+        // Legacy cloud subscribers keep working during the paid-plan rollout.
+        if self.user.cloud_subscribed == Some(true) {
+            return true;
+        }
+
+        let Some(entitlement) = self.user.entitlement.as_ref() else {
+            return false;
+        };
+
+        let has_app_feature =
+            self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app");
+        if !has_app_feature {
+            return false;
+        }
+
+        if entitlement_is_lifetime(entitlement) || entitlement_has_future_grace(entitlement) {
+            return true;
+        }
+
+        entitlement_checked_recently(entitlement) && entitlement_active(entitlement)
+    }
+
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
         let engine = self.recording.audio_transcription_engine.clone();
         let has_cloud_auth = self
@@ -1515,7 +1541,7 @@ impl SettingsStore {
             .as_ref()
             .map_or(false, |token| !token.is_empty())
             || self.user.id.as_ref().map_or(false, |id| !id.is_empty());
-        let is_subscribed = self.user.cloud_subscribed == Some(true);
+        let is_subscribed = self.cloud_transcription_entitled();
         let has_deepgram_key = !self.recording.deepgram_api_key.is_empty()
             && self.recording.deepgram_api_key != "default";
         let fallback = "whisper-large-v3-turbo-quantized".to_string();
@@ -1919,6 +1945,28 @@ mod tests {
             resolution.fallback_reason,
             Some(AudioEngineFallbackReason::NotSubscribed)
         );
+    }
+
+    #[test]
+    fn screenpipe_cloud_stays_active_for_app_entitled_users() {
+        let mut store = SettingsStore::default();
+        store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+        store.user.token = Some("token".to_string());
+        store.user.cloud_subscribed = Some(false);
+        store.user.app_entitled = Some(true);
+        store.user.subscription_plan = Some("standard".to_string());
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "standard",
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": false }
+        }));
+
+        let resolution = store.audio_engine_resolution();
+
+        assert_eq!(resolution.active, "screenpipe-cloud");
+        assert_eq!(resolution.fallback_reason, None);
     }
 
     #[test]

@@ -368,7 +368,40 @@ pub async fn get_cpal_device_and_config(
         (*best_config).with_sample_rate(best_config.max_sample_rate())
     };
 
+    // Guard against drivers that advertise a config with degenerate values —
+    // 0 channels or a 0 sample rate — seen with virtual cables and some
+    // non-default Windows capture endpoints. A 0-channel buffer crashes the
+    // realtime downmix; a 0 sample rate later crashes the resampler (infinite
+    // ratio). Both used to take down the capture thread and the app — see
+    // issue #3858. Reject the config here with a clean error so the
+    // device-recovery loop logs and backs off instead of crashing.
+    ensure_usable_stream_config(config.channels(), config.sample_rate().0, &device_name)?;
+
     Ok((cpal_audio_device, config))
+}
+
+/// Reject obviously-unusable stream configs before we open a stream.
+///
+/// Split out as a pure function so the degenerate-config guards can be
+/// unit-tested without real audio hardware. A `0` channel count makes the
+/// downstream interleaved→mono conversion panic, and a `0` sample rate makes
+/// the resampler build an infinite ratio (panic / broken state), so both are
+/// treated as hard errors rather than reaching the realtime path.
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+fn ensure_usable_stream_config(channels: u16, sample_rate: u32, device_name: &str) -> Result<()> {
+    if channels == 0 {
+        return Err(anyhow!(
+            "audio device '{}' reported 0 channels — refusing to build a stream",
+            device_name
+        ));
+    }
+    if sample_rate == 0 {
+        return Err(anyhow!(
+            "audio device '{}' reported a 0 sample rate — refusing to build a stream",
+            device_name
+        ));
+    }
+    Ok(())
 }
 
 /// How long a cached device list is considered fresh. Audio devices change
@@ -839,6 +872,75 @@ pub fn default_communications_output_device() -> Option<AudioDevice> {
 #[cfg(target_os = "windows")]
 mod windows_com_audio {
     use anyhow::{anyhow, Result};
+    use windows::core::{HRESULT, PWSTR};
+    use windows::Win32::System::Com::{CoTaskMemFree, CoUninitialize};
+
+    /// Whether a `CoInitializeEx` result means *this* call added an apartment
+    /// reference that we must balance with `CoUninitialize`.
+    ///
+    /// Per MSDN: `S_OK` and `S_FALSE` both add a reference and must be
+    /// balanced; `RPC_E_CHANGED_MODE` means the thread was already initialized
+    /// in a different apartment mode and `CoUninitialize` must NOT be called.
+    /// `HRESULT::is_ok()` is true for `S_OK`/`S_FALSE` and false for the error.
+    ///
+    /// Pure + free-standing so the balancing rule is unit-tested without COM.
+    fn com_init_added_reference(hr: HRESULT) -> bool {
+        hr.is_ok()
+    }
+
+    /// RAII guard that balances a successful `CoInitializeEx` with exactly one
+    /// `CoUninitialize` on drop.
+    ///
+    /// The previous code called `CoInitializeEx` on every poll (the device
+    /// monitor hits this every 2 s for the lifetime of the app) and never
+    /// uninitialized, so the per-thread COM apartment reference count grew
+    /// without bound — the "handle/PID growth from audio-device enumeration"
+    /// in issue #3858. Balancing keeps the apartment alive for the duration of
+    /// the call and releases our reference afterward; any COM init that cpal
+    /// holds via its own thread-local is unaffected.
+    struct ComApartment {
+        added_reference: bool,
+    }
+
+    impl ComApartment {
+        unsafe fn enter() -> Self {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+            Self {
+                added_reference: com_init_added_reference(hr),
+            }
+        }
+    }
+
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            if self.added_reference {
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
+    /// RAII wrapper around a `CoTaskMem`-allocated `PWSTR` (e.g. from
+    /// `IMMDevice::GetId`). Frees the allocation on drop so it is released on
+    /// every path — including the early `?` returns that previously leaked it
+    /// (e.g. when the second `GetId`/`to_string` failed after the first
+    /// succeeded).
+    struct CoTaskMemPwstr(PWSTR);
+
+    impl CoTaskMemPwstr {
+        fn to_string(&self) -> Result<String> {
+            // PWSTR is Copy; `to_string` reads the buffer without consuming it.
+            unsafe { self.0.to_string() }.map_err(|e| anyhow!("invalid device id utf-16: {}", e))
+        }
+    }
+
+    impl Drop for CoTaskMemPwstr {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { CoTaskMemFree(Some(self.0.as_ptr() as _)) };
+            }
+        }
+    }
 
     /// Query the Windows eCommunications default output endpoint.
     /// Returns the friendly name if it differs from the eConsole default,
@@ -848,12 +950,13 @@ mod windows_com_audio {
         use windows::Win32::Media::Audio::{
             eCommunications, eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
         };
-        use windows::Win32::System::Com::{
-            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM,
-        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, STGM};
 
-        // COM init (idempotent per thread — returns S_FALSE if already initialized)
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        // Initialize COM and guarantee a matching CoUninitialize on every exit
+        // path (the leak fix). The guard lives until the end of the function so
+        // all COM objects below are released before the apartment reference is
+        // dropped.
+        let _com = ComApartment::enter();
 
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
@@ -867,15 +970,13 @@ mod windows_com_audio {
             .map_err(|e| anyhow!("no console output endpoint: {}", e))?;
 
         // Compare endpoint IDs — if identical, the user's communications and
-        // multimedia defaults point to the same physical device.
-        let comm_id = comm.GetId()?;
-        let console_id = console.GetId()?;
+        // multimedia defaults point to the same physical device. Wrapping the
+        // PWSTRs guarantees they're freed even if `to_string` below errors.
+        let comm_id = CoTaskMemPwstr(comm.GetId()?);
+        let console_id = CoTaskMemPwstr(console.GetId()?);
 
         let comm_id_str = comm_id.to_string()?;
         let console_id_str = console_id.to_string()?;
-
-        CoTaskMemFree(Some(comm_id.as_ptr() as _));
-        CoTaskMemFree(Some(console_id.as_ptr() as _));
 
         if comm_id_str == console_id_str {
             return Ok(None); // same device, nothing extra to record
@@ -884,6 +985,7 @@ mod windows_com_audio {
         // They differ — get the friendly name of the communications device
         // STGM_READ = 0
         let store = comm.OpenPropertyStore(STGM(0))?;
+        // windows-rs PROPVARIANT clears itself (PropVariantClear) on drop.
         let prop = store.GetValue(&PKEY_Device_FriendlyName)?;
 
         // windows-core 0.58 PROPVARIANT implements Display via BSTR conversion
@@ -893,6 +995,32 @@ mod windows_com_audio {
         }
 
         Ok(Some(name))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::com_init_added_reference;
+        use windows::Win32::Foundation::{RPC_E_CHANGED_MODE, S_FALSE, S_OK};
+
+        #[test]
+        fn s_ok_and_s_false_require_balancing_uninit() {
+            assert!(
+                com_init_added_reference(S_OK),
+                "S_OK adds a COM reference that must be balanced"
+            );
+            assert!(
+                com_init_added_reference(S_FALSE),
+                "S_FALSE (already initialized) still adds a reference"
+            );
+        }
+
+        #[test]
+        fn changed_mode_must_not_uninit() {
+            assert!(
+                !com_init_added_reference(RPC_E_CHANGED_MODE),
+                "RPC_E_CHANGED_MODE means we did NOT add a reference"
+            );
+        }
     }
 }
 
@@ -927,5 +1055,57 @@ mod resolve_audio_tests {
             &["MacBook Pro Microphone (input)".to_string()],
             false
         ));
+    }
+}
+
+#[cfg(all(test, not(all(target_os = "linux", feature = "pulseaudio"))))]
+mod stream_config_tests {
+    use super::ensure_usable_stream_config;
+
+    /// Regression for issue #3858: a non-default / virtual device that reports
+    /// 0 channels must be rejected with a clean error before we build a stream,
+    /// rather than reaching the realtime downmix and panicking.
+    #[test]
+    fn zero_channels_is_rejected() {
+        let err = ensure_usable_stream_config(0, 48_000, "Some Virtual Cable")
+            .expect_err("0 channels must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("0 channels"),
+            "error should explain why: {msg}"
+        );
+        assert!(
+            msg.contains("Some Virtual Cable"),
+            "error should name the device: {msg}"
+        );
+    }
+
+    /// Regression for issue #3858: a 0 sample rate must be rejected too — it
+    /// later crashes the resampler with an infinite ratio.
+    #[test]
+    fn zero_sample_rate_is_rejected() {
+        let err = ensure_usable_stream_config(2, 0, "Weird Device")
+            .expect_err("0 sample rate must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("0 sample rate"),
+            "error should explain why: {msg}"
+        );
+        assert!(
+            msg.contains("Weird Device"),
+            "error should name the device: {msg}"
+        );
+    }
+
+    #[test]
+    fn valid_configs_are_accepted() {
+        // Mono, stereo, and high-channel pro interfaces at a range of common
+        // (and unusual-but-valid) sample rates.
+        assert!(ensure_usable_stream_config(1, 16_000, "Mic").is_ok());
+        assert!(ensure_usable_stream_config(2, 44_100, "Mic").is_ok());
+        assert!(ensure_usable_stream_config(8, 48_000, "Interface").is_ok());
+        assert!(ensure_usable_stream_config(32, 192_000, "Dante").is_ok());
+        assert!(ensure_usable_stream_config(64, 384_000, "MADI").is_ok());
+        assert!(ensure_usable_stream_config(1, 8_000, "Bluetooth HFP").is_ok());
     }
 }

@@ -47,6 +47,7 @@ pub mod n8n;
 pub mod notion;
 pub mod ntfy;
 pub mod obsidian;
+pub mod obsidian_memories;
 pub mod odoo;
 pub mod openclaw;
 pub mod otter;
@@ -190,6 +191,20 @@ pub trait Integration: Send + Sync {
         None
     }
 
+    /// User-selectable access levels offered on the OAuth consent (e.g. Slack
+    /// send-only vs send+read). Default is empty — `extra_auth_params` is used
+    /// as-is and the UI shows no choice. The connect command resolves the
+    /// chosen variant's `params` by `id`; scope strings never come from the UI.
+    fn oauth_scope_variants(&self) -> &'static [oauth::ScopeVariant] {
+        &[]
+    }
+
+    /// Whether repeated OAuth connects can create distinct account/workspace
+    /// instances instead of overwriting the provider's default token slot.
+    fn supports_oauth_instances(&self) -> bool {
+        false
+    }
+
     /// Background refresh policy. Defaults to "rely on access-token expiry".
     /// Override when the provider expires the refresh token on inactivity.
     fn refresh_policy(&self) -> RefreshPolicy {
@@ -266,6 +281,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(linear::Linear),
         Box::new(perplexity::Perplexity),
         Box::new(obsidian::Obsidian),
+        Box::new(obsidian_memories::ObsidianMemories),
         Box::new(n8n::N8n),
         Box::new(make::Make),
         Box::new(zapier::Zapier),
@@ -512,6 +528,7 @@ impl ConnectionManager {
                 def,
                 connected,
                 is_oauth,
+                supports_oauth_instances: is_oauth && i.supports_oauth_instances(),
             });
         }
         result
@@ -675,6 +692,8 @@ pub struct ConnectionInfo {
     pub connected: bool,
     /// True if this integration authenticates via OAuth (no manual fields).
     pub is_oauth: bool,
+    /// True if OAuth reconnects can be stored as separate named instances.
+    pub supports_oauth_instances: bool,
 }
 
 type CredentialConnection<'a> = (

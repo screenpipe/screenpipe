@@ -18,6 +18,7 @@ import { toast } from "@/components/ui/use-toast";
 import { useFrameLoading } from "@/components/rewind/hooks/use-frame-loading";
 import { useLiveText } from "@/components/rewind/hooks/use-live-text";
 import { useFrameActions } from "@/components/rewind/hooks/use-frame-actions";
+import { commands } from "@/lib/utils/tauri";
 
 export interface DetectedUrl {
 	normalized: string;
@@ -254,7 +255,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 			if (!text?.trim()) return;
 
 			e.preventDefault();
-			navigator.clipboard.writeText(text).catch(() => {});
+			commands.copyTextToClipboard(text).catch(() => {});
 			toast({ title: "copied text", description: "all frame text copied to clipboard" });
 		};
 
@@ -367,7 +368,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 								onClick={() => {
 									const text = getSelectableLayerText()?.trim();
 									if (text) {
-										navigator.clipboard.writeText(text).catch(() => {});
+										commands.copyTextToClipboard(text).catch(() => {});
 										toast({ title: "copied selection", description: "selected text copied to clipboard" });
 									}
 									setContextMenuOpen(false);

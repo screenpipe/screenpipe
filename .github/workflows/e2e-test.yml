@@ -79,7 +79,7 @@ jobs:
         path: |
           apps/screenpipe-app-tauri/src-tauri/ffmpeg
           apps/screenpipe-app-tauri/src-tauri/vcredist
-          apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
+          apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2
           apps/screenpipe-app-tauri/src-tauri/bun-x86_64-pc-windows-msvc.exe
         key: Windows-e2e-artifacts-v2-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
         restore-keys: |
@@ -127,13 +127,13 @@ jobs:
     - name: Download ONNX Runtime (CPU) for Windows
       shell: pwsh
       run: |
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
-        $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip"
+        $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2"
         $ortDir = "ort-system-lib"
         # retry: the GitHub release CDN intermittently returns 504, which would otherwise fail the whole job
         for ($attempt = 1; $attempt -le 5; $attempt++) {
           try {
-            Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.22.0.zip"
+            Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.24.2.zip"
             break
           } catch {
             if ($attempt -eq 5) { throw }
@@ -142,15 +142,17 @@ jobs:
           }
         }
         if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
-        7z x onnxruntime-win-x64-1.22.0.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
+        7z x onnxruntime-win-x64-1.24.2.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
         if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }
         Copy-Item -Path $tauriDir -Destination $ortDir -Recurse -Force
 
-    - name: Set ORT env vars
-      shell: bash
-      run: |
-        echo "ORT_STRATEGY=system" >> $GITHUB_ENV
-        echo "ORT_LIB_LOCATION=${{ github.workspace }}/ort-system-lib" >> $GITHUB_ENV
+    # No ORT_STRATEGY/ORT_LIB_LOCATION: link ONNX Runtime via ort's
+    # download-binaries (pyke prebuilt), same as the green release-app and the
+    # ci.yml/windows-integration/release-cli workflows. Setting ORT_LIB_LOCATION
+    # forces ort-sys into system static-linking, which needs onnxruntime_common.lib
+    # + the static _deps tree the dynamic MS prebuilt doesn't ship -> "ort-sys
+    # could not link" (the e2e Windows Build failure). The MS zip downloaded above
+    # is still staged below for the runtime DLL.
 
     - name: Cache Next.js build
       uses: actions/cache@v4
@@ -172,9 +174,9 @@ jobs:
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 
-    # ORT_STRATEGY=system links against onnxruntime.lib but does NOT copy
-    # onnxruntime.dll next to the test binary the way the default
-    # download-binaries+copy-dylibs path would. Without a copy here the
+    # ort links via download-binaries but the audio crate's Windows ort
+    # features omit copy-dylibs, so onnxruntime.dll is NOT copied next to the
+    # test binary automatically. Without a copy here the
     # Windows DLL loader fails to find onnxruntime.dll at runtime and the
     # screenpipe-server thread panics with "Failed to initialize ORT API"
     # on the very first ort::api() call. Tauri's bundle step does this for
@@ -316,7 +318,7 @@ jobs:
         "$install_dir/bun" --version
 
     - name: Install Linux dependencies
-      timeout-minutes: 20
+      timeout-minutes: 35
       run: |
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive

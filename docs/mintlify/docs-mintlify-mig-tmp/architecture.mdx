@@ -106,11 +106,9 @@ graph TD
     CORE[screenpipe-core<br/><i>pipes · config</i>]
     EVENTS[screenpipe-events<br/><i>event system</i>]
     A11Y[screenpipe-accessibility<br/><i>UI events · accessibility tree</i>]
-    AI[screenpipe-apple-intelligence<br/><i>Foundation Models</i>]
     INT[screenpipe-integrations<br/><i>MCP · reminders</i>]
 
     APP --> SERVER
-    APP --> AI
     SERVER --> DB
     SERVER --> VISION
     SERVER --> AUDIO
@@ -178,7 +176,6 @@ REST API on `localhost:3030`:
 | `/frames/{id}/context` | accessibility text + URLs + OCR fallback for a frame |
 | `/health` | system status and metrics |
 | `/raw_sql` | direct database queries |
-| `/ai/chat/completions` | Apple Intelligence (macOS 26+) |
 
 see [API reference](/cli-reference) for the full endpoint list.
 

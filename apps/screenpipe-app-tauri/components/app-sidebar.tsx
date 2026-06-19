@@ -95,7 +95,7 @@ export function AppSidebar({ children, className }: AppSidebarProps) {
         // Animate width only when not actively dragging — otherwise the
         // 300ms transition fights the pointer.
         isResizing ? "" : "transition-[width] duration-300",
-        fullscreen ? "pt-2" : "pt-8",
+        fullscreen ? "pt-7" : "pt-8",
         isTranslucent ? "vibrant-sidebar" : "bg-background",
         isTranslucent ? "vibrant-sidebar-border" : "border-border",
         className,

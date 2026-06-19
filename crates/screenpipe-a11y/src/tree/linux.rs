@@ -998,7 +998,8 @@ pub struct LinuxTreeWalker {
 unsafe impl Send for LinuxTreeWalker {}
 
 impl LinuxTreeWalker {
-    pub fn new(config: TreeWalkerConfig) -> Self {
+    pub fn new(mut config: TreeWalkerConfig) -> Self {
+        config.compile_patterns();
         Self {
             config,
             inner: UnsafeCell::new(WalkerInner {
@@ -1057,15 +1058,15 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
 
         // Apply user-configured ignored windows. Supports legacy unscoped
         // patterns and scoped `App::Title` patterns.
-        let ignored_patterns = WindowPattern::parse_list(&self.config.ignored_windows);
-        let included_patterns = WindowPattern::parse_list(&self.config.included_windows);
-        if window_pattern::matches_any(&ignored_patterns, &app_lower, &window_lower) {
+        let ignored_patterns = self.config.resolved_ignored();
+        let included_patterns = self.config.resolved_included();
+        if window_pattern::matches_any(ignored_patterns.as_ref(), &app_lower, &window_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // Scoped includes act as per-app whitelists — see
         // `window_pattern::passes_includes`.
-        if !window_pattern::passes_includes(&included_patterns, &app_lower, &window_lower) {
+        if !window_pattern::passes_includes(included_patterns.as_ref(), &app_lower, &window_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
 
@@ -1073,7 +1074,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         let mut state = WalkState::new(
             &self.config,
             start,
-            ignored_patterns.clone(),
+            ignored_patterns.to_vec(),
             app_lower.clone(),
         );
         if let Some((wx, wy, ww, wh)) = get_component_extents(conn, &window_ref) {

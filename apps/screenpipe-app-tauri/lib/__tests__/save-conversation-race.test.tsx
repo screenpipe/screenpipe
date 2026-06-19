@@ -55,6 +55,7 @@ const saveCalls: Array<{
   messages: any[];
   browserState?: any;
   lastUserMessageAt?: number;
+  lastViewedAt?: number;
 }> = [];
 
 vi.mock("@/lib/chat-storage", () => ({
@@ -64,6 +65,7 @@ vi.mock("@/lib/chat-storage", () => ({
       messages: conv.messages,
       browserState: conv.browserState,
       lastUserMessageAt: conv.lastUserMessageAt,
+      lastViewedAt: conv.lastViewedAt,
     });
   }),
   loadConversationFile: vi.fn(async () => null),
@@ -97,6 +99,7 @@ vi.mock("@/lib/hooks/use-settings", () => ({
 // ── Import under test (after mocks) ───────────────────────────────────
 import { useChatConversations } from "../../components/hooks/use-chat-conversations";
 import { loadConversationFile } from "@/lib/chat-storage";
+import { useChatStore } from "../stores/chat-store";
 
 // Test harness: thin component that wires up the refs/state the hook
 // needs, then exposes `saveConversation` for the test to call. Mirrors
@@ -148,6 +151,7 @@ beforeEach(() => {
   saveCalls.length = 0;
   deleteCachedBrowserState("chat-A");
   deleteCachedBrowserState("fresh-sid");
+  useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
 });
 
 afterEach(() => {
@@ -276,5 +280,41 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
 
     expect(saveCalls).toHaveLength(1);
     expect(saveCalls[0].lastUserMessageAt).toBe(9_000);
+  });
+
+  it("persists the store's lastViewedAt watermark on save", async () => {
+    useChatStore.getState().actions.upsert({
+      id: "chat-A",
+      title: "chat-A",
+      preview: "",
+      status: "idle",
+      messageCount: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      pinned: false,
+      unread: false,
+      lastContentAt: 9_000,
+      lastViewedAt: 8_500,
+    });
+
+    const messages = [
+      { id: "u1", role: "user" as const, content: "hello", timestamp: 1_000 },
+      { id: "a1", role: "assistant" as const, content: "reply", timestamp: 2_000 },
+    ];
+
+    const { result } = renderHook(() =>
+      useHarness({
+        initialMessages: messages,
+        initialConversationId: "chat-A",
+        initialPiSessionId: "chat-A",
+      }),
+    );
+
+    await act(async () => {
+      await result.current.hook.saveConversation(messages);
+    });
+
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].lastViewedAt).toBe(8_500);
   });
 });

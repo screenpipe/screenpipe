@@ -109,7 +109,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
         if (!update) {
           const cpuArch = arch();
           update = await check({ endpoints: [
-            `https://screenpi.pe/api/app-update/stable/windows-${cpuArch}/{{current_version}}`,
+            `https://screenpipe.com/api/app-update/stable/windows-${cpuArch}/{{current_version}}`,
           ] } as any);
         }
 

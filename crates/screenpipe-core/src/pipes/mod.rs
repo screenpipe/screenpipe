@@ -10,7 +10,9 @@
 //! parses configs, runs the scheduler, and delegates execution to an
 //! [`AgentExecutor`].
 
+pub mod connections;
 pub mod favorites;
+pub mod mcp_access;
 pub mod permissions;
 pub mod preset_fallback;
 pub mod sync;
@@ -19,8 +21,10 @@ use crate::agents::{
     pi::{PiExecutor, SCREENPIPE_API_URL},
     AgentExecutor, ExecutionHandle,
 };
+use crate::pipes::connections::parse_mcp_connection_id;
+use crate::pipes::mcp_access::McpSessionAccessRegistry;
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use cron::Schedule as CronSchedule;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -30,6 +34,11 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+const PIPE_COMPLETED_EVENT_PREFIX: &str = "pipe_completed:";
+const PIPE_LOG_ACTIVE_KEEP_PER_PIPE: usize = 200;
+const PIPE_LOG_ARCHIVE_AFTER_DAYS: i64 = 14;
+const PIPE_LOG_ARCHIVE_DIR: &str = "archive";
 
 // ---------------------------------------------------------------------------
 // Config & log types
@@ -639,6 +648,201 @@ fn cleanup_orphaned_pid_files(pipes_dir: &Path) {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PipeLogArchiveSummary {
+    scanned: usize,
+    archived: usize,
+    bytes_archived: u64,
+    failed: usize,
+}
+
+#[derive(Debug)]
+struct PipeLogArchiveCandidate {
+    path: PathBuf,
+    file_name: std::ffi::OsString,
+    timestamp: DateTime<Utc>,
+    size: u64,
+}
+
+fn archive_old_pipe_logs(pipes_dir: &Path) -> PipeLogArchiveSummary {
+    let archive_before = Utc::now() - chrono::Duration::days(PIPE_LOG_ARCHIVE_AFTER_DAYS);
+    archive_old_pipe_logs_with_policy(pipes_dir, PIPE_LOG_ACTIVE_KEEP_PER_PIPE, archive_before)
+}
+
+/// Run [`archive_old_pipe_logs`] on the blocking thread pool so the directory
+/// walk and synchronous file moves never stall the async runtime, even on
+/// installs with a large pre-existing log backlog.
+async fn archive_old_pipe_logs_offloaded(pipes_dir: PathBuf) -> PipeLogArchiveSummary {
+    match tokio::task::spawn_blocking(move || archive_old_pipe_logs(&pipes_dir)).await {
+        Ok(summary) => summary,
+        Err(e) => {
+            warn!("pipe log archive: blocking task failed: {}", e);
+            PipeLogArchiveSummary::default()
+        }
+    }
+}
+
+fn archive_old_pipe_logs_with_policy(
+    pipes_dir: &Path,
+    keep_active_per_pipe: usize,
+    archive_before: DateTime<Utc>,
+) -> PipeLogArchiveSummary {
+    let mut summary = PipeLogArchiveSummary::default();
+    let pipe_entries = match std::fs::read_dir(pipes_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!(
+                "pipe log archive: could not read pipes dir {:?}: {}",
+                pipes_dir, e
+            );
+            summary.failed += 1;
+            return summary;
+        }
+    };
+
+    for pipe_entry in pipe_entries.flatten() {
+        let pipe_dir = pipe_entry.path();
+        if !pipe_dir.is_dir() {
+            continue;
+        }
+
+        let logs_dir = pipe_dir.join("logs");
+        let log_entries = match std::fs::read_dir(&logs_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                warn!("pipe log archive: could not read {:?}: {}", logs_dir, e);
+                summary.failed += 1;
+                continue;
+            }
+        };
+
+        let mut candidates = Vec::new();
+        for log_entry in log_entries.flatten() {
+            let path = log_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            summary.scanned += 1;
+            let metadata = match log_entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    warn!("pipe log archive: could not stat {:?}: {}", path, e);
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let timestamp = pipe_log_timestamp(&path, &metadata);
+
+            candidates.push(PipeLogArchiveCandidate {
+                path,
+                file_name: log_entry.file_name(),
+                timestamp,
+                size: metadata.len(),
+            });
+        }
+
+        candidates.sort_by(|a, b| {
+            b.timestamp
+                .cmp(&a.timestamp)
+                .then_with(|| b.file_name.cmp(&a.file_name))
+        });
+
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            if index < keep_active_per_pipe && candidate.timestamp >= archive_before {
+                continue;
+            }
+
+            let archive_month = candidate.timestamp.format("%Y-%m").to_string();
+            let archive_dir = logs_dir.join(PIPE_LOG_ARCHIVE_DIR).join(archive_month);
+            if let Err(e) = std::fs::create_dir_all(&archive_dir) {
+                warn!(
+                    "pipe log archive: could not create {:?}: {}",
+                    archive_dir, e
+                );
+                summary.failed += 1;
+                continue;
+            }
+
+            let archive_path = unique_pipe_log_archive_path(&archive_dir, &candidate.file_name);
+            match std::fs::rename(&candidate.path, &archive_path) {
+                Ok(()) => {
+                    summary.archived += 1;
+                    summary.bytes_archived += candidate.size;
+                }
+                Err(e) => {
+                    warn!(
+                        "pipe log archive: could not move {:?} to {:?}: {}",
+                        candidate.path, archive_path, e
+                    );
+                    summary.failed += 1;
+                }
+            }
+        }
+    }
+
+    summary
+}
+
+fn pipe_log_timestamp(path: &Path, metadata: &std::fs::Metadata) -> DateTime<Utc> {
+    pipe_log_timestamp_from_name(path)
+        .or_else(|| metadata.modified().ok().map(DateTime::<Utc>::from))
+        .unwrap_or_else(Utc::now)
+}
+
+fn pipe_log_timestamp_from_name(path: &Path) -> Option<DateTime<Utc>> {
+    let stem = path.file_stem()?.to_str()?;
+    let naive = NaiveDateTime::parse_from_str(stem, "%Y%m%d_%H%M%S").ok()?;
+    Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+}
+
+fn unique_pipe_log_archive_path(archive_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let path = archive_dir.join(file_name);
+    if !path.exists() {
+        return path;
+    }
+
+    let original = Path::new(file_name);
+    let stem = original
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("log");
+    let extension = original
+        .extension()
+        .and_then(|extension| extension.to_str());
+
+    for suffix in 1.. {
+        let candidate_name = match extension {
+            Some(extension) => format!("{stem}-{suffix}.{extension}"),
+            None => format!("{stem}-{suffix}"),
+        };
+        let candidate = archive_dir.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded suffix loop should return an unused archive path");
+}
+
+fn log_pipe_archive_summary(context: &str, summary: PipeLogArchiveSummary) {
+    if summary.archived > 0 {
+        info!(
+            "{context}: archived {} pipe log files ({} bytes), scanned {}, failed {}",
+            summary.archived, summary.bytes_archived, summary.scanned, summary.failed
+        );
+    } else if summary.failed > 0 {
+        warn!(
+            "{context}: pipe log archive had {} failures while scanning {} files",
+            summary.failed, summary.scanned
+        );
+    }
+}
+
 /// Result of a single pipe run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipeRunLog {
@@ -847,14 +1051,15 @@ fn read_chatgpt_token_from_secrets() -> Option<String> {
         _ => None,
     };
 
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let db_path_str = db_path.to_string_lossy().into_owned();
 
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let pool = sqlx::SqlitePool::connect(&db_url).await.ok()?;
-            let store = screenpipe_secrets::SecretStore::new(pool, secret_key)
+            // Shared, engine-matched pool — not an ad-hoc per-call connection,
+            // which churns the WAL-index and corrupts db.sqlite (#4263).
+            let store = screenpipe_secrets::SecretStore::open(&db_path_str, secret_key)
                 .await
                 .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;
@@ -1354,6 +1559,8 @@ pub struct PipeManager {
     last_reload: Arc<Mutex<Instant>>,
     /// Optional token registry for server-side permission enforcement.
     token_registry: Option<Arc<dyn permissions::PipeTokenRegistry>>,
+    /// Optional registry for per-pipe MCP server allowlists.
+    mcp_session_access: Option<McpSessionAccessRegistry>,
     /// Extra context appended to every pipe prompt (e.g. connected integrations).
     extra_context: Option<String>,
     /// Connected integrations context injected into every pipe *system* prompt.
@@ -1399,6 +1606,7 @@ impl PipeManager {
                     .unwrap_or(Instant::now()),
             )),
             token_registry: None,
+            mcp_session_access: None,
             extra_context: None,
             connections_context: None,
             local_api_key: None,
@@ -1465,6 +1673,11 @@ impl PipeManager {
         self.token_registry = Some(registry);
     }
 
+    /// Set the registry used by the local MCP API to enforce per-pipe MCP scopes.
+    pub fn set_mcp_session_access(&mut self, registry: McpSessionAccessRegistry) {
+        self.mcp_session_access = Some(registry);
+    }
+
     /// Set a callback to be invoked after each scheduled pipe run.
     pub fn set_on_run_complete(&mut self, cb: OnPipeRunComplete) {
         self.on_run_complete = Some(cb);
@@ -1484,7 +1697,7 @@ impl PipeManager {
     }
 
     /// Mark orphaned 'running' executions as failed on startup,
-    /// then prune old executions (keep 50 per pipe).
+    /// then prune old executions and archive old disk logs.
     pub async fn startup_recovery(&self) {
         // Clean up orphaned PID files from previous crashes
         cleanup_orphaned_pid_files(&self.pipes_dir);
@@ -1506,6 +1719,11 @@ impl PipeManager {
             // Prune old executions to prevent DB bloat
             self.cleanup_executions().await;
         }
+
+        log_pipe_archive_summary(
+            "startup pipe log archive",
+            archive_old_pipe_logs_offloaded(self.pipes_dir.clone()).await,
+        );
     }
 
     /// Delete old pipe executions, keeping only the newest 50 per pipe.
@@ -2180,6 +2398,7 @@ impl PipeManager {
         let on_output = self.on_output_line.clone();
         let pipes_dir_for_log = self.pipes_dir.clone();
         let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let mcp_session_access = self.mcp_session_access.clone();
 
         // Spawn the actual execution in a background task
         tokio::spawn(async move {
@@ -2203,6 +2422,17 @@ impl PipeManager {
                 }
             });
 
+            let mcp_server_allowlist = selected_mcp_server_ids(&config);
+            let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
+            if let Some(ref registry) = mcp_session_access {
+                if mcp_server_allowlist.is_empty() {
+                    registry.clear_session(&session_owner).await;
+                } else {
+                    registry
+                        .set_allowlist(session_owner.clone(), mcp_server_allowlist.clone())
+                        .await;
+                }
+            }
             let run_result = tokio::time::timeout(
                 timeout_duration,
                 executor.run_streaming(
@@ -2216,14 +2446,18 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
-                    Some(format!("pipe:{pipe_name}").as_str()),
+                    mcp_allowlist_arg(&mcp_server_allowlist),
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
+                    Some(session_owner.as_str()),
                 ),
             )
             .await;
+            if let Some(ref registry) = mcp_session_access {
+                registry.clear_session(&session_owner).await;
+            }
 
             let finished_at = Utc::now();
 
@@ -2696,6 +2930,17 @@ impl PipeManager {
                 }
             });
 
+            let mcp_server_allowlist = selected_mcp_server_ids(&config);
+            let session_owner = format!("pipe:{name}:{}", exec_id.unwrap_or(0));
+            if let Some(ref registry) = self.mcp_session_access {
+                if mcp_server_allowlist.is_empty() {
+                    registry.clear_session(&session_owner).await;
+                } else {
+                    registry
+                        .set_allowlist(session_owner.clone(), mcp_server_allowlist.clone())
+                        .await;
+                }
+            }
             let run_result = tokio::time::timeout(
                 timeout_duration,
                 executor.run_streaming(
@@ -2709,14 +2954,18 @@ impl PipeManager {
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
-                    // Owner tag: a pipe's owned-browser navigations are
-                    // `pipe:<name>`, which never matches an open chat's
-                    // conversationId, so they stay out of whatever chat is on
-                    // screen. See screenpipe-core::agents::bash_env.
-                    Some(format!("pipe:{name}").as_str()),
+                    mcp_allowlist_arg(&mcp_server_allowlist),
+                    // Owner tag: must match the frontend's pipeSessionId()
+                    // format (`pipe:<name>:<execId>`) so the owned-browser
+                    // sidebar shows navigations when the user is watching this
+                    // pipe.
+                    Some(session_owner.as_str()),
                 ),
             )
             .await;
+            if let Some(ref registry) = self.mcp_session_access {
+                registry.clear_session(&session_owner).await;
+            }
 
             // Remove from running + clean up PID file
             let _removed_handle = {
@@ -3374,6 +3623,7 @@ impl PipeManager {
         let store = self.store.clone();
         let api_port = self.api_port;
         let token_registry = self.token_registry.clone();
+        let mcp_session_access = self.mcp_session_access.clone();
         let extra_context = self.extra_context.clone();
         let connections_context = self.connections_context.clone();
         let local_api_key = self.local_api_key.clone();
@@ -3483,7 +3733,7 @@ impl PipeManager {
                     }
                     // pipe_completed:* — filter from all-events subscription
                     while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
-                        if e.name.starts_with("pipe_completed:") {
+                        if is_pipe_completed_event(&e.name) {
                             pending_events.push((e.name, e.data));
                         }
                     }
@@ -3502,16 +3752,14 @@ impl PipeManager {
                                 }
 
                                 // Don't let a pipe trigger itself
-                                if *event_name == format!("pipe_completed:{}", name) {
+                                if is_pipe_completed_for_pipe(event_name, name) {
                                     continue;
                                 }
 
                                 // Circular chain detection: if pipe X was triggered by
                                 // pipe_completed:Y within the cooldown, don't let
                                 // pipe_completed:X trigger Y back.
-                                if let Some(source_pipe) =
-                                    event_name.strip_prefix("pipe_completed:")
-                                {
+                                if let Some(source_pipe) = pipe_completed_source(event_name) {
                                     let reverse_key = format!("{}→{}", name, source_pipe);
                                     if recent_chain.contains_key(&reverse_key) {
                                         debug!(
@@ -3576,10 +3824,72 @@ impl PipeManager {
                         if let Some(check) = &connection_check {
                             let missing = check(config.connections.clone()).await;
                             if !missing.is_empty() {
-                                debug!(
+                                let skipped_at = Utc::now();
+                                let trigger = if triggered_by_event {
+                                    "event"
+                                } else {
+                                    "scheduled"
+                                };
+                                let message = format!(
+                                    "pipe '{}' skipped: missing required connections: {}",
+                                    name,
+                                    missing.join(", ")
+                                );
+                                warn!(
                                     "scheduler: pipe '{}' in setup mode (missing connections: {:?}), skipping",
                                     name, missing
                                 );
+                                last_run.insert(name.clone(), skipped_at);
+                                if let Some(ref store) = store {
+                                    match store
+                                        .create_execution(
+                                            name,
+                                            trigger,
+                                            &config.model,
+                                            config.provider.as_deref(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(id) => {
+                                            let _ = store
+                                                .finish_execution(
+                                                    id,
+                                                    "failed",
+                                                    "",
+                                                    &message,
+                                                    None,
+                                                    Some("missing_connections"),
+                                                    Some(&message),
+                                                    None,
+                                                )
+                                                .await;
+                                        }
+                                        Err(e) => {
+                                            warn!("failed to create skipped execution row: {}", e);
+                                        }
+                                    }
+                                    let _ = store.upsert_scheduler_state(name, false).await;
+                                }
+                                {
+                                    let mut logs_guard = logs.lock().await;
+                                    let entry = logs_guard
+                                        .entry(name.clone())
+                                        .or_insert_with(VecDeque::new);
+                                    entry.push_front(PipeRunLog {
+                                        pipe_name: name.clone(),
+                                        started_at: skipped_at,
+                                        finished_at: skipped_at,
+                                        success: false,
+                                        stdout: String::new(),
+                                        stderr: message.clone(),
+                                    });
+                                    if entry.len() > 50 {
+                                        entry.pop_back();
+                                    }
+                                }
+                                if let Some(ref cb) = on_run_complete {
+                                    cb(name, false, 0.0, Some("missing_connections"));
+                                }
                                 continue;
                             }
                         }
@@ -3763,10 +4073,12 @@ impl PipeManager {
                     let on_output = on_output_line.clone();
                     let store_ref = store.clone();
                     let token_registry_ref = token_registry.clone();
+                    let mcp_session_access_ref = mcp_session_access.clone();
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let pipes_dir_for_mark = pipes_dir.clone();
                     let queued_ref = queued_or_running.clone();
+                    let mcp_server_allowlist = selected_mcp_server_ids(config);
 
                     tokio::spawn(async move {
                         // Event-triggered pipes skip the queue for low-latency response.
@@ -3876,6 +4188,19 @@ impl PipeManager {
                             }
                         });
 
+                        let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
+                        if let Some(ref registry) = mcp_session_access_ref {
+                            if mcp_server_allowlist.is_empty() {
+                                registry.clear_session(&session_owner).await;
+                            } else {
+                                registry
+                                    .set_allowlist(
+                                        session_owner.clone(),
+                                        mcp_server_allowlist.clone(),
+                                    )
+                                    .await;
+                            }
+                        }
                         let run_result = tokio::time::timeout(
                             timeout_duration,
                             executor.run_streaming(
@@ -3889,11 +4214,16 @@ impl PipeManager {
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
-                                // Owner tag — see run_pipe_with_trigger.
-                                Some(format!("pipe:{pipe_name}").as_str()),
+                                mcp_allowlist_arg(&mcp_server_allowlist),
+                                // Owner tag — must match pipeSessionId() on the
+                                // frontend. See run_pipe_with_trigger.
+                                Some(session_owner.as_str()),
                             ),
                         )
                         .await;
+                        if let Some(ref registry) = mcp_session_access_ref {
+                            registry.clear_session(&session_owner).await;
+                        }
 
                         let finished_at = Utc::now();
 
@@ -4126,7 +4456,7 @@ impl PipeManager {
                     });
                 }
 
-                // Daily cleanup: prune old executions every 24h
+                // Daily cleanup: prune old executions and archive old disk logs every 24h
                 if last_cleanup.elapsed() >= std::time::Duration::from_secs(86400) {
                     if let Some(ref store) = store {
                         match store.cleanup_old_executions(50).await {
@@ -4137,6 +4467,10 @@ impl PipeManager {
                             _ => {}
                         }
                     }
+                    log_pipe_archive_summary(
+                        "scheduler pipe log archive",
+                        archive_old_pipe_logs_offloaded(pipes_dir.clone()).await,
+                    );
                     last_cleanup = Instant::now();
                 }
 
@@ -4185,6 +4519,14 @@ impl PipeManager {
         // Manual pipes are bundled as templates. Scheduled pipes (idea-tracker,
         // obsidian-sync) are available from the pipe store instead.
         let builtins = vec![
+            (
+                "automate-my-work",
+                include_str!("../../assets/pipes/automate-my-work/pipe.md"),
+            ),
+            (
+                "missed-todos",
+                include_str!("../../assets/pipes/missed-todos/pipe.md"),
+            ),
             (
                 "day-recap",
                 include_str!("../../assets/pipes/day-recap/pipe.md"),
@@ -4241,6 +4583,17 @@ impl PipeManager {
                 std::fs::create_dir_all(&dir)?;
                 atomic_write(&pipe_md, content)?;
                 info!("installed built-in pipe: {}", name);
+            } else if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+                // already installed — don't overwrite the user's copy, but do
+                // repair known-broken instructions left over from older bundles
+                // (e.g. PATCH /meetings/:id, which the server never supported).
+                if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                    atomic_write(&pipe_md, &migrated)?;
+                    info!(
+                        "migrated built-in pipe '{}' (fixed stale instructions)",
+                        name
+                    );
+                }
             }
         }
 
@@ -4307,6 +4660,37 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     let config: PipeConfig = serde_yaml::from_str(yaml_str)?;
 
     Ok((config, body))
+}
+
+/// Surgically repair known-broken fragments in an already-installed builtin
+/// `pipe.md` without clobbering the user's other edits. `install_builtin_pipes`
+/// only writes when the file is absent, so a stale local copy never picks up a
+/// bundled fix on its own. Rather than overwrite the whole file (which would
+/// throw away user customization), we replace just the specific broken fragment.
+///
+/// Returns the rewritten content only when a migration actually applied, so the
+/// caller can skip the disk write otherwise. Idempotent: running it on
+/// already-fixed content is a no-op.
+fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    // (old, new) fragment swaps per builtin pipe.
+    let replacements: &[(&str, &str)] = match name {
+        // the meeting-summary pipe shipped instructions to PATCH
+        // /meetings/:id, but the server only registers PUT (see
+        // screenpipe-engine server.rs) — so every save 404'd. fix already
+        // installed local copies. PR #4247.
+        "meeting-summary" => &[(
+            "-X PATCH \"http://localhost:3030/meetings/",
+            "-X PUT \"http://localhost:3030/meetings/",
+        )],
+        _ => return None,
+    };
+
+    let mut updated = original.to_string();
+    for (old, new) in replacements {
+        updated = updated.replace(old, new);
+    }
+
+    (updated != original).then_some(updated)
 }
 
 /// Atomic file write: write to a temp file in the same directory, then rename.
@@ -4412,6 +4796,22 @@ fn render_pipe_system_prompt(
     sys
 }
 
+fn selected_mcp_server_ids(config: &PipeConfig) -> Vec<String> {
+    config
+        .connections
+        .iter()
+        .filter_map(|connection| parse_mcp_connection_id(connection).map(str::to_string))
+        .collect()
+}
+
+fn mcp_allowlist_arg(allowlist: &[String]) -> Option<&[String]> {
+    if allowlist.is_empty() {
+        None
+    } else {
+        Some(allowlist)
+    }
+}
+
 /// Build the dynamic user prompt for a pipe.
 ///
 /// Contains time-varying context (time range, date, timezone) and any extra context.
@@ -4511,6 +4911,18 @@ fn validate_one_off_freshness(schedule: &str) -> Result<()> {
     Ok(())
 }
 
+fn pipe_completed_source(event_name: &str) -> Option<&str> {
+    event_name.strip_prefix(PIPE_COMPLETED_EVENT_PREFIX)
+}
+
+fn is_pipe_completed_event(event_name: &str) -> bool {
+    pipe_completed_source(event_name).is_some()
+}
+
+fn is_pipe_completed_for_pipe(event_name: &str, pipe_name: &str) -> bool {
+    matches!(pipe_completed_source(event_name), Some(source_pipe) if source_pipe == pipe_name)
+}
+
 /// Parsed schedule — fixed interval, cron, or a single fire-once timestamp.
 pub enum ParsedSchedule {
     Interval(std::time::Duration),
@@ -4590,16 +5002,18 @@ fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
     // Schedules are evaluated against the user's local timezone (see
     // `cron_should_fire`), so encode the local hour directly — no UTC shift.
     // "day" → every day at that hour; "monday".. → specific weekday.
+    // The `cron` crate evaluates day-of-week via chrono's `number_from_sunday()`
+    // which is 1-indexed: Sun=1, Mon=2, Tue=3, Wed=4, Thu=5, Fri=6, Sat=7.
     let cron_str = match prefix {
         "day" => format!("0 0 {} * * * *", local_hour),
         "daily" => format!("0 0 {} * * * *", local_hour),
-        "monday" | "mon" => format!("0 0 {} * * 1 *", local_hour),
-        "tuesday" | "tue" => format!("0 0 {} * * 2 *", local_hour),
-        "wednesday" | "wed" => format!("0 0 {} * * 3 *", local_hour),
-        "thursday" | "thu" => format!("0 0 {} * * 4 *", local_hour),
-        "friday" | "fri" => format!("0 0 {} * * 5 *", local_hour),
-        "saturday" | "sat" => format!("0 0 {} * * 6 *", local_hour),
-        "sunday" | "sun" => format!("0 0 {} * * 0 *", local_hour),
+        "sunday" | "sun" => format!("0 0 {} * * 1 *", local_hour),
+        "monday" | "mon" => format!("0 0 {} * * 2 *", local_hour),
+        "tuesday" | "tue" => format!("0 0 {} * * 3 *", local_hour),
+        "wednesday" | "wed" => format!("0 0 {} * * 4 *", local_hour),
+        "thursday" | "thu" => format!("0 0 {} * * 5 *", local_hour),
+        "friday" | "fri" => format!("0 0 {} * * 6 *", local_hour),
+        "saturday" | "sat" => format!("0 0 {} * * 7 *", local_hour),
         _ => return None,
     };
 
@@ -4968,7 +5382,7 @@ impl Drop for PipeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Timelike;
+    use chrono::{TimeZone, Timelike};
 
     // -- scheduler lifecycle tests ------------------------------------------
 
@@ -5014,6 +5428,106 @@ mod tests {
         // cap larger than input keeps everything
         let files = vec![f("a.md", 100)];
         assert_eq!(select_newest_files(files, 50).len(), 1);
+    }
+
+    #[test]
+    fn archive_old_pipe_logs_keeps_newest_active_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs_dir = temp.path().join("demo").join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        for name in [
+            "20260101_000000.json",
+            "20260102_000000.json",
+            "20260103_000000.json",
+        ] {
+            std::fs::write(logs_dir.join(name), "{}").unwrap();
+        }
+
+        let cutoff = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let summary = archive_old_pipe_logs_with_policy(temp.path(), 2, cutoff);
+
+        assert_eq!(summary.scanned, 3);
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.failed, 0);
+        assert!(logs_dir.join("20260103_000000.json").exists());
+        assert!(logs_dir.join("20260102_000000.json").exists());
+        assert!(!logs_dir.join("20260101_000000.json").exists());
+        assert!(logs_dir
+            .join("archive/2026-01/20260101_000000.json")
+            .exists());
+
+        let second_pass = archive_old_pipe_logs_with_policy(temp.path(), 2, cutoff);
+        assert_eq!(second_pass.scanned, 2);
+        assert_eq!(second_pass.archived, 0);
+        assert_eq!(second_pass.failed, 0);
+    }
+
+    #[test]
+    fn archive_old_pipe_logs_archives_files_past_cutoff() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs_dir = temp.path().join("demo").join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        std::fs::write(logs_dir.join("20260101_000000.json"), "{}").unwrap();
+        std::fs::write(logs_dir.join("20260120_000000.json"), "{}").unwrap();
+
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 15, 0, 0, 0).unwrap();
+        let summary = archive_old_pipe_logs_with_policy(temp.path(), 200, cutoff);
+
+        assert_eq!(summary.scanned, 2);
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.failed, 0);
+        assert!(logs_dir.join("20260120_000000.json").exists());
+        assert!(!logs_dir.join("20260101_000000.json").exists());
+        assert!(logs_dir
+            .join("archive/2026-01/20260101_000000.json")
+            .exists());
+    }
+
+    #[test]
+    fn migrate_builtin_pipe_fixes_stale_patch_verb() {
+        // a stale local meeting-summary copy with the old PATCH verb gets
+        // surgically rewritten to PUT, leaving surrounding text untouched.
+        let stale = "do stuff\n  curl -s -X PATCH \"http://localhost:3030/meetings/<MEETING_ID>\" \\\n    -d '{}'\nmore stuff";
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("stale PATCH content should migrate");
+        assert!(fixed.contains("-X PUT \"http://localhost:3030/meetings/"));
+        assert!(!fixed.contains("-X PATCH"));
+        assert!(fixed.starts_with("do stuff"));
+        assert!(fixed.ends_with("more stuff"));
+
+        // idempotent: already-PUT content is a no-op (no rewrite, no churn).
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+
+        // other builtins and unrelated content are left alone.
+        assert!(migrate_builtin_pipe_text("day-recap", stale).is_none());
+        assert!(migrate_builtin_pipe_text("meeting-summary", "no api calls here").is_none());
+    }
+
+    #[test]
+    fn pipe_completed_helpers_match_exact_pipe_event() {
+        assert!(is_pipe_completed_event("pipe_completed:daily-summary"));
+        assert_eq!(
+            pipe_completed_source("pipe_completed:daily-summary"),
+            Some("daily-summary")
+        );
+        assert!(is_pipe_completed_for_pipe(
+            "pipe_completed:daily-summary",
+            "daily-summary"
+        ));
+        assert!(!is_pipe_completed_for_pipe(
+            "pipe_completed:daily-summary",
+            "daily"
+        ));
+        assert!(!is_pipe_completed_event("workflow_event"));
+    }
+
+    #[test]
+    fn empty_mcp_allowlist_is_unscoped_for_legacy_pipes() {
+        let empty: Vec<String> = Vec::new();
+        let selected = vec!["linear".to_string()];
+
+        assert!(mcp_allowlist_arg(&empty).is_none());
+        assert_eq!(mcp_allowlist_arg(&selected), Some(selected.as_slice()));
     }
 
     #[test]
@@ -5588,8 +6102,7 @@ mod tests {
     fn human_schedule_pm_hour_is_local() {
         use chrono::{TimeZone, Timelike};
         // "every monday at 6pm" must encode local hour 18 (no UTC shift baked into
-        // the cron expression) — issue #3851. (Weekday-number mapping is a separate
-        // concern tracked outside this fix.)
+        // the cron expression) — issue #3851.
         let cron = parse_human_schedule("every monday at 6pm").expect("should parse");
         let from = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
         let next = cron.after(&from).next().unwrap();
@@ -5598,6 +6111,44 @@ mod tests {
             18,
             "6pm must encode local hour 18, not a shifted hour"
         );
+    }
+
+    #[test]
+    fn human_schedule_weekday_fires_on_correct_day() {
+        use chrono::{Datelike, TimeZone, Weekday};
+        // The cron crate uses number_from_sunday() (Sun=1..Sat=7). Each weekday
+        // name must map to the right number so the schedule fires on the named day,
+        // not the day before. 2026-06-04 is a Thursday; search from just after
+        // midnight so the next slot for each day is unambiguous.
+        let cases: &[(&str, Weekday)] = &[
+            ("every sunday at 1pm", Weekday::Sun),
+            ("every monday at 1pm", Weekday::Mon),
+            ("every tuesday at 1pm", Weekday::Tue),
+            ("every wednesday at 1pm", Weekday::Wed),
+            ("every thursday at 1pm", Weekday::Thu),
+            ("every friday at 1pm", Weekday::Fri),
+            ("every saturday at 1pm", Weekday::Sat),
+        ];
+        // Start from Thursday 2026-06-04 00:01 UTC so every day except Thursday
+        // has a clear "next occurrence" this week or next.
+        let from = chrono::Utc.with_ymd_and_hms(2026, 6, 4, 0, 1, 0).unwrap();
+        for (schedule, expected_weekday) in cases {
+            let cron = parse_human_schedule(schedule)
+                .unwrap_or_else(|| panic!("failed to parse: {}", schedule));
+            let next = cron
+                .after(&from)
+                .next()
+                .unwrap_or_else(|| panic!("no next occurrence for: {}", schedule));
+            assert_eq!(
+                next.weekday(),
+                *expected_weekday,
+                "'{}' should fire on {:?} but fired on {:?} ({})",
+                schedule,
+                expected_weekday,
+                next.weekday(),
+                next
+            );
+        }
     }
 
     #[test]

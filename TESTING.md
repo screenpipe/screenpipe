@@ -156,6 +156,7 @@ commits: device_monitor.rs atomic swap, tiered backoff, empty device list guard
 - [ ] **DB gap query after device switch** — run: `sqlite3 ~/.screenpipe/db.sqlite "SELECT t1.timestamp as gap_start, t2.timestamp as gap_end, (julianday(t2.timestamp) - julianday(t1.timestamp)) * 86400 as gap_seconds FROM audio_transcriptions t1 JOIN audio_transcriptions t2 ON t2.id = (SELECT MIN(id) FROM audio_transcriptions WHERE id > t1.id AND is_input_device = 0) WHERE t1.is_input_device = 0 AND (julianday(t2.timestamp) - julianday(t1.timestamp)) * 86400 > 60 ORDER BY t1.timestamp;"` — should return no rows if output was continuously captured.
 - [ ] **Bluetooth audio device hijack recovery** — Join a video call (e.g., Zoom, Proton Meet) on AirPods, end the call, join another call ~1 min later on same AirPods. Verify the second call is fully captured (audio_chunks created throughout). CoreAudio sometimes delivers zero-fill when another app has exclusive claim; the watchdog detects sustained silence (>30s of exact zeros) after initial healthy audio and rebuilds the device. Regression: `a2e89b2ae` (initial detection), fixed by `357e4dfcc` (only trip watchdog after stream is healthy). USB devices that never produce real audio should NOT trigger rebuild storms.
 - [ ] **Manual-mode pinned-input fallback** — In manual mode (NOT "Follow System Default"), pin only AirPods (input) as your mic. Mid-recording, turn off the AirPods. Verify: within ~20-25s the monitor engages the system default mic as a substitute and capture continues. Re-connect AirPods. Verify the substitute is torn down and capture returns to AirPods. Log markers: `grep "PINNED_FALLBACK" ~/.screenpipe/screenpipe-app.*.log` shows `pinned input '...' missing > 20s, capturing from system default '...' until it returns` then `clearing fallback '...': pinned input returned`. Edge: if you also user-disabled the default mic (privacy mode), expect "system default ... is user-disabled — no fallback engaged" log + zero capture rather than auto-fallback.
+- [ ] **Pinned-input fallback when the dead device IS the system default (or there is none)** — Same as above, but make AirPods BOTH the pinned input AND the macOS default input (the common real case), then turn them off. Verify capture continues from the built-in mic within ~20-25s — NOT zero capture. The decider now fails over to any *available* input when the system default is unusable (it IS the dead pinned device — Bluetooth lingers as the registered default — or CoreAudio reports no default). Reconnect AirPods → substitute torn down. Sub-checks: (a) prefers an on-board mic over virtual/aggregate inputs (e.g. BlackHole/Aggregate present → built-in chosen); (b) still respects privacy — if the only other input is user-disabled, expect zero capture, not auto-fallback; (c) transient empty device list (SCK failure) → no fallback that cycle, no disconnect cascade; (d) sleep/wake flap < grace does not engage a spurious fallback. Regression: `ba23c8531` (ruark 6/18 "no recording either side of the call", frames=0/samples=0 — AirPods were the only input AND the default).
 
 #### meeting detection & speaker identification
 
@@ -237,20 +238,6 @@ commits: `d9d43d31`, `620c89a5`, `14acf6f0`
 - [ ] **startup permission gate** — on first launch, permissions are requested before recording starts (`d9d43d31`).
 - [ ] **faster permission polling** — permission status checked every 5-10 seconds, not 30 (`d9d43d31`).
 - [ ] **improved permission recovery UX** — Verify that the user experience for recovering from denied permissions is clear and intuitive. (`57cca740`)
-
-### 7. Apple Intelligence (macOS 26+)
-
-commits: `d4abc619`, `4f4a8282`, `31f37407`, `2223af9a`, `b34a4abd`, `303958f9`
-
-- [ ] **macOS 26: API works** — `POST /ai/chat/completions` returns valid response using on-device Foundation Model.
-- [ ] **macOS < 26: no crash** — app launches normally. FoundationModels.framework is weak-linked (`31f37407`). feature gracefully disabled.
-- [ ] **Intel Mac: no crash** — Apple Intelligence not available, but app doesn't crash at DYLD load time.
-- [ ] **JSON mode** — request with `response_format: { type: "json_object" }` returns valid JSON, no prose preamble (`2223af9a`).
-- [ ] **JSON fallback extraction** — if model prepends prose before JSON, the `{...}` is extracted correctly (`b34a4abd`).
-- [ ] **streaming (SSE)** — request with `stream: true` returns Server-Sent Events with incremental tokens (`4f4a8282`).
-- [ ] **tool calling** — request with `tools` array gets tool definitions injected into prompt, model responds with tool calls (`4f4a8282`).
-- [ ] **daily summary** — generates valid JSON summary from audio transcripts. no "JSON Parse error: Unexpected identifier 'Here'" (`303958f9`, `2223af9a`).
-- [ ] **daily summary audio-only** — summary uses only audio data (no vision), single AI call (`303958f9`).
 
 ### 8. app lifecycle & updates
 
@@ -387,7 +374,6 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **Timeline single "current" bar** — Verify that the timeline only shows one "current time" bar, even during rapid updates. (`bcce42796`)
 - [ ] **Timeline "Calls" filter** — Verify the "Calls" filter on the timeline correctly filters for call-related events. (`0ff93b167`)
 - [ ] **Collapsible timeline filters** — Verify that timeline filters can be collapsed and expanded correctly. (`0ff93b167`)
-- [ ] **daily summary in timeline** — Apple Intelligence summary shows in timeline, compact when no summary (`d9821624`).
 - [ ] **window-focused refresh** — opening app via shortcut/tray refreshes timeline data immediately (`0b057046`).
 - [ ] **code block colors in memories** — Verify that code block colors in the memories page match the current app theme. (`1c8d785fc`)
 - [ ] **memories page pagination** — Verify that memories page pagination works correctly and tags are loaded from the API. (`3e00b70b4`)
@@ -434,7 +420,6 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`
 - [ ] **no frame clearing during navigation** — navigating timeline doesn't cause frames to disappear and reload (`2529367d`).
 - [ ] **URL detection in frames** — URLs visible in screenshots are extracted and shown as clickable pills (`50ef52d1`, `aa992146`).
 - [ ] **app context popover** — clicking app icon in timeline shows context (time, windows, urls, audio) (`be3ecffb`).
-- [ ] **daily summary in timeline** — Apple Intelligence summary shows in timeline, compact when no summary (`d9821624`).
 - [ ] **window-focused refresh** — opening app via shortcut/tray refreshes timeline data immediately (`0b057046`).
 - [ ] **frame deep link navigation** — `screenpipe://frame/N` or `screenpipe://frames/N` opens main window and jumps to frame N. works from cold start; invalid IDs show clear error.
 - [ ] **Keyword search accessibility** — Keyword search should find content within accessibility-only frames and utilize `frames_fts` for comprehensive accessibility text searching.
@@ -536,7 +521,7 @@ Note: `"terminal"` matches `WindowsTerminal.exe` but NOT `cmd.exe` or `powershel
 - [ ] **Failed OCR = no noise** — if OCR fails for a terminal, the frame should have NULL text, not chrome like "System Minimize Restore Close".
 - [ ] **Non-terminal chrome-only** — rare case where a normal app returns only chrome from accessibility. stored as-is (acceptable, no OCR fallback triggered).
 - [ ] **Empty accessibility + empty OCR** — app with no tree text and OCR failure. frame stored with NULL text. no crash.
-- [ ] **ocr_text table populated** — `SELECT COUNT(*) FROM ocr_text` should be non-zero after a few minutes of use on Windows.
+- [ ] **OCR text persisted on frames** — `SELECT COUNT(*) FROM frames WHERE full_text IS NOT NULL AND full_text != ''` should be non-zero after a few minutes of use on Windows. (The `ocr_text` table was retired; OCR text now lives in `frames.full_text`, per-word boxes in `frames.text_json`.)
 
 #### Windows text extraction — untested / unknown apps
 
@@ -623,7 +608,7 @@ commits: `deac5ea9`
 
 commits: `8f334c0a`, `fda40d2c`
 
-- [ ] **macOS 26 runner** — release builds on self-hosted macOS 26 runner with Apple Intelligence (`fda40d2c`).
+- [ ] **macOS 26 runner** — release builds on self-hosted macOS 26 runner (`fda40d2c`).
 - [ ] **updater artifacts** — release includes `.tar.gz` + `.sig` for macOS, `.nsis.zip` + `.sig` for Windows.
 - [ ] **prod config used** — CI copies `tauri.prod.conf.json` to `tauri.conf.json` before building. identifier is `screenpi.pe` not `screenpi.pe.dev`.
 - [ ] **draft then publish** — `workflow_dispatch` creates draft. manual publish or `release-app-publish` commit publishes.
@@ -788,7 +773,6 @@ commits: `fc830b43`
 ### before every release
 1. run sections 1-4 completely (90% of regressions)
 2. spot-check sections 5-10
-3. if Apple Intelligence code changed, run section 7
 
 ### before merging window/tray/dock changes
 run section 1 and 2 completely. these are the most fragile.
@@ -799,8 +783,8 @@ run section 3, 5, and 14 (Windows text extraction matrix) completely.
 ### before merging audio changes
 run section 4 completely.
 
-### before merging AI/Apple Intelligence changes
-run section 7 and 10.
+### before merging AI changes
+run section 10.
 
 ## known limitations (not bugs)
 
@@ -842,9 +826,6 @@ grep -E "audio.*timeout|audio.*error|device.*disconnect" ~/.screenpipe/screenpip
 
 # window/overlay issues
 grep -E "show_existing|panel.*level|Accessory|activation_policy" ~/.screenpipe/screenpipe-app.*.log
-
-# Apple Intelligence
-grep -E "FoundationModels|apple.intelligence|fm_generate" ~/.screenpipe/screenpipe-app.*.log
 ```
 
 ### 12. mainland china / great firewall

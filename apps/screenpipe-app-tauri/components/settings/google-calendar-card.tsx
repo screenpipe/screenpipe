@@ -159,7 +159,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("google-calendar", null);
+      const res = await commands.oauthConnect("google-calendar", null, null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_calendar_connected");
         await fetchStatus();
@@ -259,7 +259,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                       <Lock className="h-3 w-3" />pro required
                     </Button>
                     <button
-                      onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                      onClick={() => openUrl("https://screenpipe.com/onboarding")}
                       className="text-[10px] text-muted-foreground hover:text-foreground underline self-start"
                     >
                       upgrade to pro to connect

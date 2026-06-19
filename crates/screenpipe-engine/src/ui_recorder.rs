@@ -125,6 +125,9 @@ pub struct UiRecorderConfig {
     /// still wake event-driven capture, but clipboard payloads/operation rows
     /// are not written.
     pub record_clipboard_events: bool,
+    /// Persist mouse-click rows to DB. When false, clicks can still wake
+    /// event-driven capture, but `ui_events` click rows are not written.
+    pub record_click_events: bool,
     /// Prioritize input latency over event metadata completeness.
     /// Maps to `UiCaptureConfig.prioritize_input_latency`. See that field for details.
     pub prioritize_input_latency: bool,
@@ -163,6 +166,7 @@ impl Default for UiRecorderConfig {
             record_input_events: true,
             record_keyboard_events: true,
             record_clipboard_events: true,
+            record_click_events: true,
             prioritize_input_latency: false,
             extraction_thread_priority: ExtractionThreadPriority::BelowNormal,
             pause_extraction_on_input_ms: 150,
@@ -199,15 +203,10 @@ impl UiRecorderConfig {
             config.excluded_apps.push(app.to_lowercase());
         }
 
-        // Add excluded window patterns
-        for pattern in &self.excluded_windows {
-            if let Ok(re) = regex::Regex::new(pattern) {
-                config.excluded_window_patterns.push(re);
-            }
-        }
-
+        config.excluded_window_pattern_strings = self.excluded_windows.clone();
         config.ignored_windows = self.ignored_windows.clone();
         config.included_windows = self.included_windows.clone();
+        config.compile_patterns();
 
         config
     }
@@ -232,17 +231,160 @@ pub struct TreeWalkerSnapshot {
     pub total_text_chars: u64,
 }
 
-/// Global shared tree walker metrics — updated every 60s by the walker thread,
-/// readable from the health endpoint. Uses the same global-static pattern as
-/// `LAST_AUDIO_CAPTURE` in screenpipe-audio.
-static TREE_WALKER_METRICS: std::sync::LazyLock<std::sync::Mutex<TreeWalkerSnapshot>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(TreeWalkerSnapshot::default()));
+/// Outcome of a single production accessibility tree walk, recorded by the
+/// capture loop via [`record_tree_walk`]. Keeps the metrics layer decoupled
+/// from `screenpipe_a11y::tree::TreeWalkResult` — callers translate their
+/// per-walk result into one of these so this crate doesn't depend on the walk
+/// internals.
+#[derive(Debug, Clone, Copy)]
+pub enum TreeWalkOutcome {
+    /// Walk produced a snapshot that was stored (content differed from the
+    /// previous frame). Carries the per-walk cost metrics.
+    Stored {
+        duration_ms: u64,
+        node_count: u64,
+        max_depth: u64,
+        text_chars: u64,
+        truncated: bool,
+        truncated_timeout: bool,
+        truncated_max_nodes: bool,
+    },
+    /// Walk produced a snapshot whose content matched the previous frame
+    /// (content dedup). Still a real walk attempt — counts toward totals.
+    Deduped {
+        duration_ms: u64,
+        node_count: u64,
+        max_depth: u64,
+        text_chars: u64,
+        truncated: bool,
+        truncated_timeout: bool,
+        truncated_max_nodes: bool,
+    },
+    /// Walk completed but returned no text (games, AX-hostile apps).
+    Empty,
+    /// Walk failed — no focused window / AX error (`TreeWalkResult::NotFound`).
+    Error,
+}
 
-/// Read the latest tree walker metrics snapshot.
+/// Internal cumulative accumulator behind [`TREE_WALKER_METRICS`]. Stores
+/// running sums + maxes so [`tree_walker_snapshot`] can derive averages on
+/// read (avg = sum / total). Kept module-private; the public surface is the
+/// derived [`TreeWalkerSnapshot`].
+#[derive(Default)]
+struct TreeWalkerAccumulator {
+    walks_total: u64,
+    walks_stored: u64,
+    walks_deduped: u64,
+    walks_empty: u64,
+    walks_error: u64,
+    walks_truncated: u64,
+    walks_truncated_timeout: u64,
+    walks_truncated_max_nodes: u64,
+    sum_walk_duration_ms: u64,
+    max_walk_duration_ms: u64,
+    sum_nodes: u64,
+    max_depth_reached: u64,
+    total_text_chars: u64,
+}
+
+impl TreeWalkerAccumulator {
+    /// Derive the point-in-time snapshot (averages + rates) from the running
+    /// sums. `walks_total` is the denominator for per-walk averages.
+    fn snapshot(&self) -> TreeWalkerSnapshot {
+        let total = self.walks_total;
+        let avg = |sum: u64| if total > 0 { sum / total } else { 0 };
+        TreeWalkerSnapshot {
+            walks_total: total,
+            walks_stored: self.walks_stored,
+            walks_deduped: self.walks_deduped,
+            walks_empty: self.walks_empty,
+            walks_error: self.walks_error,
+            walks_truncated: self.walks_truncated,
+            walks_truncated_timeout: self.walks_truncated_timeout,
+            walks_truncated_max_nodes: self.walks_truncated_max_nodes,
+            truncation_rate: if total > 0 {
+                self.walks_truncated as f64 / total as f64
+            } else {
+                0.0
+            },
+            avg_walk_duration_ms: avg(self.sum_walk_duration_ms),
+            max_walk_duration_ms: self.max_walk_duration_ms,
+            avg_nodes_per_walk: avg(self.sum_nodes),
+            max_depth_reached: self.max_depth_reached,
+            total_text_chars: self.total_text_chars,
+        }
+    }
+}
+
+/// Global shared tree walker metrics — a cumulative accumulator updated on
+/// every production walk via [`record_tree_walk`], readable from the health
+/// endpoint. Uses the same global-static pattern as `LAST_AUDIO_CAPTURE` in
+/// screenpipe-audio.
+static TREE_WALKER_METRICS: std::sync::LazyLock<std::sync::Mutex<TreeWalkerAccumulator>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(TreeWalkerAccumulator::default()));
+
+/// Record the outcome of one production accessibility tree walk. Called from
+/// the event-driven capture loop for every walk attempt so the health endpoint
+/// and analytics surface real `ax_*` counters instead of zeros. Cheap: one
+/// mutex acquisition that updates a handful of integers.
+pub fn record_tree_walk(outcome: TreeWalkOutcome) {
+    let Ok(mut acc) = TREE_WALKER_METRICS.lock() else {
+        return;
+    };
+    acc.walks_total += 1;
+    match outcome {
+        TreeWalkOutcome::Stored {
+            duration_ms,
+            node_count,
+            max_depth,
+            text_chars,
+            truncated,
+            truncated_timeout,
+            truncated_max_nodes,
+        }
+        | TreeWalkOutcome::Deduped {
+            duration_ms,
+            node_count,
+            max_depth,
+            text_chars,
+            truncated,
+            truncated_timeout,
+            truncated_max_nodes,
+        } => {
+            if matches!(outcome, TreeWalkOutcome::Stored { .. }) {
+                acc.walks_stored += 1;
+            } else {
+                acc.walks_deduped += 1;
+            }
+            acc.sum_walk_duration_ms += duration_ms;
+            acc.max_walk_duration_ms = acc.max_walk_duration_ms.max(duration_ms);
+            acc.sum_nodes += node_count;
+            acc.max_depth_reached = acc.max_depth_reached.max(max_depth);
+            acc.total_text_chars += text_chars;
+            if truncated {
+                acc.walks_truncated += 1;
+            }
+            if truncated_timeout {
+                acc.walks_truncated_timeout += 1;
+            }
+            if truncated_max_nodes {
+                acc.walks_truncated_max_nodes += 1;
+            }
+        }
+        TreeWalkOutcome::Empty => {
+            acc.walks_empty += 1;
+        }
+        TreeWalkOutcome::Error => {
+            acc.walks_error += 1;
+        }
+    }
+}
+
+/// Read the latest tree walker metrics snapshot (averages derived on read).
 pub fn tree_walker_snapshot() -> TreeWalkerSnapshot {
     TREE_WALKER_METRICS
         .lock()
-        .map(|g| g.clone())
+        .map(|acc| acc.snapshot())
         .unwrap_or_default()
 }
 
@@ -530,6 +672,7 @@ pub async fn start_ui_recording(
     let record_input_events = config.record_input_events;
     let record_keyboard_events = config.record_keyboard_events;
     let record_clipboard_events = config.record_clipboard_events;
+    let record_click_events = config.record_click_events;
     let trigger_gates = TriggerGates;
 
     // Start the recording
@@ -568,6 +711,12 @@ pub async fn start_ui_recording(
         let mut batch = EventBatch::with_capacity(batch_size);
         let mut last_flush = std::time::Instant::now();
         let mut consecutive_failures: u32 = 0;
+        // Upper bound on events retained across failed flushes. `flush_batch`
+        // keeps the batch on error so a transient write-pool stall doesn't drop
+        // captured events (SCREENPIPE-CLI-FZ); this cap stops that retention from
+        // growing without limit — and keeps the retried INSERT cheap — when the
+        // DB stays unavailable. `batch_size * 2` leaves a useful retry buffer.
+        let max_retained = batch_size.saturating_mul(2).max(200);
         let max_batch_age = Duration::from_secs(30); // Drop events older than 30s during storms
                                                      // Track the tail of an in-progress scroll burst so we can emit a
                                                      // single `ScrollStop` trigger when it settles. 300ms matches the
@@ -585,24 +734,28 @@ pub async fn start_ui_recording(
             match handle.recv_timeout(recv_timeout) {
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
-                    let app_lower = db_event
-                        .app_name
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase();
-                    let title_lower = db_event
-                        .window_title
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase();
-                    let is_ignored =
-                        window_pattern::matches_any(&ignored_patterns, &app_lower, &title_lower);
+                    let is_ignored = if ignored_patterns.is_empty() {
+                        false
+                    } else {
+                        let app_lower = db_event
+                            .app_name
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        let title_lower = db_event
+                            .window_title
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        window_pattern::matches_any(&ignored_patterns, &app_lower, &title_lower)
+                    };
                     let should_record_event = record_input_events
                         && !is_ignored
                         && should_record_input_event(
                             &db_event,
                             record_keyboard_events,
                             record_clipboard_events,
+                            record_click_events,
                         );
 
                     // Decide whether this event warrants a capture and, if so,
@@ -618,7 +771,7 @@ pub async fn start_ui_recording(
                     let is_scroll =
                         matches!(db_event.event_type, screenpipe_db::UiEventType::Scroll);
                     let trigger_kind =
-                        capture_trigger_kind(&db_event, &ignored_patterns, trigger_gates);
+                        capture_trigger_kind_with_ignored(&db_event, is_ignored, trigger_gates);
                     // A correlation id is only useful if there's somewhere
                     // for both halves to land: a live capture-loop receiver
                     // to produce the frame AND a linker to pair them. If
@@ -667,8 +820,12 @@ pub async fn start_ui_recording(
                         batch.push(db_event, correlation_id);
                     }
 
-                    // Flush if batch is full
-                    if batch.len() >= batch_size {
+                    // Flush when the batch is full — but only while writes are
+                    // healthy. Once a flush has failed, the batch is retained
+                    // for retry; defer those retries to the timeout path below
+                    // so they're paced by the backoff instead of re-attempted on
+                    // every incoming event (which would hammer a stalled DB).
+                    if batch.len() >= batch_size && consecutive_failures == 0 {
                         flush_batch(
                             &db,
                             &mut batch,
@@ -680,21 +837,10 @@ pub async fn start_ui_recording(
                     }
                 }
                 None => {
-                    // Timeout - check if we should flush
+                    // Timeout - check if we should flush. This path also drives
+                    // retries of a retained (previously failed) batch, paced by
+                    // the backoff at the end of the block.
                     if !batch.is_empty() && last_flush.elapsed() >= batch_timeout {
-                        // During contention storms, drop old events to prevent unbounded growth
-                        if consecutive_failures > 3 && batch.len() > batch_size * 2 {
-                            let old_len = batch.len();
-                            // Keep only the most recent batch_size events
-                            let drain_count = old_len.saturating_sub(batch_size);
-                            batch.drain_oldest(drain_count);
-                            warn!(
-                                "UI recorder: dropped {} old events during DB contention (kept {})",
-                                drain_count,
-                                batch.len()
-                            );
-                        }
-
                         flush_batch(
                             &db,
                             &mut batch,
@@ -717,6 +863,21 @@ pub async fn start_ui_recording(
                             tokio::time::sleep(backoff).await;
                         }
                     }
+                }
+            }
+
+            // Bound the events retained across failed flushes. `flush_batch`
+            // keeps the batch on error (so a transient stall doesn't drop
+            // captured events), and this cap keeps that retention from growing
+            // without limit. Runs every iteration so it bounds BOTH the
+            // full-batch and timeout flush paths, not just the idle one.
+            if consecutive_failures > 0 {
+                let dropped = cap_retained_batch(&mut batch, max_retained);
+                if dropped > 0 {
+                    warn!(
+                        "UI recorder: dropped {} oldest events (retained batch capped at {} during DB contention)",
+                        dropped, max_retained
+                    );
                 }
             }
 
@@ -790,13 +951,29 @@ fn should_record_input_event(
     db_event: &InsertUiEvent,
     record_keyboard_events: bool,
     record_clipboard_events: bool,
+    record_click_events: bool,
 ) -> bool {
     match db_event.event_type {
         screenpipe_db::UiEventType::Key | screenpipe_db::UiEventType::Text => {
             record_keyboard_events
         }
         screenpipe_db::UiEventType::Clipboard => record_clipboard_events,
+        screenpipe_db::UiEventType::Click => record_click_events,
         _ => true,
+    }
+}
+
+/// Drop the oldest events so at most `max_retained` remain, returning how many
+/// were dropped (0 when already within the cap). Bounds the batch while failed
+/// flushes are being retained for retry during a DB stall — see `flush_batch`.
+fn cap_retained_batch(batch: &mut EventBatch, max_retained: usize) -> usize {
+    let len = batch.len();
+    if len > max_retained {
+        let excess = len - max_retained;
+        batch.drain_oldest(excess);
+        excess
+    } else {
+        0
     }
 }
 
@@ -844,6 +1021,14 @@ async fn flush_batch(
                     }
                 }
             }
+
+            // Clear ONLY on success. A failed insert leaves the batch intact so
+            // the next flush retries it — otherwise a transient write-pool stall
+            // (e.g. PoolTimedOut) silently drops captured events and leaves a
+            // hole in the timeline. See SCREENPIPE-CLI-FZ. Growth across a
+            // sustained stall is bounded by the caller (max_retained /
+            // max_batch_age).
+            batch.clear();
         }
         Err(e) => {
             *consecutive_failures += 1;
@@ -856,15 +1041,16 @@ async fn flush_batch(
                     consecutive_failures, e
                 );
             }
+            // Retain the batch (do NOT clear) so the next flush retries it.
+            // See the comment in the Ok arm.
         }
     }
-    batch.clear();
 }
 
 /// Marker for legacy trigger-side gates. Key and clipboard events are
 /// privacy-sensitive for storage, not for workflow checkpointing, so
-/// [`capture_trigger_kind`] intentionally lets them trigger even when older
-/// callers think these gates are off.
+/// [`capture_trigger_kind_with_ignored`] intentionally lets them trigger even
+/// when older callers think these gates are off.
 #[derive(Debug, Clone, Copy, Default)]
 struct TriggerGates;
 
@@ -877,24 +1063,14 @@ fn event_target_point(db_event: &InsertUiEvent) -> Option<(i32, i32)> {
 ///
 /// Returns `None` for events that don't directly trigger a capture
 /// (Move, Idle) and for Scroll events — Scroll triggers are deferred
-/// until the burst ends, handled by [`ScrollBurstTracker`]. Also
-/// returns `None` for Key / Clipboard when their respective gate in
-/// `gates` is off, so no correlation_id is minted for triggers the
-/// capture loop will drop at the same gate.
-fn capture_trigger_kind(
+/// until the burst ends, handled by [`ScrollBurstTracker`]. App/window ignore
+/// matching is computed by the hot loop once and passed in as `is_ignored`.
+fn capture_trigger_kind_with_ignored(
     db_event: &InsertUiEvent,
-    ignored_patterns: &[WindowPattern],
+    is_ignored: bool,
     _gates: TriggerGates,
 ) -> Option<crate::event_driven_capture::CaptureTrigger> {
     use crate::event_driven_capture::CaptureTrigger;
-    // Both AppSwitch and WindowFocus events carry app_name (set by the
-    // a11y observer when the focused app or window changes), so we can pass
-    // both sides to the matcher and have scoped `App::Title` patterns work.
-    let app = db_event.app_name.clone().unwrap_or_default();
-    let title = db_event.window_title.clone().unwrap_or_default();
-    let app_lower = app.to_lowercase();
-    let title_lower = title.to_lowercase();
-    let is_ignored = window_pattern::matches_any(ignored_patterns, &app_lower, &title_lower);
     let target = event_target_point(db_event);
     match &db_event.event_type {
         screenpipe_db::UiEventType::AppSwitch => {
@@ -902,7 +1078,7 @@ fn capture_trigger_kind(
                 None
             } else {
                 Some(CaptureTrigger::AppSwitch {
-                    app_name: app,
+                    app_name: db_event.app_name.clone().unwrap_or_default(),
                     target,
                 })
             }
@@ -912,7 +1088,7 @@ fn capture_trigger_kind(
                 None
             } else {
                 Some(CaptureTrigger::WindowFocus {
-                    window_name: title,
+                    window_name: db_event.window_title.clone().unwrap_or_default(),
                     target,
                 })
             }
@@ -940,6 +1116,30 @@ fn capture_trigger_kind(
         // Move/Idle never trigger.
         _ => None,
     }
+}
+
+#[cfg(test)]
+fn capture_trigger_kind(
+    db_event: &InsertUiEvent,
+    ignored_patterns: &[WindowPattern],
+    gates: TriggerGates,
+) -> Option<crate::event_driven_capture::CaptureTrigger> {
+    let is_ignored = if ignored_patterns.is_empty() {
+        false
+    } else {
+        let app_lower = db_event
+            .app_name
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
+        let title_lower = db_event
+            .window_title
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
+        window_pattern::matches_any(ignored_patterns, &app_lower, &title_lower)
+    };
+    capture_trigger_kind_with_ignored(db_event, is_ignored, gates)
 }
 
 /// Tracks the most recent Scroll event in a burst so the recorder can
@@ -1168,6 +1368,90 @@ mod event_batch_tests {
 
         assert_eq!(timeout, UI_RECORDER_MIN_RECV_TIMEOUT);
     }
+
+    #[test]
+    fn cap_retained_batch_drops_oldest_beyond_cap() {
+        let mut b = EventBatch::with_capacity(8);
+        for i in 1..=6 {
+            b.push(evt(), Some(i));
+        }
+        let dropped = cap_retained_batch(&mut b, 4);
+        assert_eq!(dropped, 2, "two oldest dropped to fit the cap of 4");
+        assert_eq!(b.len(), 4);
+        // Newest events survive, oldest are dropped, vecs stay aligned.
+        assert_eq!(b.correlation_ids, vec![Some(3), Some(4), Some(5), Some(6)]);
+    }
+
+    #[test]
+    fn cap_retained_batch_is_noop_within_cap() {
+        let mut b = EventBatch::with_capacity(8);
+        b.push(evt(), Some(1));
+        b.push(evt(), Some(2));
+        let dropped = cap_retained_batch(&mut b, 4);
+        assert_eq!(dropped, 0);
+        assert_eq!(b.len(), 2);
+    }
+
+    /// Regression for SCREENPIPE-CLI-FZ: a failed insert must NOT discard the
+    /// captured events. Before the fix `flush_batch` cleared unconditionally,
+    /// so any transient write-pool stall (PoolTimedOut) silently dropped the
+    /// batch and left a hole in the timeline.
+    #[tokio::test]
+    async fn flush_batch_retains_events_when_insert_fails() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        // Make every insert fail deterministically by removing the table.
+        sqlx::query("DROP TABLE ui_events")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let mut batch = EventBatch::with_capacity(8);
+        batch.push(evt(), Some(1));
+        batch.push(evt(), Some(2));
+        batch.push(evt(), None);
+        let mut consecutive_failures = 0u32;
+
+        flush_batch(&db, &mut batch, &mut consecutive_failures, None).await;
+
+        assert_eq!(
+            batch.len(),
+            3,
+            "a failed flush must retain captured events for retry, not drop them"
+        );
+        assert_eq!(consecutive_failures, 1, "the failure should be counted");
+        assert_eq!(
+            batch.correlation_ids,
+            vec![Some(1), Some(2), None],
+            "retained events stay aligned with their correlation ids"
+        );
+    }
+
+    /// The flip side: a successful flush clears the batch and resets the
+    /// failure counter so the full-batch flush path re-engages.
+    #[tokio::test]
+    async fn flush_batch_clears_events_on_success() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let mut batch = EventBatch::with_capacity(8);
+        batch.push(evt(), None);
+        batch.push(evt(), None);
+        let mut consecutive_failures = 3u32;
+
+        flush_batch(&db, &mut batch, &mut consecutive_failures, None).await;
+
+        assert!(batch.is_empty(), "a successful flush clears the batch");
+        assert_eq!(
+            consecutive_failures, 0,
+            "success resets the failure counter"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1227,42 +1511,56 @@ mod capture_trigger_kind_tests {
         assert!(!should_record_input_event(
             &evt(UiEventType::Key),
             false,
+            true,
             true
         ));
         assert!(!should_record_input_event(
             &evt(UiEventType::Text),
             false,
+            true,
             true
         ));
         assert!(!should_record_input_event(
             &evt(UiEventType::Clipboard),
+            true,
+            false,
+            true
+        ));
+        assert!(!should_record_input_event(
+            &evt(UiEventType::Click),
+            true,
             true,
             false
         ));
         assert!(should_record_input_event(
             &evt(UiEventType::Key),
             true,
+            false,
             false
         ));
         assert!(should_record_input_event(
             &evt(UiEventType::Text),
             true,
+            false,
             false
         ));
         assert!(should_record_input_event(
             &evt(UiEventType::Clipboard),
             false,
-            true
+            true,
+            false
         ));
         assert!(should_record_input_event(
             &evt(UiEventType::WindowFocus),
+            false,
             false,
             false
         ));
         assert!(should_record_input_event(
             &evt(UiEventType::Click),
             false,
-            false
+            false,
+            true
         ));
     }
 
@@ -1270,7 +1568,7 @@ mod capture_trigger_kind_tests {
     fn key_event_can_trigger_without_being_stored() {
         let event = evt(UiEventType::Key);
 
-        assert!(!should_record_input_event(&event, false, true));
+        assert!(!should_record_input_event(&event, false, true, true));
         assert!(matches!(
             capture_trigger_kind(&event, &[], gates(true, true)),
             Some(CaptureTrigger::KeyPress)
@@ -1311,10 +1609,25 @@ mod capture_trigger_kind_tests {
     fn clipboard_event_can_trigger_without_being_stored() {
         let event = evt(UiEventType::Clipboard);
 
-        assert!(!should_record_input_event(&event, true, false));
+        assert!(!should_record_input_event(&event, true, false, true));
         assert!(matches!(
             capture_trigger_kind(&event, &[], gates(true, true)),
             Some(CaptureTrigger::Clipboard)
+        ));
+    }
+
+    #[test]
+    fn click_event_can_trigger_without_being_stored() {
+        // Policy/setting may disable click rows; the click must still reach
+        // the event-driven capture trigger mapper so frames keep flowing.
+        let mut event = evt(UiEventType::Click);
+        event.x = Some(10);
+        event.y = Some(20);
+
+        assert!(!should_record_input_event(&event, true, true, false));
+        assert!(matches!(
+            capture_trigger_kind(&event, &[], gates(true, true)),
+            Some(CaptureTrigger::Click { x: 10, y: 20 })
         ));
     }
 
@@ -1449,6 +1762,21 @@ mod tests {
 
         assert!(ui_config.capture_clipboard);
         assert!(!ui_config.capture_clipboard_content);
+    }
+
+    #[test]
+    fn to_ui_config_refreshes_filter_caches() {
+        let config = UiRecorderConfig {
+            excluded_apps: vec!["SecretApp".to_string()],
+            excluded_windows: vec![r"(?i)private window".to_string()],
+            ..Default::default()
+        };
+
+        let ui_config = config.to_ui_config();
+
+        assert!(!ui_config.excluded_app_patterns.is_empty());
+        assert!(!ui_config.should_capture_app("secretapp helper"));
+        assert!(!ui_config.should_capture_window("Private Window - Browser"));
     }
 
     #[test]
@@ -1601,5 +1929,115 @@ mod tests {
         // boundaries — it must be Send.
         fn assert_send<T: Send>() {}
         assert_send::<UiRecorderHandle>();
+    }
+
+    /// Apply one outcome to a local accumulator the same way `record_tree_walk`
+    /// does, without touching the global static (so tests don't race).
+    fn apply(acc: &mut TreeWalkerAccumulator, outcome: TreeWalkOutcome) {
+        acc.walks_total += 1;
+        match outcome {
+            TreeWalkOutcome::Stored {
+                duration_ms,
+                node_count,
+                max_depth,
+                text_chars,
+                truncated,
+                truncated_timeout,
+                truncated_max_nodes,
+            }
+            | TreeWalkOutcome::Deduped {
+                duration_ms,
+                node_count,
+                max_depth,
+                text_chars,
+                truncated,
+                truncated_timeout,
+                truncated_max_nodes,
+            } => {
+                if matches!(outcome, TreeWalkOutcome::Stored { .. }) {
+                    acc.walks_stored += 1;
+                } else {
+                    acc.walks_deduped += 1;
+                }
+                acc.sum_walk_duration_ms += duration_ms;
+                acc.max_walk_duration_ms = acc.max_walk_duration_ms.max(duration_ms);
+                acc.sum_nodes += node_count;
+                acc.max_depth_reached = acc.max_depth_reached.max(max_depth);
+                acc.total_text_chars += text_chars;
+                if truncated {
+                    acc.walks_truncated += 1;
+                }
+                if truncated_timeout {
+                    acc.walks_truncated_timeout += 1;
+                }
+                if truncated_max_nodes {
+                    acc.walks_truncated_max_nodes += 1;
+                }
+            }
+            TreeWalkOutcome::Empty => acc.walks_empty += 1,
+            TreeWalkOutcome::Error => acc.walks_error += 1,
+        }
+    }
+
+    #[test]
+    fn tree_walker_accumulator_derives_averages_and_rates() {
+        let mut acc = TreeWalkerAccumulator::default();
+        // stored: 100ms, 50 nodes, depth 5, 200 chars, truncated by timeout
+        apply(
+            &mut acc,
+            TreeWalkOutcome::Stored {
+                duration_ms: 100,
+                node_count: 50,
+                max_depth: 5,
+                text_chars: 200,
+                truncated: true,
+                truncated_timeout: true,
+                truncated_max_nodes: false,
+            },
+        );
+        // deduped: 200ms, 150 nodes, depth 9, 800 chars, not truncated
+        apply(
+            &mut acc,
+            TreeWalkOutcome::Deduped {
+                duration_ms: 200,
+                node_count: 150,
+                max_depth: 9,
+                text_chars: 800,
+                truncated: false,
+                truncated_timeout: false,
+                truncated_max_nodes: false,
+            },
+        );
+        apply(&mut acc, TreeWalkOutcome::Empty);
+        apply(&mut acc, TreeWalkOutcome::Error);
+
+        let snap = acc.snapshot();
+        assert_eq!(snap.walks_total, 4);
+        assert_eq!(snap.walks_stored, 1);
+        assert_eq!(snap.walks_deduped, 1);
+        assert_eq!(snap.walks_empty, 1);
+        assert_eq!(snap.walks_error, 1);
+        assert_eq!(snap.walks_truncated, 1);
+        assert_eq!(snap.walks_truncated_timeout, 1);
+        assert_eq!(snap.walks_truncated_max_nodes, 0);
+        // truncation_rate = 1 truncated / 4 total
+        assert!((snap.truncation_rate - 0.25).abs() < 1e-9);
+        // averages divide cumulative sums by walks_total (= 4), integer division:
+        // avg_walk_duration_ms = (100 + 200) / 4 = 75
+        assert_eq!(snap.avg_walk_duration_ms, 75);
+        assert_eq!(snap.max_walk_duration_ms, 200);
+        // avg_nodes_per_walk = (50 + 150) / 4 = 50
+        assert_eq!(snap.avg_nodes_per_walk, 50);
+        assert_eq!(snap.max_depth_reached, 9);
+        assert_eq!(snap.total_text_chars, 1000);
+    }
+
+    #[test]
+    fn tree_walker_accumulator_empty_is_all_zero() {
+        let snap = TreeWalkerAccumulator::default().snapshot();
+        assert_eq!(snap.walks_total, 0);
+        assert_eq!(snap.truncation_rate, 0.0);
+        assert_eq!(snap.avg_walk_duration_ms, 0);
+        assert_eq!(snap.avg_nodes_per_walk, 0);
     }
 }

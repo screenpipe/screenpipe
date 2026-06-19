@@ -59,6 +59,9 @@ pub struct PipelineMetrics {
     pub ocr_cache_hits: AtomicU64,
     /// OCR cache misses (had to run OCR engine)
     pub ocr_cache_misses: AtomicU64,
+    /// OCR runs that yielded (near-)empty text — an OCR-quality failure proxy.
+    /// Subset of `ocr_completed`; `ocr_empty / ocr_completed` is the failure rate.
+    pub ocr_empty: AtomicU64,
     /// Cumulative OCR latency in microseconds (divide by ocr_completed for average)
     pub ocr_total_latency_us: AtomicU64,
 
@@ -71,6 +74,13 @@ pub struct PipelineMetrics {
     pub frames_db_written: AtomicU64,
     /// Frames dropped (OCR done but not written to DB — e.g. tracker miss)
     pub frames_dropped: AtomicU64,
+    /// Frames dropped because the capture operation timed out (15s budget).
+    /// Subset of `frames_dropped`, kept separately so telemetry can tell a
+    /// write/DB-pool stall (timeout) apart from an outright capture failure.
+    pub frames_dropped_timeout: AtomicU64,
+    /// Frames dropped because the capture operation returned an error
+    /// (screenshot/a11y/OCR/DB failure). Subset of `frames_dropped`.
+    pub frames_dropped_error: AtomicU64,
     /// Cumulative DB insert latency in microseconds
     pub db_total_latency_us: AtomicU64,
 
@@ -105,6 +115,15 @@ pub struct PipelineMetrics {
     /// frame so nothing was written. Subtract from `attempts - captured` to isolate
     /// real silent-loss vs. expected static-screen behavior.
     pub dedup_skips: AtomicU64,
+    /// Frames skipped because they were near-all-black (excluded/ignored window
+    /// covering the monitor, asleep display, or DRM-protected surface SCK
+    /// returns as black). Like dedup skips: the pipeline ran, nothing worth
+    /// writing. Tracked separately so a spike is visible in telemetry.
+    pub frames_corrupt_black: AtomicU64,
+    /// Frames skipped because they carried a flat green decode-garbage band (a
+    /// truncated / partially-decoded capture). A non-trivial value here is the
+    /// field signal for the green-corruption reports.
+    pub frames_corrupt_green: AtomicU64,
 
     // --- Rolling window for DB latency ---
     /// Recent DB write latencies in microseconds (rolling window, not lifetime accumulator).
@@ -120,10 +139,13 @@ impl PipelineMetrics {
             ocr_completed: AtomicU64::new(0),
             ocr_cache_hits: AtomicU64::new(0),
             ocr_cache_misses: AtomicU64::new(0),
+            ocr_empty: AtomicU64::new(0),
             ocr_total_latency_us: AtomicU64::new(0),
             frames_video_written: AtomicU64::new(0),
             frames_db_written: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
+            frames_dropped_timeout: AtomicU64::new(0),
+            frames_dropped_error: AtomicU64::new(0),
             db_total_latency_us: AtomicU64::new(0),
             started_at: Instant::now(),
             first_frame_at_us: AtomicU64::new(0),
@@ -134,6 +156,8 @@ impl PipelineMetrics {
             last_capture_attempt_ts: AtomicU64::new(0),
             capture_attempts: AtomicU64::new(0),
             dedup_skips: AtomicU64::new(0),
+            frames_corrupt_black: AtomicU64::new(0),
+            frames_corrupt_green: AtomicU64::new(0),
             db_latency_window: Mutex::new(RollingLatencyWindow::new()),
         }
     }
@@ -169,6 +193,13 @@ impl PipelineMetrics {
             .fetch_add(cache_misses, Ordering::Relaxed);
     }
 
+    /// Record that an OCR run produced (near-)empty text — an OCR-quality
+    /// failure. Call alongside `record_ocr` only when the run was empty, so
+    /// `ocr_empty` stays a subset of `ocr_completed`.
+    pub fn record_ocr_empty(&self) {
+        self.ocr_empty.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Record a frame written to video.
     pub fn record_video_write(&self) {
         self.frames_video_written.fetch_add(1, Ordering::Relaxed);
@@ -193,6 +224,27 @@ impl PipelineMetrics {
             .as_secs();
         self.last_db_write_ts.store(now, Ordering::Relaxed);
         self.dedup_skips.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a frame skipped because it was corrupt — near-all-black
+    /// (`is_green == false`) or a flat green decode-garbage band
+    /// (`is_green == true`). Like [`record_dedup_skip`](Self::record_dedup_skip)
+    /// it advances `last_db_write_ts` so a steadily-corrupt screen (e.g. a long
+    /// stretch of fullscreen DRM playback returning black) doesn't trip the
+    /// health-check stall alarm — the pipeline is running fine, there's just
+    /// nothing worth writing. Bumps the matching counter so telemetry can see
+    /// *why* frames are being skipped instead of folding them into dedup.
+    pub fn record_corrupt_skip(&self, is_green: bool) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.last_db_write_ts.store(now, Ordering::Relaxed);
+        if is_green {
+            self.frames_corrupt_green.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.frames_corrupt_black.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Record a frame inserted into DB.
@@ -226,8 +278,25 @@ impl PipelineMetrics {
         }
     }
 
-    /// Record a dropped frame.
+    /// Record a dropped frame (generic — prefer the categorized variants
+    /// below so telemetry can distinguish *why* the frame was lost).
     pub fn record_drop(&self) {
+        self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a frame dropped because the capture operation timed out
+    /// (exceeded the 15s budget — typically a stuck DB write / saturated
+    /// write pool). Bumps both the timeout-specific and the total counter.
+    pub fn record_drop_timeout(&self) {
+        self.frames_dropped_timeout.fetch_add(1, Ordering::Relaxed);
+        self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a frame dropped because the capture operation returned an
+    /// error (screenshot / accessibility / OCR / DB insert failure).
+    /// Bumps both the error-specific and the total counter.
+    pub fn record_drop_error(&self) {
+        self.frames_dropped_error.fetch_add(1, Ordering::Relaxed);
         self.frames_dropped.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -242,12 +311,62 @@ impl PipelineMetrics {
         self.video_queue_depth.store(video, Ordering::Relaxed);
     }
 
+    /// Unix secs of the most recent DB write (0 = none yet). Lean accessor so
+    /// the recording-coverage sampler can read capture freshness every 5s
+    /// without taking the full `snapshot()` (which locks the latency window).
+    pub fn last_db_write_ts(&self) -> u64 {
+        self.last_db_write_ts.load(Ordering::Relaxed)
+    }
+
+    /// Seconds since the pipeline started — used by the coverage sampler's
+    /// warmup grace so a freshly-started recorder isn't classified as stalled
+    /// before the first frame lands.
+    pub fn uptime_secs(&self) -> f64 {
+        self.started_at.elapsed().as_secs_f64()
+    }
+
     /// Take a snapshot of all metrics for reporting.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let frames_captured = self.frames_captured.load(Ordering::Relaxed);
         let frames_db_written = self.frames_db_written.load(Ordering::Relaxed);
         let ocr_completed = self.ocr_completed.load(Ordering::Relaxed);
         let uptime_secs = self.started_at.elapsed().as_secs_f64();
+
+        // Loss accounting. Every counted capture attempt resolves to exactly
+        // one of: persisted (frames_db_written), a static-screen dedup
+        // (dedup_skips), or an explicit drop (frames_dropped = timeout+error).
+        // `silent_loss` is therefore the RESIDUAL — attempts we can't attribute
+        // to any of those. It should sit at ~0; a growing residual means a
+        // frame-loss path exists that nothing counts (a regression canary, not
+        // a headline). The actionable loss numbers are `frames_dropped_timeout`
+        // / `frames_dropped_error` (and `frame_drop_rate`, their share of
+        // terminal outcomes). The legacy `1 - written/captured` drop rate was
+        // structurally ~0 because frames_captured only bumps alongside a write.
+        let capture_attempts = self.capture_attempts.load(Ordering::Relaxed);
+        let dedup_skips = self.dedup_skips.load(Ordering::Relaxed);
+        let frames_dropped = self.frames_dropped.load(Ordering::Relaxed);
+        let frames_corrupt_black = self.frames_corrupt_black.load(Ordering::Relaxed);
+        let frames_corrupt_green = self.frames_corrupt_green.load(Ordering::Relaxed);
+        let frames_corrupt = frames_corrupt_black + frames_corrupt_green;
+        // A corrupt-skip is an attempt that intentionally didn't write (same as
+        // a dedup), so it must be subtracted here too — otherwise every skipped
+        // black/green frame would inflate `silent_loss` and falsely trip the
+        // leak canary.
+        let silent_loss = capture_attempts
+            .saturating_sub(frames_db_written)
+            .saturating_sub(dedup_skips)
+            .saturating_sub(frames_corrupt)
+            .saturating_sub(frames_dropped);
+        // Denominator = cycles that intended to write (attempts minus the
+        // expected static-screen dedups and corrupt skips). Guard divide-by-zero.
+        let write_intent = capture_attempts
+            .saturating_sub(dedup_skips)
+            .saturating_sub(frames_corrupt);
+        let silent_loss_rate = if write_intent > 0 {
+            silent_loss as f64 / write_intent as f64
+        } else {
+            0.0
+        };
 
         MetricsSnapshot {
             uptime_secs,
@@ -256,6 +375,7 @@ impl PipelineMetrics {
             ocr_completed,
             ocr_cache_hits: self.ocr_cache_hits.load(Ordering::Relaxed),
             ocr_cache_misses: self.ocr_cache_misses.load(Ordering::Relaxed),
+            ocr_empty: self.ocr_empty.load(Ordering::Relaxed),
             avg_ocr_latency_ms: if ocr_completed > 0 {
                 (self.ocr_total_latency_us.load(Ordering::Relaxed) as f64 / ocr_completed as f64)
                     / 1000.0
@@ -264,7 +384,11 @@ impl PipelineMetrics {
             },
             frames_video_written: self.frames_video_written.load(Ordering::Relaxed),
             frames_db_written,
-            frames_dropped: self.frames_dropped.load(Ordering::Relaxed),
+            frames_dropped,
+            frames_dropped_timeout: self.frames_dropped_timeout.load(Ordering::Relaxed),
+            frames_dropped_error: self.frames_dropped_error.load(Ordering::Relaxed),
+            silent_loss,
+            silent_loss_rate,
             avg_db_latency_ms: {
                 // Use rolling window average (recent ~200 writes) instead of lifetime
                 // accumulator — prevents early spikes from permanently inflating the metric.
@@ -284,10 +408,19 @@ impl PipelineMetrics {
                     0.0
                 }
             },
-            frame_drop_rate: if frames_captured > 0 {
-                1.0 - (frames_db_written as f64 / frames_captured as f64)
-            } else {
-                0.0
+            // Real drop rate: of all frames that reached a terminal outcome
+            // (persisted or explicitly dropped via timeout/error), the fraction
+            // dropped. The old `1 - written/captured` was structurally ~0
+            // because `frames_captured` is only bumped alongside a successful
+            // write, so it never surfaced loss. See `silent_loss_rate` for the
+            // broader attempts-based view that also catches trigger starvation.
+            frame_drop_rate: {
+                let terminal = frames_dropped + frames_db_written;
+                if terminal > 0 {
+                    frames_dropped as f64 / terminal as f64
+                } else {
+                    0.0
+                }
             },
             capture_fps_actual: if uptime_secs > 0.0 {
                 frames_captured as f64 / uptime_secs
@@ -307,8 +440,10 @@ impl PipelineMetrics {
             pipeline_stall_count: self.pipeline_stall_count.load(Ordering::Relaxed),
             last_db_write_ts: self.last_db_write_ts.load(Ordering::Relaxed),
             last_capture_attempt_ts: self.last_capture_attempt_ts.load(Ordering::Relaxed),
-            capture_attempts: self.capture_attempts.load(Ordering::Relaxed),
-            dedup_skips: self.dedup_skips.load(Ordering::Relaxed),
+            capture_attempts,
+            dedup_skips,
+            frames_corrupt_black,
+            frames_corrupt_green,
         }
     }
 }
@@ -328,12 +463,25 @@ pub struct MetricsSnapshot {
     pub ocr_completed: u64,
     pub ocr_cache_hits: u64,
     pub ocr_cache_misses: u64,
+    /// OCR runs that produced (near-)empty text (subset of ocr_completed).
+    pub ocr_empty: u64,
     pub avg_ocr_latency_ms: f64,
     pub frames_video_written: u64,
     pub frames_db_written: u64,
     pub frames_dropped: u64,
+    /// Frames dropped because the capture op timed out (subset of frames_dropped).
+    pub frames_dropped_timeout: u64,
+    /// Frames dropped because the capture op errored (subset of frames_dropped).
+    pub frames_dropped_error: u64,
+    /// Residual loss canary: attempts - written - dedup_skips - frames_dropped.
+    /// ~0 in steady state (every attempt is accounted for); a growing value
+    /// means a frame-loss path exists that nothing counts. For the actionable
+    /// loss numbers use frames_dropped_timeout/error.
+    pub silent_loss: u64,
+    /// silent_loss / (capture_attempts - dedup_skips). Should stay ~0.
+    pub silent_loss_rate: f64,
     pub avg_db_latency_ms: f64,
-    /// 0.0 = no drops, 1.0 = all dropped
+    /// 0.0 = no drops, 1.0 = all dropped (drops / (drops + writes))
     pub frame_drop_rate: f64,
     pub capture_fps_actual: f64,
     /// None if no frame has reached DB yet
@@ -349,4 +497,168 @@ pub struct MetricsSnapshot {
     pub capture_attempts: u64,
     /// Total dedup skips (capture cycle ran but content matched previous frame).
     pub dedup_skips: u64,
+    /// Frames skipped because they were near-all-black (excluded window, asleep
+    /// display, or DRM-protected surface). Subset of capture attempts.
+    pub frames_corrupt_black: u64,
+    /// Frames skipped because of a flat green decode-garbage band (truncated /
+    /// partial capture). Subset of capture attempts; the green-corruption signal.
+    pub frames_corrupt_green: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn silent_loss_is_unaccounted_residual_and_drop_rate_is_real() {
+        let m = PipelineMetrics::new();
+        // 11 attempts: 6 persisted, 2 dedup, 2 dropped (1 timeout, 1 error) =
+        // 10 accounted. The 11th attempt recorded NO outcome — simulating an
+        // uninstrumented loss path. The residual canary should catch it.
+        for _ in 0..11 {
+            m.record_capture_attempt();
+        }
+        for _ in 0..6 {
+            m.record_db_write(Duration::from_millis(5));
+        }
+        for _ in 0..2 {
+            m.record_dedup_skip();
+        }
+        m.record_drop_timeout();
+        m.record_drop_error();
+
+        let s = m.snapshot();
+        assert_eq!(s.capture_attempts, 11);
+        assert_eq!(s.frames_db_written, 6);
+        assert_eq!(s.dedup_skips, 2);
+        assert_eq!(s.frames_dropped, 2);
+        assert_eq!(s.frames_dropped_timeout, 1);
+        assert_eq!(s.frames_dropped_error, 1);
+        // residual = attempts - written - dedup - dropped = 11 - 6 - 2 - 2 = 1
+        assert_eq!(s.silent_loss, 1);
+        // silent_loss_rate = residual / (attempts - dedup) = 1 / 9
+        assert!((s.silent_loss_rate - (1.0 / 9.0)).abs() < 1e-9);
+        // frame_drop_rate = dropped / (dropped + written) = 2 / 8 = 0.25
+        // (the old `1 - written/captured` formula would have reported ~0 here)
+        assert!((s.frame_drop_rate - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fully_accounted_pipeline_has_zero_residual() {
+        let m = PipelineMetrics::new();
+        // Every attempt resolves to a known outcome → residual is 0.
+        for _ in 0..10 {
+            m.record_capture_attempt();
+        }
+        for _ in 0..6 {
+            m.record_db_write(Duration::from_millis(5));
+        }
+        for _ in 0..2 {
+            m.record_dedup_skip();
+        }
+        m.record_drop_timeout();
+        m.record_drop_error();
+
+        let s = m.snapshot();
+        assert_eq!(s.silent_loss, 0);
+        assert_eq!(s.silent_loss_rate, 0.0);
+    }
+
+    #[test]
+    fn corrupt_skips_counted_separately_and_not_counted_as_loss() {
+        let m = PipelineMetrics::new();
+        // 10 attempts: 5 persisted, 2 dedup, 2 black + 1 green corrupt = 10
+        // accounted. Corrupt skips must land in their own counters AND be
+        // subtracted from the residual, or they'd falsely trip silent_loss.
+        for _ in 0..10 {
+            m.record_capture_attempt();
+        }
+        for _ in 0..5 {
+            m.record_db_write(Duration::from_millis(5));
+        }
+        for _ in 0..2 {
+            m.record_dedup_skip();
+        }
+        m.record_corrupt_skip(false); // black
+        m.record_corrupt_skip(false); // black
+        m.record_corrupt_skip(true); // green band
+
+        let s = m.snapshot();
+        assert_eq!(s.frames_corrupt_black, 2);
+        assert_eq!(s.frames_corrupt_green, 1);
+        assert_eq!(s.dedup_skips, 2); // corrupt skips did NOT inflate dedup
+                                      // residual = attempts - written - dedup - corrupt - dropped
+                                      //          = 10 - 5 - 2 - 3 - 0 = 0
+        assert_eq!(s.silent_loss, 0);
+        assert_eq!(s.silent_loss_rate, 0.0);
+    }
+
+    #[test]
+    fn corrupt_skip_advances_db_write_clock() {
+        // Like dedup, a corrupt skip ticks last_db_write_ts so a steadily-black
+        // screen (e.g. fullscreen DRM) doesn't trip the stall alarm.
+        let m = PipelineMetrics::new();
+        assert_eq!(m.last_db_write_ts(), 0);
+        m.record_corrupt_skip(true);
+        assert!(m.last_db_write_ts() > 0);
+    }
+
+    #[test]
+    fn healthy_pipeline_reports_zero_loss() {
+        let m = PipelineMetrics::new();
+        for _ in 0..5 {
+            m.record_capture_attempt();
+            m.record_db_write(Duration::from_millis(3));
+        }
+        let s = m.snapshot();
+        assert_eq!(s.silent_loss, 0);
+        assert_eq!(s.silent_loss_rate, 0.0);
+        assert_eq!(s.frame_drop_rate, 0.0);
+        assert_eq!(s.frames_dropped, 0);
+    }
+
+    #[test]
+    fn ocr_counters_track_completed_empty_and_latency() {
+        let m = PipelineMetrics::new();
+        // 3 OCR runs (each a cache miss), 1 of which yielded empty text.
+        m.record_ocr(Duration::from_millis(10), 0, 1);
+        m.record_ocr(Duration::from_millis(20), 0, 1);
+        m.record_ocr(Duration::from_millis(30), 0, 1);
+        m.record_ocr_empty();
+
+        let s = m.snapshot();
+        assert_eq!(s.ocr_completed, 3);
+        assert_eq!(s.ocr_cache_misses, 3);
+        assert_eq!(s.ocr_cache_hits, 0);
+        assert_eq!(s.ocr_empty, 1);
+        // avg latency = (10 + 20 + 30) / 3 = 20ms
+        assert!((s.avg_ocr_latency_ms - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lean_accessors_mirror_snapshot() {
+        let m = PipelineMetrics::new();
+        // No write yet: timestamp accessor is 0, uptime is non-negative.
+        assert_eq!(m.last_db_write_ts(), 0);
+        assert!(m.uptime_secs() >= 0.0);
+
+        // After a DB write, the lean accessor agrees with the full snapshot.
+        m.record_db_write(Duration::from_millis(2));
+        let s = m.snapshot();
+        assert_eq!(m.last_db_write_ts(), s.last_db_write_ts);
+        assert!(m.last_db_write_ts() > 0);
+    }
+
+    #[test]
+    fn drop_helpers_bump_total_and_category() {
+        let m = PipelineMetrics::new();
+        m.record_drop_timeout();
+        m.record_drop_timeout();
+        m.record_drop_error();
+        let s = m.snapshot();
+        assert_eq!(s.frames_dropped_timeout, 2);
+        assert_eq!(s.frames_dropped_error, 1);
+        assert_eq!(s.frames_dropped, 3);
+    }
 }

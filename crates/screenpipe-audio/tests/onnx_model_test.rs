@@ -74,8 +74,8 @@ mod tests {
         println!("Segmentation session created in {:?}", start.elapsed());
 
         // Basic validation - check session has expected inputs/outputs
-        let inputs = session.inputs.len();
-        let outputs = session.outputs.len();
+        let inputs = session.inputs().len();
+        let outputs = session.outputs().len();
         println!("Session has {} inputs and {} outputs", inputs, outputs);
 
         assert!(inputs > 0, "Session should have at least one input");

@@ -35,7 +35,6 @@ import { usePipes, type TemplatePipe } from "@/lib/hooks/use-pipes";
 
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { DailySummaryCard } from "@/components/rewind/daily-summary";
 import { useTimelineFilters } from "@/components/rewind/hooks/use-timeline-filters";
 import { useScrollZoom } from "@/components/rewind/hooks/use-scroll-zoom";
 import { useDateNavigation } from "@/components/rewind/hooks/use-date-navigation";
@@ -62,7 +61,10 @@ export interface DeviceMetadata {
 	file_path: string;
 	app_name: string;
 	window_name: string;
-	ocr_text: string;
+	/** Frame text (accessibility-derived for most captures, OCR fallback). */
+	text: string;
+	/** @deprecated Legacy alias for `text`; the server still sends it but read `text`. */
+	ocr_text?: string;
 	timestamp: string;
 	browser_url?: string;
 }
@@ -464,13 +466,37 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		const targetDate = new Date(targetTimestamp);
 		if (isNaN(targetDate.getTime())) return;
 
+		// Pause playback so the jump settles on a still moment. Preserves the
+		// prior cross-day behavior (handleDateChange paused; navigateDirectToDate
+		// does not). resetFilters still runs via the pending-navigation effect.
+		pausePlayback();
 		setSeekingTimestamp(targetTimestamp);
 		pendingNavigationRef.current = targetDate;
 
-		if (!isSameDay(targetDate, currentDate)) {
-			await handleDateChange(targetDate);
+		// Same-day with the day's frames already loaded: jump in place instantly.
+		// The "process pending navigation" effect only re-runs when frames/
+		// currentDate change, so without this fast path a same-day jump (the
+		// common case: searching today while viewing today) never moves.
+		if (isSameDay(targetDate, currentDate)) {
+			const hasTargetDayFrames = frames.some((f) =>
+				isSameDay(new Date(f.timestamp), targetDate)
+			);
+			if (hasTargetDayFrames) {
+				jumpToTime(targetDate);
+				pendingNavigationRef.current = null;
+				setSeekingTimestamp(null);
+				return;
+			}
 		}
-	}, [currentDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+		// Cross-day, or same-day with stale/empty frames (e.g. the window was
+		// hidden): fetch around the exact moment and let the pending-navigation
+		// effect jump once frames arrive. Use navigateDirectToDate, not
+		// handleDateChange — the latter overwrites pendingNavigationRef with the
+		// nearest *day* (local midnight), landing the jump at the start of the
+		// day instead of the captured moment.
+		await navigateDirectToDate(targetDate);
+	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Listen for navigate-to-timestamp events from search window / deep links
 	useEffect(() => {
@@ -695,12 +721,13 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			contextParts.push(`Apps: ${Array.from(apps).join(", ")}`);
 		}
 
-		// Add sample OCR text (first few frames)
+		// Add sample frame text (first few frames)
 		const ocrSamples: string[] = [];
 		selectedFrames.slice(0, 3).forEach((frame) => {
 			frame.devices.forEach((device) => {
-				if (device.metadata.ocr_text && device.metadata.ocr_text.length > 0) {
-					const sample = device.metadata.ocr_text.slice(0, 200);
+				const frameText = device.metadata.text ?? device.metadata.ocr_text;
+				if (frameText && frameText.length > 0) {
+					const sample = frameText.slice(0, 200);
 					if (sample.trim()) {
 						ocrSamples.push(sample);
 					}
@@ -1200,6 +1227,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				<div ref={navBarRef} className={`absolute top-0 left-0 right-0 z-40 px-4 pb-4 ${embedded ? "pt-2" : "pt-[calc(env(safe-area-inset-top)+16px)]"}`}>
 					<TimelineControls
 						currentDate={currentDate}
+						currentTime={currentFrame ? new Date(currentFrame.timestamp) : null}
 						startAndEndDates={startAndEndDates}
 						onDateChange={handleDateChange}
 						onJumpToday={handleJumpToday}
@@ -1225,11 +1253,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						mutedDevices={mutedDevices}
 						onToggleDeviceMute={toggleDeviceMute}
 					/>
-				</div>
-
-				{/* Daily Summary — top right, below controls */}
-				<div className={`absolute ${embedded ? "top-12" : "top-[calc(env(safe-area-inset-top)+56px)]"} right-4 z-40`}>
-					<DailySummaryCard currentDate={currentDate} />
 				</div>
 
 				{/* Browser URL bar — at top of frame, above nav */}

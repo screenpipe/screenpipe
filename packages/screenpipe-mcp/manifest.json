@@ -16,7 +16,7 @@
   "homepage": "https://screenpi.pe",
   "documentation": "https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp",
   "support": "https://github.com/screenpipe/screenpipe/issues",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE.md",
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",

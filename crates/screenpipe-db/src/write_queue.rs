@@ -167,6 +167,17 @@ impl WriteQueueHealth {
 /// to restart the engine (rebuilding every pool + the shared WAL-index).
 pub type PersistentFailureHook = Arc<dyn Fn() + Send + Sync>;
 
+/// A slot the app fills (after `DatabaseManager` is built) with the
+/// persistent-failure hook. Shared so the drain loop reads whatever the app
+/// last set; empty until wired.
+pub(crate) type PersistentFailureSlot = Arc<std::sync::Mutex<Option<PersistentFailureHook>>>;
+
+pub(crate) fn persistent_failure_slot(
+    hook: Option<PersistentFailureHook>,
+) -> PersistentFailureSlot {
+    Arc::new(std::sync::Mutex::new(hook))
+}
+
 /// Rebuilds the write pool from the same options used at startup, so the drain
 /// loop can drop poisoned connections in-process without a full restart.
 #[derive(Clone)]
@@ -206,7 +217,7 @@ impl WritePoolRebuilder {
 /// existing tests — behaviour unchanged).
 pub(crate) struct WriteDrainOpts {
     pub rebuilder: Option<WritePoolRebuilder>,
-    pub on_persistent_failure: Option<PersistentFailureHook>,
+    pub on_persistent_failure: PersistentFailureSlot,
     pub health: WriteQueueHealth,
     /// Reopen the write pool every N consecutive fatal batches.
     pub reopen_every: u64,
@@ -220,7 +231,7 @@ impl Default for WriteDrainOpts {
     fn default() -> Self {
         Self {
             rebuilder: None,
-            on_persistent_failure: None,
+            on_persistent_failure: persistent_failure_slot(None),
             health: WriteQueueHealth::default(),
             reopen_every: WRITE_POOL_REOPEN_EVERY,
             degraded_after: DEGRADED_AFTER,
@@ -285,9 +296,8 @@ pub(crate) enum WriteOp {
         accessibility_tree_json: Option<String>,
         content_hash: Option<i64>,
         simhash: Option<i64>,
-        ocr_text: Option<String>,
+        /// Per-word OCR bounding boxes, stored on the frame (`frames.text_json`).
         ocr_text_json: Option<String>,
-        ocr_engine: Option<String>,
         /// Pre-computed full_text for FTS indexing
         full_text: Option<String>,
         /// When Some, this frame references another frame's elements (dedup).
@@ -691,7 +701,8 @@ async fn drain_loop(
                         "write_queue: persistent write failure ({} consecutive fatal batches) — requesting engine restart to rebuild all pools + WAL-index",
                         consecutive_fatal
                     );
-                    if let Some(hook) = &on_persistent_failure {
+                    let hook = on_persistent_failure.lock().unwrap().clone();
+                    if let Some(hook) = hook {
                         hook();
                     }
                 }
@@ -852,7 +863,13 @@ async fn execute_batch(
         None => {
             let e = last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut);
             warn!("write_queue: BEGIN IMMEDIATE exhausted retries: {}", e);
-            let fatal = should_recycle_sqlite_connection(&e);
+            // A nested-transaction error that survived all retries means a
+            // pooled connection is stuck with an orphaned transaction that
+            // per-attempt ROLLBACK didn't clear within the budget. Treating it
+            // as Healthy would leave the wedge in place (writes silently fail,
+            // SCREENPIPE-CLI-RC) — escalate to FatalConnection so the drain
+            // loop's pool reopen recovers it, same as for IOERR/CANTOPEN.
+            let fatal = should_recycle_sqlite_connection(&e) || is_nested_transaction_error(&e);
             send_error_to_all(batch, e);
             return if fatal {
                 BatchOutcome::FatalConnection
@@ -1152,9 +1169,7 @@ async fn execute_single_write(
             accessibility_tree_json,
             content_hash,
             simhash,
-            ocr_text,
             ocr_text_json,
-            ocr_engine,
             full_text,
             elements_ref_frame_id,
         } => {
@@ -1164,13 +1179,13 @@ async fn execute_single_write(
                     browser_url, app_name, window_name, focused, device_name,
                     snapshot_path, capture_trigger, accessibility_text, text_source,
                     accessibility_tree_json, content_hash, simhash, full_text,
-                    elements_ref_frame_id, document_path
+                    elements_ref_frame_id, document_path, text_json
                 ) VALUES (
                     NULL, 0, ?1, ?2,
                     ?3, ?4, ?5, ?6, ?7,
                     ?8, ?9, ?10, ?11,
                     ?12, ?13, ?14, ?15,
-                    ?16, ?17
+                    ?16, ?17, ?18
                 )"#,
             )
             .bind(timestamp)
@@ -1198,37 +1213,15 @@ async fn execute_single_write(
             .bind(full_text.as_deref())
             .bind(elements_ref_frame_id)
             .bind(document_path.as_deref())
+            .bind(ocr_text_json.as_deref())
             .execute(&mut **conn)
             .await?
             .last_insert_rowid();
 
-            // Insert OCR text in same transaction (always — needed for search)
-            // Element inserts are deferred to a separate transaction (see caller).
-            // Duplicate app_name/window_name/focused from the frame onto the OCR
-            // row so queries like `SELECT ... FROM ocr_text WHERE app_name='Obsidian'`
-            // actually return results. Without these binds the columns fall back
-            // to their schema defaults ('' / NULL / false), making OCR data
-            // effectively untagged even though the parent frame has the metadata.
-            if let (Some(text), Some(text_json), Some(engine)) = (
-                ocr_text.as_deref(),
-                ocr_text_json.as_deref(),
-                ocr_engine.as_deref(),
-            ) {
-                let text_length = text.len() as i64;
-                sqlx::query(
-                    "INSERT INTO ocr_text (frame_id, text, text_json, ocr_engine, text_length, app_name, window_name, focused) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                )
-                .bind(id)
-                .bind(text)
-                .bind(text_json)
-                .bind(engine)
-                .bind(text_length)
-                .bind(app_name.as_deref().unwrap_or(""))
-                .bind(window_name.as_deref())
-                .bind(focused)
-                .execute(&mut **conn)
-                .await?;
-            }
+            // OCR text/metadata now lives on the frame itself: full_text feeds
+            // frames_fts (search) and text_json holds the per-word bounds. The
+            // ocr_text table was retired in 2026-06. Element rows are still
+            // deferred to a separate transaction by the caller.
 
             if let Some(ref_id) = elements_ref_frame_id {
                 debug!(
@@ -1409,18 +1402,23 @@ async fn execute_single_write(
             window_name,
             sync_id,
         } => {
-            let now = Utc::now().to_rfc3339();
+            // ocr_text retired (2026-06): synced OCR text now lands on the frame
+            // that SyncInsertFrame already created. Fill in full_text (search) and
+            // any metadata the frame record didn't carry. Idempotent on replay.
+            let _ = sync_id;
             sqlx::query(
-                r#"INSERT INTO ocr_text (frame_id, text, focused, app_name, window_name, sync_id, synced_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+                r#"UPDATE frames SET
+                    full_text = ?2,
+                    focused = COALESCE(focused, ?3),
+                    app_name = COALESCE(NULLIF(app_name, ''), ?4),
+                    window_name = COALESCE(window_name, ?5)
+                   WHERE id = ?1"#,
             )
             .bind(frame_id)
             .bind(text.as_str())
             .bind(focused)
             .bind(app_name.as_str())
             .bind(window_name.as_deref())
-            .bind(sync_id.as_str())
-            .bind(now.as_str())
             .execute(&mut **conn)
             .await?;
             Ok(WriteResult::Id(*frame_id))
@@ -1575,6 +1573,8 @@ async fn execute_single_write(
             ocr_engine_str,
             windows,
         } => {
+            // ocr_engine is no longer persisted per-frame (ocr_text table retired).
+            let _ = ocr_engine_str;
             let mut results = Vec::with_capacity(windows.len());
             for (idx, window) in windows.iter().enumerate() {
                 let full_text = if window.text.is_empty() {
@@ -1582,9 +1582,15 @@ async fn execute_single_write(
                 } else {
                     Some(window.text.as_str())
                 };
+                // text_json (per-word OCR bounds) now lives on the frame.
+                let text_json = if window.text_json.is_empty() {
+                    None
+                } else {
+                    Some(window.text_json.as_str())
+                };
 
                 let frame_id = sqlx::query(
-                    "INSERT INTO frames (video_chunk_id, offset_index, timestamp, name, browser_url, app_name, window_name, focused, device_name, full_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    "INSERT INTO frames (video_chunk_id, offset_index, timestamp, name, browser_url, app_name, window_name, focused, device_name, full_text, text_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 )
                 .bind(video_chunk_id)
                 .bind(offset_index)
@@ -1596,28 +1602,12 @@ async fn execute_single_write(
                 .bind(window.focused)
                 .bind(device_name.as_str())
                 .bind(full_text)
+                .bind(text_json)
                 .execute(&mut **conn)
                 .await?
                 .last_insert_rowid();
 
-                // Insert OCR text — duplicate app/window/focused from frame so
-                // OCR rows are filterable (see handler above for rationale).
-                let text_length = window.text.len() as i64;
-                sqlx::query(
-                    "INSERT INTO ocr_text (frame_id, text, text_json, ocr_engine, text_length, app_name, window_name, focused) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                )
-                .bind(frame_id)
-                .bind(&window.text)
-                .bind(&window.text_json)
-                .bind(ocr_engine_str.as_str())
-                .bind(text_length)
-                .bind(window.app_name.as_deref().unwrap_or(""))
-                .bind(window.window_name.as_deref())
-                .bind(window.focused)
-                .execute(&mut **conn)
-                .await?;
-
-                // Dual-write: insert OCR elements into unified elements table
+                // OCR elements still go to the unified elements table for rendering.
                 if !window.text_json.is_empty() {
                     crate::db::DatabaseManager::insert_ocr_elements(
                         conn,
@@ -1816,11 +1806,14 @@ fn should_recycle_sqlite_connection(e: &sqlx::Error) -> bool {
 }
 
 fn is_nested_transaction_error(e: &sqlx::Error) -> bool {
+    let needle = "cannot start a transaction within a transaction";
     match e {
-        sqlx::Error::Database(db_err) => db_err
-            .message()
-            .to_lowercase()
-            .contains("cannot start a transaction within a transaction"),
+        // The live BEGIN IMMEDIATE failure surfaces as a Database error;
+        // Protocol is matched too because the error gets re-wrapped as it
+        // propagates (and so the predicate is unit-testable the same way the
+        // other classifiers are).
+        sqlx::Error::Database(db_err) => db_err.message().to_lowercase().contains(needle),
+        sqlx::Error::Protocol(msg) => msg.to_lowercase().contains(needle),
         _ => false,
     }
 }
@@ -2082,22 +2075,10 @@ mod tests {
                 content_hash INTEGER,
                 simhash INTEGER,
                 full_text TEXT,
+                text_json TEXT,
+                full_text_redacted_at INTEGER,
                 elements_ref_frame_id INTEGER DEFAULT NULL,
                 document_path TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ocr_text (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                frame_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                text_json TEXT NOT NULL DEFAULT '',
-                ocr_engine TEXT NOT NULL DEFAULT '',
-                text_length INTEGER DEFAULT 0
             )",
         )
         .execute(&pool)
@@ -2353,9 +2334,7 @@ mod tests {
                 accessibility_tree_json: None,
                 content_hash: Some(12345),
                 simhash: Some(67890),
-                ocr_text: None,
                 ocr_text_json: None,
-                ocr_engine: None,
                 full_text: Some("page content".to_string()),
                 elements_ref_frame_id: None,
             })
@@ -2552,6 +2531,29 @@ mod tests {
         assert!(!should_recycle_sqlite_connection(&sqlx::Error::Protocol(
             "no such table: foo".into()
         )));
+    }
+
+    #[test]
+    fn persistent_stuck_transaction_escalates_to_fatal_on_exhausted_retries() {
+        let stuck = sqlx::Error::Protocol(
+            "error returned from database: (code: 1) cannot start a transaction within a transaction"
+                .into(),
+        );
+        // Detected as a nested-transaction error in both wrapper forms.
+        assert!(is_nested_transaction_error(&stuck));
+
+        // The exhausted-retries decision escalates it to FatalConnection
+        // (so the drain loop reopens the pool) even though it is NOT in the
+        // plain recycle set — that's the gap this guards.
+        assert!(!should_recycle_sqlite_connection(&stuck));
+        assert!(should_recycle_sqlite_connection(&stuck) || is_nested_transaction_error(&stuck));
+
+        // A genuinely benign per-row error must stay non-fatal.
+        let benign = sqlx::Error::Protocol("no such table: foo".into());
+        assert!(!is_nested_transaction_error(&benign));
+        assert!(
+            !(should_recycle_sqlite_connection(&benign) || is_nested_transaction_error(&benign))
+        );
     }
 
     /// `Database` errors flow through `is_fatal_sqlite_message`: a

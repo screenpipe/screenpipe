@@ -753,27 +753,35 @@ pub fn get_enterprise_team_api_token() -> Option<String> {
         .map(String::from)
 }
 
-/// Read the user's screenpipe cloud session JWT from `~/.screenpipe/
-/// auth.json`. Returns None when the file is missing, malformed, or the
-/// token field is empty.
+/// Read the user's screenpipe cloud session JWT.
 ///
-/// The settings store (`store.bin → user.token`) is the canonical
-/// runtime cache for this token but is only populated after a fresh
-/// in-app sign-in. `auth.json` is the durable on-disk copy written by
-/// the pi-agent configuration flow — it survives store resets and dev-
-/// mode launches where the in-memory user object hasn't been hydrated
-/// yet. Used by the enterprise-policy hook to send the Bearer header
-/// even when the in-app user object is still null.
+/// #3943: the authoritative copy lives in the encrypted secret store and is
+/// mirrored into an in-process cache at startup and on every
+/// `set_cloud_token`; that cache is served first. The legacy plaintext
+/// `~/.screenpipe/auth.json` (the CLI credential file) remains as a fallback
+/// for installs that have not migrated yet; sign-out removes it. Returns
+/// None when signed out. Used by the settings hydration and the
+/// enterprise-policy hook to send the Bearer header even when the in-app
+/// user object is still null.
 #[tauri::command]
 #[specta::specta]
 pub fn get_cloud_token() -> Option<String> {
+    // #3943: the authoritative token now lives in the encrypted secret store and
+    // is mirrored into an in-process cache at startup + on every `set_cloud_token`.
+    // Prefer that; fall back to the legacy `auth.json` for installs that haven't
+    // migrated yet (and for the pi-agent config flow that still writes it).
+    if let Some(token) = crate::auth_token::cached_cloud_token() {
+        return Some(token);
+    }
     let path = screenpipe_core::paths::default_screenpipe_data_dir().join("auth.json");
     let raw = std::fs::read_to_string(&path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
     parsed
         .get("token")
         .and_then(|t| t.as_str())
-        .filter(|s| !s.is_empty())
+        // The same file historically held the LOCAL api key (`sp-<uuid8>`,
+        // engine auth_key.rs) — never serve a non-JWT value as a cloud login.
+        .filter(|s| crate::auth_token::looks_like_jwt(s))
         .map(String::from)
 }
 
@@ -802,14 +810,30 @@ pub async fn set_cloud_token(
 ) -> Result<(), String> {
     let normalized = token.filter(|t| !t.is_empty());
     let should_clear_pi_auth = normalized.is_none();
-    state.cloud_token.store(std::sync::Arc::new(normalized));
+    // Unblock cloud calls for THIS session first — the ArcSwap + cache are the
+    // runtime source of truth, so a failed durable write below never breaks an
+    // active sign-in.
+    state
+        .cloud_token
+        .store(std::sync::Arc::new(normalized.clone()));
 
+    // Sign-out: scrub the screenpipe token from pi's auth files before the
+    // fallible secret-store write so the on-disk copies never outlive the
+    // session even if persistence below fails.
     if should_clear_pi_auth {
         if let Err(e) = crate::pi::clear_screenpipe_auth_token_files() {
             warn!("failed to clear pi screenpipe auth token: {}", e);
         }
     }
 
+    // #3943: persist to the encrypted secret store (authoritative at-rest copy)
+    // and refresh the in-process cache. We surface a persistence failure as an
+    // Err so the frontend won't strip the last plaintext copy of a token it
+    // couldn't durably save (the caller ignores the Result for session purposes;
+    // only the save-and-strip path checks it).
+    crate::auth_token::store_cloud_token(normalized.as_deref())
+        .await
+        .map_err(|e| format!("failed to persist cloud token to secret store: {e}"))?;
     Ok(())
 }
 
@@ -1477,7 +1501,21 @@ pub async fn get_disk_usage(
 
 const LOGIN_URL: &str = "https://screenpipe.com/login";
 
-/// Open the screenpi.pe login page.
+/// The custom URL scheme this build registers for deep links. The enterprise
+/// build uses a distinct scheme so it does not collide with the consumer app's
+/// `screenpipe://` on machines that have both installed (see #3890). Login
+/// URLs pass a `return_scheme` query param so the website can redirect back
+/// to the right build; until the website supports the param it is ignored and
+/// redirects stay on `screenpipe://`, matching the consumer path.
+pub fn deep_link_scheme() -> &'static str {
+    if cfg!(feature = "enterprise-build") {
+        "screenpipe-enterprise"
+    } else {
+        "screenpipe"
+    }
+}
+
+/// Open the screenpipe.com login page.
 /// Windows: system browser + registered deep-link scheme handles the redirect.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Linux: in-app WebView that intercepts the screenpipe:// redirect.
@@ -1491,13 +1529,20 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         use tauri_plugin_opener::OpenerExt;
         app_handle
             .opener()
-            .open_url(LOGIN_URL, None::<&str>)
+            .open_url(
+                format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme()),
+                None::<&str>,
+            )
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     #[cfg(target_os = "macos")]
     {
+        // ASWebAuthenticationSession intercepts the redirect itself (no OS
+        // scheme routing), so the consumer `screenpipe` scheme cannot collide
+        // with another installed build here (#3890) and stays correct until
+        // the website honours `return_scheme`.
         let callback_url = match crate::auth_session::start_session(
             LOGIN_URL.to_string(),
             "screenpipe".to_string(),
@@ -1536,17 +1581,18 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
+        let login_url = format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
-            WebviewUrl::External(LOGIN_URL.parse().unwrap()),
+            WebviewUrl::External(login_url.parse().unwrap()),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
         .focused(true);
 
         builder = builder.on_navigation(move |url| {
-            if url.scheme() == "screenpipe" {
+            if url.scheme() == deep_link_scheme() {
                 info!("login window intercepted deep link callback");
                 let _ = app_for_nav.emit("deep-link-received", url.to_string());
                 if let Some(w) = app_for_nav.get_webview_window("login-browser") {
@@ -1561,7 +1607,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
             .build()
             .map(crate::window::finalize_webview_window)
             .map_err(|e| {
-                log_webview_build_failure(label, LOGIN_URL, &e);
+                log_webview_build_failure(label, &login_url, &e);
                 e.to_string()
             })?;
 
@@ -1605,7 +1651,7 @@ pub async fn open_google_calendar_auth_window(
     }
 
     builder = builder.on_navigation(move |url| {
-        if url.scheme() == "screenpipe" {
+        if url.scheme() == deep_link_scheme() {
             info!("google calendar auth window intercepted deep link: {}", url);
             let _ = app_for_nav.emit("deep-link-received", url.to_string());
             if let Some(w) = app_for_nav.get_webview_window("google-calendar-auth") {
@@ -2082,19 +2128,20 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
     }
 
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
-    if let Ok(pool) = sqlx::SqlitePool::connect(&db_url).await {
-        if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, Some(key)).await {
-            match store.reencrypt_unencrypted_secrets(&key).await {
-                Ok(count) if count > 0 => {
-                    tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
-                }
-                Err(e) => {
-                    tracing::warn!("failed to re-encrypt secrets: {}", e);
-                }
-                _ => {}
+    // Shared, engine-matched pool (never an ad-hoc per-call connection — that
+    // churn corrupts db.sqlite, #4263).
+    if let Ok(store) =
+        screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key)).await
+    {
+        match store.reencrypt_unencrypted_secrets(&key).await {
+            Ok(count) if count > 0 => {
+                tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
             }
+            Err(e) => {
+                tracing::warn!("failed to re-encrypt secrets: {}", e);
+            }
+            _ => {}
         }
     }
 
@@ -2108,13 +2155,12 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
     if db_path.exists() {
-        let pool = sqlx::SqlitePool::connect(&db_url).await.map_err(|e| {
-            format!("failed to open secret database before disabling encryption: {e}")
-        })?;
-        let plain_store = screenpipe_secrets::SecretStore::new(pool.clone(), None)
+        // Shared, engine-matched pool (never an ad-hoc per-call connection —
+        // that churn corrupts db.sqlite, #4263). The later encrypted-store open
+        // reuses this same cached pool.
+        let plain_store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None)
             .await
             .map_err(|e| format!("failed to open secret store: {e}"))?;
         let encrypted_count = plain_store
@@ -2142,9 +2188,10 @@ pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
                 }
             };
 
-            let encrypted_store = screenpipe_secrets::SecretStore::new(pool, Some(key))
-                .await
-                .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
+            let encrypted_store =
+                screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key))
+                    .await
+                    .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
             match encrypted_store.decrypt_encrypted_secrets().await {
                 Ok(count) => {
                     tracing::info!("decrypted {} secrets before keychain opt-out", count);
@@ -3200,6 +3247,12 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn open_note_path(path: String) -> Result<(), String> {
+    // Citations from the pi agent can be relative (e.g. `.pi/skills/…`); resolve
+    // to the real file so "open in default app" doesn't hand a dangling path to
+    // LaunchServices / Obsidian.
+    let path = crate::viewer::resolve_local_path(&path)
+        .to_string_lossy()
+        .into_owned();
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;

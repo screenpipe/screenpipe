@@ -83,19 +83,47 @@ export class OpenAIProvider implements AIProvider {
 		return match?.[1]?.split('.')[0] ?? null;
 	}
 
+	// OpenAI requires the literal word "json" in the messages whenever
+	// response_format json_object is set. Agent/pipe callers regularly set
+	// the format without saying "json" anywhere (SCREENPIPE-AI-PROXY-17) —
+	// a deterministic 400 we can fix by injecting a minimal system nudge.
+	private isJsonMentionError(error: any): boolean {
+		if (error?.status !== 400) return false;
+		const msg = String(error?.message ?? error?.error?.message ?? '');
+		return /must contain the word 'json'/i.test(msg);
+	}
+
 	private async createWithUnsupportedParamRetry<T>(
 		params: ChatCompletionCreateParams,
 		invoke: (p: ChatCompletionCreateParams) => Promise<T>,
 	): Promise<T> {
-		try {
-			return await invoke(params);
-		} catch (error: any) {
-			const unsupported = this.isUnsupportedSamplingParamError(error);
-			if (!unsupported) throw error;
-			const next = params as ChatCompletionCreateParams & Record<string, unknown>;
-			if (next[unsupported] === undefined) throw error;
-			delete next[unsupported];
-			return await invoke(next);
+		// Bounded fix-and-retry loop: each pass repairs one distinct rejection
+		// (an unsupported sampling param, a missing "json" mention). Anything
+		// unfixable rethrows immediately; the cap guards against an upstream
+		// that keeps rejecting repaired requests.
+		let current = params as ChatCompletionCreateParams & Record<string, unknown>;
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await invoke(current as ChatCompletionCreateParams);
+			} catch (error: any) {
+				if (attempt >= 3) throw error;
+				const unsupported = this.isUnsupportedSamplingParamError(error);
+				if (unsupported && current[unsupported] !== undefined) {
+					delete current[unsupported];
+					continue;
+				}
+				if (this.isJsonMentionError(error)) {
+					current = {
+						...current,
+						messages: [
+							{ role: 'system', content: 'Respond with a valid JSON object.' },
+							...(current.messages ?? []),
+						],
+					} as ChatCompletionCreateParams & Record<string, unknown>;
+					continue;
+				}
+				throw error;
+			}
 		}
 	}
 
@@ -175,6 +203,24 @@ export class OpenAIProvider implements AIProvider {
 						const choice = chunk.choices[0];
 						if (choice?.finish_reason) {
 							finishReason = choice.finish_reason;
+						}
+						// Forward streamed tool-call fragments (delta.tool_calls:
+						// index/id/function.name + argument chunks). The content
+						// branch below only forwards delta.content, so without this
+						// a tool call (finish_reason "tool_calls") reached Pi as an
+						// empty assistant message → stopReason:"toolUse" with nothing
+						// to run, and background pipes silently no-op'd. Pi
+						// accumulates these in the same OpenAI shape the Anthropic
+						// provider already emits.
+						const toolCalls = choice?.delta?.tool_calls;
+						if (toolCalls && toolCalls.length > 0) {
+							controller.enqueue(
+								new TextEncoder().encode(
+									`data: ${JSON.stringify({
+										choices: [{ delta: { tool_calls: toolCalls } }],
+									})}\n\n`
+								)
+							);
 						}
 						if (body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema') {
 							const content = choice?.delta?.content;

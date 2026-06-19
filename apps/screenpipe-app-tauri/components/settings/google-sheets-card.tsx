@@ -63,7 +63,7 @@ export function GoogleSheetsCard({
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("google-sheets", null);
+      const res = await commands.oauthConnect("google-sheets", null, null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_sheets_connected");
         await fetchAccounts();
@@ -155,7 +155,7 @@ export function GoogleSheetsCard({
                   <Lock className="h-3 w-3" />pro required
                 </Button>
                 <button
-                  onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                  onClick={() => openUrl("https://screenpipe.com/onboarding")}
                   className="text-[10px] text-muted-foreground hover:text-foreground underline"
                 >
                   upgrade to pro to connect

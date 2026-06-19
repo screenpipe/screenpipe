@@ -126,10 +126,16 @@ pub fn merge_manifests(
     let mut actions = Vec::new();
     let now = Utc::now();
 
-    let mut all_uuids: std::collections::HashSet<String> = local.memories.keys().cloned().collect();
-    all_uuids.extend(remote.memories.keys().cloned());
+    // Borrow the keys rather than cloning every UUID into an owned set — the
+    // loop only ever reads `uuid` (for `.get()` and per-entry `.clone()`), so
+    // the owned copies were pure allocation on every sync.
+    let all_uuids: std::collections::HashSet<&String> = local
+        .memories
+        .keys()
+        .chain(remote.memories.keys())
+        .collect();
 
-    for uuid in &all_uuids {
+    for uuid in all_uuids {
         let local_mem = local.memories.get(uuid);
         let remote_mem = remote.memories.get(uuid);
         let remote_ts = remote.tombstones.get(uuid);

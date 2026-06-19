@@ -14,6 +14,7 @@ pub mod login;
 pub mod mcp;
 pub mod pipe;
 pub mod presets;
+pub mod profile;
 pub mod search;
 pub mod status;
 mod store_file;
@@ -186,14 +187,25 @@ pub enum Command {
         port: u16,
     },
 
+    /// Show per-stage pipeline timing (OCR, DB write, capture FPS, audio
+    /// throughput) from the running server's /health endpoint
+    Profile {
+        /// Output format
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Port of the running server
+        #[arg(short = 'p', long, default_value_t = 3030)]
+        port: u16,
+    },
+
     /// Search screen + audio history directly from the local SQLite DB
     /// (no daemon required — opens `~/.screenpipe/db.sqlite` read-side
     /// via WAL while sp may be writing).
     Search(SearchArgs),
 
     /// Enterprise: query teammates' screen + audio history via
-    /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a
-    /// `team_api_token` minted at https://screenpi.pe/enterprise?tab=tokens.
+    /// `screenpipe.com/api/enterprise/v1/*`. Admin-only — needs a
+    /// `team_api_token` minted at https://screenpipe.com/enterprise?tab=tokens.
     Team {
         #[command(subcommand)]
         subcommand: TeamCommand,
@@ -244,7 +256,7 @@ pub enum Command {
     /// Install a bundle of pipes from a manifest URL
     Install {
         /// Manifest URL (HTTPS, JSON). Defaults to the screenpipe starter bundle.
-        #[arg(default_value = "https://screenpi.pe/start.json")]
+        #[arg(default_value = "https://screenpipe.com/start.json")]
         url: String,
         /// Allow manifests hosted outside the trusted host list
         #[arg(long, default_value_t = false)]
@@ -408,9 +420,9 @@ pub struct RecordArgs {
     /// Enable the async PII reconciliation worker. Runs a background
     /// task after capture that OVERWRITES PII in the source columns
     /// of ocr_text, audio_transcriptions, frames.accessibility_text,
-    /// and ui_events.text_content. Raw secrets are gone after the
-    /// worker processes the row. Off by default — capture path is
-    /// unaffected either way.
+    /// ui_events.text_content, and elements.text. Raw secrets are
+    /// gone after the worker processes the row. Off by default —
+    /// capture path is unaffected either way.
     #[arg(long, default_value_t = false)]
     pub async_pii_redaction: bool,
 
@@ -442,6 +454,16 @@ pub struct RecordArgs {
     /// regardless. Default: secret.
     #[arg(long, value_delimiter = ',', default_value = "secret")]
     pub pii_redaction_labels: Vec<String>,
+
+    /// Render redacted PII as consistent pseudonym tokens
+    /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags, so the
+    /// same value stays correlatable across rows without exposing it.
+    /// Irreversible (one-way keyed hash, random per-install key, no
+    /// reverse map). Applies to the text worker when
+    /// `--async-pii-redaction` is on, for newly-redacted rows only;
+    /// ignored for the Tinfoil backend. Off by default. See issue #4206.
+    #[arg(long, default_value_t = false)]
+    pub pii_redaction_pseudonyms: bool,
 
     /// Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise)
     #[arg(long, default_value_t = false)]
@@ -614,6 +636,12 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_keyboard_capture: bool,
 
+    /// Disable persisting mouse-click rows. Clicks still wake event-driven
+    /// capture; only the `ui_events` click rows are skipped. On by default —
+    /// click rows carry no text payload and drive workflow/task mining.
+    #[arg(long, default_value_t = false)]
+    pub disable_click_capture: bool,
+
     /// Require authentication for remote API access. When enabled, non-localhost
     /// requests must include Authorization: Bearer <SCREENPIPE_API_KEY>.
     /// Localhost requests are always allowed.
@@ -694,6 +722,7 @@ pub struct RecordArgSources {
     pub async_image_pii_redaction: bool,
     pub pii_backend: bool,
     pub pii_redaction_labels: bool,
+    pub pii_redaction_pseudonyms: bool,
     pub filter_music: bool,
     pub disable_vision: bool,
     pub ignored_windows: bool,
@@ -708,6 +737,7 @@ pub struct RecordArgSources {
     pub pause_on_drm_content: bool,
     pub disable_clipboard_capture: bool,
     pub disable_keyboard_capture: bool,
+    pub disable_click_capture: bool,
     pub api_auth: bool,
     pub listen_on_lan: bool,
     pub encrypt_secrets: bool,
@@ -744,6 +774,7 @@ impl RecordArgSources {
             async_image_pii_redaction: from_command_line(record, "async_image_pii_redaction"),
             pii_backend: from_command_line(record, "pii_backend"),
             pii_redaction_labels: from_command_line(record, "pii_redaction_labels"),
+            pii_redaction_pseudonyms: from_command_line(record, "pii_redaction_pseudonyms"),
             filter_music: from_command_line(record, "filter_music"),
             disable_vision: from_command_line(record, "disable_vision"),
             ignored_windows: from_command_line(record, "ignored_windows"),
@@ -758,6 +789,7 @@ impl RecordArgSources {
             pause_on_drm_content: from_command_line(record, "pause_on_drm_content"),
             disable_clipboard_capture: from_command_line(record, "disable_clipboard_capture"),
             disable_keyboard_capture: from_command_line(record, "disable_keyboard_capture"),
+            disable_click_capture: from_command_line(record, "disable_click_capture"),
             api_auth: from_command_line(record, "api_auth"),
             listen_on_lan: from_command_line(record, "listen_on_lan"),
             encrypt_secrets: from_command_line(record, "encrypt_secrets"),
@@ -786,6 +818,7 @@ impl RecordArgSources {
             || self.async_image_pii_redaction
             || self.pii_backend
             || self.pii_redaction_labels
+            || self.pii_redaction_pseudonyms
             || self.filter_music
             || self.disable_vision
             || self.ignored_windows
@@ -800,6 +833,7 @@ impl RecordArgSources {
             || self.pause_on_drm_content
             || self.disable_clipboard_capture
             || self.disable_keyboard_capture
+            || self.disable_click_capture
             || self.api_auth
             || self.listen_on_lan
             || self.encrypt_secrets
@@ -895,6 +929,9 @@ impl RecordArgs {
             capture_keystrokes: true,
             record_keyboard_events: !self.disable_keyboard_capture,
             record_clipboard_events: !self.disable_clipboard_capture,
+            // Clicks stay captured at the hook level so they keep waking
+            // event-driven capture; only row persistence is gated.
+            record_click_events: !self.disable_click_capture,
             // Same-app title changes must reach the event-driven trigger
             // mapper so focus changes can produce linked captures.
             capture_window_focus: true,
@@ -926,6 +963,7 @@ impl RecordArgs {
             async_image_pii_redaction: self.async_image_pii_redaction,
             pii_backend: self.pii_backend.clone(),
             pii_redaction_labels: self.pii_redaction_labels.clone(),
+            pii_redaction_pseudonyms: self.pii_redaction_pseudonyms,
             filter_music: self.filter_music,
             audio_transcription_engine: engine_str.to_string(),
             transcription_mode: mode_str.to_string(),
@@ -969,6 +1007,7 @@ impl RecordArgs {
             pause_on_drm_content: self.pause_on_drm_content,
             disable_clipboard_capture: self.disable_clipboard_capture,
             disable_keyboard_capture: self.disable_keyboard_capture,
+            disable_click_capture: self.disable_click_capture,
             listen_on_lan: self.listen_on_lan,
             // Passing any `--schedule-rule` implies the schedule is on.
             schedule_enabled: self.schedule_enabled || !self.schedule_rules.is_empty(),
@@ -1012,6 +1051,17 @@ impl RecordArgs {
         let mut settings = persisted_settings.unwrap_or_else(|| self.to_recording_settings());
         if loaded_from_store {
             self.apply_explicit_overrides(&mut settings, sources);
+        }
+
+        // #3943: the desktop app migrates the cloud token out of plaintext
+        // store.bin into the shared encrypted SecretStore. A standalone CLI
+        // run whose persisted settings carry no user token must look there,
+        // or cloud features (STT, screenpipe-cloud pipes) silently lose auth
+        // once the app has migrated.
+        if settings.effective_user_id().is_none() {
+            if let Some(token) = crate::auth_key::find_cloud_token(&data_dir).await {
+                settings.user_id = token;
+            }
         }
 
         // First-launch tier detection for CLI users
@@ -1189,6 +1239,9 @@ impl RecordArgs {
         if sources.pii_redaction_labels {
             settings.pii_redaction_labels = self.pii_redaction_labels.clone();
         }
+        if sources.pii_redaction_pseudonyms {
+            settings.pii_redaction_pseudonyms = self.pii_redaction_pseudonyms;
+        }
         if sources.filter_music {
             settings.filter_music = self.filter_music;
         }
@@ -1246,6 +1299,9 @@ impl RecordArgs {
         }
         if sources.disable_keyboard_capture {
             settings.disable_keyboard_capture = self.disable_keyboard_capture;
+        }
+        if sources.disable_click_capture {
+            settings.disable_click_capture = self.disable_click_capture;
         }
         if sources.api_auth {
             settings.api_auth = self.api_auth;
@@ -1726,7 +1782,7 @@ pub struct SearchArgs {
 // =============================================================================
 
 /// Mirrors the `screenpipe-team` skill 1:1 — same endpoints, same vocabulary.
-/// All three variants hit `https://screenpi.pe/api/enterprise/v1/*` directly
+/// All three variants hit `https://screenpipe.com/api/enterprise/v1/*` directly
 /// with the admin's `team_api_token` from `~/.screenpipe/enterprise.json`
 /// (or `SCREENPIPE_TEAM_API_TOKEN` env override). No daemon needed.
 #[derive(Subcommand, Debug)]
@@ -2154,6 +2210,31 @@ mod tests {
         match cli.command {
             Command::Survey => {}
             _ => panic!("expected Survey command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_command_parses_with_defaults() {
+        let cli = Cli::try_parse_from(["screenpipe", "profile"]).unwrap();
+        match cli.command {
+            Command::Profile { json, port } => {
+                assert!(!json);
+                assert_eq!(port, 3030);
+            }
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_command_parses_port_and_json() {
+        let cli =
+            Cli::try_parse_from(["screenpipe", "profile", "--port", "4040", "--json"]).unwrap();
+        match cli.command {
+            Command::Profile { json, port } => {
+                assert!(json);
+                assert_eq!(port, 4040);
+            }
+            _ => panic!("expected Profile command"),
         }
     }
 

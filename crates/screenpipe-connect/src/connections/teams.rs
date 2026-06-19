@@ -28,7 +28,10 @@ static OAUTH: OAuthConfig = OAuthConfig {
         ),
         // select_account so a second connect shows Microsoft's account picker
         // instead of silently consenting under the already-signed-in account.
-        ("prompt", "consent select_account"),
+        // NOTE: Microsoft Entra rejects multiple space-separated prompt values
+        // with AADSTS90023 ("Unsupported 'prompt' value"), so we send only
+        // select_account. First-time consent is still prompted automatically.
+        ("prompt", "select_account"),
     ],
     redirect_uri_override: None,
 };
@@ -78,6 +81,10 @@ impl Integration for Teams {
 
     fn oauth_config(&self) -> Option<&'static OAuthConfig> {
         Some(&OAUTH)
+    }
+
+    fn supports_oauth_instances(&self) -> bool {
+        true
     }
 
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {

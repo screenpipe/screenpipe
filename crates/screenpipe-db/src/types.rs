@@ -197,6 +197,15 @@ pub struct Speaker {
     pub metadata: String,
 }
 
+#[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct TagAutocompleteItem {
+    pub name: String,
+    pub count: i64,
+    pub frame_count: i64,
+    pub audio_count: i64,
+    pub memory_count: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewDiarizationSegment {
     pub provider_speaker_label: String,
@@ -313,6 +322,15 @@ pub struct OutputRecord {
     pub size_bytes: i64,
     pub preview: Option<String>,
     pub metadata: Option<String>,
+    /// SAF envelope `kind` (e.g. "sop") when this output is a validated
+    /// SAF artifact; NULL for plain file outputs.
+    pub saf_kind: Option<String>,
+    /// SAF stable artifact id — survives across re-emits/versions.
+    pub artifact_id: Option<String>,
+    /// SAF artifact `version` number (monotonic per artifact_id). The column
+    /// name is prefixed to avoid clashing with the envelope's `saf_version`
+    /// format marker, which is always 1 and not stored.
+    pub saf_version: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -898,6 +916,12 @@ pub struct Element {
     /// implicitly true/false. See issue #2436.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_screen: Option<bool>,
+    /// Raw JSON of the element's automation properties (`is_enabled`,
+    /// `is_focused`, `is_selected`, `is_expanded`, `value`, `placeholder`, …)
+    /// serialized at capture. `None` for OCR rows and legacy accessibility
+    /// rows. Parsed into compact state by the API layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<String>,
 }
 
 /// Flat row for bulk insert (parent_id assigned after insert)
@@ -933,6 +957,9 @@ pub struct ElementRow {
     /// (legacy rows pre-issue-#2436 fix); search treats unknown as
     /// neither on- nor off-screen.
     pub on_screen: Option<bool>,
+    /// Raw JSON automation properties (see [`Element::properties`]). NULL for
+    /// OCR / legacy rows.
+    pub properties: Option<String>,
 }
 
 impl From<ElementRow> for Element {
@@ -963,6 +990,7 @@ impl From<ElementRow> for Element {
             confidence: row.confidence,
             sort_order: row.sort_order,
             on_screen: row.on_screen,
+            properties: row.properties,
         }
     }
 }

@@ -32,7 +32,6 @@ pub struct DeleteTimeRangeRequest {
 #[derive(Serialize, OaSchema)]
 pub struct DeleteTimeRangeResponse {
     pub frames_deleted: u64,
-    pub ocr_deleted: u64,
     pub audio_transcriptions_deleted: u64,
     pub audio_chunks_deleted: u64,
     pub video_chunks_deleted: u64,
@@ -104,7 +103,6 @@ pub(crate) async fn delete_time_range_handler(
 
     Ok(JsonResponse(DeleteTimeRangeResponse {
         frames_deleted: result.frames_deleted,
-        ocr_deleted: result.ocr_deleted,
         audio_transcriptions_deleted: result.audio_transcriptions_deleted,
         audio_chunks_deleted: result.audio_chunks_deleted,
         video_chunks_deleted: result.video_chunks_deleted,
@@ -365,16 +363,12 @@ pub(crate) async fn delete_device_data_handler(
         })?;
 
     info!(
-        "deleted device data for {}: frames={}, ocr={}, audio={}",
-        payload.machine_id,
-        result.frames_deleted,
-        result.ocr_deleted,
-        result.audio_transcriptions_deleted
+        "deleted device data for {}: frames={}, audio={}",
+        payload.machine_id, result.frames_deleted, result.audio_transcriptions_deleted
     );
 
     Ok(JsonResponse(DeleteTimeRangeResponse {
         frames_deleted: result.frames_deleted,
-        ocr_deleted: result.ocr_deleted,
         audio_transcriptions_deleted: result.audio_transcriptions_deleted,
         audio_chunks_deleted: result.audio_chunks_deleted,
         video_chunks_deleted: result.video_chunks_deleted,

@@ -122,6 +122,80 @@ pub fn local_api_context_from_app(app: &tauri::AppHandle) -> LocalApiContext {
 const RESTART_COOLDOWN_SECS: u64 = 30;
 const CAPTURE_RESTART_MEETING_REATTACH_WINDOW: Duration = Duration::from_secs(120);
 
+/// Shared state for the DB-wedge auto-recovery circuit breaker. Tracks recent
+/// auto-restart timestamps so a DB that stays broken after a restart (genuine
+/// on-disk corruption, which a restart can't repair) cannot restart-storm.
+pub type DbWedgeBreaker = Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>;
+
+pub fn new_db_wedge_breaker() -> DbWedgeBreaker {
+    Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()))
+}
+
+/// Max auto-restarts allowed inside `DB_WEDGE_BREAKER_WINDOW` before giving up.
+const DB_WEDGE_MAX_RESTARTS: usize = 3;
+const DB_WEDGE_BREAKER_WINDOW: Duration = Duration::from_secs(600);
+/// Coalesce a burst of persistent-failure signals before acting.
+const DB_WEDGE_DEBOUNCE: Duration = Duration::from_secs(15);
+
+/// Build the `PersistentFailureHook` the DB layer fires when writes wedge
+/// persistently. The hook itself is sync (`Fn()`), so it spawns the async
+/// restart. Captures an `AppHandle` (cheap clone, Send+Sync) and the shared
+/// breaker so restart-storm protection persists across restarts.
+pub fn make_db_wedge_recovery_hook(
+    app: tauri::AppHandle,
+    breaker: DbWedgeBreaker,
+) -> screenpipe_db::PersistentFailureHook {
+    std::sync::Arc::new(move || {
+        let app = app.clone();
+        let breaker = breaker.clone();
+        tokio::spawn(async move {
+            recover_from_db_wedge(app, breaker).await;
+        });
+    })
+}
+
+async fn recover_from_db_wedge(app: tauri::AppHandle, breaker: DbWedgeBreaker) {
+    // Debounce: let a burst of signals coalesce and any in-flight work settle.
+    tokio::time::sleep(DB_WEDGE_DEBOUNCE).await;
+
+    // Circuit breaker: drop timestamps outside the window, then decide.
+    {
+        let now = std::time::Instant::now();
+        let mut recent = breaker.lock().unwrap();
+        while recent
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > DB_WEDGE_BREAKER_WINDOW)
+        {
+            recent.pop_front();
+        }
+        if recent.len() >= DB_WEDGE_MAX_RESTARTS {
+            error!(
+                "db wedge auto-recovery: {} restarts within {:?} did not clear the write wedge — \
+                 this looks like on-disk corruption a restart can't repair. Auto-restart suspended; \
+                 quit screenpipe and run `screenpipe db recover`.",
+                recent.len(),
+                DB_WEDGE_BREAKER_WINDOW
+            );
+            return;
+        }
+        recent.push_back(now);
+    }
+
+    warn!(
+        "db wedge auto-recovery: persistent write failure detected — restarting recording to \
+         rebuild all DB pools + the shared WAL-index"
+    );
+    if let Err(e) = stop_screenpipe(app.state::<RecordingState>(), app.clone()).await {
+        warn!(
+            "db wedge auto-recovery: stop_screenpipe failed (continuing to spawn): {}",
+            e
+        );
+    }
+    if let Err(e) = spawn_screenpipe(app.state::<RecordingState>(), app.clone(), None).await {
+        error!("db wedge auto-recovery: spawn_screenpipe failed: {}", e);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct InterruptedMeeting {
     id: i64,
@@ -167,6 +241,9 @@ pub struct RecordingState {
     /// one update propagates to all three readers (cloud_proxy.rs, the
     /// pi-agent's models.json apiKey, and any future Tauri-side consumer).
     pub cloud_token: Arc<arc_swap::ArcSwap<Option<String>>>,
+    /// Restart-storm guard for DB-wedge auto-recovery. Shared across server
+    /// restarts so a DB that stays broken after N restarts stops retrying.
+    pub db_wedge_breaker: DbWedgeBreaker,
 }
 
 // ---------------------------------------------------------------------------
@@ -821,6 +898,11 @@ pub async fn spawn_screenpipe(
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
     let cloud_token_arc = state.cloud_token.clone();
+    // Wire the DB-wedge auto-recovery hook onto every (re)created DB. Captured into
+    // the dedicated server thread so the freshly-built `ServerCore` gets the hook
+    // before it starts writing.
+    let app_for_db_wedge = app.clone();
+    let db_wedge_breaker = state.db_wedge_breaker.clone();
 
     // Pipe output callback. Stage 5: legacy `pipe_event` topic dropped.
     // Every pipe stdout line is emitted on the unified `agent_event`
@@ -887,6 +969,15 @@ pub async fn spawn_screenpipe(
                         return;
                     }
                 };
+
+                // Wire the persistent-failure hook so a wedged DB auto-restarts
+                // recording (rebuilding every pool + the shared WAL-index).
+                server
+                    .db
+                    .set_persistent_failure_hook(make_db_wedge_recovery_hook(
+                        app_for_db_wedge.clone(),
+                        db_wedge_breaker.clone(),
+                    ));
 
                 // Phase 2: Start capture
                 let capture = match CaptureSession::start(&server, &recording_config, true).await {

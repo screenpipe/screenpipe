@@ -205,7 +205,7 @@ export function AppContextPopover({
 			);
 		}
 
-		navigator.clipboard.writeText(lines.join("\n"));
+		commands.copyTextToClipboard(lines.join("\n"));
 		setCopied(true);
 		setTimeout(() => setCopied(false), 1500);
 	};

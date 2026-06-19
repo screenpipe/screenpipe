@@ -30,7 +30,7 @@ const EMPTY_POLICY: AdminPolicy = {
  */
 export async function fetchAdminPolicy(licenseKey: string): Promise<AdminPolicy> {
   try {
-    const res = await fetch("https://screenpi.pe/api/enterprise/policy", {
+    const res = await fetch("https://screenpipe.com/api/enterprise/policy", {
       method: "GET",
       headers: {
         "Content-Type": "application/json",

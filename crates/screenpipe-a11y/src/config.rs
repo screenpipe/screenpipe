@@ -83,6 +83,11 @@ pub struct UiCaptureConfig {
     /// Apps to exclude from capture (case-insensitive substring match)
     pub excluded_apps: Vec<String>,
 
+    /// Cached lowercase parse of `excluded_apps`.
+    /// Populated by `compile_patterns()` for hot-path app filtering.
+    #[serde(skip)]
+    pub excluded_app_patterns: Vec<String>,
+
     /// Window title patterns to exclude (regex)
     #[serde(skip)]
     pub excluded_window_patterns: Vec<Regex>,
@@ -214,6 +219,7 @@ impl Default for UiCaptureConfig {
                 "Keychain Access".to_string(),
                 "Credential Manager".to_string(),
             ],
+            excluded_app_patterns: Vec::new(),
             excluded_window_patterns: Vec::new(),
             // Incognito / private browsing detection is handled by the
             // `crate::incognito` module with comprehensive localized matching
@@ -261,8 +267,27 @@ impl UiCaptureConfig {
             .iter()
             .filter_map(|s| Regex::new(s).ok())
             .collect();
+        self.excluded_app_patterns = self
+            .excluded_apps
+            .iter()
+            .map(|app| app.to_lowercase())
+            .collect();
         self.ignored_window_patterns = WindowPattern::parse_list(&self.ignored_windows);
         self.included_window_patterns = WindowPattern::parse_list(&self.included_windows);
+    }
+
+    /// Lazily resolve lowercased excluded-app patterns.
+    fn resolved_excluded_apps(&self) -> std::borrow::Cow<'_, [String]> {
+        if self.excluded_app_patterns.is_empty() && !self.excluded_apps.is_empty() {
+            std::borrow::Cow::Owned(
+                self.excluded_apps
+                    .iter()
+                    .map(|app| app.to_lowercase())
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(&self.excluded_app_patterns)
+        }
     }
 
     /// Lazily resolve the parsed ignore patterns. Returns the cache if it's
@@ -297,9 +322,9 @@ impl UiCaptureConfig {
 
         let app_lower = app_name.to_lowercase();
         if self
-            .excluded_apps
+            .resolved_excluded_apps()
             .iter()
-            .any(|excluded| app_lower.contains(&excluded.to_lowercase()))
+            .any(|excluded| app_lower.contains(excluded))
         {
             return false;
         }
@@ -394,6 +419,7 @@ impl UiCaptureConfig {
     /// Builder pattern: set excluded apps
     pub fn with_excluded_apps(mut self, apps: Vec<String>) -> Self {
         self.excluded_apps = apps;
+        self.compile_patterns();
         self
     }
 

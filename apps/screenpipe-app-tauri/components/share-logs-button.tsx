@@ -25,6 +25,34 @@ import { localFetch } from "@/lib/api";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { loadAllConversations } from "@/lib/chat-storage";
 import { redactPii } from "@/lib/utils/redact-pii";
+import { firstImageFile } from "@/lib/utils/clipboard-image";
+
+// Read an image File and return a compressed JPEG data URL (max 1920px wide).
+// Shared by the file-picker, clipboard paste, and drag-drop entry points.
+async function compressImageFile(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => resolve(ev.target?.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const img = new Image();
+  img.src = dataUrl;
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("failed to decode image"));
+  });
+
+  const MAX_WIDTH = 1920;
+  const scale = img.width > MAX_WIDTH ? MAX_WIDTH / img.width : 1;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.8);
+}
 
 interface VideoChunk {
   device_name: string;
@@ -126,36 +154,56 @@ export const ShareLogsButton = ({
     }
   };
 
+  // Compress + attach an image File from any source. Last write wins so a
+  // paste/drop replaces an existing attachment (the single-screenshot model).
+  const attachImageFile = async (file: File) => {
+    try {
+      setScreenshot(await compressImageFile(file));
+    } catch (err) {
+      console.error("failed to attach screenshot:", err);
+      toast({
+        title: "couldn't attach screenshot",
+        description: "that image couldn't be read — try a different file.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleScreenshotUpload = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    try {
-      const file = e.target.files?.[0];
-      if (!file) return;
+    const file = e.target.files?.[0];
+    if (file) await attachImageFile(file);
+  };
 
-      const img = new Image();
-      const dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => resolve(ev.target?.result as string);
-        reader.readAsDataURL(file);
-      });
-
-      img.src = dataUrl;
-      await new Promise<void>((resolve) => { img.onload = () => resolve(); });
-
-      const MAX_WIDTH = 1920;
-      const scale = img.width > MAX_WIDTH ? MAX_WIDTH / img.width : 1;
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      const compressed = canvas.toDataURL("image/jpeg", 0.8);
-      setScreenshot(compressed);
-    } catch (err) {
-      console.error("Failed to select screenshot:", err);
+  // Paste-a-screenshot (Cmd/Ctrl+V) and drag-drop. Previously only the
+  // file-picker worked, so users who copied a screenshot to the clipboard hit
+  // a dead end. We intercept only when an image is actually present so normal
+  // text paste into the textarea is untouched.
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const file = firstImageFile(e.clipboardData);
+    if (file) {
+      // stop propagation so the duplicate handler on the wrapper div (which
+      // catches pastes when the textarea isn't focused) doesn't attach twice.
+      e.preventDefault();
+      e.stopPropagation();
+      void attachImageFile(file);
     }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    const file = firstImageFile(e.dataTransfer);
+    if (file) {
+      e.preventDefault();
+      e.stopPropagation();
+      void attachImageFile(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    // Signal we accept the drop so the browser fires `drop` instead of opening
+    // the image in the webview.
+    if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
   };
 
   const sendLogs = async () => {
@@ -164,7 +212,7 @@ export const ShareLogsButton = ({
 
     setIsSending(true);
     try {
-      const BASE_URL = "https://screenpi.pe";
+      const BASE_URL = "https://screenpipe.com";
       const identifier = settings.user?.id || machineId;
       const type = settings.user?.id ? "user" : "machine";
 
@@ -315,11 +363,17 @@ export const ShareLogsButton = ({
   };
   return (
     <TooltipProvider>
-      <div className="flex flex-col gap-2.5 w-full">
+      <div
+        className="flex flex-col gap-2.5 w-full"
+        onPaste={handlePaste}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+      >
         <Textarea
-          placeholder="describe your feedback or issue..."
+          placeholder="describe your feedback or issue... (paste or drop a screenshot)"
           value={feedbackText}
           onChange={(e) => setFeedbackText(e.target.value)}
+          onPaste={handlePaste}
           className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
         />
 

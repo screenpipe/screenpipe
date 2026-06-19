@@ -28,6 +28,9 @@ export interface NotificationPayload {
   actions: NotificationAction[];
   autoDismissMs?: number;
   pipe_name?: string;
+  source_session_id?: string;
+  source_message_id?: string;
+  source_url?: string;
 }
 
 export async function showNotificationPanel(

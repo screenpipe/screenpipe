@@ -204,6 +204,68 @@ async function applyPiiPolicy(lockedSettings: Record<string, unknown>): Promise<
 }
 
 /**
+ * Apply enterprise-forced input-capture settings (keyboard / click rows) to
+ * the local settings store so the recording engine honors them. The admin
+ * sets these in the workspace policy's Managed settings
+ * (lockedSettings.disableKeyboardCapture / disableClickCapture — "true" |
+ * "false" strings like every managed value). Unlike the PII policy, the
+ * engine only reads these at spawn, so when a forced value actually changes
+ * the device's effective setting we restart the engine once. The matching
+ * privacy-section toggles are disabled separately so the employee can't
+ * override a forced value.
+ */
+let inputCaptureRestartInFlight = false;
+
+async function applyInputCapturePolicy(lockedSettings: Record<string, unknown>): Promise<void> {
+  const updates: Record<string, boolean> = {};
+
+  const keyboard = lockedSettings.disableKeyboardCapture;
+  if (keyboard === "true" || keyboard === "false") {
+    updates.disableKeyboardCapture = keyboard === "true";
+  }
+
+  const clicks = lockedSettings.disableClickCapture;
+  if (clicks === "true" || clicks === "false") {
+    updates.disableClickCapture = clicks === "true";
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  const store = await getStore();
+  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+  // Defaults when the key was never persisted mirror the app defaults:
+  // keyboard rows off, click rows on.
+  const current: Record<string, boolean> = {
+    disableKeyboardCapture: (settings.disableKeyboardCapture as boolean | undefined) ?? true,
+    disableClickCapture: (settings.disableClickCapture as boolean | undefined) ?? false,
+  };
+  const changed = Object.entries(updates).some(([key, value]) => current[key] !== value);
+  if (!changed) return;
+
+  await store.set("settings", { ...settings, ...updates });
+  await store.save();
+  console.log(
+    `[enterprise] input capture policy changed settings: ${Object.entries(updates)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", ")} — restarting engine`
+  );
+
+  // Restart so the forced values take effect without waiting for the
+  // employee to restart manually. Guarded so overlapping policy polls in
+  // this window don't stack restarts; steady-state polls are no-ops because
+  // the store already matches the policy.
+  if (inputCaptureRestartInFlight) return;
+  inputCaptureRestartInFlight = true;
+  try {
+    await commands.stopScreenpipe();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await commands.spawnScreenpipe(null);
+  } finally {
+    inputCaptureRestartInFlight = false;
+  }
+}
+
+/**
  * Fire-and-forget heartbeat to report device status to the enterprise API.
  * Called after a successful policy fetch. Never throws, never blocks.
  */
@@ -240,7 +302,7 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
       pipeStatuses = await gatherPipeStatuses();
     } catch {}
 
-    await tauriFetch("https://screenpi.pe/api/enterprise/heartbeat", {
+    await tauriFetch("https://screenpipe.com/api/enterprise/heartbeat", {
       method: "POST",
       headers: {
         "X-License-Key": licenseKey,
@@ -357,7 +419,7 @@ export function useEnterprisePolicy() {
       if (cloudToken) {
         headers["Authorization"] = `Bearer ${cloudToken}`;
       }
-      const res = await tauriFetch("https://screenpi.pe/api/enterprise/policy", {
+      const res = await tauriFetch("https://screenpipe.com/api/enterprise/policy", {
         method: "GET",
         headers,
       });
@@ -428,6 +490,14 @@ export function useEnterprisePolicy() {
         console.warn("[enterprise] failed to apply PII policy:", e);
       }
 
+      // Apply enterprise-forced input capture (keyboard / click rows).
+      // Restarts the engine when a forced value actually changed.
+      try {
+        await applyInputCapturePolicy(result.lockedSettings);
+      } catch (e) {
+        console.warn("[enterprise] failed to apply input capture policy:", e);
+      }
+
       // Fire-and-forget heartbeat
       sendHeartbeat(licenseKey);
 
@@ -457,12 +527,24 @@ export function useEnterprisePolicy() {
         const streams = (data.syncStreams ?? {}) as Record<string, unknown>;
         const pickBool = (key: string): boolean =>
           typeof streams[key] === "boolean" ? (streams[key] as boolean) : true;
+        // frame_images is a NEW data class (screen pixels leave the device on
+        // request) — a 3-way MODE ("off" | "cited" | "all"), the org's explicit
+        // dashboard choice. Legacy boolean policies map true → "cited".
+        // Anything unrecognized is "off" — fail-closed.
+        const rawMode = streams.frame_images as unknown;
+        const frameImages =
+          rawMode === "off" || rawMode === "cited" || rawMode === "all"
+            ? rawMode
+            : rawMode === true
+            ? "cited"
+            : "off";
         await commands.setSyncStreams(
           pickBool("frames"),
           pickBool("audio"),
           pickBool("ui_events"),
           pickBool("memories"),
           pickBool("snapshots"),
+          frameImages,
         );
       } catch (e) {
         console.warn("[enterprise] failed to push sync streams to Rust:", e);

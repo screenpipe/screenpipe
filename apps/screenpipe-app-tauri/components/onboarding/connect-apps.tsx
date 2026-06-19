@@ -609,7 +609,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     });
 
     try {
-      const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+      const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -699,7 +699,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           setTimeout(() => reject(new Error("oauth_timeout")), OAUTH_TIMEOUT_MS)
         );
         const res = await Promise.race([
-          commands.oauthConnect(integration.id, null),
+          commands.oauthConnect(integration.id, null, null),
           timeoutPromise,
         ]);
         if (res.status === "ok" && res.data.connected) {

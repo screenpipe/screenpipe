@@ -21,6 +21,7 @@ import {
   Check,
   Download,
   ExternalLink,
+  Brain,
 } from "lucide-react";
 import { localFetch } from "@/lib/api";
 import { commands } from "@/lib/utils/tauri";
@@ -44,6 +45,80 @@ export {
   SCREENPIPE_API_SKILL_MD,
   SCREENPIPE_CLI_SKILL_MD,
 } from "@/lib/generated/screenpipe-skills";
+
+// ---------------------------------------------------------------------------
+// Second-brain prompt — paste-once automation that turns the agent into a
+// digital clone of the user's working context: it segments workflows,
+// summarizes processes, and maintains a durable memory in the background.
+// Kept in sync with docs.screenpi.pe/second-brain (docs/.../second-brain.mdx).
+// ---------------------------------------------------------------------------
+
+export const SECOND_BRAIN_PROMPT = `you have access to screenpipe, a local tool that records everything i see, say, and
+hear on my computer and makes it searchable. i want you to build and maintain a
+"second brain" about me — a living memory of who i am, what i'm working on, and how
+i work — by watching my activity through screenpipe in the background, so i never
+have to re-explain my context. think of it as a digital clone of my working context.
+
+## how to read my activity
+
+if you have the screenpipe MCP tools (search-content, activity-summary, list-meetings,
+update-memory), use them. otherwise query the local REST API at http://localhost:3030
+(or http://SCREENPIPE_IP:3030 if i run screenpipe on another machine):
+
+- recent activity:    curl "http://localhost:3030/search?content_type=all&start_time=START&end_time=END&limit=100"
+- light summary:      curl "http://localhost:3030/activity-summary?start_time=START&end_time=END"
+- meetings:           curl "http://localhost:3030/meetings?limit=20"
+
+START / END are ISO 8601 UTC timestamps. start with a small window (the last 1-2 hours)
+so you don't pull too much. if screenpipe skills are available, load them first.
+
+## what to do each run (about once an hour, or when i ask)
+
+1. SEGMENT — pull my activity since you last ran and split it into distinct work
+   sessions. a session is a coherent block of related activity (e.g. "45 min in cursor
+   refactoring auth", "30 min in gmail answering investor emails", "1h call about X").
+   note the app(s), the time range, what i was actually trying to do, and the goal.
+
+2. SUMMARIZE — for each session write a short summary of the *process*: the steps i
+   took, the tools/inputs/outputs, the decisions i made, and whether it's repeatable.
+   if it looks repeatable, capture it as a numbered SOP i could hand off or automate.
+
+3. REMEMBER — update my second brain with anything durable and reusable:
+   - who i am: role, goals, preferences, recurring tools
+   - people i interact with and about what       (tag person:NAME)
+   - projects in flight, their status, open loops (tag project:NAME)
+   - workflows / SOPs i repeat                    (tag topic:NAME)
+   store only stable, reusable facts. never store secrets — passwords, API keys, tokens,
+   financial or health data, or anything clearly private. skip one-off noise.
+
+## where to store the second brain
+
+- if you have the screenpipe update-memory tool: write each durable fact as a memory
+  with namespaced tags (person:, project:, topic:) and importance 0-1. retrieve later
+  with search-content content_type='memory'. this is the same memory the screenpipe
+  digital-clone pipe builds, so it stays queryable from any agent.
+- also (or instead, if you lack that tool) keep markdown files i can read:
+    second-brain/profile.md          - who i am, goals, preferences
+    second-brain/people/NAME.md      - one file per person
+    second-brain/projects/NAME.md    - one file per project, with open loops
+    second-brain/workflows/NAME.md   - repeatable SOPs
+    second-brain/log/DATE.md         - the hourly session summaries (append-only)
+    second-brain/now.md              - what i'm doing right now and over the last
+                                       ~30/120 min, refreshed every run
+
+always APPEND and DEDUPE: update existing entries instead of duplicating them, and
+link related notes together.
+
+## run on a schedule
+
+set this to run automatically about once an hour using whatever scheduling you have
+(claude tasks, codex automations, openclaw/hermes automations, or a system cron job).
+between runs, when i ask you anything, read now.md and the relevant project/person
+files first so you already know what i was doing.
+
+start now: do one pass over my last 2 hours, then tell me what you learned about me
+and propose the schedule.
+`;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -104,7 +179,7 @@ function McpSection({ name, mcp }: { name: string; mcp: AgentCardProps["mcp"] })
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(mcp.snippet);
+      await commands.copyTextToClipboard(mcp.snippet);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -191,7 +266,7 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
 
   const copyMd = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(variant.md);
+      await commands.copyTextToClipboard(variant.md);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied SKILL.md to clipboard" });
@@ -203,7 +278,7 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
   const copyCmd = useCallback(async () => {
     if (!variant.cliInstall) return;
     try {
-      await navigator.clipboard.writeText(variant.cliInstall);
+      await commands.copyTextToClipboard(variant.cliInstall);
       setCmdCopied(true);
       setTimeout(() => setCmdCopied(false), 2000);
       toast({ title: "copied install command" });
@@ -898,6 +973,89 @@ function ConnectSection({ integrationId, fields }: { integrationId: string; fiel
   );
 }
 
+// ---------------------------------------------------------------------------
+// Second-brain callout — the headline action on every agent card: copy a
+// single prompt that makes the agent build a digital-clone-style memory of you.
+// ---------------------------------------------------------------------------
+
+function SecondBrainCallout({ name }: { name: string }) {
+  const [copied, setCopied] = useState(false);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const copyPrompt = useCallback(async () => {
+    try {
+      await commands.copyTextToClipboard(SECOND_BRAIN_PROMPT);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast({ title: "copied second-brain prompt", description: `paste it into ${name}` });
+      posthog.capture("second_brain_prompt_copied", { agent: name });
+    } catch (e) {
+      toast({ title: "copy failed", description: String(e), variant: "destructive" });
+    }
+  }, [name]);
+
+  const saveMd = useCallback(async () => {
+    setIsSaving(true);
+    try {
+      await writeTextFile("screenpipe-second-brain.md", SECOND_BRAIN_PROMPT, {
+        baseDir: BaseDirectory.Download,
+      });
+      const dir = await downloadDir();
+      setSavedPath(await join(dir, "screenpipe-second-brain.md"));
+      toast({ title: "saved to Downloads", description: "screenpipe-second-brain.md" });
+      posthog.capture("second_brain_prompt_saved", { agent: name });
+    } catch (e) {
+      toast({ title: "save failed", description: String(e), variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [name]);
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <Brain className="h-3.5 w-3.5 text-foreground/70" />
+        <p className="text-xs font-semibold text-foreground">build a second brain</p>
+      </div>
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        Paste one prompt into {name} and it keeps working in the background — segmenting your
+        workflows, summarizing your processes, and building a durable memory of you. Like the
+        digital clone pipe, but inside {name}.
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button size="sm" onClick={copyPrompt} className="h-7 text-xs">
+          {copied ? <Check className="h-3 w-3 mr-1.5" /> : <Copy className="h-3 w-3 mr-1.5" />}
+          {copied ? "copied" : "copy prompt"}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={saveMd}
+          disabled={isSaving}
+          className="h-7 text-xs"
+        >
+          {isSaving ? (
+            <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+          ) : savedPath ? (
+            <Check className="h-3 w-3 mr-1.5" />
+          ) : (
+            <Download className="h-3 w-3 mr-1.5" />
+          )}
+          {savedPath ? "saved" : "save .md"}
+        </Button>
+        <a
+          href="#"
+          onClick={(e) => { e.preventDefault(); openUrl("https://docs.screenpi.pe/second-brain"); }}
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground ml-auto"
+        >
+          <ExternalLink className="h-3 w-3" /> learn more
+        </a>
+      </div>
+    </div>
+  );
+}
+
 // AgentCard — wraps the three sections behind a tab switcher
 // ---------------------------------------------------------------------------
 
@@ -934,6 +1092,10 @@ export function AgentCard({
               </a>
             )}
           </div>
+        </div>
+
+        <div className="px-4 pb-3">
+          <SecondBrainCallout name={name} />
         </div>
 
         <div className="px-4 pb-4">

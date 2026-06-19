@@ -34,6 +34,7 @@ use super::meetings::{resolve_meeting_status_from, MeetingStatusResponse};
 /// Maximum number of concurrent WebSocket connections allowed.
 /// This prevents file descriptor exhaustion from too many open connections.
 pub(crate) const MAX_WEBSOCKET_CONNECTIONS: usize = 100;
+pub(crate) const EVENTS_WEBSOCKET_PING_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Guard that decrements the WebSocket connection counter when dropped.
 /// This ensures the counter is always decremented, even on panics or early returns.
@@ -143,7 +144,7 @@ async fn handle_socket(socket: WebSocket, query: Query<EventsQuery>, _guard: WsC
                         }
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                _ = tokio::time::sleep(EVENTS_WEBSOCKET_PING_INTERVAL) => {
                     let _ = sender.send(Message::Ping(vec![])).await;
                 }
             }
@@ -316,4 +317,14 @@ async fn handle_metrics_socket(
     }
 
     debug!("Metrics WebSocket connection closed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_websocket_ping_interval_is_not_busy() {
+        assert_eq!(EVENTS_WEBSOCKET_PING_INTERVAL, Duration::from_secs(15));
+    }
 }

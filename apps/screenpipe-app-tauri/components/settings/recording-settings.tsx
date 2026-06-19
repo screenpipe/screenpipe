@@ -81,7 +81,7 @@ import {
   CheckCircle2,
   XCircle,
   Circle,
-  Upload,
+  Download,
   Trash2,
   Search,
   ListTodo,
@@ -105,6 +105,7 @@ import {
   useSettings,
   Settings,
 } from "@/lib/hooks/use-settings";
+import { hasAppEntitlement } from "@/lib/app-entitlement";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
@@ -143,6 +144,7 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
+import { ApplyRestartBar } from "./apply-restart-bar";
 // ScheduleSettings moved to privacy-section
 import { ValidatedInput } from "../ui/validated-input";
 import {
@@ -228,7 +230,7 @@ const getAudioEngineResolution = (
     };
   }
 
-  if (requested === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+  if (requested === "screenpipe-cloud" && !hasAppEntitlement(settings.user as any)) {
     return {
       requested,
       active: fallback,
@@ -1294,7 +1296,7 @@ function TranscriptionDictionary({
               className="h-7 text-xs px-2 gap-1"
               onClick={() => setShowBulk(!showBulk)}
             >
-              <Upload className="h-3 w-3" />
+              <Download className="h-3 w-3" />
               bulk import
             </Button>
             {vocabularyWords.length > 0 && (
@@ -1648,7 +1650,7 @@ function HighFpsCard({
             <div className="flex flex-col gap-1">
               {(
                 [
-                  { v: "ask" as const, label: "Ask me", hint: "Adds a “+ HD” action to the meeting-start notification (recommended)" },
+                  { v: "ask" as const, label: "Ask me", hint: "Adds an “open note + HD” action to the meeting-start notification — one click opens the note and starts HD (recommended)" },
                   { v: "always" as const, label: "Always record at HD", hint: "Auto-start every detected meeting — more disk + CPU per call" },
                   { v: "never" as const, label: "Never", hint: "No prompt; only the tray timer can start a session" },
                 ] satisfies Array<{ v: HdDefaultMode; label: string; hint: string }>
@@ -1891,10 +1893,13 @@ export function RecordingSettings() {
       settings.audioTranscriptionEngine,
       settings.deepgramApiKey,
       settings.user?.cloud_subscribed,
+      settings.user?.app_entitled,
+      settings.user?.entitlement,
       settings.user?.id,
       settings.user?.token,
     ]
   );
+  const hasCloudTranscriptionAccess = hasAppEntitlement(settings.user as any);
   const languageSupportEngine = audioEngineResolution.active;
   const languageSupportKey =
     getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
@@ -1926,6 +1931,15 @@ export function RecordingSettings() {
         : languageSupportIsLimited
           ? `Restricts transcription to selected languages supported by ${languageSupportLabel}`
           : "Restricts transcription to selected";
+  const selectedLanguageNames = settings.languages
+    .map((code) => supportedLanguageOptions.find((language) => language.code === code)?.name ?? code)
+    .join(", ");
+  const languageTriggerLabel =
+    settings.languages.length === 0
+      ? "Auto-detect"
+      : settings.languages.length <= 2
+        ? selectedLanguageNames
+        : `${settings.languages.length} selected`;
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -2001,14 +2015,16 @@ export function RecordingSettings() {
 
   useEffect(() => {
     const previousSnapshot = languageSelectionSnapshotRef.current;
-    if (previousSnapshot.supportKey !== languageSupportKey) {
+    const supportKeyChanged = previousSnapshot.supportKey !== languageSupportKey;
+    if (supportKeyChanged) {
       languageSelectionsBySupportKeyRef.current[previousSnapshot.supportKey] = [
         ...previousSnapshot.languages,
       ];
     }
 
-    const preferredLanguages =
-      languageSelectionsBySupportKeyRef.current[languageSupportKey];
+    const preferredLanguages = supportKeyChanged
+      ? languageSelectionsBySupportKeyRef.current[languageSupportKey]
+      : undefined;
     const resolvedLanguages = resolveLanguageSelectionForTranscriptionEngine(
       settings.languages,
       languageSupportEngine,
@@ -2290,9 +2306,9 @@ export function RecordingSettings() {
     }
 
     // If trying to use cloud but not subscribed
-    if (value === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+    if (value === "screenpipe-cloud" && !hasCloudTranscriptionAccess) {
       try {
-        const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+        const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -2350,7 +2366,12 @@ export function RecordingSettings() {
   };
 
 
-  const handleLanguageChange = (currentValue: Language) => {
+  const handleLanguageChange = (currentValue: Language | null) => {
+    if (!currentValue) {
+      handleSettingsChange({ languages: [] });
+      return;
+    }
+
     const updatedLanguages = settings.languages.includes(currentValue)
       ? settings.languages.filter((id) => id !== currentValue)
       : [...settings.languages, currentValue];
@@ -2591,6 +2612,35 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
 
+        {/* Audio capture mode — continuous vs meetings-only */}
+        {!settings.disableAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Capture audio
+                  <HelpTooltip text="“During meetings only” records and transcribes audio just while a meeting is detected — saving battery, disk, and cloud transcription cost. “Always” captures continuously, 24/7. Requires meeting detection to be on." />
+                </h3>
+              </div>
+              <Select
+                value={settings.audioCaptureMode ?? "always"}
+                onValueChange={(value) => handleSettingsChange({ audioCaptureMode: value as "always" | "meetings-only" | "disabled" }, true)}
+              >
+                <SelectTrigger className="w-[200px] h-7 text-xs">
+                  <SelectValue placeholder="Select mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="always">Always (continuous)</SelectItem>
+                  <SelectItem value="meetings-only">During meetings only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
         {/* Your Name + Train Voice — hidden when transcription is disabled */}
         {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
         <Card className="border-border bg-card">
@@ -2673,8 +2723,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
-                      <SelectItem value="screenpipe-cloud" disabled={!settings.user?.cloud_subscribed}>
-                        Screenpipe Cloud {!settings.user?.cloud_subscribed && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                      <SelectItem value="screenpipe-cloud" disabled={!hasCloudTranscriptionAccess}>
+                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>
@@ -3309,7 +3359,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <Popover open={openLanguages} onOpenChange={setOpenLanguages}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" size="sm" className="h-7 text-xs">
-                    {settings.languages.length > 0 ? `${settings.languages.length} selected` : "Auto-detect"}
+                    {languageTriggerLabel}
                     <ChevronsUpDown className="ml-1 h-3 w-3 opacity-50" />
                   </Button>
                 </PopoverTrigger>
@@ -3319,6 +3369,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <CommandList>
                       <CommandEmpty>No languages found.</CommandEmpty>
                       <CommandGroup>
+                        <CommandItem value="auto-detect" onSelect={() => handleLanguageChange(null)}>
+                          <Check className={cn("mr-2 h-3 w-3", settings.languages.length === 0 ? "opacity-100" : "opacity-0")} />
+                          <span className="text-xs">Auto-detect</span>
+                        </CommandItem>
                         {supportedLanguageOptions.map((language) => (
                           <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code)}>
                             <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code) ? "opacity-100" : "opacity-0")} />
@@ -3783,24 +3837,14 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </DialogContent>
       </Dialog>
 
-      {/* Floating apply & restart button — always visible when changes pending */}
-      {hasUnsavedChanges && (
-        <div className="sticky bottom-4 flex justify-end pointer-events-none z-50">
-          <Button
-            onClick={handleUpdate}
-            disabled={isUpdating || Object.keys(validationErrors).length > 0}
-            size="sm"
-            className="pointer-events-auto flex items-center gap-1.5 h-9 px-4 text-sm bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 shadow-lg"
-          >
-            {isUpdating ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Apply & Restart
-          </Button>
-        </div>
-      )}
+      {/* Floating apply & restart bar — always visible when changes pending */}
+      <ApplyRestartBar
+        visible={hasUnsavedChanges}
+        onApply={handleUpdate}
+        isUpdating={isUpdating}
+        disabled={Object.keys(validationErrors).length > 0}
+        message="unsaved recording changes. restart to apply."
+      />
     </div>
   );
 }

@@ -358,6 +358,78 @@ pub(crate) struct RpcResponse {
 /// Shared between PiManager (sender side) and the stdout reader thread (resolver side).
 type PendingResponses = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<RpcResponse>>>>;
 
+fn pi_session_has_in_flight_work(
+    queue_state: Option<&Arc<crate::pi_command_queue::PiQueueState>>,
+    pending_responses: &PendingResponses,
+) -> bool {
+    let pending_rpc = pending_responses
+        .lock()
+        .map(|pending| !pending.is_empty())
+        .unwrap_or(true);
+    pending_rpc || queue_state.map(|state| state.is_busy()).unwrap_or(false)
+}
+
+fn event_tool_call_ids(event: &Value) -> Vec<String> {
+    match event.get("type").and_then(|t| t.as_str()) {
+        Some("tool_execution_start") | Some("tool_execution_end") => event
+            .get("toolCallId")
+            .and_then(|id| id.as_str())
+            .map(|id| vec![id.to_string()])
+            .unwrap_or_default(),
+        Some("message_update") => {
+            let Some(update) = event.get("assistantMessageEvent") else {
+                return Vec::new();
+            };
+            if update.get("type").and_then(|t| t.as_str()) != Some("toolcall_end") {
+                return Vec::new();
+            }
+            update
+                .get("toolCall")
+                .and_then(|tool_call| tool_call.get("id"))
+                .and_then(|id| id.as_str())
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default()
+        }
+        Some("message_end") => {
+            let Some(message) = event.get("message") else {
+                return Vec::new();
+            };
+            match message.get("role").and_then(|role| role.as_str()) {
+                Some("assistant")
+                    if message.get("stopReason").and_then(|reason| reason.as_str())
+                        == Some("toolUse") =>
+                {
+                    message
+                        .get("content")
+                        .and_then(|content| content.as_array())
+                        .map(|content| {
+                            content
+                                .iter()
+                                .filter(|item| {
+                                    item.get("type").and_then(|t| t.as_str()) == Some("toolCall")
+                                })
+                                .filter_map(|item| {
+                                    item.get("id")
+                                        .or_else(|| item.get("toolCallId"))
+                                        .and_then(|id| id.as_str())
+                                        .map(|id| id.to_string())
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+                Some("toolResult") => message
+                    .get("toolCallId")
+                    .and_then(|id| id.as_str())
+                    .map(|id| vec![id.to_string()])
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[allow(dead_code)]
 pub struct PiManager {
     child: Option<Child>,
@@ -466,6 +538,10 @@ impl PiManager {
     pub fn is_running(&mut self) -> bool {
         self.check_alive()
     }
+
+    fn has_in_flight_work(&self) -> bool {
+        pi_session_has_in_flight_work(self.queue_state.as_ref(), &self.pending_responses)
+    }
 }
 
 /// Get the Pi config directory — screenpipe's isolated agent dir
@@ -513,6 +589,19 @@ fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<(), String> {
 pub(crate) fn clear_screenpipe_auth_token_files() -> Result<(), String> {
     let auth_path = get_pi_config_dir()?.join("auth.json");
     remove_screenpipe_auth_from_path(&auth_path)
+}
+
+/// chmod 600 (unix): pi's `auth.json` / `models.json` embed the user's raw
+/// cloud JWT while signed in (#3943) — keep them out of reach of other local
+/// users. No-op on Windows (per-user ACLs already apply under %USERPROFILE%).
+fn harden_secret_file(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// Parse the output of `where pi` on Windows, preferring .cmd files
@@ -792,19 +881,20 @@ fn run_command_output(mut cmd: Command) -> Result<Output, String> {
 fn format_install_failure(tool: &str, output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // Prefer stderr, fall back to stdout (bun reports some failures there),
+    // and never let both-empty reduce the message to a bare "stderr: " —
+    // signal deaths (SIGILL/SIGKILL) produce exactly that shape.
     let details = if !stderr.trim().is_empty() {
         truncate_stderr(&stderr)
+    } else if !stdout.trim().is_empty() {
+        format!("(stdout) {}", truncate_stderr(&stdout))
     } else {
-        truncate_stderr(&stdout)
+        "(no output captured)".to_string()
     };
     format!(
-        "{} install failed (exit {}). stderr: {}",
+        "{} install failed ({}). output: {}",
         tool,
-        output
-            .status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "signal".to_string()),
+        screenpipe_core::agents::pi::describe_exit_status(&output.status),
         details
     )
 }
@@ -849,6 +939,16 @@ fn verify_pi_package_install(install_dir: &Path) -> Result<(), String> {
 fn run_pi_package_install(install_dir: &Path, bun: &str) -> Result<(), String> {
     let cache_dir = install_dir.join(".bun-cache");
     let _ = std::fs::create_dir_all(&cache_dir);
+
+    // Log the exact command + bun version so a failed install is reproducible
+    // from the log alone; a bun that can't even execute (e.g. SIGILL on an
+    // unsupported CPU) shows up right here as the version probe failing.
+    info!(
+        "Running Pi dependency install: {} install (cwd: {}, bun version: {})",
+        bun,
+        install_dir.display(),
+        screenpipe_core::agents::pi::bun_version_string(bun),
+    );
 
     let mut bun_cmd = Command::new(bun);
     bun_cmd
@@ -1247,6 +1347,7 @@ async fn ensure_pi_config(
         .map_err(|e| format!("Failed to serialize models config: {}", e))?;
     std::fs::write(&models_path, models_str)
         .map_err(|e| format!("Failed to write pi models config: {}", e))?;
+    harden_secret_file(&models_path);
 
     // -- auth.json: merge screenpipe token, preserve other providers --
     let auth_path = config_dir.join("auth.json");
@@ -1266,6 +1367,7 @@ async fn ensure_pi_config(
             .map_err(|e| format!("Failed to serialize auth: {}", e))?;
         std::fs::write(&auth_path, auth_str)
             .map_err(|e| format!("Failed to write pi auth: {}", e))?;
+        harden_secret_file(&auth_path);
     } else {
         remove_screenpipe_auth_from_path(&auth_path)?;
     }
@@ -1488,6 +1590,16 @@ pub async fn pi_start_inner(
     if let Some(m) = pool.sessions.get_mut(&sid) {
         if m.is_running() {
             let old_pid = m.child.as_ref().map(|c| c.id());
+            if m.has_in_flight_work() {
+                warn!(
+                    "Refusing to restart busy pi instance (pid {:?}) for session '{}'",
+                    old_pid, sid
+                );
+                return Err(format!(
+                    "Pi session '{}' is still working; retry the restart after the current turn finishes",
+                    sid
+                ));
+            }
             info!(
                 "Stopping existing pi instance (pid {:?}) for session '{}' to start new one",
                 old_pid, sid
@@ -1979,7 +2091,7 @@ pub async fn pi_start_inner(
                     }
                     Some("agent_end") => {
                         qs.mark_agent_idle();
-                        qs.signal_done();
+                        qs.signal_done_if_idle();
                     }
                     Some("message_start") => {
                         // Native steer may not emit agent_start — it goes
@@ -1992,12 +2104,57 @@ pub async fn pi_start_inner(
                             qs.clear_steer_in_flight();
                         }
                     }
+                    Some("message_end") => {
+                        if let Some(event) = parsed.as_ref() {
+                            let ids = event_tool_call_ids(event);
+                            let role = event
+                                .get("message")
+                                .and_then(|message| message.get("role"))
+                                .and_then(|role| role.as_str());
+                            match role {
+                                Some("assistant") => {
+                                    for id in ids {
+                                        qs.mark_tool_active(id);
+                                    }
+                                }
+                                Some("toolResult") => {
+                                    for id in ids {
+                                        qs.mark_tool_idle(&id);
+                                    }
+                                    qs.signal_done_if_idle();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some("message_update") => {
+                        if let Some(event) = parsed.as_ref() {
+                            for id in event_tool_call_ids(event) {
+                                qs.mark_tool_active(id);
+                            }
+                        }
+                    }
+                    Some("tool_execution_start") => {
+                        if let Some(event) = parsed.as_ref() {
+                            for id in event_tool_call_ids(event) {
+                                qs.mark_tool_active(id);
+                            }
+                        }
+                    }
+                    Some("tool_execution_end") => {
+                        if let Some(event) = parsed.as_ref() {
+                            for id in event_tool_call_ids(event) {
+                                qs.mark_tool_idle(&id);
+                            }
+                        }
+                        qs.signal_done_if_idle();
+                    }
                     Some("response") => {
                         // Only meaningful for new_session/abort — those don't
                         // fire agent_start/agent_end. Suppress while a prompt
-                        // is mid-stream so the queue never advances on an ACK
-                        // while the assistant is still replying.
-                        if !qs.is_agent_active() {
+                        // or tool is mid-turn so the queue never advances on
+                        // an ACK while the assistant is still working.
+                        if !qs.has_active_turn_work() {
                             // Note: this runs on a std::thread (not tokio),
                             // so use std::thread::spawn + std::thread::sleep.
                             let qs = qs.clone();
@@ -2077,7 +2234,8 @@ pub async fn pi_start_inner(
                 }
             }
             if !is_stdout_text_delta {
-                if let Err(e) = app_handle.emit("pi_output", &line) {
+                let event_name = format!("pi_output:{}", sid_clone);
+                if let Err(e) = app_handle.emit(&event_name, &line) {
                     error!("Failed to emit pi_output: {}", e);
                 }
             }
@@ -2145,7 +2303,8 @@ pub async fn pi_start_inner(
                     if let Err(e) = app_handle.emit("agent_event", &unified) {
                         error!("Failed to emit agent_event from stderr: {}", e);
                     }
-                    if let Err(e) = app_handle.emit("pi_output", &line) {
+                    let event_name = format!("pi_output:{}", sid_stderr);
+                    if let Err(e) = app_handle.emit(&event_name, &line) {
                         error!("Failed to emit pi_output from stderr: {}", e);
                     }
                 } else {
@@ -2609,6 +2768,113 @@ pub async fn pi_set_model(
         .map_err(|_| "Pi command queue dropped".to_string())?
 }
 
+fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
+    let settings_path = get_pi_config_dir()?.join("settings.json");
+    let s = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(&settings_path, s)
+        .map_err(|e| format!("Failed to write settings.json: {}", e))
+}
+
+fn read_pi_settings() -> Result<serde_json::Value, String> {
+    let settings_path = get_pi_config_dir()?.join("settings.json");
+    if !settings_path.exists() {
+        return Ok(json!({}));
+    }
+    let content = std::fs::read_to_string(&settings_path)
+        .map_err(|e| format!("Failed to read settings.json: {}", e))?;
+    match serde_json::from_str(&content) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            warn!("Pi settings.json is malformed, treating as empty: {}", e);
+            Ok(json!({}))
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_set_thinking_level(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    level: String,
+) -> Result<(), String> {
+    let valid_levels = ["low", "medium", "high"];
+    if !valid_levels.contains(&level.as_str()) {
+        return Err(format!(
+            "Invalid thinking level '{}'. Valid values: {:?}",
+            level, valid_levels
+        ));
+    }
+
+    info!("pi_set_thinking_level: session={:?} level={}", session_id, level);
+
+    // Always persist — Pi reads this on startup, so changing before a conversation works.
+    // Pi also re-writes the clamped value after handling the RPC, which wins.
+    let mut settings = read_pi_settings()?;
+    if let Some(obj) = settings.as_object_mut() {
+        obj.insert("defaultThinkingLevel".to_string(), json!(level));
+    }
+    write_pi_settings(&settings)?;
+
+    // If a live session is specified, also push via RPC for immediate effect
+    if let Some(ref sid) = session_id {
+        let queue_opt = {
+            let mut pool = state.0.lock().await;
+            pool.sessions
+                .get_mut(sid.as_str())
+                .and_then(|m| if m.is_running() { m.queue_handle.clone() } else { None })
+        };
+        if let Some(queue) = queue_opt {
+            let cmd = json!({ "type": "set_thinking_level", "level": &level });
+            match queue.send_immediate(cmd).await {
+                Ok(()) => info!("pi_set_thinking_level RPC sent ok: session={} level={}", sid, level),
+                Err(e) => warn!("pi_set_thinking_level RPC failed: session={} level={} err={}", sid, level, e),
+            }
+        } else {
+            info!("pi_set_thinking_level: session {} not running, saved to settings.json only", sid);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_request_state(
+    state: State<'_, PiState>,
+    session_id: String,
+) -> Result<(), String> {
+    info!("pi_request_state: session={}", session_id);
+    let queue = {
+        let mut pool = state.0.lock().await;
+        pool.sessions
+            .get_mut(session_id.as_str())
+            .and_then(|m| if m.is_running() { m.queue_handle.clone() } else { None })
+            .ok_or_else(|| format!("pi_request_state: session {} not found or not running", session_id))?
+    };
+    match queue.send_immediate(json!({ "type": "get_state" })).await {
+        Ok(()) => { info!("pi_request_state RPC sent ok: session={}", session_id); Ok(()) }
+        Err(e) => { warn!("pi_request_state RPC failed: session={} err={}", session_id, e); Err(e) }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_get_thinking_level() -> Result<String, String> {
+    let settings = read_pi_settings()?;
+    let raw = settings
+        .get("defaultThinkingLevel")
+        .and_then(|l| l.as_str())
+        .unwrap_or("medium");
+    // Clamp to supported values — settings.json may have stale levels from old versions
+    let level = match raw {
+        "low" | "medium" | "high" => raw,
+        _ => "medium",
+    };
+    Ok(level.to_string())
+}
+
 /// Update Pi config and restart the chat session so the new model takes effect.
 /// Without restart, Pi keeps using the provider/model from its original CLI args.
 ///
@@ -2918,6 +3184,112 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    #[test]
+    fn parses_tool_call_ids_from_pi_events() {
+        let assistant_tool_call = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": [
+                    {"type": "text", "text": "checking"},
+                    {"type": "toolCall", "id": "tool-1", "name": "bash"}
+                ]
+            }
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&assistant_tool_call),
+            vec!["tool-1".to_string()]
+        );
+
+        let assistant_tool_update = json!({
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "toolcall_end",
+                "toolCall": {
+                    "type": "toolCall",
+                    "id": "tool-1",
+                    "name": "bash",
+                    "arguments": { "command": "ls" }
+                }
+            }
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&assistant_tool_update),
+            vec!["tool-1".to_string()]
+        );
+
+        let assistant_stop_with_historical_tool = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "stop",
+                "content": [
+                    {"type": "toolCall", "id": "tool-2", "name": "bash"}
+                ]
+            }
+        });
+        assert!(
+            super::event_tool_call_ids(&assistant_stop_with_historical_tool).is_empty()
+        );
+
+        let tool_result = json!({
+            "type": "message_end",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "tool-1",
+                "content": [{"type": "text", "text": "done"}]
+            }
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&tool_result),
+            vec!["tool-1".to_string()]
+        );
+
+        let tool_end = json!({
+            "type": "tool_execution_end",
+            "toolCallId": "tool-1",
+        });
+        assert_eq!(
+            super::event_tool_call_ids(&tool_end),
+            vec!["tool-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn pi_session_busy_tracks_queue_tools_and_pending_rpc() {
+        let pending: super::PendingResponses =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let queue_state = crate::pi_command_queue::PiQueueState::new();
+
+        assert!(!super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+
+        queue_state.mark_agent_active();
+        assert!(super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+        queue_state.mark_agent_idle();
+
+        queue_state.mark_tool_active("tool-1");
+        assert!(super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+        queue_state.mark_tool_idle("tool-1");
+        assert!(!super::pi_session_has_in_flight_work(
+            Some(&queue_state),
+            &pending
+        ));
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert("req_1".to_string(), tx);
+        assert!(super::pi_session_has_in_flight_work(None, &pending));
+    }
+
     fn write_package_json(package_dir: &std::path::Path, name: &str, version: &str) {
         std::fs::create_dir_all(package_dir).expect("create package dir");
         std::fs::write(
@@ -2941,6 +3313,40 @@ mod tests {
         let dist = pi_dir.join("dist");
         std::fs::create_dir_all(&dist).expect("create dist");
         std::fs::write(dist.join("cli.js"), "console.log('pi')").expect("write cli");
+    }
+
+    /// Regression guard for the empty "Pi background install failed: " log
+    /// (Linux AppImage report, 2026-06-12): a bun that exits non-zero without
+    /// writing to either stream must still produce an actionable message with
+    /// the exit status in it.
+    #[cfg(unix)]
+    #[test]
+    fn format_install_failure_never_empty_details() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{ExitStatus, Output};
+
+        let silent = Output {
+            status: ExitStatus::from_raw(0x0100), // exit code 1
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let msg = super::format_install_failure("bun", &silent);
+        assert_eq!(
+            msg,
+            "bun install failed (exit code 1). output: (no output captured)"
+        );
+
+        let sigkill = Output {
+            status: ExitStatus::from_raw(9), // killed by signal 9
+            stdout: b"partial progress".to_vec(),
+            stderr: Vec::new(),
+        };
+        let msg = super::format_install_failure("bun", &sigkill);
+        assert!(
+            msg.contains("killed by signal 9") && msg.contains("(stdout) partial progress"),
+            "signal + stdout fallback must both surface: {}",
+            msg
+        );
     }
 
     #[test]

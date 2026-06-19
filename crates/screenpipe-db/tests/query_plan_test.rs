@@ -145,15 +145,14 @@ mod query_plan_tests {
         let plan = explain(
             &db,
             r#"SELECT
-                ocr_text.frame_id,
-                ocr_text.text as ocr_text,
+                frames.id as frame_id,
+                COALESCE(frames.full_text, frames.accessibility_text, '') as ocr_text,
                 frames.timestamp,
                 frames.app_name,
                 frames.window_name,
                 video_chunks.device_name
             FROM frames
             JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
-            JOIN ocr_text ON frames.id = ocr_text.frame_id
             WHERE frames.timestamp >= '2020-01-01' AND frames.timestamp <= '2030-01-01'
             ORDER BY frames.timestamp DESC
             LIMIT 20 OFFSET 0"#,
@@ -235,17 +234,11 @@ mod query_plan_tests {
             r#"SELECT
                 f.id, f.timestamp, f.offset_index,
                 COALESCE(
-                    SUBSTR(f.accessibility_text, 1, 200),
-                    (SELECT SUBSTR(ot.text, 1, 200) FROM ocr_text ot WHERE ot.frame_id = f.id LIMIT 1)
+                    SUBSTR(f.full_text, 1, 200),
+                    SUBSTR(f.accessibility_text, 1, 200)
                 ) as text,
-                COALESCE(
-                    f.app_name,
-                    (SELECT ot.app_name FROM ocr_text ot WHERE ot.frame_id = f.id LIMIT 1)
-                ) as app_name,
-                COALESCE(
-                    f.window_name,
-                    (SELECT ot.window_name FROM ocr_text ot WHERE ot.frame_id = f.id LIMIT 1)
-                ) as window_name,
+                f.app_name as app_name,
+                f.window_name as window_name,
                 COALESCE(vc.device_name, f.device_name) as screen_device,
                 COALESCE(vc.file_path, f.snapshot_path) as video_path,
                 COALESCE(vc.fps, 0.033) as chunk_fps,
@@ -313,7 +306,6 @@ mod query_plan_tests {
             &db,
             r#"SELECT frames.id, frames.timestamp
             FROM frames
-            JOIN ocr_text ON frames.id = ocr_text.frame_id
             WHERE (?2 IS NULL OR frames.timestamp >= ?2)
               AND (?3 IS NULL OR frames.timestamp <= ?3)
             ORDER BY frames.timestamp DESC
@@ -326,7 +318,6 @@ mod query_plan_tests {
             &db,
             r#"SELECT frames.id, frames.timestamp
             FROM frames
-            JOIN ocr_text ON frames.id = ocr_text.frame_id
             WHERE frames.timestamp >= '2020-01-01'
               AND frames.timestamp <= '2030-01-01'
             ORDER BY frames.timestamp DESC
@@ -543,7 +534,6 @@ mod query_plan_tests {
             &db,
             r#"SELECT COUNT(DISTINCT frames.id)
             FROM frames
-            JOIN ocr_text ON frames.id = ocr_text.frame_id
             WHERE frames.timestamp >= '2020-01-01'
               AND frames.timestamp <= '2030-01-01'"#,
         )

@@ -14,8 +14,27 @@ import { screenpipeWebUrl } from "@/lib/web-url";
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const TOAST_COOLDOWN_MS = 5 * 60 * 1000;
+// Debounce window-focus re-verification so rapidly alt-tabbing doesn't spam
+// /api/user. Short enough that returning from a browser checkout feels instant.
+const FOCUS_REVERIFY_COOLDOWN_MS = 30 * 1000;
 
 let lastToastTime = 0;
+
+// Decide whether a window-focus / visibility change should trigger an eager
+// entitlement re-verify. Exported for unit testing. We skip while the window is
+// hidden (a `visibilitychange` to hidden shouldn't fetch) and debounce against
+// the last verify so steady-state focus changes don't hammer the API. A
+// `lastVerifyAtMs` of 0 means "not verified yet this session" → always allow.
+export function shouldReverifyOnFocus(
+  nowMs: number,
+  lastVerifyAtMs: number,
+  visibilityState: DocumentVisibilityState | undefined,
+  cooldownMs: number = FOCUS_REVERIFY_COOLDOWN_MS
+): boolean {
+  if (visibilityState === "hidden") return false;
+  if (lastVerifyAtMs === 0) return true;
+  return nowMs - lastVerifyAtMs >= cooldownMs;
+}
 
 function openLogin() {
   // dynamic import to avoid SSR/test crashes from tauri plugins
@@ -66,10 +85,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     showSignedOutToast();
   }, [updateSettings]);
 
+  const lastVerifyAtRef = useRef(0);
+
   const verifyToken = useCallback(async () => {
     const token = tokenRef.current;
     if (!token) return;
 
+    lastVerifyAtRef.current = Date.now();
     // Re-fetch the full user object instead of just probing the status code.
     // Without this the locally-cached `user.cloud_subscribed` flag never
     // changes after the first login — so a user whose Stripe sub lapses
@@ -91,9 +113,29 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const initial = setTimeout(verifyToken, 5000);
     const interval = setInterval(verifyToken, CHECK_INTERVAL_MS);
+
+    // Eagerly re-verify entitlement when the user returns to the app — e.g.
+    // right after completing checkout in the browser — so a freshly-subscribed
+    // user's `cloud_subscribed` flips on within seconds instead of waiting up
+    // to CHECK_INTERVAL_MS (or an app restart). Debounced; skipped while hidden.
+    const onFocus = () => {
+      if (
+        shouldReverifyOnFocus(
+          Date.now(),
+          lastVerifyAtRef.current,
+          typeof document !== "undefined" ? document.visibilityState : undefined
+        )
+      ) {
+        void verifyToken();
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     return () => {
       clearTimeout(initial);
       clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
   }, [verifyToken]);
 

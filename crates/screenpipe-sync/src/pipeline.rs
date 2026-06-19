@@ -338,6 +338,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_presigned_ticket_contract_replays_verbatim() {
+        // Pins the wire contract the screenpi.pe control plane relies on
+        // for customer-owned S3 buckets (provider `s3_bucket`): the ticket
+        // carries a SigV4-presigned URL whose signature covers the
+        // x-amz-meta-* headers. The device must (a) PUT to the URL with the
+        // query string intact, (b) replay every ticket header verbatim, and
+        // (c) send the manifest's content type. Drop any of those and S3
+        // answers 403 SignatureDoesNotMatch for every batch.
+        use wiremock::matchers::query_param;
+
+        let storage = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(
+                "/acme-telemetry/customer-a/enterprise-telemetry/lic-1/dev-1/direct/b-1.jsonl",
+            ))
+            .and(query_param("X-Amz-Algorithm", "AWS4-HMAC-SHA256"))
+            .and(query_param("X-Amz-Expires", "900"))
+            .and(query_param(
+                "X-Amz-SignedHeaders",
+                "host;x-amz-meta-sp_batch_id;x-amz-meta-sp_device_id",
+            ))
+            .and(query_param("X-Amz-Signature", "deadbeef"))
+            .and(header(
+                "content-type",
+                "application/vnd.screenpipe.telemetry+jsonl",
+            ))
+            .and(header("x-amz-meta-sp_device_id", "dev-1"))
+            .and(header("x-amz-meta-sp_batch_id", "b-1"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&storage)
+            .await;
+
+        let control = MockServer::start().await;
+        let upload_url = format!(
+            "{}/acme-telemetry/customer-a/enterprise-telemetry/lic-1/dev-1/direct/b-1.jsonl\
+             ?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900\
+             &X-Amz-SignedHeaders=host%3Bx-amz-meta-sp_batch_id%3Bx-amz-meta-sp_device_id\
+             &X-Amz-Signature=deadbeef",
+            storage.uri()
+        );
+        Mock::given(method("POST"))
+            .and(path("/ticket"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "method": "PUT",
+                "upload_url": upload_url,
+                "headers": {
+                    // The control plane also echoes Content-Type; HttpPutDirect
+                    // ignores it in favor of the manifest's content type (same
+                    // value by construction).
+                    "Content-Type": "application/vnd.screenpipe.telemetry+jsonl",
+                    "x-amz-meta-sp_device_id": "dev-1",
+                    "x-amz-meta-sp_batch_id": "b-1"
+                }
+            })))
+            .expect(1)
+            .mount(&control)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/complete"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+            .expect(1)
+            .mount(&control)
+            .await;
+
+        let cfg = TicketedConfig::new(
+            format!("{}/ticket", control.uri()),
+            format!("{}/complete", control.uri()),
+        );
+        let pipeline = TicketedPipeline::new(cfg);
+        let outcome = pipeline
+            .upload(
+                b"{\"k\":1}\n",
+                "application/vnd.screenpipe.telemetry+jsonl",
+                &json!({"batch_id": "b-1"}),
+                &json!({"batch_id": "b-1", "ok": true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.put.bytes_uploaded, 8);
+        // The stored object reference strips the signature query params.
+        assert!(outcome
+            .put
+            .object_url
+            .as_deref()
+            .unwrap()
+            .ends_with("/b-1.jsonl"));
+    }
+
+    #[tokio::test]
     async fn ticket_401_maps_to_auth_rejected() {
         let control = MockServer::start().await;
         Mock::given(method("POST"))

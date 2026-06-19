@@ -77,6 +77,17 @@ pub trait OwnedWebviewHandle: Send + Sync {
         .await
         .map(|_| ())
     }
+
+    /// Whether the underlying transport can actually service an eval/navigate
+    /// right now. Reported up through [`OwnedBrowser::is_ready`] to
+    /// `GET /connections/browsers` so a background caller is never handed a
+    /// browser that will fail deep inside. For the Tauri webview, "attached
+    /// handle" is *not* enough — the native child webview (or a window to host
+    /// a lazily-created one) must exist too. Default `true` for transports
+    /// whose readiness equals being attached.
+    async fn is_ready(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +156,14 @@ impl Browser for OwnedBrowser {
         &self.description
     }
     async fn is_ready(&self) -> bool {
-        self.handle.read().await.is_some()
+        // Attached *and* actually serviceable. The Tauri handle reports `false`
+        // until a webview (or a window to host one) exists, so the owned browser
+        // isn't advertised as ready while it would still fail deep inside.
+        let handle = self.handle.read().await.clone();
+        match handle {
+            Some(handle) => handle.is_ready().await,
+            None => false,
+        }
     }
     async fn eval(
         &self,

@@ -9,6 +9,24 @@ small and uses the SDK surface an app would use in production.
 | [Swift](./swift-app) | ![Swift example app](../docs/screenshots/swift-example.png) | `swift run --package-path examples/swift-app ScreenpipeExample` | `SCREENPIPE_SWIFT_EXAMPLE_SMOKE=1 swift run --package-path examples/swift-app ScreenpipeExample` |
 | [Tauri](./tauri-app) | ![Tauri example app](../docs/screenshots/tauri-example.png) | `npm --prefix examples/tauri-app install && npm --prefix examples/tauri-app run dev` | `npm --prefix examples/tauri-app run smoke` |
 
+## Node Scripts
+
+Standalone Node demos of the Node SDK surface — run after building the native
+addon (see below). Each prints what it's doing and degrades gracefully when a
+permission is missing.
+
+| Script | What it shows |
+| --- | --- |
+| [`record-10s.mjs`](./record-10s.mjs) | Minimal: record the screen for 10s to an MP4. |
+| [`record-with-paired-10s.mjs`](./record-with-paired-10s.mjs) | Multi-monitor + paired capture: MP4(s) plus a queryable `db.sqlite`. |
+| [`record-with-privacy-filter.mjs`](./record-with-privacy-filter.mjs) | Privacy filters: exclude sensitive windows/URLs via `ignoredWindows`/`ignoredUrls`, poll `filterStatus()`, and toggle a rule at runtime with `setFilters()`. |
+| [`preflight-and-record.mjs`](./preflight-and-record.mjs) | Pre-flight permission gate + a live `audioLevel()` mic meter + `focusedApp()` accessibility check, then record only if screen is granted. |
+
+```bash
+node examples/record-with-privacy-filter.mjs
+node examples/preflight-and-record.mjs
+```
+
 ## Before Running UI Apps
 
 Build the native addon from the repo root:

@@ -60,11 +60,20 @@ export class GeminiProvider implements AIProvider {
 	}
 
 	/** Get auth headers — Bearer token for Vertex, none for API key (key is in URL) */
-	private async getAuthHeaders(): Promise<Record<string, string>> {
+	private async getAuthHeaders(serviceTier?: 'flex' | 'standard'): Promise<Record<string, string>> {
 		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 		if (this.vertexProvider) {
 			const token = await this.vertexProvider.getAccessToken();
 			headers['Authorization'] = `Bearer ${token}`;
+			// Flex tier — 50% cheaper, best-effort latency. Only meaningful on the
+			// Vertex path (the public generativelanguage endpoint ignores it). The
+			// router sets serviceTier='flex' for background traffic; the chat
+			// handler cascades to a standard-tier model if flex is throttled (429).
+			// Docs: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/flex
+			if (serviceTier === 'flex') {
+				headers['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+				headers['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
+			}
 		}
 		return headers;
 	}
@@ -114,7 +123,7 @@ export class GeminiProvider implements AIProvider {
 		const requestBody = this.buildRequestBody(body);
 
 		console.log('[Gemini] Request to:', url.replace(this.apiKey || 'N/A', '***'));
-		const headers = await this.getAuthHeaders();
+		const headers = await this.getAuthHeaders(body.serviceTier);
 
 		const response = await fetch(url, {
 			method: 'POST',
@@ -150,7 +159,7 @@ export class GeminiProvider implements AIProvider {
 			toolNames: requestBody.tools?.[0]?.functionDeclarations?.map((f: any) => f.name) || [],
 			hasToolConfig: !!requestBody.toolConfig,
 		}));
-		const streamHeaders = await this.getAuthHeaders();
+		const streamHeaders = await this.getAuthHeaders(body.serviceTier);
 
 		const response = await fetch(url, {
 			method: 'POST',
@@ -234,6 +243,15 @@ export class GeminiProvider implements AIProvider {
 
 										if (part.functionCall) {
 											const funcName = part.functionCall.name;
+											// A nameless function call is unexecutable — Pi would see
+											// stopReason "toolUse" with no tool to run and silently
+											// no-op. Skip rather than forward a malformed tool_call
+											// (mirrors the input-side formatFunctionCallPart guard and
+											// the Anthropic provider's `if (!name) continue`).
+											if (typeof funcName !== 'string' || funcName.length === 0) {
+												console.warn('[Gemini] skipping function call with empty name:', JSON.stringify(part.functionCall));
+												continue;
+											}
 											console.log('[Gemini] Model called function:', funcName, JSON.stringify(part.functionCall.args || {}));
 
 											// Surface every tool call — web_search included — to the client.
@@ -654,6 +672,12 @@ export class GeminiProvider implements AIProvider {
 				content += part.text;
 			}
 			if (part.functionCall) {
+				// Drop nameless function calls (see streaming guard above) so the
+				// non-streaming path can't emit an unexecutable tool_call either.
+				if (typeof part.functionCall.name !== 'string' || part.functionCall.name.length === 0) {
+					console.warn('[Gemini] skipping function call with empty name:', JSON.stringify(part.functionCall));
+					continue;
+				}
 				const sig = part.thoughtSignature || '';
 				const callId = sig
 					? `call_${toolCalls.length}_ts_${btoa(sig)}`

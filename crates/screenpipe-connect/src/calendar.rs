@@ -15,6 +15,10 @@ use chrono::{DateTime, Duration, Local, Utc};
 use eventkit::{
     AuthorizationStatus, CalendarInfo, EventKitError, EventsManager, Result as EKResult,
 };
+// Re-export so downstream crates (screenpipe-engine's calendar routes) can
+// classify failures (AuthorizationDenied vs real errors) without depending
+// on the eventkit crate directly.
+pub use eventkit::EventKitError as CalendarError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tracing::{info, warn};

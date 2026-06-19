@@ -16,6 +16,33 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperState};
 /// white noise at 0.1 amplitude (RMS~0.071), normal speech (RMS~0.05-0.3).
 const MIN_RMS_ENERGY: f32 = 0.015;
 
+/// Char budget for the Whisper initial_prompt — roughly Whisper's ~224-token
+/// prompt window. Entries past this are dropped (whole entries only).
+const INITIAL_PROMPT_CHAR_BUDGET: usize = 800;
+
+/// Build the Whisper initial_prompt from vocabulary, capped to `budget` chars by
+/// adding *whole* comma-joined entries. Never byte-slices a joined string: a cut
+/// at a non-char boundary panics, and a unicode term (e.g. an accented attendee
+/// name now seeded as a keyterm) can land exactly there.
+fn build_initial_prompt(vocabulary: &[VocabularyEntry], budget: usize) -> String {
+    let mut prompt = String::new();
+    let mut char_len = 0usize;
+    for entry in vocabulary {
+        let term = entry.replacement.as_deref().unwrap_or(&entry.word);
+        let sep = if prompt.is_empty() { 0 } else { 2 }; // ", "
+        let term_len = term.chars().count();
+        if char_len + sep + term_len > budget {
+            break;
+        }
+        if !prompt.is_empty() {
+            prompt.push_str(", ");
+        }
+        prompt.push_str(term);
+        char_len += sep + term_len;
+    }
+    prompt
+}
+
 /// Processes audio data using the Whisper model to generate transcriptions.
 ///
 /// # Returns
@@ -71,21 +98,13 @@ pub async fn process_with_whisper(
     params.set_debug_mode(false);
     params.set_translate(false);
 
-    // Set initial_prompt from vocabulary to bias Whisper toward custom words
+    // Set initial_prompt from vocabulary to bias Whisper toward custom words.
     if !vocabulary.is_empty() {
-        let prompt: String = vocabulary
-            .iter()
-            .map(|v| v.replacement.as_deref().unwrap_or(&v.word))
-            .collect::<Vec<_>>()
-            .join(", ");
-        // Truncate to ~800 chars to stay within Whisper's 224 token limit
-        let prompt = if prompt.len() > 800 {
-            &prompt[..800]
-        } else {
-            &prompt
-        };
-        debug!("whisper initial_prompt: {}", prompt);
-        params.set_initial_prompt(prompt);
+        let prompt = build_initial_prompt(vocabulary, INITIAL_PROMPT_CHAR_BUDGET);
+        if !prompt.is_empty() {
+            debug!("whisper initial_prompt: {}", prompt);
+            params.set_initial_prompt(prompt.as_str());
+        }
     }
 
     whisper_state
@@ -105,4 +124,45 @@ pub async fn process_with_whisper(
     }
 
     Ok(transcript)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vocab(words: &[&str]) -> Vec<VocabularyEntry> {
+        words
+            .iter()
+            .map(|w| VocabularyEntry {
+                word: w.to_string(),
+                replacement: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn joins_entries_within_budget() {
+        let p = build_initial_prompt(&vocab(&["Arvind", "Vercel", "Screenpipe"]), 800);
+        assert_eq!(p, "Arvind, Vercel, Screenpipe");
+        assert!(build_initial_prompt(&[], 800).is_empty());
+    }
+
+    #[test]
+    fn drops_whole_entries_past_budget() {
+        // budget 10: "Arvind" (6) fits; ", Vercel" would be 14 > 10 → dropped.
+        assert_eq!(
+            build_initial_prompt(&vocab(&["Arvind", "Vercel"]), 10),
+            "Arvind"
+        );
+    }
+
+    #[test]
+    fn never_panics_on_unicode_at_the_boundary() {
+        // Accented multibyte names near the budget must not byte-slice/panic.
+        let names = vocab(&["André", "Müller", "Søren", "naïve", "Zoë"]);
+        for budget in 0..40 {
+            let p = build_initial_prompt(&names, budget);
+            assert!(p.chars().count() <= budget.max(0));
+        }
+    }
 }

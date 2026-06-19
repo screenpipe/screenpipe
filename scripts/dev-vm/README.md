@@ -31,7 +31,7 @@ Guest credentials: `admin` / `admin` (cirruslabs image default). `setup.sh` inst
 ## Apple platform limits (apply to every VM tool, not just tart)
 
 - Max 2 macOS guest VMs running at the same time per host.
-- No Apple Neural Engine in guests: Apple Intelligence is unavailable; Vision OCR falls back to CPU/GPU (works, slower).
+- No Apple Neural Engine in guests: Vision OCR falls back to CPU/GPU (works, slower).
 - Audio input device support is partial; mic-dependent flows can be flaky.
 - GPU is paravirtualized Metal at roughly 90% of host performance.
 

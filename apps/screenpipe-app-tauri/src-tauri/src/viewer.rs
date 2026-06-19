@@ -20,6 +20,106 @@ use tracing::{error, info};
 const VIEWER_LABEL_PREFIX: &str = "viewer-";
 const MAX_VIEWER_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Expand a leading `~` / `~/` to the user's home directory. Leaves every
+/// other path untouched (including bare `~user`, which we don't resolve).
+fn expand_tilde(path: &str) -> PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Resolve a path that may be relative, `~`-prefixed, or already absolute into
+/// a real file on disk.
+///
+/// Source citations from the pi agent arrive *relative to the session's working
+/// directory* — e.g. `.pi/skills/screenpipe-api/SKILL.md` — so a naive read from
+/// the app's own cwd (where this Tauri process happens to live) misses them and
+/// surfaces a raw "No such file or directory" to the user. We expand `~`, then
+/// probe the handful of base directories the agent actually runs in and return
+/// the first candidate that exists.
+///
+/// `.pi/skills/<name>/…` is a mirror of the canonical skills store at
+/// `<data_dir>/skills/<name>/…`, and `.pi/…` more generally is mirrored into the
+/// chat session dir and every pipe dir — so we remap those explicitly.
+///
+/// Falls back to the expanded path when nothing matches, so the eventual error
+/// message points at a concrete location instead of the bare relative string.
+pub fn resolve_local_path(path: &str) -> PathBuf {
+    resolve_local_path_in(path, &screenpipe_core::paths::default_screenpipe_data_dir())
+}
+
+/// Inner resolver with the data dir injected, so it's pure and unit testable.
+/// See [`resolve_local_path`] for the rationale.
+fn resolve_local_path_in(path: &str, data_dir: &Path) -> PathBuf {
+    let expanded = expand_tilde(path);
+
+    // Absolute paths (incl. post-`~`) and anything already reachable from the
+    // current working directory are read as-is. This is the old behavior, so
+    // the common absolute-path case adds ZERO new filesystem probing — and we
+    // never widen access to a user folder the citation didn't already name.
+    if expanded.is_absolute() || expanded.exists() {
+        return expanded;
+    }
+
+    // Normalize separators so a Windows-style `.pi\skills\…` is recognized too.
+    let norm = path.replace('\\', "/");
+    let norm = norm.strip_prefix("./").unwrap_or(norm.as_str());
+
+    // Resolve relative agent paths ONLY against screenpipe-owned, app-created
+    // directories under the data dir. We deliberately never probe arbitrary
+    // user folders (`~/Documents`, `~/Desktop`, …): that would be a wrong guess
+    // and, on macOS, a needless TCC access that could surface a permission
+    // prompt for a path the user never pointed us at.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // `.pi/skills/<name>/…` → canonical store `<data_dir>/skills/<name>/…`.
+    if let Some(rest) = norm.strip_prefix(".pi/skills/") {
+        candidates.push(data_dir.join("skills").join(rest));
+    }
+
+    // The chat session dir and the data dir itself (agent artifacts land here).
+    candidates.push(data_dir.join("pi-chat").join(&expanded));
+    candidates.push(data_dir.join(&expanded));
+
+    // Every pipe project dir mirrors `.pi/…`; only worth probing for
+    // `.pi/`-relative paths and bounded by the number of installed pipes.
+    if norm.starts_with(".pi/") {
+        if let Ok(entries) = std::fs::read_dir(data_dir.join("pipes")) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    candidates.push(entry.path().join(&expanded));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .unwrap_or(expanded)
+}
+
+/// Turn a filesystem error into a short, human-readable line for the viewer's
+/// error state instead of leaking `os error 2`-style internals at the user.
+fn friendly_io_error(e: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::NotFound => {
+            "file not found — it may have been moved, deleted, or not created yet".to_string()
+        }
+        ErrorKind::PermissionDenied => {
+            "permission denied — screenpipe can't read this file".to_string()
+        }
+        _ => e.to_string(),
+    }
+}
+
 /// Hash a path to a stable, filesystem-safe label suffix. Tauri window
 /// labels must match `^[a-zA-Z0-9_-]+$`, so we can't use the path directly.
 fn label_for_path(path: &str) -> String {
@@ -35,6 +135,9 @@ fn label_for_path(path: &str) -> String {
 #[tauri::command]
 #[specta::specta]
 pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), String> {
+    // Resolve up front so the window label (dedup key), title, and the
+    // `/viewer?path=` the page reads all reference the real file.
+    let path = resolve_local_path(&path).to_string_lossy().into_owned();
     let label = label_for_path(&path);
 
     if let Some(window) = app.get_webview_window(&label) {
@@ -115,10 +218,21 @@ pub enum ViewerContent {
 #[tauri::command]
 #[specta::specta]
 pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
-    let p = Path::new(&path);
-    let metadata = tokio::fs::metadata(p)
-        .await
-        .map_err(|e| format!("cannot read {}: {}", path, e))?;
+    let resolved = resolve_local_path(&path);
+    let p = resolved.as_path();
+    // Show the resolved location everywhere downstream so the breadcrumb,
+    // "copy path", and error state all point at the file we actually read.
+    let path = resolved.to_string_lossy().into_owned();
+
+    let metadata = match tokio::fs::metadata(p).await {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            return Ok(ViewerContent::Error {
+                message: friendly_io_error(&e),
+                path,
+            });
+        }
+    };
 
     if !metadata.is_file() {
         return Ok(ViewerContent::Error {
@@ -231,6 +345,7 @@ fn looks_binary(bytes: &[u8]) -> bool {
 #[tauri::command]
 #[specta::specta]
 pub async fn reveal_in_default_browser(path: String) -> Result<(), String> {
+    let path = resolve_local_path(&path).to_string_lossy().into_owned();
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
@@ -307,6 +422,111 @@ mod tests {
     fn looks_binary_empty_is_text() {
         // Empty file should render as empty text, not be misclassified.
         assert!(!looks_binary(b""));
+    }
+
+    fn unique_tmp_dir(tag: &str) -> PathBuf {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let mut hasher = DefaultHasher::new();
+        tag.hash(&mut hasher);
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .hash(&mut hasher);
+        let dir = std::env::temp_dir().join(format!("sp-viewer-test-{:016x}", hasher.finish()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn expand_tilde_handles_home() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_tilde("~"), home);
+            assert_eq!(expand_tilde("~/notes/a.md"), home.join("notes/a.md"));
+        }
+        // Non-tilde paths pass through untouched.
+        assert_eq!(expand_tilde("/abs/x.md"), PathBuf::from("/abs/x.md"));
+        assert_eq!(expand_tilde(".pi/skills/x"), PathBuf::from(".pi/skills/x"));
+    }
+
+    #[test]
+    fn resolve_absolute_is_unchanged() {
+        let data = unique_tmp_dir("abs");
+        let got = resolve_local_path_in("/nope/missing.md", &data);
+        assert_eq!(got, PathBuf::from("/nope/missing.md"));
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[test]
+    fn resolve_pi_skills_maps_to_store() {
+        // `.pi/skills/<name>/SKILL.md` is a mirror of <data_dir>/skills/<name>/.
+        let data = unique_tmp_dir("skills");
+        let skill = data.join("skills").join("screenpipe-api");
+        std::fs::create_dir_all(&skill).unwrap();
+        let file = skill.join("SKILL.md");
+        std::fs::write(&file, b"# skill").unwrap();
+
+        let got = resolve_local_path_in(".pi/skills/screenpipe-api/SKILL.md", &data);
+        assert_eq!(got, file);
+
+        // Same with a leading `./`.
+        let got2 = resolve_local_path_in("./.pi/skills/screenpipe-api/SKILL.md", &data);
+        assert_eq!(got2, file);
+
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[test]
+    fn resolve_pi_relative_falls_back_to_chat_dir() {
+        // A non-skill `.pi/…` path resolves against the chat session dir.
+        let data = unique_tmp_dir("chat");
+        let ext = data.join("pi-chat").join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext).unwrap();
+        let file = ext.join("web-search.ts");
+        std::fs::write(&file, b"// ext").unwrap();
+
+        let got = resolve_local_path_in(".pi/extensions/web-search.ts", &data);
+        assert_eq!(got, file);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[test]
+    fn resolve_missing_relative_falls_back_to_expanded() {
+        // Nothing exists anywhere → return the expanded (still-relative) path so
+        // the error message is about a concrete-looking location, not a panic.
+        let data = unique_tmp_dir("missing");
+        let got = resolve_local_path_in(".pi/skills/ghost/SKILL.md", &data);
+        assert_eq!(got, PathBuf::from(".pi/skills/ghost/SKILL.md"));
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[test]
+    fn resolve_never_probes_user_folders() {
+        // A bare relative path that looks like a user-content location must NOT
+        // be resolved to a real file outside the data dir — even if such a file
+        // exists in $HOME. Guards against widening macOS TCC access / opening a
+        // file the citation never actually pointed at.
+        let data = unique_tmp_dir("tcc");
+        let got = resolve_local_path_in("Documents/secret.md", &data);
+        assert_eq!(got, PathBuf::from("Documents/secret.md"));
+        assert!(!got.is_absolute());
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[test]
+    fn resolve_normalizes_windows_separators() {
+        // A Windows-style `.pi\skills\…` citation still remaps to the store.
+        let data = unique_tmp_dir("winsep");
+        let skill = data.join("skills").join("screenpipe-api");
+        std::fs::create_dir_all(&skill).unwrap();
+        let file = skill.join("SKILL.md");
+        std::fs::write(&file, b"# skill").unwrap();
+
+        let got = resolve_local_path_in(".pi\\skills\\screenpipe-api\\SKILL.md", &data);
+        assert_eq!(got, file);
+        std::fs::remove_dir_all(&data).ok();
     }
 
     #[test]

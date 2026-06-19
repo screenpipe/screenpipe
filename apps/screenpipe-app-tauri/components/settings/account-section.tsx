@@ -32,12 +32,12 @@ import {
 import { toast } from "@/components/ui/use-toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
-import { planDisplayName } from "@/lib/app-entitlement";
+import { planDisplayName, isSignedInCloudSubscriber } from "@/lib/app-entitlement";
 import { Card } from "../ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { localFetch } from "@/lib/api";
+import { syncFetchOrThrow } from "@/lib/sync-fetch";
 import { listen } from "@tauri-apps/api/event";
 import { ReferralCard } from "./referral-card";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
@@ -132,7 +132,7 @@ export function AccountSection() {
         // New subscription checkout ($50/mo Pro). Pass the Clerk token so the
         // session pins customer_email + metadata.user_id to this account — the
         // webhook then links the sub even if a different email is used at Stripe.
-        const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
+        const response = await fetch("https://screenpipe.com/api/subscription/checkout", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -158,7 +158,7 @@ export function AccountSection() {
             pollCount++;
             try {
               const subResponse = await fetch(
-                `https://screenpi.pe/api/cloud-sync/subscription?userId=${settings.user?.id}&email=${encodeURIComponent(settings.user?.email || "")}`,
+                `https://screenpipe.com/api/cloud-sync/subscription?userId=${settings.user?.id}&email=${encodeURIComponent(settings.user?.email || "")}`,
                 {
                   headers: { Authorization: `Bearer ${settings.user?.token}` },
                 }
@@ -169,9 +169,17 @@ export function AccountSection() {
                 const subStatus = subData.subscription?.status;
                 const isActive = subData.hasSubscription || subStatus === "trialing" || subStatus === "active";
                 if (isActive) {
-                  updateSettings({
-                    user: { ...settings.user!, cloud_subscribed: true },
-                  });
+                  // Never persist cloud_subscribed without a session token — a
+                  // stale { cloud_subscribed: true, token: null } user desyncs
+                  // the app-wide pro gating from the login state and renders a
+                  // "Business · active" card under a "not logged in" header.
+                  // (This poll runs token-authenticated, so the guard is
+                  // belt-and-suspenders.)
+                  if (settings.user?.token) {
+                    updateSettings({
+                      user: { ...settings.user, cloud_subscribed: true },
+                    });
+                  }
                   toast({
                     title: "subscription activated",
                     description: "welcome to screenpipe business!",
@@ -241,7 +249,12 @@ export function AccountSection() {
                 size="sm"
                 data-testid="account-logout-button"
                 onClick={async () => {
-                  updateSettings({ user: null as any });
+                  await updateSettings({ user: null as any });
+                  try {
+                    await commands.setCloudToken(null);
+                  } catch (e) {
+                    console.warn("failed to clear cloud token on logout:", e);
+                  }
                   // Restart Pi with null token so it stops using the old
                   // account's quota. Next message will auto-start as anonymous.
                   try {
@@ -265,9 +278,11 @@ export function AccountSection() {
         </div>
       </div>
 
-      {/* Subscribed view */}
-      {settings.user?.cloud_subscribed ? (
-        <Card className="p-5">
+      {/* Subscribed view — requires a session token, not just cloud_subscribed,
+          so a token-hydration failure can't render this "active" card under a
+          "not logged in" header (see isSignedInCloudSubscriber). */}
+      {isSignedInCloudSubscriber(settings.user) ? (
+        <Card className="p-5" data-testid="account-cloud-active-card">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />
@@ -335,8 +350,8 @@ export function AccountSection() {
                     onClick={async () => {
                       setPipeSyncing(true);
                       try {
-                        await localFetch("/sync/pipes/pull", { method: "POST" });
-                        await localFetch("/sync/pipes/push", { method: "POST" });
+                        await syncFetchOrThrow("/sync/pipes/pull", { method: "POST" });
+                        await syncFetchOrThrow("/sync/pipes/push", { method: "POST" });
                         toast({ title: "pipes synced" });
                       } catch (e) {
                         toast({
@@ -400,8 +415,8 @@ export function AccountSection() {
                     onClick={async () => {
                       setMemoriesSyncing(true);
                       try {
-                        await localFetch("/sync/memories/pull", { method: "POST" });
-                        await localFetch("/sync/memories/push", { method: "POST" });
+                        await syncFetchOrThrow("/sync/memories/pull", { method: "POST" });
+                        await syncFetchOrThrow("/sync/memories/push", { method: "POST" });
                         toast({ title: "memories synced" });
                       } catch (e) {
                         toast({
@@ -468,8 +483,8 @@ export function AccountSection() {
                     onClick={async () => {
                       setConnectionsSyncing(true);
                       try {
-                        await localFetch("/sync/connections/pull", { method: "POST" });
-                        await localFetch("/sync/connections/push", { method: "POST" });
+                        await syncFetchOrThrow("/sync/connections/pull", { method: "POST" });
+                        await syncFetchOrThrow("/sync/connections/push", { method: "POST" });
                         toast({ title: "connections synced" });
                       } catch (e) {
                         toast({

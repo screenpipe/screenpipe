@@ -5,10 +5,13 @@
 //! Enterprise direct-upload data plane.
 //!
 //! Hosted ingest sends plaintext JSONL to Screenpipe over TLS. Direct upload
-//! requests a control-plane ticket, PUTs the batch directly into the customer's
-//! Azure Blob container, then completes the manifest. Encrypted mode stores
-//! ciphertext; readable mode stores JSONL. In both cases Screenpipe Cloud sees
-//! checksums and cursors, not the telemetry body.
+//! requests a control-plane ticket, PUTs the batch directly into the
+//! customer's storage (Azure Blob via SAS URLs, or an S3 bucket / any
+//! S3-compatible endpoint via SigV4 presigned URLs — the ticket's
+//! `upload_url` + `headers` are replayed verbatim either way), then
+//! completes the manifest. Encrypted mode stores ciphertext; readable mode
+//! stores JSONL. In both cases Screenpipe Cloud sees checksums and cursors,
+//! not the telemetry body.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::header::HeaderMap;
@@ -675,8 +678,8 @@ mod tests {
 
     fn direct_cfg() -> DirectUploadConfig {
         DirectUploadConfig {
-            ticket_url: "https://screenpi.pe/api/enterprise/upload-ticket".to_string(),
-            complete_url: "https://screenpi.pe/api/enterprise/upload-complete".to_string(),
+            ticket_url: "https://screenpipe.com/api/enterprise/upload-ticket".to_string(),
+            complete_url: "https://screenpipe.com/api/enterprise/upload-complete".to_string(),
             recipients: vec![
                 DirectUploadKeyRecipientConfig {
                     purpose: "primary".to_string(),
@@ -699,7 +702,7 @@ mod tests {
             license_key: "sek_test".to_string(),
             device_id: "dev-1".to_string(),
             device_label: "host".to_string(),
-            ingest_url: "https://screenpi.pe/api/enterprise/ingest".to_string(),
+            ingest_url: "https://screenpipe.com/api/enterprise/ingest".to_string(),
             cursor_path: std::path::PathBuf::from("/tmp/nope"),
             upload_mode: EnterpriseUploadMode::HostedIngest,
         }
@@ -709,10 +712,10 @@ mod tests {
     fn sibling_urls_are_derived_from_ingest_url() {
         assert_eq!(
             sibling_enterprise_endpoint(
-                "https://screenpi.pe/api/enterprise/ingest",
+                "https://screenpipe.com/api/enterprise/ingest",
                 "upload-ticket"
             ),
-            "https://screenpi.pe/api/enterprise/upload-ticket"
+            "https://screenpipe.com/api/enterprise/upload-ticket"
         );
         assert_eq!(
             sibling_enterprise_endpoint("https://host/custom", "upload-ticket"),

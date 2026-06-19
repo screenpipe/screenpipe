@@ -47,14 +47,36 @@ WHISPER_URL = ""
 # Legacy compat
 SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 
+# Interactive chat must stay low-latency, so interactive Gemini uses the STANDARD
+# tier, not best-effort flex (flex on the interactive auto lane made chat slow).
+# Background traffic still flexes (isFlexEligible returns true for background
+# regardless of this flag). Set here (not just dashboard) so it persists as the
+# deliberate default across redeploys; FLEX_TIER_ENABLED remains the master switch.
+GEMINI_FLEX_INTERACTIVE = "false"
+
+# Cost / flex tuning knobs — read with a code default, so they live in the CF
+# dashboard (Settings → Variables), not here, and take effect with no redeploy:
+# - FLEX_TIER_ENABLED ("true"): master kill switch for the Vertex Gemini flex tier.
+# - GEMINI_FLEX_INTERACTIVE ("true"): also flex interactive Gemini, not just
+#   background. Set "false" to revert to background-only flex if best-effort
+#   latency hurts user-facing chat.
+# - MAX_DAILY_COST_PER_USER ("5"): base per-user daily $ cap; ×7 subscribed,
+#   ×0.64 logged_in, ×0.32 anonymous (getTierDailyCostCap). Credits extend 1:1.
+# - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = always glm-5
+#   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
+#   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
+# - ROUTER_SAMPLE_PCT ("100"): % of devices in the router arm for A/B (deterministic
+#   by device hash). 50 = half ON / half control → measure ON vs control in cost_log
+#   via the router_tier column ('control' = baseline arm). 0 = effectively off.
+
 # Secrets (set via `wrangler secret put <NAME>`):
 # - VERTEX_SERVICE_ACCOUNT_JSON: GCP service account JSON for Vertex AI
 # - VERTEX_PROJECT_ID: Your GCP project ID
 
-# Bind the Workers AI model catalog. Run machine learning models, powered by serverless GPUs, on Cloudflare's global network
-# Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#workers-ai
-# [ai]
-# binding = "AI"
+# Workers AI — used by the difficulty router (ROUTER_MODE=embedding) for the
+# @cf/baai/bge-base-en-v1.5 prompt embedding. Harmless when ROUTER_MODE is off.
+[ai]
+binding = "AI"
 
 # Bind an Analytics Engine dataset. Use Analytics Engine to write analytics within your Pages Function.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#analytics-engine-datasets

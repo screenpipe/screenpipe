@@ -71,62 +71,99 @@ pub async fn transcribe_with_openai_compatible(
                 .build()?,
         ),
     };
-    // Build multipart form
-    let mut form = multipart::Form::new()
-        .text("model", model.to_string())
-        .text("response_format", "json".to_string())
-        .part(
-            "file",
-            multipart::Part::bytes(audio_bytes)
-                .file_name(file_name.to_string())
-                .mime_str(mime_type)?,
-        );
+    // Send with bounded retry on transient transport failures (timeouts,
+    // connection resets, "error sending request" blips — the recurring
+    // openai-compatible failures in Sentry, often a local server briefly
+    // unavailable). The multipart form can't be reused across attempts, so
+    // rebuild it each time; audio bytes are cloned only on a retry. HTTP status
+    // errors come back as Ok(Response) and are handled by handle_response, so a
+    // reqwest::Error here is always transport-level.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_err: Option<reqwest::Error> = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        let mut form = multipart::Form::new()
+            .text("model", model.to_string())
+            .text("response_format", "json".to_string())
+            .part(
+                "file",
+                multipart::Part::bytes(audio_bytes.clone())
+                    .file_name(file_name.to_string())
+                    .mime_str(mime_type)?,
+            );
 
-    // Add language if specified
-    if !languages.is_empty() {
-        // Use the first language as the primary language hint
-        let lang_code = languages[0].as_lang_code();
-        form = form.text("language", lang_code.to_string());
-    }
-
-    // Pass vocabulary/hotwords for transcription biasing.
-    // - OpenAI Whisper API: uses `prompt` as initial_prompt
-    // - mlx-audio (VibeVoice-ASR): uses `context` for hotwords (ignores `prompt`)
-    // Send both fields so it works regardless of which server is running.
-    if !vocabulary.is_empty() {
-        let prompt = vocabulary.join(", ");
-        debug!("passing vocabulary as prompt + context: {}", prompt);
-        form = form.text("prompt", prompt.clone());
-        form = form.text("context", prompt);
-    }
-
-    // Build request with optional authentication
-    let mut request = client
-        .post(format!("{}/v1/audio/transcriptions", endpoint))
-        .multipart(form);
-
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            request = request.bearer_auth(key);
+        if !languages.is_empty() {
+            form = form.text("language", languages[0].as_lang_code().to_string());
         }
-    }
 
-    // Add custom headers
-    if let Some(headers) = custom_headers {
-        for (name, value) in headers {
-            if let (Ok(header_name), Ok(header_value)) = (
-                reqwest::header::HeaderName::from_bytes(name.as_bytes()),
-                reqwest::header::HeaderValue::from_str(value),
-            ) {
-                request = request.header(header_name, header_value);
+        // Vocabulary/hotwords for biasing: `prompt` = OpenAI initial_prompt,
+        // `context` = mlx-audio hotwords. Send both so it works on either server.
+        if !vocabulary.is_empty() {
+            let prompt = vocabulary.join(", ");
+            form = form.text("prompt", prompt.clone()).text("context", prompt);
+        }
+
+        let mut request = client
+            .post(format!("{}/v1/audio/transcriptions", endpoint))
+            .multipart(form);
+
+        if let Some(key) = api_key {
+            if !key.is_empty() {
+                request = request.bearer_auth(key);
+            }
+        }
+
+        if let Some(headers) = custom_headers {
+            for (name, value) in headers {
+                if let (Ok(header_name), Ok(header_value)) = (
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(value),
+                ) {
+                    request = request.header(header_name, header_value);
+                }
+            }
+        }
+
+        match request.send().await {
+            Ok(response) => return handle_response(response, device).await,
+            Err(e) => {
+                if !openai_error_is_transient(&e) || attempt + 1 == MAX_ATTEMPTS {
+                    return Err(e.into());
+                }
+                let delay = std::time::Duration::from_millis(300 * 2u64.pow(attempt));
+                debug!(
+                    "openai-compatible request failed (attempt {}/{}): {} — retrying in {:?}",
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    e,
+                    delay
+                );
+                last_err = Some(e);
+                tokio::time::sleep(delay).await;
             }
         }
     }
+    Err(last_err
+        .expect("retry loop ran with at least one attempt")
+        .into())
+}
 
-    // Send request
-    let response = request.send().await?;
+/// Whether a transport-level error is transient (worth retrying) rather than
+/// deterministic. HTTP status errors don't reach here (they're `Ok(Response)`).
+fn openai_error_is_transient(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || transient_error_text(&format!("{err:?}"))
+}
 
-    handle_response(response, device).await
+/// String-level fallback for transient transport failures reqwest doesn't flag
+/// via `is_timeout`/`is_connect`.
+fn transient_error_text(debug: &str) -> bool {
+    let d = debug.to_lowercase();
+    d.contains("timed out")
+        || d.contains("timeout")
+        || d.contains("connection reset")
+        || d.contains("connection closed")
+        || d.contains("broken pipe")
+        || d.contains("connection refused")
+        || d.contains("error sending request")
 }
 
 /// Create WAV data from f32 audio samples (uncompressed PCM).
@@ -296,6 +333,17 @@ async fn handle_response(response: Response, device: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_error_text_flags_blips_only() {
+        assert!(transient_error_text(
+            "reqwest::Error { kind: Request, source: error sending request }"
+        ));
+        assert!(transient_error_text("operation timed out"));
+        assert!(transient_error_text("Connection refused (os error 61)"));
+        assert!(!transient_error_text("invalid api key"));
+        assert!(!transient_error_text("404 not found"));
+    }
 
     #[test]
     fn test_create_mp3_data() {

@@ -36,7 +36,7 @@ chrono = { workspace = true }
 # Local Embeddings + STT
 # Using fork of vad-rs with Silero VAD v5/v6 support
 # v5/v6: 3x faster, 6000+ languages, better accuracy
-vad-rs = { git = "https://github.com/divanshu-go/vad-rs-1.git", rev = "b14b26ec7093f5398ef6658020259cd7c130ea6c", default-features = false }
+vad-rs = { git = "https://github.com/screenpipe/vad-rs-1.git", rev = "260252c122c752c8c2da7e86caff7e706aace025", default-features = false }
 anyhow = { workspace = true }
 hf-hub = { workspace = true }
 # https://github.com/pdeljanov/Symphonia/tree/master?tab=readme-ov-file#optimizations
@@ -94,7 +94,7 @@ libpulse-binding = { version = "2.28", optional = true }
 libpulse-simple-binding = { version = "2.28", optional = true }
 # Bundle ONNX Runtime on Linux (same as macOS). load-dynamic was tried but
 # broke systems without a system-installed libonnxruntime.so (see #2506).
-ort = { workspace = true, features = ["download-binaries"] }
+ort = { workspace = true, features = ["download-binaries", "tls-native"] }
 
 # Windows COM API for querying the "Default Communications Device" role.
 # MS Teams/Zoom route audio to the eCommunications endpoint, which may
@@ -107,16 +107,26 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell_PropertiesSystem",
 ] }
 
+# Bundle ONNX Runtime at build time on Windows x86_64 (same as Linux/macOS-arm64).
+# `load-dynamic` (runtime LoadLibrary of onnxruntime.dll) was tried but HANGS on
+# some hosts: ort rc.12's first call deadlocks inside `libloading::Library::new`
+# at 0% CPU, before `CreateEnv`, so the audio engine never finishes the
+# `building_audio` boot phase and the app looks dead (recording, VAD, diarization
+# all broken). Load-time linking of the *same* onnxruntime.dll initializes in
+# ~30ms. See PR #4171.
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-# Avoid build-time network downloads (ort-sys download-binaries) for Windows x86_64.
-# When ONNX Runtime is available at runtime, `ort` can load it dynamically.
-ort = { workspace = true, default-features = false, features = ["load-dynamic"] }
+ort = { workspace = true, features = ["download-binaries", "tls-native"] }
 samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }
 
-# Windows ARM64: use our own ONNX Runtime DLL at runtime (load-dynamic); no compile-time link, no ort.pyke.io cache
+# Windows ARM64: do NOT use `load-dynamic` — its runtime LoadLibrary of
+# onnxruntime.dll hangs with ort rc.12 the same way it did on x86_64 (see #4173).
+# ort links at build time instead; CI sets ORT_STRATEGY=system + ORT_LIB_LOCATION
+# to the bundled MS onnxruntime-win-arm64 (pyke ships no arm64-windows prebuilt,
+# so the `download-binaries` strategy that comes in transitively is overridden by
+# ORT_STRATEGY=system).
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-ort = { workspace = true, default-features = false, features = ["load-dynamic"] }
+ort = { workspace = true, default-features = false, features = ["api-24", "tracing"] }
 ort-sys = { workspace = true }
 samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }
@@ -125,7 +135,17 @@ libsamplerate-sys = { workspace = true }
 cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a" }
 once_cell = { workspace = true }
 objc = { workspace = true }
-ort = { workspace = true, features = ["download-binaries"] }
+
+# Apple Silicon: bundle ONNX Runtime via the pyke prebuilt (arm64 xcframework).
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+ort = { workspace = true, features = ["download-binaries", "tls-native"] }
+
+# Intel mac: ort rc.12 ships no x86_64 prebuilt (pyke + upstream ONNX Runtime
+# are arm64-only since ~1.20). load-dynamic links against headers only and
+# loads the dylib at runtime if present. The ONNX ASR paths (parakeet/qwen3)
+# are not enabled on Intel, so no dylib is required for a working build.
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+ort = { workspace = true, default-features = false, features = ["load-dynamic", "api-24"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

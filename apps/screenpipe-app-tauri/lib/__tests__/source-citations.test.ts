@@ -185,6 +185,45 @@ describe("source citations", () => {
     expect(citations[1].title).toBe("Read: standalone-chat.tsx");
   });
 
+  it("carries the absolute path on file/memory citations so the footer can open a preview", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "read",
+            args: { path: "/Users/louisbeaumont/.codex/memories/MEMORY.md" },
+            result: "notes",
+            isRunning: false,
+          },
+        },
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "write",
+            args: { path: "/tmp/out/report.md" },
+            result: "ok",
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations[0].path).toBe("/Users/louisbeaumont/.codex/memories/MEMORY.md");
+    expect(citations[1].path).toBe("/tmp/out/report.md");
+  });
+
+  it("preserves an explicit citation's path so server-provided file sources stay openable", () => {
+    const citations = sourceCitationsFromMessage({
+      sourceCitations: [
+        { id: "x", kind: "file", title: "Read: a.md", path: "/tmp/a.md" },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0].path).toBe("/tmp/a.md");
+  });
+
   it("normalizes pi tool namespaces before deriving citations", () => {
     const citations = sourceCitationsFromMessage({
       contentBlocks: [

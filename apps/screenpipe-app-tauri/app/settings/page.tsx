@@ -111,7 +111,7 @@ function ReferralSection() {
 
   const handleCopy = async () => {
     if (!referralLink) return;
-    await navigator.clipboard.writeText(referralLink);
+    await commands.copyTextToClipboard(referralLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -120,7 +120,7 @@ function ReferralSection() {
     if (!inviteEmail || !referralLink || sending) return;
     setSending(true);
     try {
-      const res = await fetch("https://screenpi.pe/api/referral/invite", {
+      const res = await fetch("https://screenpipe.com/api/referral/invite", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -368,6 +368,7 @@ function SettingsContent() {
         {/* Back to app */}
         <div className={cn("px-4 py-3 border-b", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
           <button
+            data-testid="settings-back-to-app"
             onClick={() => router.push("/home")}
             className={cn(
               "flex items-center space-x-1.5 text-sm transition-colors w-full",

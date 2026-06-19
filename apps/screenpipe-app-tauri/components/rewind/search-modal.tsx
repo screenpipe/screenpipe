@@ -889,33 +889,36 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     (async () => {
       setIsSearchingTags(true);
       try {
-        // Fetch all distinct tags with counts from the tags + vision_tags tables
+        // Query the tags table directly (distinct names only), not vision_tags.
+        // count was only used for ORDER BY and is never displayed, so we drop the
+        // GROUP BY aggregate over vision_tags — that full-table scan is what froze
+        // the UI on large DBs. LIKE is ASCII case-insensitive by default, so the
+        // lowercased query matches regardless of tag casing (ASCII only). LIMIT 500
+        // keeps low-count unique tags (e.g. per-session workflow tags with count=1)
+        // so specific long queries still find their target.
+        const safeTagQuery = tagQuery.replace(/'/g, "''");
+        const tagsSQL = tagQuery.length > 0
+          ? `SELECT name FROM tags WHERE name LIKE '%${safeTagQuery}%' COLLATE NOCASE ORDER BY name LIMIT 500`
+          : `SELECT name FROM tags ORDER BY name LIMIT 500`;
+
         const tagsResp = await localFetch("/raw_sql", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: "SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id GROUP BY t.id, t.name ORDER BY count DESC",
-          }),
+          body: JSON.stringify({ query: tagsSQL }),
           signal: AbortSignal.timeout(5000),
         });
 
         if (cancelled) return;
-        const allDbTags: { name: string; count: number }[] = tagsResp.ok
+        const allDbTags: { name: string }[] = tagsResp.ok
           ? await tagsResp.json()
           : [];
 
-        // Set autocomplete pills (filtered if user typed something after #)
+        // SQL already filtered by tagQuery — use results directly
         const tagNames = allDbTags.map(t => t.name);
-        setAllTags(
-          tagQuery.length > 0
-            ? tagNames.filter(t => t.toLowerCase().includes(tagQuery))
-            : tagNames
-        );
+        setAllTags(tagNames);
 
-        // Find tags that match the query
-        const matched = tagQuery.length > 0
-          ? allDbTags.filter(t => t.name.toLowerCase().includes(tagQuery))
-          : allDbTags;
+        // All returned tags already match the query
+        const matched = allDbTags;
 
         if (matched.length > 0 && !cancelled) {
           // Fetch frames tagged with matching tags
@@ -1510,6 +1513,32 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         </div>
       ) : (
         <>
+          {/* Content type filter chips — always at the top */}
+          {!isTagSearch && !isPeopleSearch && (
+            <div className="flex gap-2 mb-3">
+              {([
+                { key: "all" as ContentFilter, label: "All", icon: null },
+                { key: "screen" as ContentFilter, label: "Screen", icon: Monitor },
+                { key: "input" as ContentFilter, label: "Keyboard & Clipboard", icon: Keyboard },
+                { key: "chats" as ContentFilter, label: "Chats", icon: MessageSquare },
+              ] as const).map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => { setContentFilter(key); setSelectedIndex(0); setSelectedChatIndex(0); }}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full border transition-colors",
+                    contentFilter === key
+                      ? "bg-foreground text-background border-foreground"
+                      : "border-border text-muted-foreground hover:border-foreground/40"
+                  )}
+                >
+                  {Icon && <Icon className="w-3 h-3" />}
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Empty state */}
           {showEmpty && (
             <div className="py-12 text-center text-sm text-muted-foreground">
@@ -1681,30 +1710,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               </div>
             </div>
           )}
-
-          {/* Content type filter chips — always visible */}
-          <div className="flex gap-2 mb-3">
-            {([
-              { key: "all" as ContentFilter, label: "All", icon: null },
-              { key: "screen" as ContentFilter, label: "Screen", icon: Monitor },
-              { key: "input" as ContentFilter, label: "Keyboard & Clipboard", icon: Keyboard },
-              { key: "chats" as ContentFilter, label: "Chats", icon: MessageSquare },
-            ] as const).map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => { setContentFilter(key); setSelectedIndex(0); setSelectedChatIndex(0); }}
-                className={cn(
-                  "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full border transition-colors",
-                  contentFilter === key
-                    ? "bg-foreground text-background border-foreground"
-                    : "border-border text-muted-foreground hover:border-foreground/40"
-                )}
-              >
-                {Icon && <Icon className="w-3 h-3" />}
-                {label}
-              </button>
-            ))}
-          </div>
 
           {/* Inline chat section in "All" view — appears instantly (in-memory filter) while screen results load */}
           {contentFilter !== "chats" && debouncedQuery.trim().length >= 1 && filteredChats.length > 0 && !isTagSearch && !isPeopleSearch && (
@@ -2132,7 +2137,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return (
       <div className={cn(
         "flex flex-col bg-card/95 backdrop-blur-xl",
-        standalone ? "rounded-xl border border-border/50 shadow-2xl overflow-hidden" : "h-full",
+        standalone ? "h-full rounded-xl border border-border/50 shadow-2xl overflow-hidden" : "h-full",
       )}>
         {/* Search Input — Raycast-style large input */}
         <div className={cn(

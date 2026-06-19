@@ -61,9 +61,23 @@ impl SileroVad {
         debug!("Initializing SileroVad...");
         let model_path = Self::get_or_download_model().await?;
         debug!("SileroVad Model downloaded to: {:?}", model_path);
-        let vad = Vad::new(model_path, 16000).map_err(|e| {
+        // `Vad::new` builds an ONNX Runtime session under the hood. ort
+        // 2.0.0-rc.12 can hang (not just error) during its global init on some
+        // hosts, and this runs on the audio boot path right after the
+        // diarization session — a hang freezes the `building_audio` phase and
+        // the engine never starts. Guard it with a watchdog so a hung runtime
+        // degrades to an error; the caller then falls back to WebRTC VAD.
+        let vad = crate::utils::ort_watchdog::run_with_timeout(
+            "silero vad init",
+            crate::utils::ort_watchdog::ORT_INIT_TIMEOUT,
+            move || {
+                Vad::new(model_path, 16000)
+                    .map_err(|e| anyhow::anyhow!("Vad creation error: {}", e))
+            },
+        )
+        .map_err(|e| {
             debug!("SileroVad Error creating Vad: {}", e);
-            anyhow::anyhow!("Vad creation error: {}", e)
+            e
         })?;
         debug!("SileroVad initialized successfully");
         Ok(Self {

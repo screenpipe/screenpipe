@@ -11,6 +11,7 @@ import type { SettingsField } from "./settings-search";
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   { label: "Capture stalls" },
+  { label: "Power mode changes" },
   { label: "App updates" },
   { label: "Pipe suggestions" },
   { label: "Pipe notifications" },
@@ -30,6 +31,7 @@ import { commands } from "@/lib/utils/tauri";
 
 const defaultPrefs = {
   captureStalls: true,
+  powerModeChanges: true,
   appUpdates: true,
   pipeSuggestions: true,
   pipeNotifications: true,
@@ -79,6 +81,21 @@ export function NotificationsSettings() {
                 showRestartNotifications: v,
               } as Partial<Settings>);
             }}
+          />
+        </div>
+
+        {/* Power mode changes */}
+        <div className="flex items-center justify-between py-3 border-b border-border">
+          <div>
+            <p className="text-sm font-medium">Power mode changes</p>
+            <p className="text-xs text-muted-foreground">
+              Toast when battery saver kicks in (Balanced / Saver). Critical alerts when capture is paused for low battery still fire.
+            </p>
+          </div>
+          <Switch
+            data-testid="notification-pref-power-mode-changes"
+            checked={prefs.powerModeChanges ?? true}
+            onCheckedChange={(v) => updatePref("powerModeChanges", v)}
           />
         </div>
 
