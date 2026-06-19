@@ -172,9 +172,17 @@ const tauriBackendFetch = async (
       throw new Error(res.error);
     }
     const resText = res.data;
+    // The Rust backend returns only the body text (no headers). Sniff SSE so
+    // the diagnostics' content-type check can detect a streamed response.
+    const looksLikeSse = /(^|\n)\s*data:/.test(resText);
+    const contentType = looksLikeSse ? "text/event-stream" : "application/json";
     return {
       ok: true,
       status: 200,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? contentType : null,
+      },
       json: async () => JSON.parse(resText),
       text: async () => resText,
       clone: function () {
@@ -185,6 +193,9 @@ const tauriBackendFetch = async (
     return {
       ok: false,
       status: 500,
+      headers: {
+        get: (_name: string) => null,
+      },
       text: async () => String(err?.message || err),
       json: async () => {
         throw new Error(String(err?.message || err));
@@ -733,9 +744,11 @@ const AISection = ({
       }));
     } else {
       // Local custom providers often do not implement browser CORS preflight on /models.
+      // Route local URLs (loopback, private IP, .local) through the Rust backend,
+      // matching the chat + fetchModels paths — tauriFetch can't reach them.
       const modelsFetchFn =
         settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url)
-          ? tauriFetch
+          ? tauriBackendFetch
           : fetch;
       try {
         modelsResponse = await modelsFetchFn(modelsUrl, {
