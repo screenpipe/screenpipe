@@ -1036,7 +1036,6 @@ export function BrowserSidebar({
             previewPath ? (
               <FilePreviewSidebar
                 path={previewPath}
-                onClose={onCloseFilePreview}
                 onReplacePath={onReplaceFilePreviewPath}
               />
             ) : null

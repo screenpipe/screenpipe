@@ -15,7 +15,6 @@ import { commands } from "@/lib/utils/tauri";
 
 interface FilePreviewSidebarProps {
   path: string;
-  onClose?: () => void;
   onReplacePath?: (path: string) => void;
 }
 

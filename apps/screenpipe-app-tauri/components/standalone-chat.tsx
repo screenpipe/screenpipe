@@ -728,13 +728,29 @@ export function StandaloneChat({
   }, [inspectorOpen, closeFilePreview, setInspectorOpen]);
 
   const toggleBrowserPanel = useCallback(() => {
+    if (inspectorOpen) {
+      setInspectorOpen(false);
+      return;
+    }
     setInspectorOpen(false);
     if (filePreviewOpen) {
       closeFilePreview();
       return;
     }
     window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle"));
-  }, [closeFilePreview, filePreviewOpen, setInspectorOpen]);
+  }, [closeFilePreview, filePreviewOpen, inspectorOpen, setInspectorOpen]);
+
+  const handlePanelStateChange = useCallback(
+    (nextState: { hasUrl: boolean; open: boolean }) => {
+      setBrowserPanelState((currentState) =>
+        currentState.hasUrl === nextState.hasUrl &&
+        currentState.open === nextState.open
+          ? currentState
+          : nextState,
+      );
+    },
+    [],
+  );
 
   const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
   const {
@@ -6426,14 +6442,7 @@ export function StandaloneChat({
           />
         ) : null}
         onBecomeVisible={() => setInspectorOpen(false)}
-        onPanelStateChange={(nextState) => {
-          setBrowserPanelState((currentState) =>
-            currentState.hasUrl === nextState.hasUrl &&
-            currentState.open === nextState.open
-              ? currentState
-              : nextState,
-          );
-        }}
+        onPanelStateChange={handlePanelStateChange}
       />
       </div> {/* End of horizontal chat+browser split */}
 
