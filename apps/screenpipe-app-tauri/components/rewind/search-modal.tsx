@@ -567,10 +567,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       .slice(0, 10);
   }, []);
 
-  // Async facet loading — fires a lightweight SQL aggregation query
+  // Async facet loading — keep it behind the first keyword page so large DB
+  // aggregations do not compete with the initial visible result.
   useEffect(() => {
     const q = debouncedQuery.trim();
-    if (!q || q.length < 3 || q.startsWith("#") || q.startsWith("@")) {
+    if (!q || q.length < 3 || q.startsWith("#") || q.startsWith("@") || searchResults.length === 0) {
       setFacetApps([]);
       setFacetDomains([]);
       setFacetTimeRanges([]);
@@ -579,6 +580,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     setFacetsLoading(true);
     let pending = 3;
     const onFacetDone = () => { pending--; if (pending === 0 && !cancelled) setFacetsLoading(false); };
@@ -598,7 +600,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: sql }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
       });
       return resp.ok ? resp.json() : [];
     };
@@ -649,9 +651,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setFacetTimeRanges(buildTimeRanges(rows.map(r => ({ dateKey: r.d, timestamp: r.ts, count: r.cnt }))));
     }).catch(() => {}).finally(onFacetDone);
 
-    return () => { cancelled = true; setFacetsLoading(false); };
+    return () => { cancelled = true; controller.abort(); setFacetsLoading(false); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery, buildTimeRanges, searchEpoch]);
+  }, [debouncedQuery, buildTimeRanges, searchEpoch, searchResults.length]);
 
   // Speaker time ranges (from loaded transcriptions — these are small enough)
   const speakerTimeRanges = useMemo(() => {
@@ -743,12 +745,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const filteredSpeakerTranscriptionsRef = useRef(filteredSpeakerTranscriptions);
   filteredSpeakerTranscriptionsRef.current = filteredSpeakerTranscriptions;
 
-  // Load chats when switching to chats tab. Typing a query searches the full
-  // on-disk archive; empty state stays capped to recent chats.
+  // Load chats only inside the chats tab. Normal "All" search should not make
+  // the chat archive compete with the first OCR/accessibility results.
   useEffect(() => {
     if (!isOpen || isTagSearch || isPeopleSearch) return;
     const q = debouncedQuery.trim();
-    if (contentFilter === "chats" || q) {
+    if (contentFilter === "chats") {
       void loadChats(q);
     }
   }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats]);
@@ -955,7 +957,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return () => { cancelled = true; };
   }, [debouncedQuery]);
 
-  // Search speakers — triggered by @query or normal text query (>= 2 chars)
+  // Search speakers. @ queries are immediate; normal text queries wait for the
+  // first keyword pass so names do not slow down the first result.
   useEffect(() => {
     if (selectedSpeaker) {
       setSpeakerResults([]);
@@ -966,7 +969,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     const searchTerm = isAtQuery ? debouncedQuery.slice(1).trim() : debouncedQuery.trim();
 
     // For normal queries, require >= 2 chars; for @, show all speakers immediately
-    if (!isAtQuery && (searchTerm.length < 2 || debouncedQuery.startsWith("#"))) {
+    if (!isAtQuery && (searchTerm.length < 2 || debouncedQuery.startsWith("#") || (isSearching && searchResults.length === 0))) {
       setSpeakerResults([]);
       return;
     }
@@ -978,10 +981,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setIsSearchingSpeakers(true);
       try {
         // For @ with no text, fetch all speakers; otherwise search by name
-        const url = searchTerm.length > 0
-          ? `/speakers/search?name=${encodeURIComponent(searchTerm)}`
-          : `/speakers/search?name=`;
-        const resp = await localFetch(url, {
+        const params = new URLSearchParams({
+          name: searchTerm,
+          limit: (isAtQuery ? 20 : 5).toString(),
+          include_samples: "false",
+        });
+        const resp = await localFetch(`/speakers/search?${params}`, {
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]),
         });
         if (resp.ok && !cancelled) {
@@ -996,7 +1001,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     })();
 
     return () => { cancelled = true; controller.abort(); };
-  }, [debouncedQuery, selectedSpeaker]);
+  }, [debouncedQuery, selectedSpeaker, isSearching, searchResults.length]);
 
   // Load transcriptions when a speaker is selected
   useEffect(() => {
