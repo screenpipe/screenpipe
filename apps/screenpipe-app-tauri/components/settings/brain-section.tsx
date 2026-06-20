@@ -398,17 +398,24 @@ export function BrainSection() {
     setTimeout(() => editRef.current?.focus(), 0);
   };
 
+  const closeEditDialog = () => {
+    setEditingId(null);
+    setEditContent("");
+    setEditTags([]);
+    setTagInput("");
+  };
+
   const saveEdit = async (id: number) => {
     const trimmed = editContent.trim();
     const memory = memories.find((m) => m.id === id);
     if (!trimmed) {
-      setEditingId(null);
+      closeEditDialog();
       return;
     }
     const contentChanged = trimmed !== memory?.content;
     const tagsChanged = JSON.stringify(editTags) !== JSON.stringify(memory?.tags);
     if (!contentChanged && !tagsChanged) {
-      setEditingId(null);
+      closeEditDialog();
       return;
     }
     setSavingId(id);
@@ -438,7 +445,7 @@ export function BrainSection() {
       });
     } finally {
       setSavingId(null);
-      setEditingId(null);
+      closeEditDialog();
     }
   };
 
@@ -957,6 +964,105 @@ export function BrainSection() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={editingId !== null}
+        onOpenChange={(open) => {
+          if (open) {
+            setTimeout(() => editRef.current?.focus(), 0);
+          } else if (savingId === null) {
+            closeEditDialog();
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl" data-testid="brain-edit-memory-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base">edit memory</DialogTitle>
+            <DialogDescription>
+              Update the saved memory and its labels.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              data-testid="brain-edit-memory-textarea"
+              ref={editRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className="min-h-[180px] resize-y text-sm"
+              rows={8}
+              disabled={savingId !== null}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && editingId !== null) {
+                  e.preventDefault();
+                  void saveEdit(editingId);
+                }
+                if (e.key === "Escape") closeEditDialog();
+              }}
+            />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {editTags
+                .filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t))
+                .map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
+                  >
+                    <Tag className="h-2.5 w-2.5" />
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeTagFromEdit(tag)}
+                      className="hover:text-destructive"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              <Input
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addTagToEdit(tagInput);
+                  }
+                  if (e.key === "Backspace" && !tagInput && editTags.length > 0) {
+                    removeTagFromEdit(editTags[editTags.length - 1]);
+                  }
+                }}
+                placeholder="add tag..."
+                className="h-6 text-[10px] w-20 px-1.5 border-dashed"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={closeEditDialog}
+              disabled={savingId !== null}
+            >
+              cancel
+            </Button>
+            <Button
+              data-testid="brain-edit-memory-save"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                if (editingId !== null) void saveEdit(editingId);
+              }}
+              disabled={!editContent.trim() || savingId !== null}
+            >
+              {savingId !== null ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                "save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* filters row */}
       <div className="flex items-center gap-2">
         {(typeFilter === "memories" ? loading : artifactsLoading) ? (
@@ -1245,43 +1351,19 @@ export function BrainSection() {
                   }`}
                 />
                 <div
-                  className="flex-1 min-w-0 cursor-text"
-                  onClick={() => {
-                    if (editingId !== memory.id) startEditing(memory);
-                  }}
+                  className="flex-1 min-w-0"
                 >
-                  {editingId === memory.id ? (
-                    <textarea
-                      ref={editRef}
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      onBlur={() => saveEdit(memory.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          saveEdit(memory.id);
-                        }
-                        if (e.key === "Escape") {
-                          setEditingId(null);
-                        }
-                      }}
-                      disabled={savingId === memory.id}
-                      className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-y focus:outline-none focus:border-foreground/40"
-                      rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
-                    />
-                  ) : (
-                    <CompactMarkdown
-                      expanded={expandedIds.has(memory.id)}
-                      onToggleExpanded={() => toggleExpanded(memory.id)}
-                      suffix={
-                        savingId === memory.id ? (
-                          <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
-                        ) : undefined
-                      }
-                    >
-                      {memory.content}
-                    </CompactMarkdown>
-                  )}
+                  <CompactMarkdown
+                    expanded={expandedIds.has(memory.id)}
+                    onToggleExpanded={() => toggleExpanded(memory.id)}
+                    suffix={
+                      savingId === memory.id ? (
+                        <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                      ) : undefined
+                    }
+                  >
+                    {memory.content}
+                  </CompactMarkdown>
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
@@ -1292,76 +1374,34 @@ export function BrainSection() {
                     >
                       {memory.source}
                     </Badge>
-                    {editingId === memory.id ? (
-                      <>
-                        {editTags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
-                          <span
+                    {memory.tags.length > 0 &&
+                      memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
+                        tag.length > 30 ? (
+                          <TooltipProvider key={tag}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[10px] px-1 py-0 font-normal max-w-[120px] truncate cursor-default"
+                                >
+                                  {tag}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-xs break-all">{tag}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <Badge
                             key={tag}
-                            className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] rounded-full border border-border bg-muted"
+                            variant="secondary"
+                            className="text-[10px] px-1 py-0 font-normal"
                           >
-                            <Tag className="h-2 w-2" />
                             {tag}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeTagFromEdit(tag);
-                              }}
-                              className="hover:text-destructive"
-                            >
-                              <X className="h-2.5 w-2.5" />
-                            </button>
-                          </span>
-                        ))}
-                        <Input
-                          value={tagInput}
-                          onChange={(e) => setTagInput(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === "Enter" || e.key === ",") {
-                              e.preventDefault();
-                              addTagToEdit(tagInput);
-                            }
-                            if (e.key === "Backspace" && !tagInput && editTags.length > 0) {
-                              removeTagFromEdit(editTags[editTags.length - 1]);
-                            }
-                          }}
-                          placeholder="+ tag"
-                          className="h-5 text-[10px] w-16 px-1 border-dashed inline-flex"
-                        />
-                      </>
-                    ) : (
-                      <>
-                        {memory.tags.length > 0 &&
-                          memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
-                            tag.length > 30 ? (
-                              <TooltipProvider key={tag}>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Badge
-                                      variant="secondary"
-                                      className="text-[10px] px-1 py-0 font-normal max-w-[120px] truncate cursor-default"
-                                    >
-                                      {tag}
-                                    </Badge>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="text-xs break-all">{tag}</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            ) : (
-                              <Badge
-                                key={tag}
-                                variant="secondary"
-                                className="text-[10px] px-1 py-0 font-normal"
-                              >
-                                {tag}
-                              </Badge>
-                            )
-                          ))}
-                      </>
-                    )}
+                          </Badge>
+                        )
+                      ))}
                     {memory.importance > 0 && (
                       <span
                         className="flex items-center gap-1"
@@ -1383,6 +1423,7 @@ export function BrainSection() {
 
                 <div className="flex items-center gap-0.5 shrink-0">
                   <Button
+                    data-testid={`brain-edit-memory-${memory.id}`}
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"

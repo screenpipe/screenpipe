@@ -154,4 +154,31 @@ describe("BrainSection type filter", () => {
       );
     });
   });
+
+  it("edits memory tags from the edit dialog", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getByTestId("brain-edit-memory-1"));
+
+    const textarea = screen.getByTestId(
+      "brain-edit-memory-textarea",
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe(MEMORIES[0].content);
+
+    const tagInput = screen.getByPlaceholderText("add tag...");
+    fireEvent.change(tagInput, { target: { value: "new-tag" } });
+    fireEvent.keyDown(tagInput, { key: "Enter" });
+
+    expect(screen.getByText("new-tag")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("brain-edit-memory-save"));
+
+    await waitFor(() => {
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        "/memories/1",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+  });
 });
