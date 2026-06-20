@@ -95,11 +95,13 @@ type UnifiedItem =
   | { kind: "memory"; data: MemoryRecord; sortDate: number }
   | { kind: "artifact"; data: UnifiedArtifact; sortDate: number };
 
-type TypeFilter = "all" | "memories" | "artifacts";
+type TypeFilter = "memories" | "artifacts";
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
   const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
@@ -169,7 +171,7 @@ export function BrainSection() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
 
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("memories");
   const [visibleCount, setVisibleCount] = useState(RENDER_WINDOW);
 
   // expanded content rows
@@ -242,7 +244,10 @@ export function BrainSection() {
     hasMore: artifactsHaveMore,
     loadMore: loadMoreArtifacts,
     deleteRegistered,
-  } = useUnifiedArtifacts(debouncedQuery, activeTag);
+  } = useUnifiedArtifacts(
+    debouncedQuery,
+    typeFilter === "artifacts" ? activeTag : null,
+  );
 
   // fetch all tags once on mount
   useEffect(() => {
@@ -277,7 +282,7 @@ export function BrainSection() {
           order_dir: sortDir,
         });
         if (debouncedQuery) params.set("q", debouncedQuery);
-        if (activeTag) params.set("tags", activeTag);
+        if (typeFilter === "memories" && activeTag) params.set("tags", activeTag);
         const res = await localFetch(
           `/memories?${params}`,
           { signal: controller.signal },
@@ -304,13 +309,13 @@ export function BrainSection() {
         loadingMoreRef.current = false;
       }
     },
-    [toast, debouncedQuery, activeTag, sortField, sortDir],
+    [toast, debouncedQuery, activeTag, sortField, sortDir, typeFilter],
   );
 
   // fetch on mount + refetch when search/tag filter changes
   useEffect(() => {
     fetchPage(0, false);
-  }, [debouncedQuery, activeTag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, activeTag, typeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // refetch when sort changes so the API returns correctly ordered data
   useEffect(() => {
@@ -476,7 +481,7 @@ export function BrainSection() {
     const items: UnifiedItem[] = [];
 
     // Add memories (unless filtered to artifacts-only)
-    if (typeFilter !== "artifacts") {
+    if (typeFilter === "memories") {
       for (const m of memories) {
         items.push({
           kind: "memory",
@@ -487,7 +492,7 @@ export function BrainSection() {
     }
 
     // Add artifacts (unless filtered to memories-only or importance sort is active)
-    if (typeFilter !== "memories" && sortField !== "importance") {
+    if (typeFilter === "artifacts" && sortField !== "importance") {
       for (const a of artifacts) {
         items.push({
           kind: "artifact",
@@ -505,10 +510,11 @@ export function BrainSection() {
   // True total across the full dataset: both totals are server-side and
   // already reflect the active search/tag filters.
   const totalCount =
-    (typeFilter !== "artifacts" ? total : 0) +
-    (typeFilter !== "memories" && sortField !== "importance"
-      ? artifactsTotal
-      : 0);
+    typeFilter === "memories"
+      ? total
+      : sortField !== "importance"
+        ? artifactsTotal
+        : 0;
 
   // Collapse the render window whenever the visible dataset changes shape.
   useEffect(() => {
@@ -530,14 +536,14 @@ export function BrainSection() {
         const windowNearsEnd =
           visibleCount + RENDER_WINDOW >= unifiedItems.length;
         if (
-          typeFilter !== "artifacts" &&
+          typeFilter === "memories" &&
           !loadingMoreRef.current &&
           memories.length < total &&
           windowNearsEnd
         ) {
           fetchPage(memories.length, true);
         }
-        if (typeFilter !== "memories" && artifactsHaveMore && windowNearsEnd) {
+        if (typeFilter === "artifacts" && artifactsHaveMore && windowNearsEnd) {
           loadMoreArtifacts();
         }
       },
@@ -571,11 +577,6 @@ export function BrainSection() {
       return pruned.size === prev.size ? prev : pruned;
     });
   }, [unifiedItems]);
-
-  const combinedTags = React.useMemo(() => {
-    const set = new Set([...allTags, ...artifactSources]);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [allTags, artifactSources]);
 
   const handleDeleteArtifact = useCallback(
     async (a: UnifiedArtifact) => {
@@ -681,35 +682,72 @@ export function BrainSection() {
         </div>
       )}
 
+      <div className="flex items-center justify-between gap-3">
+        <div className="inline-flex items-center gap-1 border-b border-border">
+          {(
+            [
+              { value: "memories", label: "Memories", count: total },
+              { value: "artifacts", label: "Artifacts", count: artifactsTotal },
+            ] as { value: TypeFilter; label: string; count: number }[]
+          ).map(({ value, label, count }) => (
+            <button
+              key={value}
+              data-testid={`brain-filter-${value}`}
+              onClick={() => {
+                setTypeFilter(value);
+                setActiveTag(null);
+                setSelectedIds(new Set());
+              }}
+              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                typeFilter === value
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {label}
+              <span className="ml-2 text-xs text-muted-foreground">
+                {count.toLocaleString()}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* search bar + add button */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             data-testid="brain-search-input"
-            placeholder="search memories, files, entities, or dates..."
+            placeholder={
+              typeFilter === "memories"
+                ? "search memories, entities, tags, or dates..."
+                : "search artifacts, files, sources, or dates..."
+            }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8 h-8 text-sm"
           />
         </div>
-        <Button
-          data-testid="brain-add-memory-btn"
-          size="sm"
-          variant="outline"
-          className="h-8 text-xs gap-1"
-          onClick={() => {
-            setAddingNew(true);
-            setTimeout(() => newContentRef.current?.focus(), 0);
-          }}
-        >
-          <Plus className="h-3.5 w-3.5" />
-          add
-        </Button>
+        {typeFilter === "memories" && (
+          <Button
+            data-testid="brain-add-memory-btn"
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs gap-1"
+            onClick={() => {
+              setAddingNew(true);
+              setTimeout(() => newContentRef.current?.focus(), 0);
+            }}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            add
+          </Button>
+        )}
       </div>
 
       {/* add new memory form */}
-      {addingNew && (
+      {addingNew && typeFilter === "memories" && (
         <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20">
           <textarea
             data-testid="brain-add-memory-textarea"
@@ -788,7 +826,7 @@ export function BrainSection() {
 
       {/* filters row */}
       <div className="flex items-center gap-2 flex-wrap">
-        {loading && artifactsLoading ? (
+        {(typeFilter === "memories" ? loading : artifactsLoading) ? (
           <Skeleton className="h-6 w-16 rounded-full" />
         ) : (
           <Badge variant="secondary" className="text-xs">
@@ -796,52 +834,12 @@ export function BrainSection() {
           </Badge>
         )}
 
-        {/* type filter */}
-        {(
-          [
-            { value: "all", label: "all" },
-            { value: "memories", label: "memories" },
-            { value: "artifacts", label: "artifacts" },
-          ] as { value: TypeFilter; label: string }[]
-        ).map(({ value, label }) => (
-          <button
-            key={value}
-            data-testid={`brain-filter-${value}`}
-            onClick={() => {
-              setTypeFilter(value);
-              // clear active tag if it won't be visible in the new filter
-              if (activeTag) {
-                const nextTags =
-                  value === "memories"
-                    ? allTags
-                    : value === "artifacts"
-                      ? artifactSources
-                      : combinedTags;
-                if (!nextTags.includes(activeTag)) setActiveTag(null);
-              }
-            }}
-            className={`inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
-              typeFilter === value
-                ? "bg-foreground text-background border-foreground"
-                : "border-border text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-
         {/* divider between type filters and tag chips */}
         {(() => {
-          const visibleTags =
-            typeFilter === "memories"
-              ? allTags
-              : typeFilter === "artifacts"
-                ? artifactSources
-                : combinedTags;
+          const visibleTags = typeFilter === "memories" ? allTags : artifactSources;
           if (visibleTags.length === 0) return null;
           return (
             <>
-              <div className="h-4 w-px bg-border shrink-0" />
               {(showAllTags ? visibleTags : visibleTags.slice(0, 6)).map((tag) => (
                 <button
                   key={tag}
@@ -942,7 +940,7 @@ export function BrainSection() {
         </div>
       )}
 
-      {loading && artifactsLoading ? (
+      {(typeFilter === "memories" ? loading : artifactsLoading) ? (
         <BrainSkeleton />
       ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
@@ -951,11 +949,9 @@ export function BrainSection() {
               ? "no items match your search"
               : typeFilter === "memories"
                 ? "no memories yet"
-                : typeFilter === "artifacts"
-                  ? "no artifacts yet"
-                  : "no memories or artifacts yet"}
+                : "no artifacts yet"}
           </p>
-          {!debouncedQuery && !activeTag && typeFilter !== "artifacts" && (
+          {!debouncedQuery && !activeTag && typeFilter === "memories" && (
             <>
               <p className="text-xs">
                 memories are automatically created by pipes that learn from your
@@ -1056,9 +1052,6 @@ export function BrainSection() {
                       <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal">
                         {artifactItemSource(artItem)}
                       </Badge>
-                      <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
-                        artifact
-                      </span>
                       {artItem.saf_kind && (
                         <span
                           data-testid={`brain-artifact-saf-kind-${artTestId}`}
@@ -1189,9 +1182,6 @@ export function BrainSection() {
                     >
                       {memory.source}
                     </Badge>
-                    <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
-                      memory
-                    </span>
                     {editingId === memory.id ? (
                       <>
                         {editTags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (

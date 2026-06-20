@@ -36,11 +36,40 @@ interface CompactMarkdownProps {
   "data-testid"?: string;
 }
 
-// A truncated preview can cut a ``` block in half; close the fence so the
-// remainder renders as a code block instead of swallowing the row.
-function closeOpenFence(text: string): string {
-  const fences = (text.match(/```/g) || []).length;
-  return fences % 2 === 1 ? text + "\n```" : text;
+function formatTimeForMemoryCopy(time: string): string {
+  const [hourText, minute] = time.split(":");
+  const hour = Number(hourText);
+  if (!Number.isFinite(hour)) return time;
+
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const twelveHour = hour % 12 || 12;
+  return `${twelveHour}:${minute} ${suffix}`;
+}
+
+function formatDateForMemoryCopy(dateText: string): string {
+  const [year, month, day] = dateText.split("-").map(Number);
+  if (!year || !month || !day) return dateText;
+
+  const date = new Date(year, month - 1, day);
+  const today = new Date();
+  const isToday =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+
+  if (isToday) return "last hour";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function compactWindowCheckedCopy(text: string): string {
+  return text.replace(
+    /(^|\n)([*_]{0,3})Window checked:\s*(\d{4}-\d{2}-\d{2})\s+([0-2]\d:[0-5]\d)\s*[–-]\s*([0-2]\d:[0-5]\d)\s+[A-Z]{2,5}(?:\s*\([^)]*UTC[^)]*\))?([*_]{0,3})(?=\n|$)/g,
+    (_match, prefix, openMarker, dateText, startTime, endTime, closeMarker) => {
+      const when = formatDateForMemoryCopy(dateText);
+      const range = `${formatTimeForMemoryCopy(startTime)}-${formatTimeForMemoryCopy(endTime)}`;
+      return `${prefix}${openMarker}Checked ${when} (${range})${closeMarker}`;
+    },
+  );
 }
 
 export function CompactMarkdown({
@@ -51,28 +80,31 @@ export function CompactMarkdown({
   suffix,
   "data-testid": dataTestId,
 }: CompactMarkdownProps) {
-  const isLong = children.length > truncateLen;
-  const truncated = isLong && !expanded;
-  const displayContent = truncated
-    ? closeOpenFence(children.slice(0, truncateLen) + "…")
-    : children;
+  const content = compactWindowCheckedCopy(children);
+  const isLong = content.length > truncateLen;
+  const collapsed = isLong && !expanded;
 
   return (
-    <div className="text-sm text-foreground" data-testid={dataTestId}>
-      <MarkdownBlock
-        text={displayContent}
-        isUser={false}
-        renderSpecialCodeBlock={
-          // A cut-off chart would render as an error box, so only attempt
-          // diagrams when the full content is shown.
-          truncated
-            ? undefined
-            : (language, content) =>
-                language === "mermaid" ? (
-                  <MermaidDiagramBlock chart={content} />
-                ) : null
-        }
-      />
+    <div
+      className="text-sm text-foreground [&_.prose]:text-sm [&_.prose]:leading-relaxed [&_.prose_h1]:text-lg [&_.prose_h1]:leading-tight [&_.prose_h1]:font-semibold [&_.prose_h1]:mb-3 [&_.prose_h2]:text-base [&_.prose_h2]:leading-snug [&_.prose_h2]:font-semibold [&_.prose_h2]:mb-2 [&_.prose_h3]:text-sm [&_.prose_h3]:leading-snug [&_.prose_h3]:font-semibold [&_.prose_h3]:mb-1.5 [&_.prose_p]:my-2 [&_.prose_ul]:my-2 [&_.prose_ol]:my-2 [&_.prose_li]:my-1"
+      data-testid={dataTestId}
+    >
+      <div className={collapsed ? "max-h-28 overflow-hidden" : undefined}>
+        <MarkdownBlock
+          text={content}
+          isUser={false}
+          renderSpecialCodeBlock={
+            // Collapsed cards clip the rendered tree visually; keep heavy
+            // diagrams disabled until the user expands the artifact.
+            collapsed
+              ? undefined
+              : (language, content) =>
+                  language === "mermaid" ? (
+                    <MermaidDiagramBlock chart={content} />
+                  ) : null
+          }
+        />
+      </div>
       {suffix}
       {isLong && onToggleExpanded && (
         <button
