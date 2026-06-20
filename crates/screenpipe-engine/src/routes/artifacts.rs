@@ -1083,8 +1083,7 @@ mod tests {
             path: "/Users/test/.screenpipe/outputs/pipe/focus-pipe/relatorio-foco-offline.html"
                 .to_string(),
             original_path: Some(
-                "/Users/test/.screenpipe/pipes/focus-pipe/output/relatorio-foco.html"
-                    .to_string(),
+                "/Users/test/.screenpipe/pipes/focus-pipe/output/relatorio-foco.html".to_string(),
             ),
             size_bytes: 1024,
             preview: Some("<html><body>Resumo do dia</body></html>".to_string()),
