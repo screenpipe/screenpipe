@@ -131,6 +131,18 @@ impl DeviceRecoveryBackoff {
     }
 }
 
+/// Throttle policy for the periodic `[DEVICE_RECOVERY]` failure WARNs.
+///
+/// A device that is the registered system default yet cannot actually start
+/// (a disconnected RDP "Remote Audio" endpoint, a Bluetooth device lingering
+/// as the default while powered off) makes recovery retry every backoff cycle
+/// indefinitely. Logging every attempt floods the log and Sentry. Log the
+/// first few attempts (useful while a transient condition is still clearing)
+/// then only every 30th, so a genuinely-gone device stays quiet.
+fn should_log_recovery_attempt(attempts: u32) -> bool {
+    attempts <= 3 || attempts.is_multiple_of(30)
+}
+
 /// Returns true if the error from `default_output_device()` indicates a
 /// permanent condition that won't resolve without hardware changes.
 fn is_permanent_output_error(err: &anyhow::Error) -> bool {
@@ -917,13 +929,17 @@ pub async fn start_device_monitor(
                                                 }
                                                 Err(e) => {
                                                     input_recovery_backoff.record_failure(false);
-                                                    warn!(
-                                                        "[DEVICE_RECOVERY] failed to start input device {} (attempt {}, next retry in {}s): {}",
-                                                        device_name,
+                                                    if should_log_recovery_attempt(
                                                         input_recovery_backoff.attempts,
-                                                        input_recovery_backoff.next_delay_secs(),
-                                                        e
-                                                    );
+                                                    ) {
+                                                        warn!(
+                                                            "[DEVICE_RECOVERY] failed to start input device {} (attempt {}, next retry in {}s): {}",
+                                                            device_name,
+                                                            input_recovery_backoff.attempts,
+                                                            input_recovery_backoff.next_delay_secs(),
+                                                            e
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -931,9 +947,9 @@ pub async fn start_device_monitor(
                                     Err(e) => {
                                         let is_permanent = is_permanent_input_error(&e);
                                         input_recovery_backoff.record_failure(is_permanent);
-                                        if input_recovery_backoff.attempts <= 3
-                                            || input_recovery_backoff.attempts.is_multiple_of(30)
-                                        {
+                                        if should_log_recovery_attempt(
+                                            input_recovery_backoff.attempts,
+                                        ) {
                                             warn!(
                                                 "[DEVICE_RECOVERY] no input device available (attempt {}, {}, next retry in {}s): {}",
                                                 input_recovery_backoff.attempts,
@@ -998,20 +1014,24 @@ pub async fn start_device_monitor(
                                             }
                                             Err(e) => {
                                                 output_recovery_backoff.record_failure(false);
-                                                warn!(
-                                                    "[DEVICE_RECOVERY] failed to start output device {} (attempt {}, next retry in {}s): {}",
-                                                    device_name, output_recovery_backoff.attempts,
-                                                    output_recovery_backoff.next_delay_secs(), e
-                                                );
+                                                if should_log_recovery_attempt(
+                                                    output_recovery_backoff.attempts,
+                                                ) {
+                                                    warn!(
+                                                        "[DEVICE_RECOVERY] failed to start output device {} (attempt {}, next retry in {}s): {}",
+                                                        device_name, output_recovery_backoff.attempts,
+                                                        output_recovery_backoff.next_delay_secs(), e
+                                                    );
+                                                }
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         let is_permanent = is_permanent_output_error(&e);
                                         output_recovery_backoff.record_failure(is_permanent);
-                                        if output_recovery_backoff.attempts <= 3
-                                            || output_recovery_backoff.attempts.is_multiple_of(30)
-                                        {
+                                        if should_log_recovery_attempt(
+                                            output_recovery_backoff.attempts,
+                                        ) {
                                             // Log first 3 attempts, then every 30th to avoid spam
                                             warn!(
                                                 "[DEVICE_RECOVERY] no output device available (attempt {}, {}, next retry in {}s): {}",
@@ -1631,6 +1651,23 @@ mod tests {
         /// Default for builders that don't exercise the fail-over-to-any-available
         /// path (most fallback tests only care about the system-default target).
         static ref EMPTY_AVAILABLE_INPUTS: HashSet<String> = HashSet::new();
+    }
+
+    #[test]
+    fn test_recovery_log_throttle() {
+        // First three attempts always log (transient conditions still clearing).
+        assert!(should_log_recovery_attempt(1));
+        assert!(should_log_recovery_attempt(2));
+        assert!(should_log_recovery_attempt(3));
+        // Then quiet until every 30th, so a genuinely-gone device (e.g. a
+        // disconnected RDP "Remote Audio" endpoint that keeps retrying every
+        // backoff cycle forever) stops flooding the log and Sentry.
+        assert!(!should_log_recovery_attempt(4));
+        assert!(!should_log_recovery_attempt(29));
+        assert!(should_log_recovery_attempt(30));
+        assert!(!should_log_recovery_attempt(31));
+        assert!(should_log_recovery_attempt(60));
+        assert!(!should_log_recovery_attempt(65));
     }
 
     #[test]
