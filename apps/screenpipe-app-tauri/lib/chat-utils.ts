@@ -79,6 +79,8 @@ export interface ChatPrefillData {
   source?: string;
   /** Open the Home window chat instead of the Chat overlay. */
   useHomeChat?: boolean;
+  /** Pipe generation tracking context — written to the target window's sessionStorage. */
+  pipeGenerationContext?: Record<string, unknown>;
 }
 
 export type ChatTargetWindow = "home" | "chat";

@@ -636,7 +636,7 @@ export function NoteView({
         images: noteImages,
         autoSend: true,
         source: "meeting-summarize",
-        useHomeChat: true,
+        useHomeChat: false,
       });
     } catch (err) {
       console.error("failed to summarize meeting", err);

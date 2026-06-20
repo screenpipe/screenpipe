@@ -65,7 +65,7 @@ import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
 import { NotificationBell } from "@/components/notification-bell";
-import { ChatPrefillData } from "@/lib/chat-utils";
+import { ChatPrefillData, showChatWithPrefill } from "@/lib/chat-utils";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 // --- Types ---
 
@@ -246,10 +246,7 @@ function getReadmeFromPipeMd(raw: string): string {
 }
 
 function navigateHomeAndPrefill(data: ChatPrefillData): void {
-  sessionStorage.setItem("pendingChatPrefill", JSON.stringify(data));
-  const url = new URL(window.location.href);
-  url.searchParams.set("section", "home");
-  window.location.href = url.toString();
+  void showChatWithPrefill({ ...data, useHomeChat: false });
 }
 
 function buildForkPipeDisplayLabel(pipeTitle: string): string {

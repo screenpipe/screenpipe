@@ -59,7 +59,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { emit, once, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { mountAgentEventBus, registerDefault } from "@/lib/events/bus";
 import { parsePipeSessionId } from "@/lib/events/types";
-import { ChatPrefillData } from "@/lib/chat-utils";
+import { ChatPrefillData, showChatWithPrefill } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import { humanizeDow, humanizeSchedule, parseHumanSchedule } from "@/lib/utils/schedule-format";
@@ -233,12 +233,7 @@ rules:
 create the pipe.md file, install it, and enable it. here is what the user wants:`;
 
 function navigateHomeAndPrefill(data: ChatPrefillData): void {
-  // Store prefill data before navigating — the page will reload so
-  // any code after location change won't execute.
-  sessionStorage.setItem("pendingChatPrefill", JSON.stringify(data));
-  const url = new URL(window.location.href);
-  url.searchParams.set("section", "home");
-  window.location.href = url.toString();
+  void showChatWithPrefill({ ...data, useHomeChat: false });
 }
 
 function buildCreatePipeDisplayLabel(prompt: string): string {
@@ -1042,19 +1037,6 @@ export function PipesSection() {
     // Baseline the installed list so we can detect the new pipe even if the
     // user already has pipes installed.
     const baseline = pipes.map((p: any) => p?.config?.name).filter(Boolean);
-    try {
-      sessionStorage.setItem(
-        "pipeGenerationContext",
-        JSON.stringify({
-          generation_id: generationId,
-          started_at: Date.now(),
-          prompt_length: value.length,
-          baseline_pipes: baseline,
-        })
-      );
-    } catch {
-      // sessionStorage unavailable — funnel will miss this attempt, not fatal
-    }
     posthog.capture("pipe_generation_started", {
       generation_id: generationId,
       prompt_length: value.length,
@@ -1067,6 +1049,12 @@ export function PipesSection() {
       prompt: value,
       displayLabel: buildCreatePipeDisplayLabel(value),
       autoSend: true,
+      pipeGenerationContext: {
+        generation_id: generationId,
+        started_at: Date.now(),
+        prompt_length: value.length,
+        baseline_pipes: baseline,
+      },
     });
   };
 

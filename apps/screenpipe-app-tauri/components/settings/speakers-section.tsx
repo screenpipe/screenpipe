@@ -1191,7 +1191,7 @@ export function SpeakersSection() {
               displayLabel: buildOrganizeSpeakersDisplayLabel(),
               autoSend: true,
               source: "speakers-organize",
-              useHomeChat: true,
+              useHomeChat: false,
             });
           }}
         >

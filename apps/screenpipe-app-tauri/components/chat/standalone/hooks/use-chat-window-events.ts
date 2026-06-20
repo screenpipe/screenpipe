@@ -138,11 +138,16 @@ export function useChatPrefillListener({
       autoSend?: boolean;
       source?: string;
       targetWindow?: string;
+      pipeGenerationContext?: Record<string, unknown>;
     }>("chat-prefill", (event) => {
-      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow } = event.payload;
+      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow, pipeGenerationContext } = event.payload;
       const prefillImages = normalizeImageDataUrls(images);
 
       if (!shouldHandleChatPrefillForWindow({ targetWindow, autoSend }, getCurrentWindow().label)) return;
+
+      if (pipeGenerationContext) {
+        try { sessionStorage.setItem("pipeGenerationContext", JSON.stringify(pipeGenerationContext)); } catch {}
+      }
 
       if (autoSend && prompt) {
         if (prefillInFlightRef.current) return;
