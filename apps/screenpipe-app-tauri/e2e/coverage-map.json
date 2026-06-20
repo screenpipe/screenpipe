@@ -671,6 +671,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Account 'active' plan card is gated on the session token (token AND cloud_subscribed) like the header, so a tokenless-but-subscribed stale shell (post-#3943 secret-store token desync) renders 'not logged in' with the active card gone. Mocks /api/user across all windows and clears set_cloud_token to reproduce the desync deterministically."
+    },
+    {
+      "spec": "search-request-priority.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["home-search", "local-api-search"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Verifies keyword search request fires before secondary search, facet, and speaker requests."
     }
   ]
 }
