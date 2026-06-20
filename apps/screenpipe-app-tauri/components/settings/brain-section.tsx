@@ -57,7 +57,7 @@ import {
 } from "@/lib/hooks/use-unified-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
-import { getMemoryDisplay } from "@/lib/utils/memory-display";
+import { getMemoryDisplay, type MemoryDisplay } from "@/lib/utils/memory-display";
 
 interface MemoryRecord {
   id: number;
@@ -254,6 +254,7 @@ export function BrainSection() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+  const memoryDisplayCacheRef = useRef<Map<string, MemoryDisplay>>(new Map());
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("memories");
   const [visibleCount, setVisibleCount] = useState(RENDER_WINDOW);
@@ -323,6 +324,17 @@ export function BrainSection() {
     const timer = setTimeout(() => setDebouncedFilterSearch(filterSearch), 180);
     return () => clearTimeout(timer);
   }, [filterSearch]);
+
+  const getCachedMemoryDisplay = useCallback((content: string): MemoryDisplay => {
+    const cache = memoryDisplayCacheRef.current;
+    const cached = cache.get(content);
+    if (cached) return cached;
+
+    const display = getMemoryDisplay(content);
+    if (cache.size > 300) cache.clear();
+    cache.set(content, display);
+    return display;
+  }, []);
 
   // artifact data — GET /artifacts merges registered outputs + pipe fs
   // artifacts server-side; q/source filtering and totals are server-side too.
@@ -638,26 +650,49 @@ export function BrainSection() {
         ? artifactsTotal
         : 0;
   const normalizedFilterSearch = filterSearch.trim().toLowerCase();
-  const loadedMemoryFilterTags = memories
-    .flatMap((memory) => memory.tags)
-    .filter((tag) => tag.length > 0 && !/^\d+$/.test(tag))
-    .filter((tag) => {
-      if (!normalizedFilterSearch) return true;
-      return (
-        tag.toLowerCase().includes(normalizedFilterSearch) ||
-        filterTagLabel(tag).toLowerCase().includes(normalizedFilterSearch)
+  const filterTags = React.useMemo(() => {
+    if (typeFilter === "artifacts") {
+      return artifactSources.filter((source) =>
+        source.toLowerCase().includes(normalizedFilterSearch)
       );
-    });
-  const filterTags =
-    typeFilter === "memories"
-      ? Array.from(new Set([...activeTags, ...loadedMemoryFilterTags, ...memoryFilterTags]))
-      : artifactSources.filter((source) =>
-          source.toLowerCase().includes(normalizedFilterSearch)
+    }
+
+    const loadedMemoryFilterTags = memories
+      .flatMap((memory) => memory.tags)
+      .filter((tag) => tag.length > 0 && !/^\d+$/.test(tag))
+      .filter((tag) => {
+        if (!normalizedFilterSearch) return true;
+        return (
+          tag.toLowerCase().includes(normalizedFilterSearch) ||
+          filterTagLabel(tag).toLowerCase().includes(normalizedFilterSearch)
         );
-  const labelFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "label");
-  const personFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "person");
-  const dateFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "date");
-  const sourceFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "source");
+      });
+
+    return Array.from(new Set([...activeTags, ...loadedMemoryFilterTags, ...memoryFilterTags]));
+  }, [
+    activeTags,
+    artifactSources,
+    memories,
+    memoryFilterTags,
+    normalizedFilterSearch,
+    typeFilter,
+  ]);
+  const labelFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "label"),
+    [filterTags],
+  );
+  const personFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "person"),
+    [filterTags],
+  );
+  const dateFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "date"),
+    [filterTags],
+  );
+  const sourceFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "source"),
+    [filterTags],
+  );
   const showFilterButton = typeFilter === "memories" || artifactSources.length > 0;
   const toggleActiveTag = (tag: string) => {
     setActiveTags((prev) => {
@@ -1506,7 +1541,7 @@ export function BrainSection() {
             const memory = item.data;
             const isDeleting = deletingId === memory.id;
             const isExpanded = expandedIds.has(memory.id);
-            const display = getMemoryDisplay(memory.content);
+            const display = getCachedMemoryDisplay(memory.content);
             const tags = memoryCardTags(memory.tags);
 
             return (
