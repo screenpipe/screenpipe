@@ -10,6 +10,15 @@ import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
@@ -441,6 +450,13 @@ export function BrainSection() {
     setNewTags((prev) => prev.filter((t) => t !== tag));
   };
 
+  const closeAddMemoryDialog = () => {
+    setAddingNew(false);
+    setNewContent("");
+    setNewTags([]);
+    setNewTagInput("");
+  };
+
   const createMemory = async () => {
     const trimmed = newContent.trim();
     if (!trimmed) return;
@@ -458,10 +474,7 @@ export function BrainSection() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast({ title: "memory created" });
-      setNewContent("");
-      setNewTags([]);
-      setNewTagInput("");
-      setAddingNew(false);
+      closeAddMemoryDialog();
       fetchPage(0, false);
     } catch (err) {
       toast({
@@ -746,68 +759,80 @@ export function BrainSection() {
         )}
       </div>
 
-      {/* add new memory form */}
-      {addingNew && typeFilter === "memories" && (
-        <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20">
-          <textarea
-            data-testid="brain-add-memory-textarea"
-            ref={newContentRef}
-            value={newContent}
-            onChange={(e) => setNewContent(e.target.value)}
-            placeholder="what should the AI remember?"
-            className="text-sm w-full bg-transparent border border-border rounded px-2 py-1.5 resize-y focus:outline-none focus:border-foreground/40 min-h-[60px]"
-            rows={2}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                createMemory();
-              }
-              if (e.key === "Escape") setAddingNew(false);
-            }}
-          />
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {newTags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
-              >
-                <Tag className="h-2.5 w-2.5" />
-                {tag}
-                <button
-                  onClick={() => removeTagFromNew(tag)}
-                  className="hover:text-destructive"
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            ))}
-            <Input
-              value={newTagInput}
-              onChange={(e) => setNewTagInput(e.target.value)}
+      <Dialog
+        open={addingNew && typeFilter === "memories"}
+        onOpenChange={(open) => {
+          if (open) {
+            setAddingNew(true);
+            setTimeout(() => newContentRef.current?.focus(), 0);
+          } else {
+            closeAddMemoryDialog();
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl" data-testid="brain-add-memory-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base">add memory</DialogTitle>
+            <DialogDescription>
+              Save a durable fact, preference, or decision the AI should keep.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              data-testid="brain-add-memory-textarea"
+              ref={newContentRef}
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+              placeholder="what should the AI remember?"
+              className="min-h-[140px] resize-y text-sm"
+              rows={6}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
-                  addTagToNew(newTagInput);
+                  createMemory();
                 }
-                if (e.key === "Backspace" && !newTagInput && newTags.length > 0) {
-                  removeTagFromNew(newTags[newTags.length - 1]);
-                }
+                if (e.key === "Escape") closeAddMemoryDialog();
               }}
-              placeholder="add tag..."
-              className="h-6 text-[10px] w-20 px-1.5 border-dashed"
             />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {newTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
+                >
+                  <Tag className="h-2.5 w-2.5" />
+                  {tag}
+                  <button
+                    onClick={() => removeTagFromNew(tag)}
+                    className="hover:text-destructive"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </span>
+              ))}
+              <Input
+                value={newTagInput}
+                onChange={(e) => setNewTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addTagToNew(newTagInput);
+                  }
+                  if (e.key === "Backspace" && !newTagInput && newTags.length > 0) {
+                    removeTagFromNew(newTags[newTags.length - 1]);
+                  }
+                }}
+                placeholder="add tag..."
+                className="h-6 text-[10px] w-20 px-1.5 border-dashed"
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-2 justify-end">
+          <DialogFooter>
             <Button
               size="sm"
               variant="ghost"
               className="h-7 text-xs"
-              onClick={() => {
-                setAddingNew(false);
-                setNewContent("");
-                setNewTags([]);
-                setNewTagInput("");
-              }}
+              onClick={closeAddMemoryDialog}
             >
               cancel
             </Button>
@@ -817,12 +842,12 @@ export function BrainSection() {
               className="h-7 text-xs"
               onClick={createMemory}
               disabled={!newContent.trim() || savingNew}
-            >
-              {savingNew ? <Loader2 className="h-3 w-3 animate-spin" /> : "save"}
+          >
+            {savingNew ? <Loader2 className="h-3 w-3 animate-spin" /> : "save"}
             </Button>
-          </div>
-        </div>
-      )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* filters row */}
       <div className="flex items-center gap-2 flex-wrap">
