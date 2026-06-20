@@ -430,7 +430,10 @@ fn select_newest_files(
 /// Returns `true` if the extension is user-facing for fallback artifact
 /// discovery. Pipes producing other types should declare them in `artifacts:`.
 fn is_user_facing_artifact_ext(ext: &str) -> bool {
-    matches!(ext, "md" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+    matches!(
+        ext,
+        "md" | "html" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2061,6 +2064,7 @@ impl PipeManager {
                 for (path, _) in select_newest_files(candidates, fallback_cap) {
                     let kind = match path.extension().and_then(|e| e.to_str()) {
                         Some("md") => "markdown",
+                        Some("html") => "html",
                         Some("json") => "json",
                         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
                         _ => "text",
@@ -5652,6 +5656,7 @@ mod tests {
     fn test_is_user_facing_artifact_ext() {
         // positive cases
         assert!(is_user_facing_artifact_ext("md"));
+        assert!(is_user_facing_artifact_ext("html"));
         assert!(is_user_facing_artifact_ext("png"));
         assert!(is_user_facing_artifact_ext("jpg"));
         assert!(is_user_facing_artifact_ext("jpeg"));
@@ -5691,6 +5696,7 @@ mod tests {
         // Create mixed files in output/
         let files = vec![
             "report.md",
+            "report.html",
             "screenshot.png",
             "data.json",
             "runner.ts",
@@ -5716,7 +5722,21 @@ mod tests {
             .collect();
         names.sort();
 
-        assert_eq!(names, vec!["output/report.md", "output/screenshot.png"]);
+        assert_eq!(
+            names,
+            vec![
+                "output/report.html",
+                "output/report.md",
+                "output/screenshot.png"
+            ]
+        );
+
+        let html_decl = pipe_decls
+            .1
+            .iter()
+            .find(|(decl, _)| decl.path == "output/report.html")
+            .expect("html artifact should be discovered");
+        assert_eq!(html_decl.0.kind.as_deref(), Some("html"));
     }
 
     #[test]

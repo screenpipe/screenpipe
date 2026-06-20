@@ -14,6 +14,7 @@ import {
 	redactApiUrlForLogs,
 } from "@/lib/api";
 import { mergeTimelineFrames } from "./timeline-frame-merge";
+import { evaluateTimelineLiveness } from "./timeline-liveness";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -39,8 +40,37 @@ const TIMELINE_STREAM_FRAME_LIMIT = 2500;
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY_MS = 2000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+
+// Guards connectWebSocket against re-entry. connectWebSocket awaits
+// ensureApiReady() before it bumps currentWsId / closes the old socket, so two
+// callers landing in that gap (e.g. the watchdog firing while an onclose-
+// scheduled reconnect is mid-await) would each build a socket and orphan one.
+let isConnecting = false;
+
+// Reset the backoff counters so the next connectWebSocket reconnects promptly
+// instead of inheriting a long delay. Kept as one helper so the two "reconnect
+// now" call sites (watchdog + onWindowFocus) can't drift and silently
+// reintroduce the long-backoff-on-return regression.
+function resetBackoffCounters() {
+	reconnectAttempts = 0;
+	connectionAttempts = 0;
+}
+
+// Liveness watchdog — recovers a "zombie" WebSocket that looks OPEN to JS but is
+// actually dead (typically after the machine sleeps: the OS drops the TCP
+// connection while JS is frozen, so onclose/onerror never fire). The server
+// sends a keep-alive every 30s, so total silence past the stale threshold on an
+// "open" socket means the stream is dead. Pure-number checks on a slow interval
+// → negligible CPU; no DB polling. See timeline-liveness.ts.
+let lastMessageAt = 0;
+let livenessTimer: ReturnType<typeof setInterval> | null = null;
+const LIVENESS_CHECK_INTERVAL_MS = 10000; // how often the watchdog ticks
+// 1.5× the 30s server keep-alive: tolerates one dropped keep-alive plus event-loop
+// jitter before declaring a still-open socket dead, so healthy-but-quiet
+// connections aren't torn down unnecessarily.
+const LIVENESS_STALE_THRESHOLD_MS = 45000;
 
 // Suppress repeated disconnect logs - only log on state transitions
 let hasLoggedTimelineDisconnect = false;
@@ -290,8 +320,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	connectWebSocket: () => {
+		// Re-entry guard: a connect is already mid-flight. Without this, the
+		// watchdog (or an onerror+onclose pair) can stack a second connect during
+		// the ensureApiReady() await and orphan a socket. Cleared once the socket
+		// exists — ensureApiReady is the only await; the rest runs synchronously.
+		if (isConnecting) return;
+		isConnecting = true;
 		void (async () => {
-			await ensureApiReady();
+			try {
+				await ensureApiReady();
+			} catch {
+				isConnecting = false;
+				return;
+			}
 
 			// Cancel any pending reconnect timeout to prevent cascade
 			if (reconnectTimeout) {
@@ -337,14 +378,48 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				requestTimeoutTimer = null;
 			}
 
+			// Start the liveness watchdog once. It runs for the app lifetime and
+			// force-reconnects a zombie/dead socket the normal events missed.
+			if (!livenessTimer && typeof setInterval !== "undefined") {
+				livenessTimer = setInterval(() => {
+					const liveWs = get().websocket;
+					const action = evaluateTimelineLiveness({
+						readyState: liveWs ? liveWs.readyState : null,
+						now: Date.now(),
+						lastMessageAt,
+						staleThresholdMs: LIVENESS_STALE_THRESHOLD_MS,
+						documentHidden:
+							typeof document !== "undefined" &&
+							document.visibilityState === "hidden",
+						reconnectScheduled: reconnectTimeout !== null,
+					});
+					if (action === "reconnect") {
+						console.warn(
+							"[timeline WS] liveness watchdog: stream silent/dead, reconnecting",
+						);
+						// Reconnect promptly — don't inherit a long backoff delay.
+						resetBackoffCounters();
+						get().connectWebSocket();
+					}
+				}, LIVENESS_CHECK_INTERVAL_MS);
+			}
+
 			// Same as health/metrics WS: cookie may not cross webview port; ?token= is reliable.
 			const wsBase = getApiBaseUrl().replace("http://", "ws://");
 			const wsUrl = appendAuthToken(`${wsBase}/stream/frames`);
+			// Seed activity so the connecting socket isn't flagged stale before it opens.
+			lastMessageAt = Date.now();
 			const ws = new WebSocket(wsUrl);
+			// Past the ensureApiReady await — the socket now exists and the rest of
+			// this function is synchronous, so re-entry can no longer orphan a socket.
+			isConnecting = false;
 
 		ws.onopen = () => {
 			// Ignore events from old WebSocket instances
 			if (thisWsId !== currentWsId) return;
+
+			// Fresh connection counts as activity for the liveness watchdog.
+			lastMessageAt = Date.now();
 
 			// Reset retry counters on successful connection
 			connectionAttempts = 0;
@@ -382,6 +457,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		ws.onmessage = (event) => {
 			// Ignore events from old WebSocket instances
 			if (thisWsId !== currentWsId) return;
+
+			// Any message (frame batch, audio update, keep-alive) proves the
+			// stream is alive — feed the liveness watchdog.
+			lastMessageAt = Date.now();
 
 			try {
 				const data = JSON.parse(event.data);
@@ -560,8 +639,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			};
 			if (event.code === 1000 && event.wasClean) {
 				console.debug("[timeline WS] closed (clean)", closeDetail);
-			} else {
+			} else if (!hasLoggedTimelineDisconnect) {
+				// Log once per disconnect episode (reset on the next onopen). Without
+				// this gate, the now-indefinite reconnect would warn every ~30s for
+				// the entire duration of a real outage.
 				console.warn("[timeline WS] closed", closeDetail);
+				hasLoggedTimelineDisconnect = true;
 			}
 
 			// Flush any remaining frames before closing
@@ -593,16 +676,22 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				set({ isConnected: false });
 			}
 
-			// Reconnect with exponential backoff (2s, 3s, 4.5s, ... capped at 30s)
+			// Reconnect with exponential backoff (2s, 3s, 4.5s, ... capped at 30s),
+			// indefinitely. We used to give up after a fixed number of attempts (~10),
+			// which left the timeline permanently frozen after a long outage (e.g.
+			// machine sleep) until a manual refresh. The local engine is effectively
+			// always available, so it's correct to keep retrying; the 30s cap keeps
+			// the cost negligible (at most one attempt per 30s).
 			reconnectAttempts++;
-			if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
-				const delay = Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(1.5, reconnectAttempts - 1), 30000);
-				reconnectTimeout = setTimeout(() => {
-					reconnectTimeout = null;
-					connectionAttempts = 0; // Fresh start for reconnection
-					get().connectWebSocket();
-				}, delay);
-			}
+			const delay = Math.min(
+				RECONNECT_BASE_DELAY_MS * Math.pow(1.5, reconnectAttempts - 1),
+				RECONNECT_MAX_DELAY_MS,
+			);
+			reconnectTimeout = setTimeout(() => {
+				reconnectTimeout = null;
+				connectionAttempts = 0; // Fresh start for reconnection
+				get().connectWebSocket();
+			}, delay);
 		};
 		})();
 	},
@@ -759,15 +848,21 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			};
 		});
 
-		// If WebSocket is open, fetch today's data
-		if (websocket && websocket.readyState === WebSocket.OPEN) {
+		// If the socket is open AND actually alive, just fetch today's data.
+		// If it looks open but has gone silent past the stale threshold it's a
+		// zombie (the machine slept and the close event never fired) — a fetch
+		// would vanish into a dead socket, so reconnect instead for instant
+		// recovery on return.
+		const isStale = Date.now() - lastMessageAt > LIVENESS_STALE_THRESHOLD_MS;
+		if (websocket && websocket.readyState === WebSocket.OPEN && !isStale) {
 			const startTime = new Date(today);
 			startTime.setHours(0, 0, 0, 0);
 			const endTime = new Date(today);
 			endTime.setHours(23, 59, 59, 999);
 			fetchTimeRange(startTime, endTime);
 		} else {
-			// WebSocket is closed, reconnect (which will fetch on open)
+			// WebSocket is closed or a zombie — reconnect (which fetches on open).
+			resetBackoffCounters();
 			connectWebSocket();
 		}
 	},

@@ -3081,9 +3081,9 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Batch Transcription
-                      <HelpTooltip text="Accumulates longer audio chunks (30s-5min) using silence-gap detection before sending to Whisper. Gives the model more context for better transcription quality and speaker diarization." />
+                      <HelpTooltip text="Groups audio into longer stretches (30s–5min) before transcribing. More context means more accurate transcripts and a better job telling speakers apart." />
                     </h3>
-                    <p className="text-xs text-muted-foreground">Longer audio chunks for better transcription quality</p>
+                    <p className="text-xs text-muted-foreground">Group audio into longer stretches for more accurate transcripts</p>
                   </div>
                 </div>
                 <Switch
@@ -3100,7 +3100,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground flex items-center gap-1.5">
                       Max batch duration
-                      <HelpTooltip text="Maximum audio to batch before transcribing. Depends on your endpoint's file size limit. 0 = auto (~50min). Audio is compressed to MP3 before upload." />
+                      <HelpTooltip text="The most audio to group together before transcribing. Set 0 for automatic (~50min). Going higher needs a provider that accepts bigger uploads." />
                     </span>
                     <span className="text-xs font-mono text-foreground">
                       {(settings.batchMaxDurationSecs ?? 0) === 0
@@ -3138,7 +3138,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Filter Music
-                      <HelpTooltip text="Detect and filter out music-dominant audio (e.g. Spotify, YouTube) before transcription using spectral analysis. Reduces garbage transcriptions from background music." />
+                      <HelpTooltip text="Skips audio that's mostly music (e.g. Spotify, YouTube) so it isn't transcribed. Cuts the gibberish background music tends to produce." />
                     </h3>
                     <p className="text-xs text-muted-foreground">Remove background music from transcriptions</p>
                   </div>
@@ -3259,7 +3259,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Automatic meeting detection
-                    <HelpTooltip text="Detects meeting apps (Zoom, Teams, Meet, Discord calls, etc.) to start/stop meetings and live notes. Turn off if it triggers spuriously and split meetings manually. CLI equivalent: --disable-meeting-detector." />
+                    <HelpTooltip text="Detects meeting apps (Zoom, Teams, Meet, Discord calls, etc.) to start and stop meetings and live notes automatically. Turn off if it starts meetings when it shouldn't, and start them yourself instead." />
                   </h3>
                   <p className="text-xs text-muted-foreground">Auto-start meetings when a call app is detected</p>
                 </div>

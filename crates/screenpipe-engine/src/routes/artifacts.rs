@@ -579,7 +579,7 @@ fn default_per_pipe_limit() -> u32 {
 
 #[derive(OaSchema, Deserialize)]
 pub(crate) struct ListArtifactsQuery {
-    /// Case-insensitive substring match over title, source, and preview.
+    /// Case-insensitive substring match over title, source, preview, and paths.
     pub q: Option<String>,
     /// Exact source match (pipe name or chat source).
     pub source: Option<String>,
@@ -626,6 +626,22 @@ pub(crate) struct ArtifactListResponse {
     pub pagination: PaginationInfo,
     /// Distinct sources over the full (unfiltered) set, for filter pills.
     pub sources: Vec<String>,
+}
+
+fn artifact_matches_query(item: &ArtifactItem, q: &str) -> bool {
+    item.title.to_lowercase().contains(q)
+        || item.source.to_lowercase().contains(q)
+        || item.path.to_lowercase().contains(q)
+        || item
+            .original_path
+            .as_deref()
+            .map(|p| p.to_lowercase().contains(q))
+            .unwrap_or(false)
+        || item
+            .preview
+            .as_deref()
+            .map(|p| p.to_lowercase().contains(q))
+            .unwrap_or(false)
 }
 
 /// GET /artifacts — unified listing of AI-generated artifacts.
@@ -771,14 +787,7 @@ pub(crate) async fn list_artifacts_handler(
         .map(str::to_lowercase)
         .filter(|q| !q.is_empty())
     {
-        items.retain(|i| {
-            i.title.to_lowercase().contains(&q)
-                || i.source.to_lowercase().contains(&q)
-                || i.preview
-                    .as_deref()
-                    .map(|p| p.to_lowercase().contains(&q))
-                    .unwrap_or(false)
-        });
+        items.retain(|i| artifact_matches_query(i, &q));
     }
 
     // Newest first by parsed instant — sources emit different UTC offsets,
@@ -1060,6 +1069,34 @@ mod tests {
                 "/fake/screenpipe/outputs/pipe/my-pipe/report.txt"
             ))
         );
+    }
+
+    #[test]
+    fn artifact_query_matches_path_and_original_path() {
+        let item = ArtifactItem {
+            registered: true,
+            id: Some(1),
+            source: "focus-pipe".to_string(),
+            source_type: "pipe".to_string(),
+            title: "Daily focus report".to_string(),
+            kind: "html".to_string(),
+            path: "/Users/test/.screenpipe/outputs/pipe/focus-pipe/relatorio-foco-offline.html"
+                .to_string(),
+            original_path: Some(
+                "/Users/test/.screenpipe/pipes/focus-pipe/output/relatorio-foco.html".to_string(),
+            ),
+            size_bytes: 1024,
+            preview: Some("<html><body>Resumo do dia</body></html>".to_string()),
+            saf_kind: None,
+            artifact_id: None,
+            saf_version: None,
+            modified_at: "2026-06-20T00:00:00Z".to_string(),
+            created_at: Some("2026-06-20T00:00:00Z".to_string()),
+        };
+
+        assert!(artifact_matches_query(&item, "relatorio-foco-offline.html"));
+        assert!(artifact_matches_query(&item, "relatorio-foco.html"));
+        assert!(!artifact_matches_query(&item, "missing-file-name"));
     }
 
     // ── SAF envelope validator ────────────────────────────────────────────

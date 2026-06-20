@@ -728,6 +728,26 @@ impl SafeMonitor {
         // Linux: xcap captures per-frame, no persistent session to release.
     }
 
+    /// Monotonic count of frames the OS has delivered into this monitor's
+    /// persistent capture stream, if such a stream exists. Compared across
+    /// captures to detect a frozen stream: a live stream keeps advancing this
+    /// even on a static screen, so if it stops advancing while captures keep
+    /// happening, the OS callback has wedged and `capture_image()` is returning
+    /// a stale frame — the caller should `release_capture_stream()` to rebuild.
+    ///
+    /// `None` when no persistent stream is cached (e.g. just after release, or
+    /// on platforms without a delivery counter). macOS only for now.
+    pub fn last_capture_seq(&self) -> Option<u64> {
+        #[cfg(target_os = "macos")]
+        {
+            crate::stream_invalidation::monitor_frame_seq(self.monitor_id)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
     #[cfg(target_os = "windows")]
     fn record_persistent_init_failure(
         monitor_id: u32,
