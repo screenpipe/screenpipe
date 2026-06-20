@@ -284,7 +284,7 @@ describe("Chat sidebar groups", function () {
       const lsKey = await browser.execute((pipeName: string) => {
         return localStorage.getItem(`screenpipe:group-expanded:pipe:${pipeName}`);
       }, PIPE_NAME);
-      expect(lsKey).toBe("1");
+      expect(lsKey).toBe("true");
 
       // Reload page
       await reloadAndWaitForHome();
