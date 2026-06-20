@@ -374,6 +374,15 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
+    // embeds the engine in-process, so it never ran the engine binary's main()
+    // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
+    // high-tier SQLite pool (up to ~37 connections × 3 fds) plus video/audio/
+    // sockets. Exhausting it makes SQLite hit SQLITE_IOERR (522) mid-write and
+    // desync the WAL-index into "database disk image is malformed" (code 11).
+    // Shared single source of truth with the CLI; see engine `fd_limit` module.
+    screenpipe_engine::fd_limit::set_fd_limit();
+
     let _ = fix_path_env::fix();
 
     #[cfg(target_os = "windows")]

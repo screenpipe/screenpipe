@@ -539,10 +539,15 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub keep_computer_awake: bool,
 
-    /// Mitsukeru fork: override the active PowerProfile's idle_capture_interval_ms.
-    /// Forces this idle snapshot interval regardless of power mode. Useful for
-    /// fixed desktop / long-running recording where AC-power Performance defaults
-    /// (30s) are too aggressive. Reference: Balanced=60_000, Saver=120_000.
+    /// Guaranteed-capture floor (ms): always take a screenshot at least this
+    /// often, even when the screen is unchanged. This is the CLI equivalent of
+    /// the app's "Capture frequency" setting — use it when the default
+    /// event-driven cadence feels too sparse (e.g. long reading / watching with
+    /// few clicks). Overrides the active PowerProfile's idle interval (AC 30s …
+    /// Saver up to 300s) and, unlike the raw profile value, is PINNED so it
+    /// survives power transitions. Idle captures bypass content dedup, so a
+    /// frame is written even on a static screen. e.g. 2000 = a frame at least
+    /// every 2s. Omitted = follow the PowerProfile.
     #[arg(long)]
     pub idle_capture_interval_ms: Option<u64>,
 

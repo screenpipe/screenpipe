@@ -175,11 +175,11 @@ export function TimelineControls({
 								) : (
 									<CalendarIcon className="h-3 w-3" />
 								)}
-								{/* Always show the date + cursor time, e.g. "Jan 6 16:18".
-								    Prefer the timestamp of the frame under the playhead;
-								    fall back to currentDate during the brief load window
-								    before the first frame arrives. */}
-								<span>{format(currentTime ?? currentDate, "MMM d HH:mm")}</span>
+								{/* Show just the date, e.g. "Jun 19" — the exact time is already
+								    shown by the playhead chip on the timeline, so repeating it here
+								    is redundant. Prefer the date of the frame under the playhead;
+								    fall back to currentDate during the brief load window. */}
+								<span>{format(currentTime ?? currentDate, "MMM d")}</span>
 								<ChevronDown className="h-3 w-3 opacity-60" />
 							</button>
 						</PopoverTrigger>
@@ -191,7 +191,7 @@ export function TimelineControls({
 						<Calendar
 							mode="single"
 							selected={currentDate}
-							onSelect={(date) => {
+							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} onSelect={(date) => {
 								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
 								if (date) {
 									onDateChange(date);

@@ -257,9 +257,23 @@ function appNameToColor(name: string, alpha?: number): string {
 	return `hsl(${appNameToHue(name)}, 40%, 55%)`;
 }
 
-// Color for timeline bars — tinted enough to distinguish apps visually
+// Second, independent hash so two names whose hues land close together still
+// differ in saturation/lightness — avoids perceptual color collisions (the
+// "github and screenpipe look identical" problem) when hue alone isn't enough.
+function appNameToHash2(name: string): number {
+	let h = 5381;
+	for (let i = 0; i < name.length; i++) h = (h * 33) ^ name.charCodeAt(i);
+	return Math.abs(h);
+}
+
+// Color for timeline bars — spread across hue + saturation + lightness so
+// distinct apps/sites stay visually distinct. Callers pass a domain for
+// browser sessions and an app name otherwise (see segment color below).
 function appNameToBarColor(name: string): string {
-	return `hsl(${appNameToHue(name)}, 35%, 65%)`;
+	const h2 = appNameToHash2(name);
+	const sat = 34 + (h2 % 20); // 34–53%
+	const light = 60 + (Math.floor(h2 / 20) % 14); // 60–73%
+	return `hsl(${appNameToHue(name)}, ${sat}%, ${light}%)`;
 }
 
 /**
@@ -294,13 +308,10 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 				return;
 			}
 			const r = el.getBoundingClientRect();
-			// Pin the chip's vertical position to the timeline container so it stays
-			// put. The current bar constantly animates its height (80%) and scale
-			// (1.15) as frames scroll under the playhead, so following its measured
-			// top edge made the chip bob up and down. Only the horizontal position
-			// tracks the current bar; Y is anchored just above the bars region.
-			const cr = container.getBoundingClientRect();
-			setRect({ x: r.left + r.width / 2, y: cr.top + 72 });
+			// The timeline is a flat strip: every bar is the same slim height with no
+			// per-state height or scale change, so the current bar's top stays put as
+			// frames scroll under the playhead. Tracking it directly no longer bobs.
+			setRect({ x: r.left + r.width / 2, y: r.top });
 		};
 		const schedule = () => {
 			if (!raf) raf = requestAnimationFrame(measure);
@@ -319,21 +330,37 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 	if (!rect || !timestamp) return null;
 
 	return createPortal(
-		<div
-			className="fixed z-[9998] flex flex-col items-center pointer-events-none"
-			style={{
-				left: `clamp(64px, ${rect.x}px, calc(100vw - 64px))`,
-				top: `${rect.y}px`,
-				transform: "translate(-50%, -100%) translateY(-6px)",
-			}}
-		>
-			<div className="flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-mono font-semibold tabular-nums leading-none text-neutral-900 shadow-lg ring-1 ring-black/10 whitespace-nowrap">
-				<Clock className="w-3 h-3 opacity-80" />
-				<span>{format(new Date(timestamp), "h:mm:ss a")}</span>
+		<>
+			{/* Vertical playhead line through the bar (Rewind-style) — marks the
+			    current position cleanly instead of glowing the current frame. */}
+			<div
+				className="fixed z-[9997] pointer-events-none"
+				style={{
+					left: `clamp(64px, ${rect.x}px, calc(100vw - 64px))`,
+					top: `${rect.y - 4}px`,
+					height: "20px",
+					width: "1.5px",
+					transform: "translateX(-50%)",
+					background: "rgba(255,255,255,0.85)",
+					borderRadius: "1px",
+				}}
+			/>
+			<div
+				className="fixed z-[9998] flex flex-col items-center pointer-events-none"
+				style={{
+					left: `clamp(64px, ${rect.x}px, calc(100vw - 64px))`,
+					top: `${rect.y}px`,
+					transform: "translate(-50%, -100%) translateY(-6px)",
+				}}
+			>
+				<div className="flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-mono font-semibold tabular-nums leading-none text-neutral-900 shadow-lg ring-1 ring-black/10 whitespace-nowrap">
+					<Clock className="w-3 h-3 opacity-80" />
+					<span>{format(new Date(timestamp), "h:mm:ss a")}</span>
+				</div>
+				{/* small cap connecting the chip down to the playhead line */}
+				<div className="-mt-[3px] h-2 w-2 rotate-45 rounded-[1px] bg-white ring-1 ring-black/10" />
 			</div>
-			{/* downward pointer connecting the chip to the bar */}
-			<div className="-mt-[3px] h-2 w-2 rotate-45 rounded-[1px] bg-white ring-1 ring-black/10" />
-		</div>,
+		</>,
 		document.body,
 	);
 });
@@ -394,7 +421,7 @@ export const TimelineSlider = ({
 	const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
 		new Set(),
 	);
-	const { setSelectionRange, selectionRange, tags } = useTimelineSelection();
+	const { setSelectionRange, selectionRange, tags, loadTagsForFrames } = useTimelineSelection();
 
 	// UI events cache for tooltip enrichment
 	const [uiEventsCache, setUiEventsCache] = useState<Record<string, UiEventSummary[]>>({});
@@ -570,6 +597,9 @@ export const TimelineSlider = ({
 	// When true we freeze the visible frames to prevent server pushes from
 	// recomputing groups and killing the popover / selection.
 	const isUserInteracting = isDragging || activePopoverGroup !== null || selectionRange !== null;
+	// While selecting (or mid-drag), suppress the hover thumbnail + the app-context
+	// popover so they don't clutter or fight the selection.
+	const hasActiveSelection = isDragging || selectionRange !== null || selectedIndices.size > 0;
 
 	// Visible frames window: sized to what actually fits on screen.
 	// Uses container width + frame size so filters (speakers, apps, etc.)
@@ -592,6 +622,23 @@ export const TimelineSlider = ({
 		frozenFramesRef.current = latestVisibleFrames;
 	}
 	const visibleFrames = isUserInteracting ? frozenFramesRef.current : latestVisibleFrames;
+
+	// Load tags for every visible frame so the tag underline reflects reality
+	// consistently — not only after a selection. Each frame is requested once
+	// (a ref tracks what we've already asked for) so scrolling doesn't refetch.
+	const requestedTagIdsRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!visibleFrames || visibleFrames.length === 0) return;
+		const newIds: string[] = [];
+		for (const f of visibleFrames) {
+			const id = f.devices?.[0]?.frame_id;
+			if (id && !requestedTagIdsRef.current.has(id)) {
+				requestedTagIdsRef.current.add(id);
+				newIds.push(id);
+			}
+		}
+		if (newIds.length) loadTagsForFrames(newIds);
+	}, [visibleFrames, loadTagsForFrames]);
 
 	// Fetch memories for the visible time range
 	useEffect(() => {
@@ -739,6 +786,7 @@ export const TimelineSlider = ({
 		let currentGroupAllApps = new Set<string>();
 		let currentDayKey = "";
 		let currentGroupDomainCounts = new Map<string, number>();
+		let currentDomain = ""; // tracks the active site within a browser session
 
 		const flushGroup = () => {
 			if (currentGroup.length > 0) {
@@ -775,31 +823,33 @@ export const TimelineSlider = ({
 			}
 
 			const frameUrl = frameBrowserUrls[visIdx];
+			const isBrowserApp = getAppCategory(appName) === 'browser';
+			const frameDomain = isBrowserApp && frameUrl ? (extractDomain(frameUrl) || "") : "";
 
-			// Break group at day boundary OR app change
-			if ((currentDayKey && dayKey !== currentDayKey) || appName !== currentApp) {
+			// Break group at day boundary, app change, OR — within a browser — a site
+			// change, so each website becomes its own segment instead of one giant
+			// browser blob colored/iconed by whichever site happened to be most frequent.
+			const domainChanged = isBrowserApp && appName === currentApp && !!frameDomain && !!currentDomain && frameDomain !== currentDomain;
+			if ((currentDayKey && dayKey !== currentDayKey) || appName !== currentApp || domainChanged) {
 				flushGroup();
 				currentApp = appName;
+				currentDomain = frameDomain;
 				currentGroup = [frame];
 				currentGroupAllApps = new Set(allAppsInFrame.filter(n => n !== "Unknown"));
 				if (currentApp !== "Unknown") currentGroupAllApps.add(currentApp);
 				currentDayKey = dayKey;
 				// Reset domain counts for new group
 				currentGroupDomainCounts = new Map<string, number>();
-				if (frameUrl) {
-					const domain = extractDomain(frameUrl);
-					if (domain) currentGroupDomainCounts.set(domain, 1);
-				}
+				if (frameDomain) currentGroupDomainCounts.set(frameDomain, 1);
 			} else {
 				currentGroup.push(frame);
 				allAppsInFrame.filter(n => n !== "Unknown").forEach(app => currentGroupAllApps.add(app));
 				if (!currentDayKey) currentDayKey = dayKey;
+				// Adopt the first known site for a browser group that started without one
+				if (isBrowserApp && frameDomain && !currentDomain) currentDomain = frameDomain;
 				// Accumulate domain counts
-				if (frameUrl) {
-					const domain = extractDomain(frameUrl);
-					if (domain) {
-						currentGroupDomainCounts.set(domain, (currentGroupDomainCounts.get(domain) || 0) + 1);
-					}
+				if (frameDomain) {
+					currentGroupDomainCounts.set(frameDomain, (currentGroupDomainCounts.get(frameDomain) || 0) + 1);
 				}
 			}
 		});
@@ -1610,7 +1660,7 @@ export const TimelineSlider = ({
 									</div>
 								)}
 							<div
-								className="flex flex-nowrap items-end h-full group/appgroup relative"
+								className="flex flex-nowrap items-center h-full group/appgroup relative"
 								dir="rtl"
 								style={{
 									// borderLeft removed — caused visible white lines between groups
@@ -1682,7 +1732,7 @@ export const TimelineSlider = ({
 													style={{
 														zIndex: 10 - idx,
 														position: 'relative',
-														backgroundColor: appNameToColor(appName, 0.3),
+														backgroundColor: appNameToColor(group.appName, 0.3),
 													}}
 													variants={{
 														collapsed: {
@@ -1731,7 +1781,7 @@ export const TimelineSlider = ({
 								)}
 
 								{/* App context popover */}
-								{activePopoverGroup === groupIndex && (
+								{activePopoverGroup === groupIndex && !hasActiveSelection && (
 									<AppContextPopover
 										appName={group.appName}
 										appNames={group.appNames}
@@ -1779,11 +1829,24 @@ export const TimelineSlider = ({
 									// The playhead bar never shows a thumbnail — it always shows the
 									// live time chip above it instead (PlayheadTimeChip), so hovering
 									// the playhead doesn't disturb the always-on current-time label.
-									const shouldShowTooltip = hoveredTimestamp === frame.timestamp && !isCurrent;
+									const shouldShowTooltip = hoveredTimestamp === frame.timestamp && !isCurrent && !hasActiveSelection;
 
 									const frameId = frame.devices?.[0]?.frame_id || '';
 									const frameTags = frameId ? (tags[frameId] || []) : [];
 									const hasTags = frameTags.length > 0;
+
+										// Rewind-style segments: round + inset the two end frames of each
+										// app run so segments read as separate rounded pills with a small
+										// gap at every transition. We shrink the end frames (rather than
+										// add margin to the group) so frame slots — and the time axis —
+										// stay aligned. Group is dir=rtl → frameIdx 0 is the segment's
+										// right end, the last frame is its left end.
+										const isFirstInGroup = frameIdx === 0;
+										const isLastInGroup = frameIdx === group.frames.length - 1;
+										const segGap = 2; // px pulled in at each segment end
+										const slotWidth = frameWidth + frameMargin * 2;
+										const barWidth = Math.max(2, slotWidth - (isFirstInGroup ? segGap : 0) - (isLastInGroup ? segGap : 0));
+										const endRadius = "6px"; // half of 12px height → pill end
 
 									return (
 										<motion.div
@@ -1794,30 +1857,46 @@ export const TimelineSlider = ({
 											data-selected={isSelected || isInRange ? "true" : undefined}
 											className={cn(
 												"flex-shrink-0 cursor-ew-resize rounded-t relative hover:z-50 transition-all duration-200",
-												(isSelected || isInRange) && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-black/20",
+												// selection is shown as a brightened band with white top/bottom rails
+												// (in the style below), not a dark per-frame ring (read as black dots)
 												isCurrent && isPlaying && "animate-pulse"
 											)}
 											style={{
-												width: `${frameWidth}px`,
-												marginLeft: `${frameMargin}px`,
-												marginRight: `${frameMargin}px`,
-												backgroundColor: appNameToBarColor(group.appName),
-												height: isCurrent || isSelected || isInRange ? "80%" : hasAudio ? "60%" : "45%",
-												opacity: !matchesFilter ? 0.15 : isCurrent || isSelected || isInRange ? 1 : hasAudio ? 0.9 : 0.7,
+												// Interior frames fill their full slot with zero margin so same-app
+												// neighbors fuse into one solid segment; only the two end frames of a
+												// segment are inset (see barWidth/segGap above) for the transition gap.
+												width: `${barWidth}px`,
+												marginRight: isFirstInGroup ? `${segGap}px` : 0,
+												marginLeft: isLastInGroup ? `${segGap}px` : 0,
+												// Color browser sessions by their top site (github.com, etc.) rather
+												// than the browser app, so different sites in the same browser get
+												// distinct colors; non-browser groups fall back to the app name.
+												backgroundColor: appNameToBarColor(group.topDomains?.[0] ?? group.appName),
+												// flat horizontal strip (Rewind-style): all frames share one slim
+												// height so adjacent same-app frames read as a continuous segment.
+												// State is encoded by brightness/ring/glow below, not bar height.
+												height: "12px",
+												// Uniform opacity within a segment so each app run reads as one solid
+												// color (no per-frame audio/no-audio striping). Filtered-out frames dim;
+												// current/selected stand out via glow/brightness/ring, not opacity.
+												opacity: !matchesFilter ? 0.18 : 1,
 												direction: "ltr",
-												boxShadow: isCurrent
-												? isPlaying
-													? '0 0 6px rgba(255, 255, 255, 0.7), 0 0 14px rgba(255, 255, 255, 0.3)'
-													: '0 0 4px rgba(255, 255, 255, 0.6), 0 0 10px rgba(255, 255, 255, 0.25)'
-												: 'inset 0 0 0 0.5px rgba(255, 255, 255, 0.1)',
-												transform: isCurrent ? 'scale(1.15)' : 'scale(1)',
+												// Current frame is marked by the vertical playhead line + chip above,
+												// not by a glow/brightness on the bar (that read as a weird bright square).
+												// Selected range = brightened fill + white top/bottom rails so consecutive
+												// selected frames read as one clear highlighted band (no dark dotty ring).
+												boxShadow: (isSelected || isInRange)
+													? 'inset 0 2px 0 0 rgba(255,255,255,0.95), inset 0 -2px 0 0 rgba(255,255,255,0.95)'
+													: 'none',
+												filter: (isSelected || isInRange) ? 'brightness(1.35) saturate(1.1)' : 'none',
 												transition: 'all 0.2s ease-out',
-												borderRadius: '4px 4px 0 0',
+												borderTopRightRadius: isFirstInGroup ? endRadius : '0px',
+												borderBottomRightRadius: isFirstInGroup ? endRadius : '0px',
+												borderTopLeftRadius: isLastInGroup ? endRadius : '0px',
+												borderBottomLeftRadius: isLastInGroup ? endRadius : '0px',
 											}}
 											whileHover={{
-												height: "75%",
 												opacity: 1,
-												scale: 1.05,
 												transition: { duration: 0.15 }
 											}}
 											whileTap={{
@@ -1838,10 +1917,21 @@ export const TimelineSlider = ({
 												setHoveredRect(null);
 											}}
 										>
-											{/* Tag indicator dot */}
+											{/* Audio indicator — a thin line above the bar wherever a frame has
+											    speech, like Rewind. Consecutive audio frames touch into one line. */}
+											{hasAudio && matchesFilter && (
+												<div
+													className="absolute left-0 right-0 pointer-events-none"
+													style={{ top: '-7px', height: '3px', background: 'rgba(255,255,255,0.95)', borderRadius: '2px', boxShadow: '0 0 3px rgba(0,0,0,0.5)' }}
+												/>
+											)}
+
+											{/* Tag indicator — a thin amber underline below the bar, mirroring the
+											    white audio line above. Contiguous tagged frames merge into one line. */}
 											{hasTags && (
 												<div
-													className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-primary shadow-sm shadow-primary/50"
+													className="absolute left-0 right-0 pointer-events-none"
+													style={{ bottom: '-7px', height: '3px', background: 'rgba(245,196,108,0.95)', borderRadius: '2px', boxShadow: '0 0 3px rgba(0,0,0,0.4)' }}
 													title={frameTags.join(', ')}
 												/>
 											)}
@@ -1860,7 +1950,7 @@ export const TimelineSlider = ({
 											{/* Tooltip on hover — rendered via portal to escape overflow clipping */}
 											{shouldShowTooltip && hoveredRect && createPortal(
 												<div
-													className="fixed z-[9999] w-max bg-popover border border-border rounded-lg px-3 py-2 text-xs shadow-2xl pointer-events-none"
+													className="fixed z-[9999] w-max max-w-[280px] bg-popover border border-border rounded-lg px-3 py-2 text-xs shadow-2xl pointer-events-none"
 													style={{
 														left: `clamp(80px, ${hoveredRect.x}px, calc(100vw - 80px))`,
 														top: `${hoveredRect.y}px`,
@@ -1910,9 +2000,11 @@ export const TimelineSlider = ({
 														</p>
 													)}
 													{hasTags && (
-														<p className="text-primary flex items-center gap-1 mt-1 text-[11px]">
-															<span>{frameTags.join(', ')}</span>
-														</p>
+														<div className="flex flex-wrap gap-1 mt-1.5 max-w-full">
+															{frameTags.map((t) => (
+																<span key={t} className="text-[10px] leading-none text-primary bg-primary/15 rounded px-1.5 py-0.5 break-all">{t}</span>
+															))}
+														</div>
 													)}
 													{/* UI events section */}
 													{(() => {

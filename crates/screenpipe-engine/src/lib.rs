@@ -16,6 +16,7 @@ pub mod crash_log;
 pub mod drm_detector;
 pub mod event_driven_capture;
 pub mod external_memory_sync;
+pub mod fd_limit;
 pub mod focus_aware_controller;
 pub mod focus_tracker;
 pub mod frame_linker;

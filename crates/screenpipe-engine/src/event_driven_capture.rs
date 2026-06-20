@@ -317,6 +317,13 @@ pub struct EventDrivenCaptureConfig {
     pub visual_check_interval_ms: u64,
     /// Frame difference threshold (0.0–1.0) above which a VisualChange trigger fires.
     pub visual_change_threshold: f64,
+    /// User-pinned guaranteed-capture floor (ms). When `Some`, this is an
+    /// explicit "always capture at least every N ms" choice and it must
+    /// survive PowerProfile transitions — a battery-saver switch (whose
+    /// profile relaxes the idle interval up to 300s) must NOT silently
+    /// loosen the floor the user asked for. `None` = follow the active
+    /// PowerProfile's `idle_capture_interval_ms` as before.
+    pub idle_capture_interval_override_ms: Option<u64>,
 }
 
 impl Default for EventDrivenCaptureConfig {
@@ -330,6 +337,7 @@ impl Default for EventDrivenCaptureConfig {
             capture_on_clipboard: true,
             visual_check_interval_ms: 3_000, // check every 3 seconds
             visual_change_threshold: 0.05,   // ~5% difference triggers capture
+            idle_capture_interval_override_ms: None, // follow PowerProfile unless pinned
         }
     }
 }
@@ -384,6 +392,22 @@ impl EventDrivenCapture {
         } else {
             self.config.idle_capture_interval_ms
         }
+    }
+
+    /// Apply a PowerProfile's idle-capture interval, honoring a user pin.
+    ///
+    /// Power profiles set the idle floor per power state (30s on AC, up to
+    /// 300s on the most aggressive battery-saver). But a user who pinned an
+    /// explicit floor via
+    /// `idleCaptureIntervalMs` ("always capture at least every N seconds")
+    /// must keep that floor regardless of power state — otherwise plugging
+    /// out silently relaxes their guaranteed cadence to minutes. The pin
+    /// always wins; with no pin we adopt the profile's value as before.
+    pub fn apply_power_profile_idle_interval(&mut self, profile_ms: u64) {
+        self.config.idle_capture_interval_ms = self
+            .config
+            .idle_capture_interval_override_ms
+            .unwrap_or(profile_ms);
     }
 
     /// Check if enough time has passed since the last capture (debounce).
@@ -1069,7 +1093,10 @@ pub async fn event_driven_capture_loop(
                 // the bookkeeper so the post-override cadence is still correct.
                 state.config.min_capture_interval_ms =
                     high_fps.on_baseline_change(profile.min_capture_interval_ms);
-                state.config.idle_capture_interval_ms = profile.idle_capture_interval_ms;
+                // A user-pinned idle floor (`idleCaptureIntervalMs`) wins over
+                // the profile's value so a power transition can't relax the
+                // guaranteed "capture at least every N s" cadence.
+                state.apply_power_profile_idle_interval(profile.idle_capture_interval_ms);
                 // Power profile can only LOWER quality from the user's baseline,
                 // never raise it — picking "max" in settings shouldn't be silently
                 // bumped above the profile's value, but a user on saver mode also
@@ -2893,6 +2920,44 @@ mod tests {
             .checked_sub(Duration::from_millis(1_200))
             .unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
+    }
+
+    #[test]
+    fn power_profile_updates_idle_interval_without_a_pin() {
+        // No user override: a PowerProfile transition is free to set the idle
+        // floor (e.g. battery-saver relaxing it to 5 minutes).
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 30_000,
+            idle_capture_interval_override_ms: None,
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+
+        state.apply_power_profile_idle_interval(300_000);
+        assert_eq!(state.config.idle_capture_interval_ms, 300_000);
+    }
+
+    #[test]
+    fn user_idle_pin_survives_power_profile_change() {
+        // User pinned "capture at least every 2s". A later PowerProfile update
+        // (e.g. unplugging → battery-saver wants 300s) must NOT relax it.
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 2_000,
+            idle_capture_interval_override_ms: Some(2_000),
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+
+        state.apply_power_profile_idle_interval(300_000);
+        assert_eq!(
+            state.config.idle_capture_interval_ms, 2_000,
+            "pinned idle floor must win over the power-profile value"
+        );
+
+        // Even a tighter profile value (e.g. a meeting/HD-driven 1s) does not
+        // override the user's explicit choice — the pin is authoritative.
+        state.apply_power_profile_idle_interval(1_000);
+        assert_eq!(state.config.idle_capture_interval_ms, 2_000);
     }
 
     #[test]

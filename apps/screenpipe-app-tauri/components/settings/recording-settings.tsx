@@ -28,6 +28,8 @@ export const searchIndex: SettingsField[] = [
   { label: "Screen recording", keywords: ["screen", "video"] },
   { label: "Use all monitors", keywords: ["monitor", "display"] },
   { label: "Recording quality", keywords: ["fps", "quality"] },
+  // conditional: hidden when screen recording is off (same gate as Recording quality).
+  { label: "Capture frequency", keywords: ["screenshot", "interval", "idle", "cadence", "every", "minimum"], conditional: true },
   // conditional: monitor picker only renders when "Use all monitors" is off.
   { label: "Monitors", conditional: true },
   { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
@@ -3717,6 +3719,61 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </CardContent>
           </Card>
         )}
+
+        {/* Capture frequency — guaranteed screenshot cadence. Capture is
+            event-driven (clicks, typing, app/window switches, visual change),
+            so a screen that sits still can go uncaptured for the power
+            profile's idle floor (30s on AC, longer on battery). This pins a
+            hard "always capture at least every N seconds" floor for users who
+            feel capture is too sparse. Backed by `idleCaptureIntervalMs`
+            (null = follow the power profile). Needs a recording restart to
+            take effect, hence handleSettingsChange(..., true). */}
+        {!settings.disableVision && (() => {
+          const idleMs = settings.idleCaptureIntervalMs ?? null;
+          const seconds = idleMs == null ? 0 : Math.round(idleMs / 1000);
+          return (
+            <Card className="border-border bg-card">
+              <CardContent className="px-3 py-2.5">
+                <div className="flex items-center space-x-2.5 mb-2">
+                  <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium text-foreground">Capture frequency</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Always take a screenshot at least this often, even when the screen
+                      isn&apos;t changing. Lower = fewer missed moments + more disk used.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-muted-foreground">Minimum interval</span>
+                  <span className="text-xs font-mono text-foreground">
+                    {seconds === 0 ? "auto (power profile)" : `every ${seconds}s`}
+                  </span>
+                </div>
+                <Slider
+                  value={[seconds]}
+                  onValueChange={([value]) =>
+                    handleSettingsChange(
+                      {
+                        idleCaptureIntervalMs:
+                          (value ?? 0) === 0 ? null : (value as number) * 1000,
+                      },
+                      true,
+                    )
+                  }
+                  min={0}
+                  max={10}
+                  step={1}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
+                  <span>auto</span>
+                  <span>every 10s</span>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* HD recording — bound sessions only (meeting or timer; no
             indefinite mode). The controller lives in the engine and is
