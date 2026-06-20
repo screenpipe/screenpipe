@@ -171,6 +171,9 @@ export interface ChatConversation {
 	/** Pipe metadata for `pipe-watch` / `pipe-run` conversations.
 	 *  Undefined for plain chats. */
 	pipeContext?: PipeContext;
+	/** Optional user-assigned sidebar group label (lowercase, trimmed).
+	 *  Drives the manual-grouping sections in the chat sidebar. */
+	sidebarGroup?: string;
 	/** Last URL the agent navigated the embedded browser sidebar to.
 	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
 	 *  re-opens this conversation the panel restores to this URL.
