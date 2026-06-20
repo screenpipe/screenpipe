@@ -108,6 +108,24 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function artifactKindLabel(kind: string | null | undefined): string {
+  if (!kind) return "file";
+  return kind.replace(/[-_]+/g, " ");
+}
+
+function artifactPreviewWithoutTitle(preview: string, title: string): string {
+  const lines = preview.split("\n");
+  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (firstContentIndex === -1) return preview;
+  const first = lines[firstContentIndex].trim().replace(/^#{1,6}\s+/, "").trim();
+  if (first !== title.trim()) return preview;
+  return lines
+    .slice(0, firstContentIndex)
+    .concat(lines.slice(firstContentIndex + 1))
+    .join("\n")
+    .trimStart();
+}
+
 // ---------------------------------------------------------------------------
 // Unified item type for interleaved list
 // ---------------------------------------------------------------------------
@@ -1330,6 +1348,7 @@ export function BrainSection() {
               const fullContent = artifactContents.get(artKey);
               const isArtExpanded = expandedArtifactKeys.has(artKey);
               const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
+              const displayPreview = artifactPreviewWithoutTitle(rawContent, artItem.title);
               // An .html artifact is a full document whose <style>/`*` rules are
               // global. The inline markdown renderer passes raw HTML through
               // (rehype-raw), so expanding one used to inject those styles into
@@ -1341,7 +1360,7 @@ export function BrainSection() {
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
-                  className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
+                  className="group flex items-start gap-2 rounded-md border border-border p-3 transition-colors hover:bg-muted/30"
                 >
                   <Checkbox
                     data-testid={`brain-checkbox-artifact-${artTestId}`}
@@ -1353,7 +1372,72 @@ export function BrainSection() {
                         : "opacity-100"
                     }`}
                   />
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="truncate text-sm font-semibold text-foreground">
+                            {artItem.title}
+                          </h3>
+                          <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
+                            {artifactKindLabel(artItem.kind)}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <span className="truncate">{artifactItemSource(artItem)}</span>
+                          {artDate && (
+                            <>
+                              <span className="text-muted-foreground/40">·</span>
+                              <span>{timeAgo(artDate)}</span>
+                            </>
+                          )}
+                          {artSize != null && (
+                            <>
+                              <span className="text-muted-foreground/40">·</span>
+                              <span>{formatBytes(artSize)}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => void commands.openViewerWindow(artPath)}
+                          title="open viewer"
+                        >
+                          <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
+                          title="reveal in finder"
+                        >
+                          <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                        {artItem.registered && (
+                          <ConfirmDeleteDialog
+                            trigger={
+                              <Button
+                                data-testid={`brain-delete-artifact-${artTestId}`}
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="delete"
+                              >
+                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                              </Button>
+                            }
+                            title="delete artifact"
+                            description="this artifact will be permanently deleted. this cannot be undone."
+                            onConfirm={() => void handleDeleteArtifact(artItem)}
+                          />
+                        )}
+                      </div>
+                    </div>
                     {artItem.saf_kind ? (
                       // SAF artifact (shared envelope with cloud): typed
                       // renderer instead of the plain markdown preview.
@@ -1364,6 +1448,7 @@ export function BrainSection() {
                         onToggleExpanded={() =>
                           void toggleArtifactExpanded(artKey, artPath)
                         }
+                        hideTitle
                       />
                     ) : isHtmlArtifact ? (
                       // HTML artifact: render in a sandboxed iframe, never the
@@ -1375,6 +1460,7 @@ export function BrainSection() {
                         onToggleExpanded={() =>
                           void toggleArtifactExpanded(artKey, artPath)
                         }
+                        hideTitle
                       />
                     ) : (
                       <CompactMarkdown
@@ -1382,19 +1468,11 @@ export function BrainSection() {
                         expanded={isArtExpanded}
                         onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
                       >
-                        {rawContent}
+                        {displayPreview || rawContent}
                       </CompactMarkdown>
                     )}
-                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                      {artDate && (
-                        <span className="text-xs text-muted-foreground">
-                          {timeAgo(artDate)}
-                        </span>
-                      )}
-                      <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal">
-                        {artifactItemSource(artItem)}
-                      </Badge>
-                      {artItem.saf_kind && (
+                    {artItem.saf_kind && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span
                           data-testid={`brain-artifact-saf-kind-${artTestId}`}
                           className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full border border-border font-mono text-foreground/80"
@@ -1406,50 +1484,7 @@ export function BrainSection() {
                             </span>
                           )}
                         </span>
-                      )}
-                      {artSize != null && (
-                        <span className="text-[10px] text-muted-foreground/50">
-                          {formatBytes(artSize)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => void commands.openViewerWindow(artPath)}
-                      title="open viewer"
-                    >
-                      <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
-                      title="reveal in finder"
-                    >
-                      <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                    {artItem.registered && (
-                      <ConfirmDeleteDialog
-                        trigger={
-                          <Button
-                            data-testid={`brain-delete-artifact-${artTestId}`}
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="delete"
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
-                        }
-                        title="delete artifact"
-                        description="this artifact will be permanently deleted. this cannot be undone."
-                        onConfirm={() => void handleDeleteArtifact(artItem)}
-                      />
+                      </div>
                     )}
                   </div>
                 </div>
