@@ -713,7 +713,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         if (openConversationMenuId) setOpenConversationMenuId(null);
       }}
     >
-      <div className="flex-1 min-h-0 flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         {hasScheduledSlice && (
           <div
             className="flex flex-col shrink-0"
