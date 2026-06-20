@@ -871,10 +871,20 @@ where
         None => return Ok(None),
         Some(s) => s,
     };
-    s.split(',')
+    // Trim each entry and skip blanks, mirroring `from_comma_separated_string_array`.
+    // A dangling `?speaker_ids=`, a trailing comma (`1,2,`), or a space after a
+    // comma (`1, 2`) should parse forgivingly rather than 400 with a cryptic
+    // "invalid digit"/"cannot parse integer from empty string" — consistent with
+    // the lenient bool/tags query params. A genuinely non-numeric entry still
+    // errors. Returns None when nothing usable remains, so an empty param does
+    // not switch speaker filtering on.
+    let ids = s
+        .split(',')
+        .map(str::trim)
+        .filter(|i| !i.is_empty())
         .map(|i| i64::from_str(i).map_err(serde::de::Error::custom))
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((!ids.is_empty()).then_some(ids))
 }
 
 /// Split a comma-separated `tags` query param into a trimmed, non-empty list.
@@ -1108,6 +1118,28 @@ mod tests {
     fn test_truncate_middle_short_text() {
         assert_eq!(truncate_middle("hello", 10), "hello");
         assert_eq!(truncate_middle("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_speaker_ids_parse_is_forgiving() {
+        // Drive the deserializer through a serde_json string Value — like the
+        // real query path, its `deserialize_option` calls `visit_some`, so the
+        // `Option::<String>` inside the function actually sees the value (a bare
+        // StrDeserializer would route through `deserialize_any` and get dropped
+        // by the function's `unwrap_or(None)`).
+        fn parse(s: &str) -> Result<Option<Vec<i64>>, serde_json::Error> {
+            from_comma_separated_array(Value::String(s.to_string()))
+        }
+        // Plain list.
+        assert_eq!(parse("1,2,3").unwrap(), Some(vec![1, 2, 3]));
+        // Spaces after commas and a trailing comma must not 400.
+        assert_eq!(parse("1, 2 , 3").unwrap(), Some(vec![1, 2, 3]));
+        assert_eq!(parse("1,2,").unwrap(), Some(vec![1, 2]));
+        // All-blank / empty param means "no filter", not an error.
+        assert_eq!(parse("").unwrap(), None);
+        assert_eq!(parse(" , ").unwrap(), None);
+        // A genuinely non-numeric entry still errors.
+        assert!(parse("1,abc,3").is_err());
     }
 
     #[test]
