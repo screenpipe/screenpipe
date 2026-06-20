@@ -935,8 +935,8 @@ export function BrainSection() {
                     onChange={(e) => setFilterSearch(e.target.value)}
                     placeholder={
                       typeFilter === "memories"
-                        ? "find label or date..."
-                        : "find source..."
+                        ? "find filters..."
+                        : "find filters..."
                     }
                     className="h-8 pl-7 text-xs"
                     autoFocus
@@ -1000,8 +1000,8 @@ export function BrainSection() {
             data-testid="brain-search-input"
             placeholder={
               typeFilter === "memories"
-                ? "search memories, entities, tags, or dates..."
-                : "search artifacts, files, sources, or dates..."
+                ? "search memory content..."
+                : "search artifact content..."
             }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
