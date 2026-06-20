@@ -529,6 +529,41 @@ async fn list_instances(
     Path(id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
     let mgr = state.cm.lock().await;
+    let is_oauth = screenpipe_connect::connections::all_integrations()
+        .iter()
+        .find(|i| i.def().id == id)
+        .and_then(|i| i.oauth_config())
+        .is_some();
+
+    if is_oauth {
+        let instances = oauth_store::list_oauth_instances(state.secret_store.as_deref(), &id).await;
+        let mut items = Vec::new();
+        for inst in instances {
+            let token =
+                oauth_store::load_oauth_json(state.secret_store.as_deref(), &id, inst.as_deref())
+                    .await;
+            let display_name = token.as_ref().and_then(|v| {
+                v["email"]
+                    .as_str()
+                    .or_else(|| v["workspace_name"].as_str())
+                    .or_else(|| v["name"].as_str())
+                    .map(str::to_string)
+            });
+            let connected = oauth_store::is_oauth_instance_connected(
+                state.secret_store.as_deref(),
+                &id,
+                inst.as_deref(),
+            )
+            .await;
+            items.push(json!({
+                "instance": inst,
+                "connected": connected,
+                "display_name": display_name,
+            }));
+        }
+        return (StatusCode::OK, Json(json!({ "instances": items })));
+    }
+
     match mgr.get_all_instances(&id).await {
         Ok(instances) => {
             let items: Vec<Value> = instances
