@@ -74,6 +74,14 @@ interface MemoryListResponse {
   pagination: { limit: number; offset: number; total: number };
 }
 
+interface TagAutocompleteItem {
+  name: string;
+  count: number;
+  frame_count: number;
+  audio_count: number;
+  memory_count: number;
+}
+
 const PAGE_SIZE = 20;
 // How many rows are mounted at once. The full dataset stays in memory for
 // filtering/counts; only this window hits the DOM, growing as you scroll.
@@ -131,8 +139,29 @@ function isDateFilterTag(tag: string): boolean {
   );
 }
 
+function titleizeTagPart(value: string): string {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function filterTagLabel(tag: string): string {
-  return tag.startsWith("date:") ? tag.slice(5) : tag;
+  if (tag.startsWith("date:")) return tag.slice(5);
+  if (tag.startsWith("person:")) return titleizeTagPart(tag.slice(7));
+  if (tag.startsWith("meeting:")) return `Meeting ${tag.slice(8)}`;
+  if (tag.startsWith("clone:")) return titleizeTagPart(tag.slice(6));
+  return tag;
+}
+
+function filterTagKind(tag: string): "label" | "person" | "date" | "source" {
+  if (isDateFilterTag(tag)) return "date";
+  if (tag.startsWith("person:")) return "person";
+  if (tag.startsWith("meeting:") || tag.startsWith("clone:") || tag.startsWith("source:")) {
+    return "source";
+  }
+  return "label";
 }
 
 function BrainSkeleton() {
@@ -249,13 +278,22 @@ export function BrainSection() {
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [allTags, setAllTags] = useState<string[]>([]);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterSearch, setFilterSearch] = useState("");
+  const [debouncedFilterSearch, setDebouncedFilterSearch] = useState("");
+  const [memoryFilterTags, setMemoryFilterTags] = useState<string[]>([]);
+  const [memoryFilterLoading, setMemoryFilterLoading] = useState(false);
 
   // debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedFilterSearch(filterSearch), 180);
+    return () => clearTimeout(timer);
+  }, [filterSearch]);
 
   // artifact data — GET /artifacts merges registered outputs + pipe fs
   // artifacts server-side; q/source filtering and totals are server-side too.
@@ -272,18 +310,37 @@ export function BrainSection() {
     typeFilter === "artifacts" ? activeTags[0] ?? null : null,
   );
 
-  // fetch all tags once on mount
+  // Fetch only the currently visible filter options; do not load every memory
+  // label up front because large memory stores can have many distinct tags.
   useEffect(() => {
-    localFetch("/memories/tags")
+    if (typeFilter !== "memories" || !filterOpen) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      limit: "50",
+      q: debouncedFilterSearch,
+    });
+    setMemoryFilterLoading(true);
+    localFetch(`/tags/autocomplete?${params}`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((tags: string[]) => {
-        const filtered = tags.filter(
-          (t) => t.length > 0 && !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)
+      .then((items: TagAutocompleteItem[]) => {
+        if (cancelled) return;
+        setMemoryFilterTags(
+          items
+            .filter((item) => item.memory_count > 0)
+            .map((item) => item.name)
+            .filter((tag) => tag.length > 0 && !/^\d+$/.test(tag)),
         );
-        setAllTags(filtered);
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        if (!cancelled) setMemoryFilterTags([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMemoryFilterLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [typeFilter, filterOpen, debouncedFilterSearch]);
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
@@ -551,9 +608,28 @@ export function BrainSection() {
       : sortField !== "importance"
         ? artifactsTotal
         : 0;
-  const filterTags = typeFilter === "memories" ? allTags : artifactSources;
-  const dateFilterTags = filterTags.filter(isDateFilterTag);
-  const labelFilterTags = filterTags.filter((tag) => !isDateFilterTag(tag));
+  const normalizedFilterSearch = filterSearch.trim().toLowerCase();
+  const loadedMemoryFilterTags = memories
+    .flatMap((memory) => memory.tags)
+    .filter((tag) => tag.length > 0 && !/^\d+$/.test(tag))
+    .filter((tag) => {
+      if (!normalizedFilterSearch) return true;
+      return (
+        tag.toLowerCase().includes(normalizedFilterSearch) ||
+        filterTagLabel(tag).toLowerCase().includes(normalizedFilterSearch)
+      );
+    });
+  const filterTags =
+    typeFilter === "memories"
+      ? Array.from(new Set([...activeTags, ...loadedMemoryFilterTags, ...memoryFilterTags]))
+      : artifactSources.filter((source) =>
+          source.toLowerCase().includes(normalizedFilterSearch)
+        );
+  const labelFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "label");
+  const personFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "person");
+  const dateFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "date");
+  const sourceFilterTags = filterTags.filter((tag) => filterTagKind(tag) === "source");
+  const showFilterButton = typeFilter === "memories" || artifactSources.length > 0;
   const toggleActiveTag = (tag: string) => {
     setActiveTags((prev) => {
       if (typeFilter === "artifacts") {
@@ -589,7 +665,9 @@ export function BrainSection() {
         key={tag}
         type="button"
         onClick={() => toggleActiveTag(tag)}
-        className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+        className={`flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs transition-colors hover:bg-muted/80 hover:text-foreground ${
+          selected ? "text-foreground" : "text-muted-foreground"
+        }`}
         title={tag.length > 32 ? tag : undefined}
       >
         <span className="min-w-0 flex-1 truncate">{filterTagLabel(tag)}</span>
@@ -793,8 +871,14 @@ export function BrainSection() {
             </button>
           ))}
         </div>
-        {filterTags.length > 0 && (
-          <Popover>
+        {showFilterButton && (
+          <Popover
+            open={filterOpen}
+            onOpenChange={(open) => {
+              setFilterOpen(open);
+              if (!open) setFilterSearch("");
+            }}
+          >
             <PopoverTrigger asChild>
               <button
                 type="button"
@@ -812,15 +896,49 @@ export function BrainSection() {
             <PopoverContent
               align="end"
               collisionPadding={24}
-              className="w-[300px] max-w-[calc(100vw-48px)] p-2"
+              className="w-[320px] max-w-[calc(100vw-48px)] p-0"
             >
-              <div className="max-h-[420px] overflow-y-auto pr-1">
+              <div className="border-b border-border p-2">
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={filterSearch}
+                    onChange={(e) => setFilterSearch(e.target.value)}
+                    placeholder={
+                      typeFilter === "memories"
+                        ? "find label or date..."
+                        : "find source..."
+                    }
+                    className="h-8 pl-7 text-xs"
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div className="max-h-[360px] overflow-y-auto p-2">
+                {memoryFilterLoading && typeFilter === "memories" && (
+                  <div className="px-2 py-3 text-xs text-muted-foreground">
+                    loading filters...
+                  </div>
+                )}
+                {!memoryFilterLoading && filterTags.length === 0 && (
+                  <div className="px-2 py-3 text-xs text-muted-foreground">
+                    no filters found
+                  </div>
+                )}
                 {labelFilterTags.length > 0 && (
                   <div className="space-y-1">
                     <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                      Labels
+                      {typeFilter === "memories" ? "Labels" : "Sources"}
                     </div>
                     {labelFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+                {personFilterTags.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-border pt-2">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      People
+                    </div>
+                    {personFilterTags.map(renderFilterMenuItem)}
                   </div>
                 )}
                 {dateFilterTags.length > 0 && (
@@ -829,6 +947,14 @@ export function BrainSection() {
                       Dates
                     </div>
                     {dateFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+                {sourceFilterTags.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-border pt-2">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      Sources
+                    </div>
+                    {sourceFilterTags.map(renderFilterMenuItem)}
                   </div>
                 )}
               </div>

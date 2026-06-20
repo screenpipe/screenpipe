@@ -14,7 +14,7 @@ const MEMORIES = Array.from({ length: 8 }, (_, i) => ({
   id: i + 1,
   content: `[2026-06-10 17:0${i}:21] me: memory number ${i + 1} about bunny books`,
   source: "imessage",
-  tags: ["chat-sync", "imessage"],
+  tags: i === 0 ? ["chat-sync", "imessage", "person:ansh", "meeting:38"] : ["chat-sync", "imessage"],
   importance: 0.6,
   frame_id: null,
   created_at: `2026-06-10T17:0${i}:21.000-07:00`,
@@ -44,8 +44,13 @@ vi.mock("@/lib/api", () => ({
       json: async () => body,
       text: async () => JSON.stringify(body),
     });
-    if (path.startsWith("/memories/tags")) {
-      return ok(["visa", "travel", "person:ansh", "date:2026-06-20"]);
+    if (path.startsWith("/tags/autocomplete")) {
+      return ok([
+        { name: "visa", count: 1, frame_count: 0, audio_count: 0, memory_count: 1 },
+        { name: "travel", count: 1, frame_count: 0, audio_count: 0, memory_count: 1 },
+        { name: "date:2026-06-20", count: 1, frame_count: 0, audio_count: 0, memory_count: 1 },
+        { name: "screen-only", count: 1, frame_count: 1, audio_count: 0, memory_count: 0 },
+      ]);
     }
     if (path.startsWith("/memories")) {
       return ok({
@@ -144,6 +149,11 @@ describe("BrainSection type filter", () => {
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
     fireEvent.click(screen.getByRole("button", { name: /filter by/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "visa" })).toBeTruthy());
+    expect(screen.getByText("People")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ansh" })).toBeTruthy();
+    expect(screen.getByText("Sources")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Meeting 38" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "visa" }));
     fireEvent.click(screen.getByRole("button", { name: "travel" }));
 
