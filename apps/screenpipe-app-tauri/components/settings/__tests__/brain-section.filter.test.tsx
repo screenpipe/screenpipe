@@ -44,7 +44,9 @@ vi.mock("@/lib/api", () => ({
       json: async () => body,
       text: async () => JSON.stringify(body),
     });
-    if (path.startsWith("/memories/tags")) return ok([]);
+    if (path.startsWith("/memories/tags")) {
+      return ok(["visa", "travel", "person:ansh", "date:2026-06-20"]);
+    }
     if (path.startsWith("/memories")) {
       return ok({
         data: MEMORIES,
@@ -93,6 +95,7 @@ vi.mock("@/components/ui/use-toast", () => ({
 }));
 
 import { BrainSection } from "../brain-section";
+import { localFetch } from "@/lib/api";
 
 beforeEach(() => {
   // jsdom has no IntersectionObserver
@@ -134,5 +137,21 @@ describe("BrainSection type filter", () => {
 
     await waitFor(() => expect(memoryRows().length).toBe(8));
     expect(artifactRows().length).toBe(0);
+  });
+
+  it("allows multiple memory labels to be selected", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getByRole("button", { name: /filter by/i }));
+    fireEvent.click(screen.getByRole("button", { name: "visa" }));
+    fireEvent.click(screen.getByRole("button", { name: "travel" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("tags=visa%2Ctravel"),
+        expect.any(Object),
+      );
+    });
   });
 });

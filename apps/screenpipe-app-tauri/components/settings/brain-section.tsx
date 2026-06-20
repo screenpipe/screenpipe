@@ -17,6 +17,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -32,6 +37,7 @@ import {
   Copy,
   Search,
   Tag,
+  ChevronDown,
   Plus,
   Pencil,
   AlertCircle,
@@ -116,6 +122,17 @@ function timeAgo(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function isDateFilterTag(tag: string): boolean {
+  return (
+    /^date:\d{4}-\d{2}-\d{2}$/.test(tag) ||
+    /^\d{4}-\d{2}-\d{2}$/.test(tag)
+  );
+}
+
+function filterTagLabel(tag: string): string {
+  return tag.startsWith("date:") ? tag.slice(5) : tag;
 }
 
 function BrainSkeleton() {
@@ -213,9 +230,6 @@ export function BrainSection() {
     }
   };
 
-  // show all tag filter pills
-  const [showAllTags, setShowAllTags] = useState(false);
-
   // batch selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -232,7 +246,7 @@ export function BrainSection() {
   // search, filter & sort
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [activeTags, setActiveTags] = useState<string[]>([]);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [allTags, setAllTags] = useState<string[]>([]);
@@ -255,7 +269,7 @@ export function BrainSection() {
     deleteRegistered,
   } = useUnifiedArtifacts(
     debouncedQuery,
-    typeFilter === "artifacts" ? activeTag : null,
+    typeFilter === "artifacts" ? activeTags[0] ?? null : null,
   );
 
   // fetch all tags once on mount
@@ -291,7 +305,9 @@ export function BrainSection() {
           order_dir: sortDir,
         });
         if (debouncedQuery) params.set("q", debouncedQuery);
-        if (typeFilter === "memories" && activeTag) params.set("tags", activeTag);
+        if (typeFilter === "memories" && activeTags.length > 0) {
+          params.set("tags", activeTags.join(","));
+        }
         const res = await localFetch(
           `/memories?${params}`,
           { signal: controller.signal },
@@ -318,13 +334,13 @@ export function BrainSection() {
         loadingMoreRef.current = false;
       }
     },
-    [toast, debouncedQuery, activeTag, sortField, sortDir, typeFilter],
+    [toast, debouncedQuery, activeTags, sortField, sortDir, typeFilter],
   );
 
   // fetch on mount + refetch when search/tag filter changes
   useEffect(() => {
     fetchPage(0, false);
-  }, [debouncedQuery, activeTag, typeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, activeTags, typeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // refetch when sort changes so the API returns correctly ordered data
   useEffect(() => {
@@ -528,11 +544,57 @@ export function BrainSection() {
       : sortField !== "importance"
         ? artifactsTotal
         : 0;
+  const filterTags = typeFilter === "memories" ? allTags : artifactSources;
+  const dateFilterTags = filterTags.filter(isDateFilterTag);
+  const labelFilterTags = filterTags.filter((tag) => !isDateFilterTag(tag));
+  const toggleActiveTag = (tag: string) => {
+    setActiveTags((prev) => {
+      if (typeFilter === "artifacts") {
+        return prev[0] === tag ? [] : [tag];
+      }
+      return prev.includes(tag)
+        ? prev.filter((active) => active !== tag)
+        : [...prev, tag];
+    });
+  };
+
+  const renderFilterTagButton = (tag: string) => (
+    <button
+      key={tag}
+      type="button"
+      onClick={() => toggleActiveTag(tag)}
+      className={`inline-flex h-6 max-w-[150px] items-center gap-1 rounded-full border px-2 text-[10px] transition-colors ${
+        activeTags.includes(tag)
+          ? "bg-foreground text-background border-foreground"
+          : "border-border text-muted-foreground hover:bg-muted"
+      }`}
+      title={tag.length > 20 ? tag : undefined}
+    >
+      <Tag className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate">{filterTagLabel(tag)}</span>
+    </button>
+  );
+
+  const renderFilterMenuItem = (tag: string) => {
+    const selected = activeTags.includes(tag);
+    return (
+      <button
+        key={tag}
+        type="button"
+        onClick={() => toggleActiveTag(tag)}
+        className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+        title={tag.length > 32 ? tag : undefined}
+      >
+        <span className="min-w-0 flex-1 truncate">{filterTagLabel(tag)}</span>
+        {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+      </button>
+    );
+  };
 
   // Collapse the render window whenever the visible dataset changes shape.
   useEffect(() => {
     setVisibleCount(RENDER_WINDOW);
-  }, [debouncedQuery, activeTag, typeFilter, sortField, sortDir]);
+  }, [debouncedQuery, activeTags, typeFilter, sortField, sortDir]);
 
   // infinite scroll via IntersectionObserver — grows the render window and
   // pulls the next page of whichever source is running low
@@ -708,7 +770,7 @@ export function BrainSection() {
               data-testid={`brain-filter-${value}`}
               onClick={() => {
                 setTypeFilter(value);
-                setActiveTag(null);
+                setActiveTags([]);
                 setSelectedIds(new Set());
               }}
               className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -724,6 +786,48 @@ export function BrainSection() {
             </button>
           ))}
         </div>
+        {filterTags.length > 0 && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-md border px-3 text-xs transition-colors hover:bg-muted ${
+                  activeTags.length > 0
+                    ? "border-foreground/40 bg-muted text-foreground"
+                    : "border-border bg-transparent text-muted-foreground"
+                }`}
+              >
+                <Tag className="h-3.5 w-3.5" />
+                Filter by
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              collisionPadding={24}
+              className="w-[300px] max-w-[calc(100vw-48px)] p-2"
+            >
+              <div className="max-h-[420px] overflow-y-auto pr-1">
+                {labelFilterTags.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      Labels
+                    </div>
+                    {labelFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+                {dateFilterTags.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-border pt-2">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      Dates
+                    </div>
+                    {dateFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
       </div>
 
       {/* search bar + add button */}
@@ -842,57 +946,38 @@ export function BrainSection() {
               className="h-7 text-xs"
               onClick={createMemory}
               disabled={!newContent.trim() || savingNew}
-          >
-            {savingNew ? <Loader2 className="h-3 w-3 animate-spin" /> : "save"}
+            >
+              {savingNew ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                "save"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* filters row */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2">
         {(typeFilter === "memories" ? loading : artifactsLoading) ? (
           <Skeleton className="h-6 w-16 rounded-full" />
         ) : (
-          <Badge variant="secondary" className="text-xs">
+          <Badge variant="secondary" className="text-xs shrink-0">
             {totalCount.toLocaleString()} {totalCount === 1 ? "item" : "items"}
           </Badge>
         )}
 
-        {/* divider between type filters and tag chips */}
-        {(() => {
-          const visibleTags = typeFilter === "memories" ? allTags : artifactSources;
-          if (visibleTags.length === 0) return null;
-          return (
-            <>
-              {(showAllTags ? visibleTags : visibleTags.slice(0, 6)).map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() =>
-                    setActiveTag((prev) => (prev === tag ? null : tag))
-                  }
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border transition-colors max-w-[150px] ${
-                    activeTag === tag
-                      ? "bg-foreground text-background border-foreground"
-                      : "border-border text-muted-foreground hover:bg-muted"
-                  }`}
-                  title={tag.length > 20 ? tag : undefined}
-                >
-                  <Tag className="h-2.5 w-2.5 shrink-0" />
-                  <span className="truncate">{tag}</span>
-                </button>
-              ))}
-              {visibleTags.length > 6 && (
-                <button
-                  onClick={() => setShowAllTags((v) => !v)}
-                  className="inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border border-dashed border-border text-muted-foreground hover:bg-muted transition-colors"
-                >
-                  {showAllTags ? "show less" : `+${visibleTags.length - 6} more`}
-                </button>
-              )}
-            </>
-          );
-        })()}
+        {activeTags.map(renderFilterTagButton)}
+        {activeTags.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setActiveTags([])}
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border px-2 text-[10px] text-muted-foreground transition-colors hover:bg-muted"
+          >
+            clear
+            <X className="h-2.5 w-2.5" />
+          </button>
+        )}
 
         {/* sort controls — temporarily hidden */}
         {false && (
@@ -970,13 +1055,13 @@ export function BrainSection() {
       ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
           <p>
-            {debouncedQuery || activeTag
+            {debouncedQuery || activeTags.length > 0
               ? "no items match your search"
               : typeFilter === "memories"
                 ? "no memories yet"
                 : "no artifacts yet"}
           </p>
-          {!debouncedQuery && !activeTag && typeFilter === "memories" && (
+          {!debouncedQuery && activeTags.length === 0 && typeFilter === "memories" && (
             <>
               <p className="text-xs">
                 memories are automatically created by pipes that learn from your
