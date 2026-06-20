@@ -57,6 +57,7 @@ import {
 } from "@/lib/hooks/use-unified-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
+import { getMemoryDisplay } from "@/lib/utils/memory-display";
 
 interface MemoryRecord {
   id: number;
@@ -180,6 +181,16 @@ function filterTagKind(tag: string): "label" | "person" | "date" | "source" {
     return "source";
   }
   return "label";
+}
+
+function memoryCardTags(tags: string[]): string[] {
+  return Array.from(
+    new Set(
+      tags
+        .filter((tag) => !isDateFilterTag(tag) && !/^\d+$/.test(tag))
+        .map(filterTagLabel),
+    ),
+  );
 }
 
 function BrainSkeleton() {
@@ -1494,6 +1505,9 @@ export function BrainSection() {
             // Memory card (unchanged from original)
             const memory = item.data;
             const isDeleting = deletingId === memory.id;
+            const isExpanded = expandedIds.has(memory.id);
+            const display = getMemoryDisplay(memory.content);
+            const tags = memoryCardTags(memory.tags);
 
             return (
               <div
@@ -1514,17 +1528,44 @@ export function BrainSection() {
                 <div
                   className="flex-1 min-w-0"
                 >
-                  <CompactMarkdown
-                    expanded={expandedIds.has(memory.id)}
-                    onToggleExpanded={() => toggleExpanded(memory.id)}
-                    suffix={
-                      savingId === memory.id ? (
-                        <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
-                      ) : undefined
-                    }
-                  >
-                    {memory.content}
-                  </CompactMarkdown>
+                  {isExpanded ? (
+                    <CompactMarkdown
+                      expanded
+                      onToggleExpanded={() => toggleExpanded(memory.id)}
+                      suffix={
+                        savingId === memory.id ? (
+                          <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                        ) : undefined
+                      }
+                    >
+                      {memory.content}
+                    </CompactMarkdown>
+                  ) : (
+                    <div className="space-y-1">
+                      <h3 className="text-sm font-semibold text-foreground leading-snug line-clamp-2">
+                        {display.title}
+                        {savingId === memory.id && (
+                          <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                        )}
+                      </h3>
+                      {display.preview && (
+                        <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
+                          {display.preview}
+                        </p>
+                      )}
+                      {display.hasMore && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpanded(memory.id);
+                          }}
+                          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          show more
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
@@ -1535,8 +1576,8 @@ export function BrainSection() {
                     >
                       {memory.source}
                     </Badge>
-                    {memory.tags.length > 0 &&
-                      memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
+                    {tags.length > 0 &&
+                      tags.map((tag) => (
                         tag.length > 30 ? (
                           <TooltipProvider key={tag}>
                             <Tooltip>
