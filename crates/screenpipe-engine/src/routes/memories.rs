@@ -156,6 +156,20 @@ fn validate_content(content: &str) -> Result<(), (StatusCode, JsonResponse<Value
     Ok(())
 }
 
+fn parse_exact_tag_filter(tags: Option<&str>) -> Vec<String> {
+    let Some(tags) = tags else {
+        return Vec::new();
+    };
+    if !tags.contains(',') {
+        return Vec::new();
+    }
+    tags.split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 #[oasgen]
 pub(crate) async fn create_memory_handler(
     State(state): State<Arc<AppState>>,
@@ -201,11 +215,18 @@ pub(crate) async fn list_memories_handler(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListMemoriesQuery>,
 ) -> Result<JsonResponse<MemoryListResponse>, (StatusCode, JsonResponse<Value>)> {
+    let tags_all = parse_exact_tag_filter(query.tags.as_deref());
+    let legacy_tags_filter = if tags_all.is_empty() {
+        query.tags.as_deref()
+    } else {
+        None
+    };
+
     let (memories_result, total_result) = tokio::join!(
         state.db.list_memories(
             query.q.as_deref(),
             query.source.as_deref(),
-            query.tags.as_deref(),
+            legacy_tags_filter,
             query.min_importance,
             query.start_time.as_deref(),
             query.end_time.as_deref(),
@@ -213,16 +234,16 @@ pub(crate) async fn list_memories_handler(
             query.offset,
             query.order_by.as_deref(),
             query.order_dir.as_deref(),
-            &[],
+            &tags_all,
         ),
         state.db.count_memories(
             query.q.as_deref(),
             query.source.as_deref(),
-            query.tags.as_deref(),
+            legacy_tags_filter,
             query.min_importance,
             query.start_time.as_deref(),
             query.end_time.as_deref(),
-            &[],
+            &tags_all,
         )
     );
 
@@ -438,6 +459,20 @@ fn enrich_source_context_with_device(ctx: Option<Value>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_exact_tag_filter_only_splits_comma_separated_values() {
+        assert!(parse_exact_tag_filter(None).is_empty());
+        assert!(parse_exact_tag_filter(Some("visa")).is_empty());
+        assert_eq!(
+            parse_exact_tag_filter(Some("visa, travel,,person:ansh ")),
+            vec![
+                "visa".to_string(),
+                "travel".to_string(),
+                "person:ansh".to_string()
+            ],
+        );
+    }
 
     #[test]
     fn enrich_none_creates_device_object() {
