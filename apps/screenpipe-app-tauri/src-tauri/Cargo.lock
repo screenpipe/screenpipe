@@ -2165,7 +2165,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2759,6 +2759,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto_box"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16182b4f39a82ec8a6851155cc4c0cda3065bb1db33651726a29e1951de0f009"
+dependencies = [
+ "aead 0.5.2",
+ "crypto_secretbox",
+ "curve25519-dalek 4.1.3",
+ "salsa20 0.10.2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto_secretbox"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
+dependencies = [
+ "aead 0.5.2",
+ "cipher 0.4.4",
+ "generic-array 0.14.7",
+ "poly1305",
+ "salsa20 0.10.2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "cssparser"
 version = "0.29.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3342,7 +3371,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -7803,7 +7832,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -8581,7 +8610,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10386,7 +10415,7 @@ dependencies = [
  "ring",
  "russh-cryptovec",
  "russh-util",
- "salsa20",
+ "salsa20 0.11.0",
  "scrypt",
  "sec1 0.8.1",
  "sha1 0.10.6",
@@ -10738,6 +10767,15 @@ dependencies = [
 
 [[package]]
 name = "salsa20"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
+name = "salsa20"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
@@ -10889,7 +10927,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.54"
+version = "2.5.57"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11104,8 +11142,10 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "crypto_box",
  "dirs 6.0.0",
  "eventkit-rs",
+ "getrandom 0.2.17",
  "icalendar",
  "image 0.25.10",
  "lettre",
@@ -11456,7 +11496,7 @@ checksum = "d87af57419b594aa23fa95f09f0e06d80d84ba01c26148c43844cad6ff4485f0"
 dependencies = [
  "cfg-if 1.0.4",
  "pbkdf2 0.13.0",
- "salsa20",
+ "salsa20 0.11.0",
  "sha2 0.11.0",
 ]
 
@@ -15834,7 +15874,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

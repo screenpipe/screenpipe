@@ -45,6 +45,7 @@ interface UseChatComposerShellActionsOptions {
   pastedImages: string[];
   pendingDocsRef: React.MutableRefObject<PendingDoc[]>;
   attachedDocsRef: React.MutableRefObject<ExtractedDoc[]>;
+  messageHistory: string[];
   queuedPrompts: PiQueuedPrompt[];
   steerShortcutInFlightRef: React.MutableRefObject<boolean>;
   isKnownConnectionId: (id: string) => boolean;
@@ -129,6 +130,7 @@ export function useChatComposerShellActions({
   pastedImages,
   pendingDocsRef,
   attachedDocsRef,
+  messageHistory,
   queuedPrompts,
   steerShortcutInFlightRef,
   isKnownConnectionId,
@@ -138,10 +140,14 @@ export function useChatComposerShellActions({
   steerMessage,
   steerQueuedPrompt,
 }: UseChatComposerShellActionsOptions) {
+  // Index from the newest message. `null` means the user is editing normally.
+  const historyIndexRef = useRef<number | null>(null);
+
   const sendComposerMessage = useCallback(() => {
     if (pendingDocsRef.current.length > 0) return;
     if (!input.trim() && pastedImages.length === 0 && attachedDocsRef.current.length === 0) return;
 
+    historyIndexRef.current = null;
     const chip = connectionChip;
     setConnectionChip(null);
     void sendMessage(
@@ -164,6 +170,7 @@ export function useChatComposerShellActions({
   }, [sendComposerMessage]);
 
   const handlePaste = useCallback((event: React.ClipboardEvent) => {
+    historyIndexRef.current = null;
     if (handlePastedFiles(event.clipboardData)) {
       event.preventDefault();
       return;
@@ -255,6 +262,39 @@ export function useChatComposerShellActions({
       return;
     }
 
+    const isPlainArrow = !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
+    if (
+      !mentions.isOpen &&
+      isPlainArrow &&
+      event.key === "ArrowUp" &&
+      (input === "" || historyIndexRef.current !== null)
+    ) {
+      const nextIndex = Math.min((historyIndexRef.current ?? -1) + 1, messageHistory.length - 1);
+      if (nextIndex >= 0) {
+        event.preventDefault();
+        historyIndexRef.current = nextIndex;
+        setInput(messageHistory[messageHistory.length - 1 - nextIndex]);
+      }
+      return;
+    }
+
+    if (
+      !mentions.isOpen &&
+      isPlainArrow &&
+      event.key === "ArrowDown" &&
+      historyIndexRef.current !== null
+    ) {
+      event.preventDefault();
+      const nextIndex = historyIndexRef.current - 1;
+      historyIndexRef.current = nextIndex >= 0 ? nextIndex : null;
+      setInput(nextIndex >= 0 ? messageHistory[messageHistory.length - 1 - nextIndex] : "");
+      return;
+    }
+
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      historyIndexRef.current = null;
+    }
+
     if (event.key === "Enter" && !event.shiftKey && !mentions.isOpen) {
       event.preventDefault();
       sendComposerMessage();
@@ -283,6 +323,8 @@ export function useChatComposerShellActions({
     handleSteerShortcut,
     isComposing,
     isMac,
+    input,
+    messageHistory,
     mentionActions,
     mentions,
     sendComposerMessage,

@@ -865,6 +865,12 @@ export function StandaloneChat({
     pastedImages,
     pendingDocsRef,
     attachedDocsRef,
+    messageHistory: messages
+      .filter(
+        (message) =>
+          message.role === "user" && (message.displayContent ?? message.content).trim(),
+      )
+      .map((message) => message.displayContent ?? message.content),
     queuedPrompts,
     steerShortcutInFlightRef,
     isKnownConnectionId: (id) => INTEGRATION_ICON_KEYS.has(id),
