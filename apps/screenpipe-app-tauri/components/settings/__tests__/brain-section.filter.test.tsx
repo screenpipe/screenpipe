@@ -4,7 +4,7 @@
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Mocks — keep the component pure: fake API, no tauri, plain-text markdown.
@@ -163,6 +163,67 @@ describe("BrainSection type filter", () => {
         expect.any(Object),
       );
     });
+  });
+
+  it("maps memory search operators to backend query params", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.change(screen.getByTestId("brain-search-input"), {
+      target: { value: "person:ansh date:2026-06-20 content:bunny" },
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("q=bunny"),
+        expect.any(Object),
+      );
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("tags=person%3Aansh%2Cdate%3A2026-06-20"),
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("maps artifact source operators to source filtering", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    fireEvent.change(screen.getByTestId("brain-search-input"), {
+      target: { value: "source:glob-pipe content:artifact" },
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("/artifacts?limit=500&offset=0&q=artifact&source=glob-pipe"),
+      );
+    });
+  });
+
+  it("opens a memory in the side detail panel", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getByTestId("brain-item-memory-1"));
+
+    const panel = screen.getByTestId("brain-detail-panel");
+    expect(panel).toBeTruthy();
+    expect(memoryRows().length).toBe(8);
+    expect(within(panel).getAllByText(MEMORIES[0].content).length).toBeGreaterThan(0);
+  });
+
+  it("opens an artifact in the side detail panel", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
+
+    expect(screen.getByTestId("brain-detail-panel")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("full")).toBeTruthy());
   });
 
   it("edits memory tags from the edit dialog", async () => {

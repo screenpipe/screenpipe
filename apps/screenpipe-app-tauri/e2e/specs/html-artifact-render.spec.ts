@@ -15,7 +15,7 @@
  * Deterministic flow:
  *   1. write a fixture .html (full doc, global dark <style>) to a temp path
  *   2. POST /artifacts/register so it shows up as a registered Brain artifact
- *   3. open Brain, filter to it, expand it
+ *   3. open Brain, filter to it, select it
  *   4. assert: a sandboxed iframe carrying our CSP renders it, and the host
  *      document has NO <style> carrying the artifact's signature color
  *   5. cleanup: DELETE the artifact + unlink the temp file
@@ -114,14 +114,13 @@ describe("HTML artifact rendering (Brain, sandboxed)", function () {
     const rowTestId = `brain-item-artifact-${artifactId}`;
     const row = await waitForTestId(rowTestId, 20_000);
 
-    // Expand it (collapsed shows just the title + "show more").
-    const expand = await row.$('[data-testid="artifact-html-toggle"]');
-    await expand.waitForExist({ timeout: t(15_000) });
-    await expand.click();
+    // Select it so the side detail panel renders the full artifact.
+    await row.click();
+    const panel = await waitForTestId("brain-detail-panel", 15_000);
 
     // A full document defaults to rendered → a sandboxed iframe mounts once the
     // file content loads.
-    const iframe = await row.$("iframe");
+    const iframe = await panel.$("iframe");
     await iframe.waitForExist({ timeout: t(20_000) });
 
     // SECURITY: scripts only — never same-origin (which would expose Tauri IPC).

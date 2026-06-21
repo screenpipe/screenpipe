@@ -57,7 +57,12 @@ import {
 } from "@/lib/hooks/use-unified-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
-import { getMemoryDisplay, type MemoryDisplay } from "@/lib/utils/memory-display";
+import { parseBrainSearchQuery } from "@/lib/utils/brain-search";
+import { getArtifactCardDisplay } from "@/lib/utils/artifact-display";
+import {
+  getMemoryCardDisplay,
+  type MemoryCardDisplay,
+} from "@/lib/utils/memory-display";
 
 interface MemoryRecord {
   id: number;
@@ -99,10 +104,6 @@ function artifactItemKey(a: UnifiedArtifact): string {
     : `artifact:${a.source}:${a.path}`;
 }
 
-function artifactItemSource(a: UnifiedArtifact): string {
-  return a.source_type === "chat" ? "chat" : a.source;
-}
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -112,19 +113,6 @@ function formatBytes(n: number): string {
 function artifactKindLabel(kind: string | null | undefined): string {
   if (!kind) return "file";
   return kind.replace(/[-_]+/g, " ");
-}
-
-function artifactPreviewWithoutTitle(preview: string, title: string): string {
-  const lines = preview.split("\n");
-  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
-  if (firstContentIndex === -1) return preview;
-  const first = lines[firstContentIndex].trim().replace(/^#{1,6}\s+/, "").trim();
-  if (first !== title.trim()) return preview;
-  return lines
-    .slice(0, firstContentIndex)
-    .concat(lines.slice(firstContentIndex + 1))
-    .join("\n")
-    .trimStart();
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +126,9 @@ type UnifiedItem =
   | { kind: "artifact"; data: UnifiedArtifact; sortDate: number };
 
 type TypeFilter = "memories" | "artifacts";
+type SelectedBrainItem =
+  | { kind: "memory"; key: string }
+  | { kind: "artifact"; key: string };
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -254,30 +245,14 @@ export function BrainSection() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
-  const memoryDisplayCacheRef = useRef<Map<string, MemoryDisplay>>(new Map());
+  const memoryDisplayCacheRef = useRef<Map<string, MemoryCardDisplay>>(new Map());
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("memories");
   const [visibleCount, setVisibleCount] = useState(RENDER_WINDOW);
-
-  // expanded content rows
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-  const toggleExpanded = (id: number) =>
-    setExpandedIds((prev) => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-
-  // expanded artifact rows + file content cache
-  const [expandedArtifactKeys, setExpandedArtifactKeys] = useState<Set<string>>(new Set());
+  const [selectedItem, setSelectedItem] = useState<SelectedBrainItem | null>(null);
   const [artifactContents, setArtifactContents] = useState<Map<string, string>>(new Map());
 
-  const toggleArtifactExpanded = async (key: string, path: string) => {
-    setExpandedArtifactKeys((prev) => {
-      const n = new Set(prev);
-      n.has(key) ? n.delete(key) : n.add(key);
-      return n;
-    });
+  const loadArtifactContent = async (key: string, path: string) => {
     if (!artifactContents.has(key)) {
       try {
         const res = await commands.readViewerFile(path);
@@ -313,6 +288,17 @@ export function BrainSection() {
   const [debouncedFilterSearch, setDebouncedFilterSearch] = useState("");
   const [memoryFilterTags, setMemoryFilterTags] = useState<string[]>([]);
   const [memoryFilterLoading, setMemoryFilterLoading] = useState(false);
+  const parsedSearch = React.useMemo(
+    () => parseBrainSearchQuery(debouncedQuery),
+    [debouncedQuery],
+  );
+  const memorySearchTags = React.useMemo(
+    () => Array.from(new Set([...activeTags, ...parsedSearch.memoryTags])),
+    [activeTags, parsedSearch.memoryTags],
+  );
+  const artifactSourceFilter =
+    parsedSearch.artifactSource ??
+    (typeFilter === "artifacts" ? activeTags[0] ?? null : null);
 
   // debounce search
   useEffect(() => {
@@ -325,14 +311,15 @@ export function BrainSection() {
     return () => clearTimeout(timer);
   }, [filterSearch]);
 
-  const getCachedMemoryDisplay = useCallback((content: string): MemoryDisplay => {
+  const getCachedMemoryDisplay = useCallback((memory: MemoryRecord): MemoryCardDisplay => {
     const cache = memoryDisplayCacheRef.current;
-    const cached = cache.get(content);
+    const cacheKey = `${memory.id}:${memory.updated_at}:${memory.content}`;
+    const cached = cache.get(cacheKey);
     if (cached) return cached;
 
-    const display = getMemoryDisplay(content);
+    const display = getMemoryCardDisplay(memory);
     if (cache.size > 300) cache.clear();
-    cache.set(content, display);
+    cache.set(cacheKey, display);
     return display;
   }, []);
 
@@ -347,8 +334,8 @@ export function BrainSection() {
     loadMore: loadMoreArtifacts,
     deleteRegistered,
   } = useUnifiedArtifacts(
-    debouncedQuery,
-    typeFilter === "artifacts" ? activeTags[0] ?? null : null,
+    parsedSearch.contentQuery,
+    artifactSourceFilter,
   );
 
   // Fetch only the currently visible filter options; do not load every memory
@@ -387,7 +374,7 @@ export function BrainSection() {
     async (offset: number, append: boolean) => {
       if (offset === 0) {
         setLoading(true);
-        setExpandedIds(new Set());
+        setSelectedItem(null);
       } else {
         setLoadingMore(true);
         loadingMoreRef.current = true;
@@ -402,9 +389,12 @@ export function BrainSection() {
           order_by: sortField,
           order_dir: sortDir,
         });
-        if (debouncedQuery) params.set("q", debouncedQuery);
-        if (typeFilter === "memories" && activeTags.length > 0) {
-          params.set("tags", activeTags.join(","));
+        if (parsedSearch.contentQuery) params.set("q", parsedSearch.contentQuery);
+        if (typeFilter === "memories" && parsedSearch.memorySource) {
+          params.set("source", parsedSearch.memorySource);
+        }
+        if (typeFilter === "memories" && memorySearchTags.length > 0) {
+          params.set("tags", memorySearchTags.join(","));
         }
         const res = await localFetch(
           `/memories?${params}`,
@@ -432,7 +422,15 @@ export function BrainSection() {
         loadingMoreRef.current = false;
       }
     },
-    [toast, debouncedQuery, activeTags, sortField, sortDir, typeFilter],
+    [
+      toast,
+      parsedSearch.contentQuery,
+      parsedSearch.memorySource,
+      memorySearchTags,
+      sortField,
+      sortDir,
+      typeFilter,
+    ],
   );
 
   // fetch on mount + refetch when search/tag filter changes
@@ -476,6 +474,9 @@ export function BrainSection() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast({ title: "memory deleted" });
       setMemories((prev) => prev.filter((m) => m.id !== id));
+      setSelectedItem((prev) =>
+        prev?.kind === "memory" && prev.key === `mem:${id}` ? null : prev,
+      );
       setTotal((prev) => prev - 1);
     } catch (err) {
       toast({
@@ -649,6 +650,19 @@ export function BrainSection() {
       : sortField !== "importance"
         ? artifactsTotal
         : 0;
+  const selectionMode = selectedIds.size > 0;
+  const allVisibleSelected =
+    unifiedItems.length > 0 && selectedIds.size === unifiedItems.length;
+  const selectedDetail = React.useMemo(() => {
+    if (!selectedItem) return null;
+    const item = unifiedItems.find((entry) => {
+      if (entry.kind === "memory") {
+        return selectedItem.kind === "memory" && `mem:${entry.data.id}` === selectedItem.key;
+      }
+      return selectedItem.kind === "artifact" && artifactItemKey(entry.data) === selectedItem.key;
+    });
+    return item ?? null;
+  }, [selectedItem, unifiedItems]);
   const normalizedFilterSearch = filterSearch.trim().toLowerCase();
   const filterTags = React.useMemo(() => {
     if (typeFilter === "artifacts") {
@@ -806,6 +820,10 @@ export function BrainSection() {
     async (a: UnifiedArtifact) => {
       if (!a.registered || a.id == null) return;
       await deleteRegistered(a.id);
+      const key = artifactItemKey(a);
+      setSelectedItem((prev) =>
+        prev?.kind === "artifact" && prev.key === key ? null : prev,
+      );
       toast({ title: "artifact deleted" });
     },
     [deleteRegistered, toast],
@@ -847,6 +865,12 @@ export function BrainSection() {
         )
       );
       setMemories((prev) => prev.filter((m) => !memIdSet.has(m.id)));
+      setSelectedItem((prev) => {
+        if (!prev) return prev;
+        if (prev.kind === "memory" && selectedIds.has(prev.key)) return null;
+        if (prev.kind === "artifact" && selectedIds.has(prev.key)) return null;
+        return prev;
+      });
       setTotal((prev) => prev - memIds.length);
 
       // delete output-type artifacts (registered ones only — fs artifacts
@@ -882,7 +906,7 @@ export function BrainSection() {
 
   return (
     <div data-testid="section-brain" className="h-full overflow-hidden">
-    <div className="max-w-4xl mx-auto px-6 py-6 space-y-4 h-full flex flex-col">
+    <div className="max-w-6xl mx-auto px-6 py-6 space-y-4 h-full flex flex-col">
       <p className="text-muted-foreground text-sm mb-4">
         what the AI has learned from your activity and what it has generated for you
       </p>
@@ -1305,44 +1329,57 @@ export function BrainSection() {
         )}
       </div>
 
-      {/* batch delete bar — only visible when items are selected */}
-      {unifiedItems.length > 0 && (
-        <div className="flex items-center gap-2 text-xs">
-          <Checkbox
-            data-testid="brain-select-all"
-            checked={selectedIds.size === unifiedItems.length && unifiedItems.length > 0}
-            onCheckedChange={toggleSelectAll}
-            className="h-3.5 w-3.5"
-          />
-          <span className="text-muted-foreground">
-            {selectedIds.size > 0 ? `${selectedIds.size} selected` : "select all"}
-          </span>
-          {selectedIds.size > 0 && (
-            <ConfirmDeleteDialog
-              open={confirmBatchDelete}
-              onOpenChange={setConfirmBatchDelete}
-              trigger={
-                <Button
-                  data-testid="brain-delete-selected"
-                  size="sm"
-                  variant="destructive"
-                  className="h-6 text-[10px] px-2 gap-1"
-                  disabled={batchDeleting}
-                >
-                  {batchDeleting ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3 w-3" />
-                  )}
-                  delete {selectedIds.size}
-                </Button>
-              }
-              title={`delete ${selectedIds.size} item${selectedIds.size !== 1 ? "s" : ""}?`}
-              description="the selected items will be permanently deleted. this cannot be undone."
-              confirmLabel={`delete ${selectedIds.size}`}
-              onConfirm={() => { setConfirmBatchDelete(false); batchDelete(); }}
+      {selectionMode && (
+        <div className="flex h-8 items-center justify-between rounded-md border border-border bg-muted/30 px-2 text-xs">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              data-testid="brain-select-all"
+              checked={allVisibleSelected}
+              onCheckedChange={toggleSelectAll}
+              className="h-3.5 w-3.5"
             />
-          )}
+            <span className="text-muted-foreground">
+              {selectedIds.size} selected
+            </span>
+            <button
+              type="button"
+              onClick={toggleSelectAll}
+              className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {allVisibleSelected ? "deselect all" : "select all"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              clear
+            </button>
+          </div>
+          <ConfirmDeleteDialog
+            open={confirmBatchDelete}
+            onOpenChange={setConfirmBatchDelete}
+            trigger={
+              <Button
+                data-testid="brain-delete-selected"
+                size="sm"
+                variant="destructive"
+                className="h-6 text-[10px] px-2 gap-1"
+                disabled={batchDeleting}
+              >
+                {batchDeleting ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+                delete
+              </Button>
+            }
+            title={`delete ${selectedIds.size} item${selectedIds.size !== 1 ? "s" : ""}?`}
+            description="the selected items will be permanently deleted. this cannot be undone."
+            confirmLabel={`delete ${selectedIds.size}`}
+            onConfirm={() => { setConfirmBatchDelete(false); batchDelete(); }}
+          />
         </div>
       )}
 
@@ -1377,60 +1414,64 @@ export function BrainSection() {
           )}
         </div>
       ) : (
+        <div className="flex min-h-0 flex-1 gap-3">
         <div
           ref={scrollRef}
-          className="space-y-1.5 flex-1 overflow-y-auto pr-1"
+          className={`min-h-0 overflow-y-auto pr-1 ${
+            selectedDetail ? "w-[52%] shrink-0" : "flex-1"
+          }`}
         >
           {unifiedItems.slice(0, visibleCount).map((item) => {
             if (item.kind === "artifact") {
               const artItem = item.data;
               const artPath = artItem.path;
-              const artPreview = artItem.preview;
               const artSize = artItem.size_bytes;
               const artDate = artItem.modified_at;
 
               const artKey = artifactItemKey(artItem);
               const artTestId = artItem.registered ? String(artItem.id) : artKey;
-              const fullContent = artifactContents.get(artKey);
-              const isArtExpanded = expandedArtifactKeys.has(artKey);
-              const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
-              const displayPreview = artifactPreviewWithoutTitle(rawContent, artItem.title);
-              // An .html artifact is a full document whose <style>/`*` rules are
-              // global. The inline markdown renderer passes raw HTML through
-              // (rehype-raw), so expanding one used to inject those styles into
-              // the whole app (dark background, invisible headings, reset
-              // layout). HTML artifacts are rendered in a sandboxed iframe via
-              // ArtifactHtmlBody instead, so they can never restyle the app.
-              const isHtmlArtifact = isHtmlFileName(artPath);
+              const display = getArtifactCardDisplay(artItem);
+              const isSelected =
+                selectedItem?.kind === "artifact" && selectedItem.key === artKey;
+              const isChecked = selectedIds.has(artKey);
               return (
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
-                  className="group flex items-start gap-2 rounded-md border border-border p-3 transition-colors hover:bg-muted/30"
+                  className={`group flex cursor-default items-start gap-2 border-b border-border/70 px-2 py-2.5 transition-colors hover:bg-muted/30 ${
+                    isSelected ? "bg-muted/50" : ""
+                  } ${
+                    isChecked ? "bg-muted/40" : ""
+                  }`}
+                  onClick={() => {
+                    setSelectedItem({ kind: "artifact", key: artKey });
+                    void loadArtifactContent(artKey, artPath);
+                  }}
                 >
                   <Checkbox
                     data-testid={`brain-checkbox-artifact-${artTestId}`}
-                    checked={selectedIds.has(artKey)}
+                    checked={isChecked}
+                    onClick={(e) => e.stopPropagation()}
                     onCheckedChange={() => toggleSelected(artKey)}
                     className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
-                      selectedIds.size === 0
+                      !selectionMode && !isChecked
                         ? "opacity-0 group-hover:opacity-100"
                         : "opacity-100"
                     }`}
                   />
-                  <div className="flex-1 min-w-0 space-y-2">
+                  <div className="flex-1 min-w-0 space-y-1">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <h3 className="truncate text-sm font-semibold text-foreground">
-                            {artItem.title}
+                          <h3 className="truncate text-sm font-medium text-foreground">
+                            {display.title}
                           </h3>
                           <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
                             {artifactKindLabel(artItem.kind)}
                           </Badge>
                         </div>
-                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                          <span className="truncate">{artifactItemSource(artItem)}</span>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <span className="truncate">{display.subtitle}</span>
                           {artDate && (
                             <>
                               <span className="text-muted-foreground/40">·</span>
@@ -1450,7 +1491,10 @@ export function BrainSection() {
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => void commands.openViewerWindow(artPath)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void commands.openViewerWindow(artPath);
+                          }}
                           title="open viewer"
                         >
                           <Eye className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1459,7 +1503,10 @@ export function BrainSection() {
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void invoke("reveal_in_default_browser", { path: artPath });
+                          }}
                           title="reveal in finder"
                         >
                           <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1473,6 +1520,7 @@ export function BrainSection() {
                                 variant="ghost"
                                 className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                                 title="delete"
+                                onClick={(e) => e.stopPropagation()}
                               >
                                 <Trash2 className="h-3.5 w-3.5 text-destructive" />
                               </Button>
@@ -1484,38 +1532,13 @@ export function BrainSection() {
                         )}
                       </div>
                     </div>
-                    {artItem.saf_kind ? (
-                      // SAF artifact (shared envelope with cloud): typed
-                      // renderer instead of the plain markdown preview.
-                      <SafArtifactBody
-                        title={artItem.title}
-                        content={isArtExpanded ? (fullContent ?? null) : null}
-                        expanded={isArtExpanded}
-                        onToggleExpanded={() =>
-                          void toggleArtifactExpanded(artKey, artPath)
-                        }
-                        hideTitle
-                      />
-                    ) : isHtmlArtifact ? (
-                      // HTML artifact: render in a sandboxed iframe, never the
-                      // app DOM (see ArtifactHtmlBody).
-                      <ArtifactHtmlBody
-                        title={artItem.title}
-                        content={isArtExpanded ? (fullContent ?? null) : null}
-                        expanded={isArtExpanded}
-                        onToggleExpanded={() =>
-                          void toggleArtifactExpanded(artKey, artPath)
-                        }
-                        hideTitle
-                      />
-                    ) : (
-                      <CompactMarkdown
+                    {display.summary && (
+                      <p
                         data-testid={`brain-artifact-preview-${artTestId}`}
-                        expanded={isArtExpanded}
-                        onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
+                        className="line-clamp-2 text-xs leading-relaxed text-muted-foreground"
                       >
-                        {displayPreview || rawContent}
-                      </CompactMarkdown>
+                        {display.summary}
+                      </p>
                     )}
                     {artItem.saf_kind && (
                       <div className="flex items-center gap-1.5 flex-wrap">
@@ -1537,25 +1560,33 @@ export function BrainSection() {
               );
             }
 
-            // Memory card (unchanged from original)
             const memory = item.data;
             const isDeleting = deletingId === memory.id;
-            const isExpanded = expandedIds.has(memory.id);
-            const display = getCachedMemoryDisplay(memory.content);
+            const memKey = `mem:${memory.id}`;
+            const display = getCachedMemoryDisplay(memory);
             const tags = memoryCardTags(memory.tags);
+            const isSelected =
+              selectedItem?.kind === "memory" && selectedItem.key === memKey;
+            const isChecked = selectedIds.has(memKey);
 
             return (
               <div
                 key={`mem-${memory.id}`}
                 data-testid={`brain-item-memory-${memory.id}`}
-                className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
+                className={`group flex cursor-default items-start gap-2 border-b border-border/70 px-2 py-2.5 transition-colors hover:bg-muted/30 ${
+                  isSelected ? "bg-muted/50" : ""
+                } ${
+                  isChecked ? "bg-muted/40" : ""
+                }`}
+                onClick={() => setSelectedItem({ kind: "memory", key: memKey })}
               >
                 <Checkbox
                   data-testid={`brain-checkbox-memory-${memory.id}`}
-                  checked={selectedIds.has(`mem:${memory.id}`)}
-                  onCheckedChange={() => toggleSelected(`mem:${memory.id}`)}
+                  checked={isChecked}
+                  onClick={(e) => e.stopPropagation()}
+                  onCheckedChange={() => toggleSelected(memKey)}
                   className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
-                    selectedIds.size === 0
+                    !selectionMode && !isChecked
                       ? "opacity-0 group-hover:opacity-100"
                       : "opacity-100"
                   }`}
@@ -1563,44 +1594,45 @@ export function BrainSection() {
                 <div
                   className="flex-1 min-w-0"
                 >
-                  {isExpanded ? (
-                    <CompactMarkdown
-                      expanded
-                      onToggleExpanded={() => toggleExpanded(memory.id)}
-                      suffix={
-                        savingId === memory.id ? (
-                          <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
-                        ) : undefined
-                      }
-                    >
-                      {memory.content}
-                    </CompactMarkdown>
-                  ) : (
-                    <div className="space-y-1">
-                      <h3 className="text-sm font-semibold text-foreground leading-snug line-clamp-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="min-w-0 truncate text-sm font-medium text-foreground">
                         {display.title}
                         {savingId === memory.id && (
                           <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
                         )}
                       </h3>
-                      {display.preview && (
-                        <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
-                          {display.preview}
-                        </p>
-                      )}
-                      {display.hasMore && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleExpanded(memory.id);
-                          }}
-                          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          show more
-                        </button>
-                      )}
+                      <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
+                        {display.kind}
+                      </Badge>
                     </div>
-                  )}
+                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <span className="truncate">{display.subtitle}</span>
+                    </div>
+                    {display.summary && (
+                      <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
+                        {display.summary}
+                      </p>
+                    )}
+                    {display.properties.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/80">
+                        {display.properties.slice(0, 2).map((property) => (
+                          <span key={property.label} className="truncate">
+                            {property.label}: {property.value}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedItem({ kind: "memory", key: memKey });
+                      }}
+                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      open
+                    </button>
+                  </div>
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
@@ -1676,7 +1708,8 @@ export function BrainSection() {
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       commands.copyTextToClipboard(memory.content);
                       setCopiedId(memory.id);
                       setTimeout(() => setCopiedId(null), 2000);
@@ -1698,6 +1731,7 @@ export function BrainSection() {
                         className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                         disabled={isDeleting}
                         title="delete"
+                        onClick={(e) => e.stopPropagation()}
                       >
                         {isDeleting ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1721,6 +1755,153 @@ export function BrainSection() {
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             )}
           </div>
+        </div>
+        {selectedDetail && (
+          <aside
+            data-testid="brain-detail-panel"
+            className="flex min-w-0 flex-1 flex-col border-l border-border pl-3"
+          >
+            {selectedDetail.kind === "memory" ? (
+              (() => {
+                const memory = selectedDetail.data;
+                const display = getCachedMemoryDisplay(memory);
+                return (
+                  <>
+                    <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <h2 className="truncate text-base font-semibold">
+                            {display.title}
+                          </h2>
+                          <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
+                            {display.kind}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {display.subtitle}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal">
+                            {memory.source}
+                          </Badge>
+                          <span className="text-[10px] text-muted-foreground">
+                            {timeAgo(memory.created_at)}
+                          </span>
+                          {display.properties.map((property) => (
+                            <Badge
+                              key={property.label}
+                              variant="secondary"
+                              className="max-w-[180px] truncate text-[10px] px-1 py-0 font-normal"
+                              title={`${property.label}: ${property.value}`}
+                            >
+                              {property.label}: {property.value}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => setSelectedItem(null)}
+                        title="close detail"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto py-3 pr-1">
+                      <CompactMarkdown expanded>
+                        {memory.content}
+                      </CompactMarkdown>
+                    </div>
+                  </>
+                );
+              })()
+            ) : (
+              (() => {
+                const artifact = selectedDetail.data;
+                const artKey = artifactItemKey(artifact);
+                const fullContent = artifactContents.get(artKey);
+                const display = getArtifactCardDisplay(artifact);
+                const isHtmlArtifact = isHtmlFileName(artifact.path);
+                const detailContent = fullContent ?? artifact.preview ?? "";
+                return (
+                  <>
+                    <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <h2 className="truncate text-base font-semibold">
+                            {display.title}
+                          </h2>
+                          <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
+                            {artifactKindLabel(artifact.kind)}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {display.subtitle}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {display.properties.map((property) => (
+                            <Badge
+                              key={property.label}
+                              variant="secondary"
+                              className="max-w-[180px] truncate text-[10px] px-1 py-0 font-normal"
+                              title={`${property.label}: ${property.value}`}
+                            >
+                              {property.label}: {property.value}
+                            </Badge>
+                          ))}
+                          {artifact.size_bytes != null && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {formatBytes(artifact.size_bytes)}
+                            </span>
+                          )}
+                          {artifact.modified_at && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {timeAgo(artifact.modified_at)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => setSelectedItem(null)}
+                        title="close detail"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto py-3 pr-1">
+                      {artifact.saf_kind ? (
+                        <SafArtifactBody
+                          title={display.title}
+                          content={fullContent ?? null}
+                          expanded
+                          onToggleExpanded={() => setSelectedItem(null)}
+                          hideTitle
+                        />
+                      ) : isHtmlArtifact ? (
+                        <ArtifactHtmlBody
+                          title={display.title}
+                          content={fullContent ?? null}
+                          expanded
+                          onToggleExpanded={() => setSelectedItem(null)}
+                          hideTitle
+                        />
+                      ) : (
+                        <CompactMarkdown expanded>
+                          {detailContent}
+                        </CompactMarkdown>
+                      )}
+                    </div>
+                  </>
+                );
+              })()
+            )}
+          </aside>
+        )}
         </div>
       )}
     </div>
