@@ -307,6 +307,12 @@ const TOOLS: Tool[] = [
           description:
             "Comma-separated tags; returns only items carrying ALL of them (e.g. 'person:ada,project:atlas'). Works for screen + audio (content_type 'ocr'/'audio'/'all', tags written by add-tags) AND memories (content_type 'memory', tags written by update-memory). Same tag string links across all three, so two items sharing a tag are connected. Use namespaced tags (person:, project:, topic:) to link people/projects/topics. content_type 'input' and 'accessibility' have no tags and return nothing when this is set.",
         },
+        include_related: {
+          type: "boolean",
+          description:
+            "With tags set, also return the co-occurring tags (the people/projects/topics seen alongside yours, ranked by frequency) as a 'Related:' line. One call for the surrounding context instead of several follow-ups. Ignored without tags.",
+          default: false,
+        },
         max_content_length: {
           type: "integer",
           description: "Truncate each result's text via middle-truncation. Use 200-500 to keep responses compact.",
@@ -1383,8 +1389,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const tagsStr = content.tags?.length ? ` [${content.tags.join(", ")}]` : "";
             const importance =
               content.importance != null ? ` (importance: ${content.importance})` : "";
+            // frame_id links a memory back to the exact moment — jump there with
+            // frame-context / get-frame-elements (frame_id=N).
+            const frameRef = content.frame_id != null ? ` frame:${content.frame_id}` : "";
             formattedResults.push(
-              `[Memory #${content.id}]${tagsStr}${importance}\n` +
+              `[Memory #${content.id}]${tagsStr}${importance}${frameRef}\n` +
                 `${content.created_at || ""}\n` +
                 `${truncateMiddle(content.content || "", effectiveCap)}`
             );
@@ -1397,9 +1406,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
             : "");
 
+        // Co-occurring tags (only present when include_related=true + tags set).
+        // Compact one-liner per namespace so it's cheap to read.
+        const related = data.related as Record<string, string[]> | undefined;
+        const relatedStr =
+          related && Object.keys(related).length > 0
+            ? "\n\nRelated tags: " +
+              Object.entries(related)
+                .map(([ns, vals]) => `${ns}: ${(Array.isArray(vals) ? vals : []).join(", ")}`)
+                .join(" | ")
+            : "";
+
         contentItems.push({
           type: "text",
-          text: header + "\n\n" + formattedResults.join("\n---\n"),
+          text: header + "\n\n" + formattedResults.join("\n---\n") + relatedStr,
         });
 
         for (const img of images) {

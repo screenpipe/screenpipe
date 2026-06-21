@@ -50,6 +50,10 @@ pub struct MemoryContent {
     pub source_context: Option<serde_json::Value>,
     pub tags: Vec<String>,
     pub importance: f64,
+    /// First frame of the workflow segment this memory describes, when known.
+    /// Lets a caller jump straight from a memory to the exact captured moment
+    /// (`GET /frames/{frame_id}`). Null for memories with no frame provenance.
+    pub frame_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }

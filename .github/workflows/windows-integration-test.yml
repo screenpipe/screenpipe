@@ -87,15 +87,37 @@ jobs:
           Write-Host "Audio service is already running"
         }
 
-    - name: Install 7zip
+    - name: Ensure 7-Zip is available
       shell: powershell
       run: |
+        # GitHub-hosted windows runners ship 7-Zip pre-installed, so this is
+        # normally a no-op. Only download when it's genuinely missing, and
+        # retry with backoff — the old unconditional Invoke-WebRequest hit
+        # intermittent "Unable to connect to the remote server" from
+        # 7-zip.org and failed the whole Windows job on unrelated PRs.
+        $sevenZipDir = "C:\Program Files\7-Zip"
+        if (Test-Path "$sevenZipDir\7z.exe") {
+          echo "$sevenZipDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "7-Zip already present at $sevenZipDir"
+          exit 0
+        }
         $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
         $7zipInstaller = "7z-installer.exe"
-        Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller
+        $downloaded = $false
+        for ($i = 1; $i -le 5; $i++) {
+          try {
+            Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller -UseBasicParsing -TimeoutSec 60
+            $downloaded = $true
+            break
+          } catch {
+            Write-Host "7-Zip download attempt $i failed: $($_.Exception.Message)"
+            Start-Sleep -Seconds ([math]::Min(30, [math]::Pow(2, $i)))
+          }
+        }
+        if (-not $downloaded) { throw "failed to download 7-Zip after 5 attempts" }
         Start-Process -FilePath .\$7zipInstaller -Args "/S" -Wait
         Remove-Item $7zipInstaller
-        echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "$sevenZipDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     - name: Download ONNX Runtime (CPU)
       shell: pwsh

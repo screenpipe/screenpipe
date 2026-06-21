@@ -99,6 +99,8 @@ import {
   sameMeetingNoteDraft,
   type MeetingNoteDraft,
 } from "./note-save-queue";
+import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -754,41 +756,77 @@ export function NoteView({
       title: "exporting mp4…",
       description: "stitching frames and audio — this can take a minute for long meetings.",
     });
+    let jobId: string | null = null;
+    let unlisten: (() => void) | null = null;
     try {
-      // Calls the engine export core in-process via Tauri (no HTTP, no daemon
-      // dependency) — the in-app twin of the `screenpipe export` CLI. Reuses
-      // the running server core's DB handle. Rejects with the engine's error
-      // string on failure.
-      const res = await commands.exportRecording(meeting.id, null, null, target);
-      if (res.status === "error") throw new Error(res.error);
-      const summary = res.data;
-
-      const sizeMb = summary?.file_size_bytes
-        ? (summary.file_size_bytes / (1024 * 1024)).toFixed(1)
-        : null;
-      toast({
-        title: "mp4 exported",
-        description: [
-          `${summary?.frame_count ?? 0} frames`,
-          `${summary?.audio_chunk_count ?? 0} audio chunks`,
-          sizeMb ? `${sizeMb} mb` : null,
-        ]
-          .filter(Boolean)
-          .join(" · "),
+      unlisten = await listenTyped(TAURI_EVENTS.export, async (event) => {
+        const isCurrentExport =
+          event.jobId === jobId ||
+          (!jobId &&
+            event.request.meetingId === meeting.id &&
+            event.request.outputPath === target);
+        if (!isCurrentExport) return;
+        jobId = event.jobId;
+        if (event.kind === "completed") {
+          const summary = event.summary;
+          writeBrowserLogNow("info", "meeting export completed", {
+            jobId: event.jobId,
+          });
+          const sizeMb = summary?.file_size_bytes
+            ? (summary.file_size_bytes / (1024 * 1024)).toFixed(1)
+            : null;
+          toast({
+            title: "mp4 exported",
+            description: [
+              `${summary?.frame_count ?? 0} frames`,
+              `${summary?.audio_chunk_count ?? 0} audio chunks`,
+              sizeMb ? `${sizeMb} mb` : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          });
+          setExporting(false);
+          unlisten?.();
+          try {
+            await openExternal(summary?.output_path ?? target);
+          } catch {
+            // opening the file is best-effort; the export itself succeeded.
+          }
+        }
+        if (event.kind === "failed") {
+          console.error("failed to export meeting", event.error);
+          writeBrowserLogNow("error", "meeting export failed", {
+            jobId: event.jobId,
+            stack: event.error,
+          });
+          toast({
+            title: "couldn't export mp4",
+            description: event.error,
+            variant: "destructive",
+          });
+          setExporting(false);
+          unlisten?.();
+        }
       });
-      try {
-        await openExternal(target);
-      } catch {
-        // opening the file is best-effort; the export itself succeeded.
-      }
+
+      // Starts the engine export core in-process via Tauri (no HTTP, no daemon
+      // dependency), then reports completion through export:event.
+      const res = await commands.startExportRecording(meeting.id, null, null, target);
+      if (res.status === "error") throw new Error(res.error);
+      jobId = res.data.jobId;
+      writeBrowserLogNow("info", "meeting export started", { jobId });
     } catch (err) {
       console.error("failed to export meeting", err);
+      writeBrowserLogNow("error", "meeting export start failed", {
+        jobId,
+        stack: err instanceof Error ? err.stack ?? err.message : String(err),
+      });
       toast({
         title: "couldn't export mp4",
         description: String(err),
         variant: "destructive",
       });
-    } finally {
+      unlisten?.();
       setExporting(false);
     }
   };

@@ -50,6 +50,7 @@ mod embedded_server;
 mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
+mod events;
 mod google_calendar;
 mod hardware;
 mod ics_calendar;
@@ -369,6 +370,13 @@ macro_rules! define_specta_builder {
             .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
             .typ::<oauth::OAuthStatus>()
+            .typ::<events::JobEvent>()
+            .typ::<events::ExportEvent>()
+            .typ::<events::ExportRequestInfo>()
+            .typ::<events::EngineEvent>()
+            .typ::<events::NotificationActionEvent>()
+            .typ::<meeting_export::MeetingExportSummary>()
+            .typ::<meeting_export::StartExportRecordingResponse>()
     }};
 }
 

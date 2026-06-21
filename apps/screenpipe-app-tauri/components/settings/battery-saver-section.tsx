@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import type { SettingsField } from "./settings-search";
+import { PowerModePreview } from "./setting-previews";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -257,6 +258,8 @@ export function BatterySaverSection() {
           </button>
         ))}
       </div>
+
+      <PowerModePreview mode={user_pref} />
 
       {/* Thermal warning */}
       {state && (state.thermal_state === "serious" || state.thermal_state === "critical") && (

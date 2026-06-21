@@ -118,6 +118,13 @@ fn dispatch(app: &AppHandle, text: &str) {
     };
     let name = frame.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let data = frame.get("data").cloned().unwrap_or(serde_json::json!({}));
+    crate::events::emit_engine(
+        app,
+        crate::events::EngineEvent {
+            name: name.to_string(),
+            data: data.clone(),
+        },
+    );
     match name {
         "permission_lost" | "permission_restored" | "permission_needed" => {
             permission::handle(app, name, &data)

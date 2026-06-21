@@ -7,6 +7,7 @@ import React from "react";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
 import type { SettingsField } from "./settings-search";
+import { NotificationSamplePreview } from "./setting-previews";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -62,6 +63,8 @@ export function NotificationsSettings() {
           Control which notifications screenpipe sends you.
         </p>
       </div>
+
+      <NotificationSamplePreview />
 
       <div className="space-y-1">
         {/* Capture stalls */}

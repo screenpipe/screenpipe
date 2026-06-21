@@ -8,6 +8,7 @@ const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useSettingsIndexDriftCheck, type SettingsField } from "./settings-search";
+import { CaptureFrequencyPreview, AudioCaptureModePreview } from "./setting-previews";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -36,7 +37,6 @@ export const searchIndex: SettingsField[] = [
   { label: "Chinese mirror", keywords: ["china", "mirror"] },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -2639,6 +2639,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </SelectContent>
               </Select>
             </div>
+            <AudioCaptureModePreview mode={settings.audioCaptureMode ?? "always"} />
           </CardContent>
         </Card>
         )}
@@ -3166,10 +3167,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center space-x-2.5 min-w-0">
                 <Headphones className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
+                <div className="min-w-0">
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Live meeting notes
                     <HelpTooltip text="Streams only the active meeting into the live note. This is separate from background 24/7 recording and can use your selected transcription engine, screenpipe cloud, or a direct provider." />
@@ -3177,25 +3178,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <p className="text-xs text-muted-foreground">Meeting-only live captions, separate from background transcription</p>
                 </div>
               </div>
-              <Switch
-                id="meetingLiveTranscriptionEnabled"
-                checked={settings.meetingLiveTranscriptionEnabled ?? true}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({
-                    meetingLiveTranscriptionEnabled: checked,
-                    meetingLiveTranscriptionProvider: checked
-                      ? ((settings.meetingLiveTranscriptionProvider && settings.meetingLiveTranscriptionProvider !== "disabled")
-                        ? settings.meetingLiveTranscriptionProvider
-                        : "selected-engine")
-                      : "disabled",
-                  }, true)
-                }
-              />
-            </div>
-            {(settings.meetingLiveTranscriptionEnabled ?? true) && (
-              <div className="mt-2.5 ml-[26px] flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="text-xs text-muted-foreground">Live engine</Label>
+              <div className="flex items-center gap-2 shrink-0">
+                {(settings.meetingLiveTranscriptionEnabled ?? true) && (
                   <Select
                     value={settings.meetingLiveTranscriptionProvider ?? "selected-engine"}
                     onValueChange={(value) =>
@@ -3204,7 +3188,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       }, true)
                     }
                   >
-                    <SelectTrigger className="h-8 w-[260px] text-xs">
+                    <SelectTrigger className="h-7 w-[190px] text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -3213,21 +3197,37 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       <SelectItem value="deepgram-live">Direct Deepgram live</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
-                {(settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "screenpipe-cloud" &&
-                  !settings.user?.token &&
-                  !settings.user?.id && (
-                  <p className="text-xs text-muted-foreground">
-                    Log in to screenpipe cloud to use the cloud live provider.
-                  </p>
                 )}
-                {(settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "selected-engine" &&
-                  settings.audioTranscriptionEngine === "disabled" && (
-                  <p className="text-xs text-muted-foreground">
-                    Pick an audio transcription engine above, or choose a cloud/direct live provider.
-                  </p>
-                )}
+                <Switch
+                  id="meetingLiveTranscriptionEnabled"
+                  checked={settings.meetingLiveTranscriptionEnabled ?? true}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({
+                      meetingLiveTranscriptionEnabled: checked,
+                      meetingLiveTranscriptionProvider: checked
+                        ? ((settings.meetingLiveTranscriptionProvider && settings.meetingLiveTranscriptionProvider !== "disabled")
+                          ? settings.meetingLiveTranscriptionProvider
+                          : "selected-engine")
+                        : "disabled",
+                    }, true)
+                  }
+                />
               </div>
+            </div>
+            {(settings.meetingLiveTranscriptionEnabled ?? true) &&
+              (settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "screenpipe-cloud" &&
+              !settings.user?.token &&
+              !settings.user?.id && (
+              <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
+                Log in to screenpipe cloud to use the cloud live provider.
+              </p>
+            )}
+            {(settings.meetingLiveTranscriptionEnabled ?? true) &&
+              (settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "selected-engine" &&
+              settings.audioTranscriptionEngine === "disabled" && (
+              <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
+                Pick an audio transcription engine above, or choose a cloud/direct live provider.
+              </p>
             )}
             <div className="mt-2.5 pt-2.5 border-t border-border/50 flex items-center justify-between">
               <div>
@@ -3770,6 +3770,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <span>auto</span>
                   <span>every 10s</span>
                 </div>
+                <CaptureFrequencyPreview seconds={seconds} />
               </CardContent>
             </Card>
           );

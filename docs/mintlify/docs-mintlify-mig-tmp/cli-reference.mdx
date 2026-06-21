@@ -62,6 +62,35 @@ curl "http://localhost:3030/search?q=meeting&limit=10&content_type=all"
 | `browser_url` | string | filter by browser URL |
 | `min_length` | int | minimum text length |
 | `max_length` | int | maximum text length |
+| `tags` | string | comma-separated; return only items carrying **all** of these tags, e.g. `tags=person:ada,project:atlas` |
+| `include_related` | bool | with `tags`, attach a `related` block of co-occurring tags grouped by namespace |
+
+### related context
+
+pass `include_related=true` alongside a `tags` filter to get the tags that
+co-occur with the ones you asked for — the people, projects, and workflows that
+show up in the same frames, calls, and memories — in a single call instead of
+several follow-up queries:
+
+```bash
+curl "http://localhost:3030/search?tags=person:ada&include_related=true&limit=5"
+```
+
+```json
+{
+  "data": [ "...frames, audio, and memories..." ],
+  "pagination": { "limit": 5, "offset": 0, "total": 42 },
+  "related": {
+    "people": ["connor", "drew"],
+    "projects": ["atlas", "atlas-finance"],
+    "workflows": ["planning"]
+  }
+}
+```
+
+namespaces are pluralized from the tag prefix (`person:` → `people`,
+`project:` → `projects`); values are ordered most-frequent first. omit
+`tags` and the block is skipped.
 
 ### content type guide
 

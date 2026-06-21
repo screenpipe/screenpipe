@@ -15,6 +15,7 @@ interface ArtifactHtmlBodyProps {
   content: string | null;
   expanded: boolean;
   onToggleExpanded: () => void;
+  hideTitle?: boolean;
 }
 
 /**
@@ -35,6 +36,7 @@ export function ArtifactHtmlBody({
   content,
   expanded,
   onToggleExpanded,
+  hideTitle = false,
 }: ArtifactHtmlBodyProps) {
   // Source vs rendered. Initialized once per expansion from the content shape
   // (full doc / marked → rendered; bare snippet → source), then user-controlled.
@@ -52,7 +54,7 @@ export function ArtifactHtmlBody({
 
   let body: React.ReactNode = null;
   if (!expanded) {
-    body = <p className="text-sm font-medium">{title}</p>;
+    body = hideTitle ? null : <p className="text-sm font-medium">{title}</p>;
   } else if (content == null) {
     body = <p className="text-xs text-muted-foreground">loading artifact…</p>;
   } else {

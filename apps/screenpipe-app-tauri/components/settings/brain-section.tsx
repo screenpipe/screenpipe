@@ -10,6 +10,20 @@ import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
@@ -23,6 +37,7 @@ import {
   Copy,
   Search,
   Tag,
+  ChevronDown,
   Plus,
   Pencil,
   AlertCircle,
@@ -42,6 +57,7 @@ import {
 } from "@/lib/hooks/use-unified-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
+import { getMemoryDisplay, type MemoryDisplay } from "@/lib/utils/memory-display";
 
 interface MemoryRecord {
   id: number;
@@ -57,6 +73,14 @@ interface MemoryRecord {
 interface MemoryListResponse {
   data: MemoryRecord[];
   pagination: { limit: number; offset: number; total: number };
+}
+
+interface TagAutocompleteItem {
+  name: string;
+  count: number;
+  frame_count: number;
+  audio_count: number;
+  memory_count: number;
 }
 
 const PAGE_SIZE = 20;
@@ -85,6 +109,24 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function artifactKindLabel(kind: string | null | undefined): string {
+  if (!kind) return "file";
+  return kind.replace(/[-_]+/g, " ");
+}
+
+function artifactPreviewWithoutTitle(preview: string, title: string): string {
+  const lines = preview.split("\n");
+  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (firstContentIndex === -1) return preview;
+  const first = lines[firstContentIndex].trim().replace(/^#{1,6}\s+/, "").trim();
+  if (first !== title.trim()) return preview;
+  return lines
+    .slice(0, firstContentIndex)
+    .concat(lines.slice(firstContentIndex + 1))
+    .join("\n")
+    .trimStart();
+}
+
 // ---------------------------------------------------------------------------
 // Unified item type for interleaved list
 // ---------------------------------------------------------------------------
@@ -95,16 +137,60 @@ type UnifiedItem =
   | { kind: "memory"; data: MemoryRecord; sortDate: number }
   | { kind: "artifact"; data: UnifiedArtifact; sortDate: number };
 
-type TypeFilter = "all" | "memories" | "artifacts";
+type TypeFilter = "memories" | "artifacts";
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
   const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function isDateFilterTag(tag: string): boolean {
+  return (
+    /^date:\d{4}-\d{2}-\d{2}$/.test(tag) ||
+    /^\d{4}-\d{2}-\d{2}$/.test(tag)
+  );
+}
+
+function titleizeTagPart(value: string): string {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function filterTagLabel(tag: string): string {
+  if (tag.startsWith("date:")) return tag.slice(5);
+  if (tag.startsWith("person:")) return titleizeTagPart(tag.slice(7));
+  if (tag.startsWith("meeting:")) return `Meeting ${tag.slice(8)}`;
+  if (tag.startsWith("clone:")) return titleizeTagPart(tag.slice(6));
+  return tag;
+}
+
+function filterTagKind(tag: string): "label" | "person" | "date" | "source" {
+  if (isDateFilterTag(tag)) return "date";
+  if (tag.startsWith("person:")) return "person";
+  if (tag.startsWith("meeting:") || tag.startsWith("clone:") || tag.startsWith("source:")) {
+    return "source";
+  }
+  return "label";
+}
+
+function memoryCardTags(tags: string[]): string[] {
+  return Array.from(
+    new Set(
+      tags
+        .filter((tag) => !isDateFilterTag(tag) && !/^\d+$/.test(tag))
+        .map(filterTagLabel),
+    ),
+  );
 }
 
 function BrainSkeleton() {
@@ -168,8 +254,9 @@ export function BrainSection() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+  const memoryDisplayCacheRef = useRef<Map<string, MemoryDisplay>>(new Map());
 
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("memories");
   const [visibleCount, setVisibleCount] = useState(RENDER_WINDOW);
 
   // expanded content rows
@@ -202,9 +289,6 @@ export function BrainSection() {
     }
   };
 
-  // show all tag filter pills
-  const [showAllTags, setShowAllTags] = useState(false);
-
   // batch selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -221,16 +305,36 @@ export function BrainSection() {
   // search, filter & sort
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [activeTags, setActiveTags] = useState<string[]>([]);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [allTags, setAllTags] = useState<string[]>([]);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterSearch, setFilterSearch] = useState("");
+  const [debouncedFilterSearch, setDebouncedFilterSearch] = useState("");
+  const [memoryFilterTags, setMemoryFilterTags] = useState<string[]>([]);
+  const [memoryFilterLoading, setMemoryFilterLoading] = useState(false);
 
   // debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedFilterSearch(filterSearch), 180);
+    return () => clearTimeout(timer);
+  }, [filterSearch]);
+
+  const getCachedMemoryDisplay = useCallback((content: string): MemoryDisplay => {
+    const cache = memoryDisplayCacheRef.current;
+    const cached = cache.get(content);
+    if (cached) return cached;
+
+    const display = getMemoryDisplay(content);
+    if (cache.size > 300) cache.clear();
+    cache.set(content, display);
+    return display;
+  }, []);
 
   // artifact data — GET /artifacts merges registered outputs + pipe fs
   // artifacts server-side; q/source filtering and totals are server-side too.
@@ -242,20 +346,42 @@ export function BrainSection() {
     hasMore: artifactsHaveMore,
     loadMore: loadMoreArtifacts,
     deleteRegistered,
-  } = useUnifiedArtifacts(debouncedQuery, activeTag);
+  } = useUnifiedArtifacts(
+    debouncedQuery,
+    typeFilter === "artifacts" ? activeTags[0] ?? null : null,
+  );
 
-  // fetch all tags once on mount
+  // Fetch only the currently visible filter options; do not load every memory
+  // label up front because large memory stores can have many distinct tags.
   useEffect(() => {
-    localFetch("/memories/tags")
+    if (typeFilter !== "memories" || !filterOpen) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      limit: "50",
+      q: debouncedFilterSearch,
+    });
+    setMemoryFilterLoading(true);
+    localFetch(`/tags/autocomplete?${params}`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((tags: string[]) => {
-        const filtered = tags.filter(
-          (t) => t.length > 0 && !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)
+      .then((items: TagAutocompleteItem[]) => {
+        if (cancelled) return;
+        setMemoryFilterTags(
+          items
+            .filter((item) => item.memory_count > 0)
+            .map((item) => item.name)
+            .filter((tag) => tag.length > 0 && !/^\d+$/.test(tag)),
         );
-        setAllTags(filtered);
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        if (!cancelled) setMemoryFilterTags([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMemoryFilterLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [typeFilter, filterOpen, debouncedFilterSearch]);
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
@@ -277,7 +403,9 @@ export function BrainSection() {
           order_dir: sortDir,
         });
         if (debouncedQuery) params.set("q", debouncedQuery);
-        if (activeTag) params.set("tags", activeTag);
+        if (typeFilter === "memories" && activeTags.length > 0) {
+          params.set("tags", activeTags.join(","));
+        }
         const res = await localFetch(
           `/memories?${params}`,
           { signal: controller.signal },
@@ -304,13 +432,13 @@ export function BrainSection() {
         loadingMoreRef.current = false;
       }
     },
-    [toast, debouncedQuery, activeTag, sortField, sortDir],
+    [toast, debouncedQuery, activeTags, sortField, sortDir, typeFilter],
   );
 
   // fetch on mount + refetch when search/tag filter changes
   useEffect(() => {
     fetchPage(0, false);
-  }, [debouncedQuery, activeTag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, activeTags, typeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // refetch when sort changes so the API returns correctly ordered data
   useEffect(() => {
@@ -368,17 +496,24 @@ export function BrainSection() {
     setTimeout(() => editRef.current?.focus(), 0);
   };
 
+  const closeEditDialog = () => {
+    setEditingId(null);
+    setEditContent("");
+    setEditTags([]);
+    setTagInput("");
+  };
+
   const saveEdit = async (id: number) => {
     const trimmed = editContent.trim();
     const memory = memories.find((m) => m.id === id);
     if (!trimmed) {
-      setEditingId(null);
+      closeEditDialog();
       return;
     }
     const contentChanged = trimmed !== memory?.content;
     const tagsChanged = JSON.stringify(editTags) !== JSON.stringify(memory?.tags);
     if (!contentChanged && !tagsChanged) {
-      setEditingId(null);
+      closeEditDialog();
       return;
     }
     setSavingId(id);
@@ -408,7 +543,7 @@ export function BrainSection() {
       });
     } finally {
       setSavingId(null);
-      setEditingId(null);
+      closeEditDialog();
     }
   };
 
@@ -436,6 +571,13 @@ export function BrainSection() {
     setNewTags((prev) => prev.filter((t) => t !== tag));
   };
 
+  const closeAddMemoryDialog = () => {
+    setAddingNew(false);
+    setNewContent("");
+    setNewTags([]);
+    setNewTagInput("");
+  };
+
   const createMemory = async () => {
     const trimmed = newContent.trim();
     if (!trimmed) return;
@@ -453,10 +595,7 @@ export function BrainSection() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast({ title: "memory created" });
-      setNewContent("");
-      setNewTags([]);
-      setNewTagInput("");
-      setAddingNew(false);
+      closeAddMemoryDialog();
       fetchPage(0, false);
     } catch (err) {
       toast({
@@ -476,7 +615,7 @@ export function BrainSection() {
     const items: UnifiedItem[] = [];
 
     // Add memories (unless filtered to artifacts-only)
-    if (typeFilter !== "artifacts") {
+    if (typeFilter === "memories") {
       for (const m of memories) {
         items.push({
           kind: "memory",
@@ -487,7 +626,7 @@ export function BrainSection() {
     }
 
     // Add artifacts (unless filtered to memories-only or importance sort is active)
-    if (typeFilter !== "memories" && sortField !== "importance") {
+    if (typeFilter === "artifacts" && sortField !== "importance") {
       for (const a of artifacts) {
         items.push({
           kind: "artifact",
@@ -505,15 +644,106 @@ export function BrainSection() {
   // True total across the full dataset: both totals are server-side and
   // already reflect the active search/tag filters.
   const totalCount =
-    (typeFilter !== "artifacts" ? total : 0) +
-    (typeFilter !== "memories" && sortField !== "importance"
-      ? artifactsTotal
-      : 0);
+    typeFilter === "memories"
+      ? total
+      : sortField !== "importance"
+        ? artifactsTotal
+        : 0;
+  const normalizedFilterSearch = filterSearch.trim().toLowerCase();
+  const filterTags = React.useMemo(() => {
+    if (typeFilter === "artifacts") {
+      return artifactSources.filter((source) =>
+        source.toLowerCase().includes(normalizedFilterSearch)
+      );
+    }
+
+    const loadedMemoryFilterTags = memories
+      .flatMap((memory) => memory.tags)
+      .filter((tag) => tag.length > 0 && !/^\d+$/.test(tag))
+      .filter((tag) => {
+        if (!normalizedFilterSearch) return true;
+        return (
+          tag.toLowerCase().includes(normalizedFilterSearch) ||
+          filterTagLabel(tag).toLowerCase().includes(normalizedFilterSearch)
+        );
+      });
+
+    return Array.from(new Set([...activeTags, ...loadedMemoryFilterTags, ...memoryFilterTags]));
+  }, [
+    activeTags,
+    artifactSources,
+    memories,
+    memoryFilterTags,
+    normalizedFilterSearch,
+    typeFilter,
+  ]);
+  const labelFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "label"),
+    [filterTags],
+  );
+  const personFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "person"),
+    [filterTags],
+  );
+  const dateFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "date"),
+    [filterTags],
+  );
+  const sourceFilterTags = React.useMemo(
+    () => filterTags.filter((tag) => filterTagKind(tag) === "source"),
+    [filterTags],
+  );
+  const showFilterButton = typeFilter === "memories" || artifactSources.length > 0;
+  const toggleActiveTag = (tag: string) => {
+    setActiveTags((prev) => {
+      if (typeFilter === "artifacts") {
+        return prev[0] === tag ? [] : [tag];
+      }
+      return prev.includes(tag)
+        ? prev.filter((active) => active !== tag)
+        : [...prev, tag];
+    });
+  };
+
+  const renderFilterTagButton = (tag: string) => (
+    <button
+      key={tag}
+      type="button"
+      onClick={() => toggleActiveTag(tag)}
+      className={`inline-flex h-6 max-w-[150px] items-center gap-1 rounded-full border px-2 text-[10px] transition-colors ${
+        activeTags.includes(tag)
+          ? "bg-foreground text-background border-foreground"
+          : "border-border text-muted-foreground hover:bg-muted"
+      }`}
+      title={tag.length > 20 ? tag : undefined}
+    >
+      <Tag className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate">{filterTagLabel(tag)}</span>
+    </button>
+  );
+
+  const renderFilterMenuItem = (tag: string) => {
+    const selected = activeTags.includes(tag);
+    return (
+      <button
+        key={tag}
+        type="button"
+        onClick={() => toggleActiveTag(tag)}
+        className={`flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs transition-colors hover:bg-muted/80 hover:text-foreground ${
+          selected ? "text-foreground" : "text-muted-foreground"
+        }`}
+        title={tag.length > 32 ? tag : undefined}
+      >
+        <span className="min-w-0 flex-1 truncate">{filterTagLabel(tag)}</span>
+        {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+      </button>
+    );
+  };
 
   // Collapse the render window whenever the visible dataset changes shape.
   useEffect(() => {
     setVisibleCount(RENDER_WINDOW);
-  }, [debouncedQuery, activeTag, typeFilter, sortField, sortDir]);
+  }, [debouncedQuery, activeTags, typeFilter, sortField, sortDir]);
 
   // infinite scroll via IntersectionObserver — grows the render window and
   // pulls the next page of whichever source is running low
@@ -530,14 +760,14 @@ export function BrainSection() {
         const windowNearsEnd =
           visibleCount + RENDER_WINDOW >= unifiedItems.length;
         if (
-          typeFilter !== "artifacts" &&
+          typeFilter === "memories" &&
           !loadingMoreRef.current &&
           memories.length < total &&
           windowNearsEnd
         ) {
           fetchPage(memories.length, true);
         }
-        if (typeFilter !== "memories" && artifactsHaveMore && windowNearsEnd) {
+        if (typeFilter === "artifacts" && artifactsHaveMore && windowNearsEnd) {
           loadMoreArtifacts();
         }
       },
@@ -571,11 +801,6 @@ export function BrainSection() {
       return pruned.size === prev.size ? prev : pruned;
     });
   }, [unifiedItems]);
-
-  const combinedTags = React.useMemo(() => {
-    const set = new Set([...allTags, ...artifactSources]);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [allTags, artifactSources]);
 
   const handleDeleteArtifact = useCallback(
     async (a: UnifiedArtifact) => {
@@ -681,95 +906,234 @@ export function BrainSection() {
         </div>
       )}
 
+      <div className="flex items-center justify-between gap-3">
+        <div className="inline-flex items-center gap-1 border-b border-border">
+          {(
+            [
+              { value: "memories", label: "Memories", count: total },
+              { value: "artifacts", label: "Artifacts", count: artifactsTotal },
+            ] as { value: TypeFilter; label: string; count: number }[]
+          ).map(({ value, label, count }) => (
+            <button
+              key={value}
+              data-testid={`brain-filter-${value}`}
+              onClick={() => {
+                setTypeFilter(value);
+                setActiveTags([]);
+                setSelectedIds(new Set());
+              }}
+              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                typeFilter === value
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {label}
+              <span className="ml-2 text-xs text-muted-foreground">
+                {count.toLocaleString()}
+              </span>
+            </button>
+          ))}
+        </div>
+        {showFilterButton && (
+          <Popover
+            open={filterOpen}
+            onOpenChange={(open) => {
+              setFilterOpen(open);
+              if (!open) setFilterSearch("");
+            }}
+          >
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-md border px-3 text-xs transition-colors hover:bg-muted ${
+                  activeTags.length > 0
+                    ? "border-foreground/40 bg-muted text-foreground"
+                    : "border-border bg-transparent text-muted-foreground"
+                }`}
+              >
+                <Tag className="h-3.5 w-3.5" />
+                Filter by
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              collisionPadding={24}
+              className="w-[320px] max-w-[calc(100vw-48px)] p-0"
+            >
+              <div className="border-b border-border p-2">
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={filterSearch}
+                    onChange={(e) => setFilterSearch(e.target.value)}
+                    placeholder={
+                      typeFilter === "memories"
+                        ? "find filters..."
+                        : "find filters..."
+                    }
+                    className="h-8 pl-7 text-xs"
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div className="max-h-[360px] overflow-y-auto p-2">
+                {memoryFilterLoading && typeFilter === "memories" && (
+                  <div className="px-2 py-3 text-xs text-muted-foreground">
+                    loading filters...
+                  </div>
+                )}
+                {!memoryFilterLoading && filterTags.length === 0 && (
+                  <div className="px-2 py-3 text-xs text-muted-foreground">
+                    no filters found
+                  </div>
+                )}
+                {labelFilterTags.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      {typeFilter === "memories" ? "Labels" : "Sources"}
+                    </div>
+                    {labelFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+                {personFilterTags.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-border pt-2">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      People
+                    </div>
+                    {personFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+                {dateFilterTags.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-border pt-2">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      Dates
+                    </div>
+                    {dateFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+                {sourceFilterTags.length > 0 && (
+                  <div className="mt-2 space-y-1 border-t border-border pt-2">
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      Sources
+                    </div>
+                    {sourceFilterTags.map(renderFilterMenuItem)}
+                  </div>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+
       {/* search bar + add button */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             data-testid="brain-search-input"
-            placeholder="search memories, files, entities, or dates..."
+            placeholder={
+              typeFilter === "memories"
+                ? "search memory content..."
+                : "search artifact content..."
+            }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8 h-8 text-sm"
           />
         </div>
-        <Button
-          data-testid="brain-add-memory-btn"
-          size="sm"
-          variant="outline"
-          className="h-8 text-xs gap-1"
-          onClick={() => {
-            setAddingNew(true);
-            setTimeout(() => newContentRef.current?.focus(), 0);
-          }}
-        >
-          <Plus className="h-3.5 w-3.5" />
-          add
-        </Button>
+        {typeFilter === "memories" && (
+          <Button
+            data-testid="brain-add-memory-btn"
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs gap-1"
+            onClick={() => {
+              setAddingNew(true);
+              setTimeout(() => newContentRef.current?.focus(), 0);
+            }}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            add
+          </Button>
+        )}
       </div>
 
-      {/* add new memory form */}
-      {addingNew && (
-        <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20">
-          <textarea
-            data-testid="brain-add-memory-textarea"
-            ref={newContentRef}
-            value={newContent}
-            onChange={(e) => setNewContent(e.target.value)}
-            placeholder="what should the AI remember?"
-            className="text-sm w-full bg-transparent border border-border rounded px-2 py-1.5 resize-y focus:outline-none focus:border-foreground/40 min-h-[60px]"
-            rows={2}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                createMemory();
-              }
-              if (e.key === "Escape") setAddingNew(false);
-            }}
-          />
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {newTags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
-              >
-                <Tag className="h-2.5 w-2.5" />
-                {tag}
-                <button
-                  onClick={() => removeTagFromNew(tag)}
-                  className="hover:text-destructive"
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            ))}
-            <Input
-              value={newTagInput}
-              onChange={(e) => setNewTagInput(e.target.value)}
+      <Dialog
+        open={addingNew && typeFilter === "memories"}
+        onOpenChange={(open) => {
+          if (open) {
+            setAddingNew(true);
+            setTimeout(() => newContentRef.current?.focus(), 0);
+          } else {
+            closeAddMemoryDialog();
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl" data-testid="brain-add-memory-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base">add memory</DialogTitle>
+            <DialogDescription>
+              Save a durable fact, preference, or decision the AI should keep.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              data-testid="brain-add-memory-textarea"
+              ref={newContentRef}
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+              placeholder="what should the AI remember?"
+              className="min-h-[140px] resize-y text-sm"
+              rows={6}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
-                  addTagToNew(newTagInput);
+                  createMemory();
                 }
-                if (e.key === "Backspace" && !newTagInput && newTags.length > 0) {
-                  removeTagFromNew(newTags[newTags.length - 1]);
-                }
+                if (e.key === "Escape") closeAddMemoryDialog();
               }}
-              placeholder="add tag..."
-              className="h-6 text-[10px] w-20 px-1.5 border-dashed"
             />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {newTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
+                >
+                  <Tag className="h-2.5 w-2.5" />
+                  {tag}
+                  <button
+                    onClick={() => removeTagFromNew(tag)}
+                    className="hover:text-destructive"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </span>
+              ))}
+              <Input
+                value={newTagInput}
+                onChange={(e) => setNewTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addTagToNew(newTagInput);
+                  }
+                  if (e.key === "Backspace" && !newTagInput && newTags.length > 0) {
+                    removeTagFromNew(newTags[newTags.length - 1]);
+                  }
+                }}
+                placeholder="add tag..."
+                className="h-6 text-[10px] w-20 px-1.5 border-dashed"
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-2 justify-end">
+          <DialogFooter>
             <Button
               size="sm"
               variant="ghost"
               className="h-7 text-xs"
-              onClick={() => {
-                setAddingNew(false);
-                setNewContent("");
-                setNewTags([]);
-                setNewTagInput("");
-              }}
+              onClick={closeAddMemoryDialog}
             >
               cancel
             </Button>
@@ -780,96 +1144,136 @@ export function BrainSection() {
               onClick={createMemory}
               disabled={!newContent.trim() || savingNew}
             >
-              {savingNew ? <Loader2 className="h-3 w-3 animate-spin" /> : "save"}
+              {savingNew ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                "save"
+              )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editingId !== null}
+        onOpenChange={(open) => {
+          if (open) {
+            setTimeout(() => editRef.current?.focus(), 0);
+          } else if (savingId === null) {
+            closeEditDialog();
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl" data-testid="brain-edit-memory-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base">edit memory</DialogTitle>
+            <DialogDescription>
+              Update the saved memory and its labels.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              data-testid="brain-edit-memory-textarea"
+              ref={editRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className="min-h-[180px] resize-y text-sm"
+              rows={8}
+              disabled={savingId !== null}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && editingId !== null) {
+                  e.preventDefault();
+                  void saveEdit(editingId);
+                }
+                if (e.key === "Escape") closeEditDialog();
+              }}
+            />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {editTags
+                .filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t))
+                .map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
+                  >
+                    <Tag className="h-2.5 w-2.5" />
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeTagFromEdit(tag)}
+                      className="hover:text-destructive"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              <Input
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addTagToEdit(tagInput);
+                  }
+                  if (e.key === "Backspace" && !tagInput && editTags.length > 0) {
+                    removeTagFromEdit(editTags[editTags.length - 1]);
+                  }
+                }}
+                placeholder="add tag..."
+                className="h-6 text-[10px] w-20 px-1.5 border-dashed"
+              />
+            </div>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={closeEditDialog}
+              disabled={savingId !== null}
+            >
+              cancel
+            </Button>
+            <Button
+              data-testid="brain-edit-memory-save"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                if (editingId !== null) void saveEdit(editingId);
+              }}
+              disabled={!editContent.trim() || savingId !== null}
+            >
+              {savingId !== null ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                "save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* filters row */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {loading && artifactsLoading ? (
+      <div className="flex items-center gap-2">
+        {(typeFilter === "memories" ? loading : artifactsLoading) ? (
           <Skeleton className="h-6 w-16 rounded-full" />
         ) : (
-          <Badge variant="secondary" className="text-xs">
+          <Badge variant="secondary" className="text-xs shrink-0">
             {totalCount.toLocaleString()} {totalCount === 1 ? "item" : "items"}
           </Badge>
         )}
 
-        {/* type filter */}
-        {(
-          [
-            { value: "all", label: "all" },
-            { value: "memories", label: "memories" },
-            { value: "artifacts", label: "artifacts" },
-          ] as { value: TypeFilter; label: string }[]
-        ).map(({ value, label }) => (
+        {activeTags.map(renderFilterTagButton)}
+        {activeTags.length > 0 && (
           <button
-            key={value}
-            data-testid={`brain-filter-${value}`}
-            onClick={() => {
-              setTypeFilter(value);
-              // clear active tag if it won't be visible in the new filter
-              if (activeTag) {
-                const nextTags =
-                  value === "memories"
-                    ? allTags
-                    : value === "artifacts"
-                      ? artifactSources
-                      : combinedTags;
-                if (!nextTags.includes(activeTag)) setActiveTag(null);
-              }
-            }}
-            className={`inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
-              typeFilter === value
-                ? "bg-foreground text-background border-foreground"
-                : "border-border text-muted-foreground hover:bg-muted"
-            }`}
+            type="button"
+            onClick={() => setActiveTags([])}
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border px-2 text-[10px] text-muted-foreground transition-colors hover:bg-muted"
           >
-            {label}
+            clear
+            <X className="h-2.5 w-2.5" />
           </button>
-        ))}
-
-        {/* divider between type filters and tag chips */}
-        {(() => {
-          const visibleTags =
-            typeFilter === "memories"
-              ? allTags
-              : typeFilter === "artifacts"
-                ? artifactSources
-                : combinedTags;
-          if (visibleTags.length === 0) return null;
-          return (
-            <>
-              <div className="h-4 w-px bg-border shrink-0" />
-              {(showAllTags ? visibleTags : visibleTags.slice(0, 6)).map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() =>
-                    setActiveTag((prev) => (prev === tag ? null : tag))
-                  }
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border transition-colors max-w-[150px] ${
-                    activeTag === tag
-                      ? "bg-foreground text-background border-foreground"
-                      : "border-border text-muted-foreground hover:bg-muted"
-                  }`}
-                  title={tag.length > 20 ? tag : undefined}
-                >
-                  <Tag className="h-2.5 w-2.5 shrink-0" />
-                  <span className="truncate">{tag}</span>
-                </button>
-              ))}
-              {visibleTags.length > 6 && (
-                <button
-                  onClick={() => setShowAllTags((v) => !v)}
-                  className="inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border border-dashed border-border text-muted-foreground hover:bg-muted transition-colors"
-                >
-                  {showAllTags ? "show less" : `+${visibleTags.length - 6} more`}
-                </button>
-              )}
-            </>
-          );
-        })()}
+        )}
 
         {/* sort controls — temporarily hidden */}
         {false && (
@@ -942,20 +1346,18 @@ export function BrainSection() {
         </div>
       )}
 
-      {loading && artifactsLoading ? (
+      {(typeFilter === "memories" ? loading : artifactsLoading) ? (
         <BrainSkeleton />
       ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
           <p>
-            {debouncedQuery || activeTag
+            {debouncedQuery || activeTags.length > 0
               ? "no items match your search"
               : typeFilter === "memories"
                 ? "no memories yet"
-                : typeFilter === "artifacts"
-                  ? "no artifacts yet"
-                  : "no memories or artifacts yet"}
+                : "no artifacts yet"}
           </p>
-          {!debouncedQuery && !activeTag && typeFilter !== "artifacts" && (
+          {!debouncedQuery && activeTags.length === 0 && typeFilter === "memories" && (
             <>
               <p className="text-xs">
                 memories are automatically created by pipes that learn from your
@@ -992,6 +1394,7 @@ export function BrainSection() {
               const fullContent = artifactContents.get(artKey);
               const isArtExpanded = expandedArtifactKeys.has(artKey);
               const rawContent = isArtExpanded && fullContent ? fullContent : (artPreview ?? "");
+              const displayPreview = artifactPreviewWithoutTitle(rawContent, artItem.title);
               // An .html artifact is a full document whose <style>/`*` rules are
               // global. The inline markdown renderer passes raw HTML through
               // (rehype-raw), so expanding one used to inject those styles into
@@ -1003,7 +1406,7 @@ export function BrainSection() {
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
-                  className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
+                  className="group flex items-start gap-2 rounded-md border border-border p-3 transition-colors hover:bg-muted/30"
                 >
                   <Checkbox
                     data-testid={`brain-checkbox-artifact-${artTestId}`}
@@ -1015,7 +1418,72 @@ export function BrainSection() {
                         : "opacity-100"
                     }`}
                   />
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="truncate text-sm font-semibold text-foreground">
+                            {artItem.title}
+                          </h3>
+                          <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
+                            {artifactKindLabel(artItem.kind)}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <span className="truncate">{artifactItemSource(artItem)}</span>
+                          {artDate && (
+                            <>
+                              <span className="text-muted-foreground/40">·</span>
+                              <span>{timeAgo(artDate)}</span>
+                            </>
+                          )}
+                          {artSize != null && (
+                            <>
+                              <span className="text-muted-foreground/40">·</span>
+                              <span>{formatBytes(artSize)}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => void commands.openViewerWindow(artPath)}
+                          title="open viewer"
+                        >
+                          <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
+                          title="reveal in finder"
+                        >
+                          <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                        {artItem.registered && (
+                          <ConfirmDeleteDialog
+                            trigger={
+                              <Button
+                                data-testid={`brain-delete-artifact-${artTestId}`}
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="delete"
+                              >
+                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                              </Button>
+                            }
+                            title="delete artifact"
+                            description="this artifact will be permanently deleted. this cannot be undone."
+                            onConfirm={() => void handleDeleteArtifact(artItem)}
+                          />
+                        )}
+                      </div>
+                    </div>
                     {artItem.saf_kind ? (
                       // SAF artifact (shared envelope with cloud): typed
                       // renderer instead of the plain markdown preview.
@@ -1026,6 +1494,7 @@ export function BrainSection() {
                         onToggleExpanded={() =>
                           void toggleArtifactExpanded(artKey, artPath)
                         }
+                        hideTitle
                       />
                     ) : isHtmlArtifact ? (
                       // HTML artifact: render in a sandboxed iframe, never the
@@ -1037,6 +1506,7 @@ export function BrainSection() {
                         onToggleExpanded={() =>
                           void toggleArtifactExpanded(artKey, artPath)
                         }
+                        hideTitle
                       />
                     ) : (
                       <CompactMarkdown
@@ -1044,22 +1514,11 @@ export function BrainSection() {
                         expanded={isArtExpanded}
                         onToggleExpanded={() => void toggleArtifactExpanded(artKey, artPath)}
                       >
-                        {rawContent}
+                        {displayPreview || rawContent}
                       </CompactMarkdown>
                     )}
-                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                      {artDate && (
-                        <span className="text-xs text-muted-foreground">
-                          {timeAgo(artDate)}
-                        </span>
-                      )}
-                      <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal">
-                        {artifactItemSource(artItem)}
-                      </Badge>
-                      <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
-                        artifact
-                      </span>
-                      {artItem.saf_kind && (
+                    {artItem.saf_kind && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span
                           data-testid={`brain-artifact-saf-kind-${artTestId}`}
                           className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full border border-border font-mono text-foreground/80"
@@ -1071,50 +1530,7 @@ export function BrainSection() {
                             </span>
                           )}
                         </span>
-                      )}
-                      {artSize != null && (
-                        <span className="text-[10px] text-muted-foreground/50">
-                          {formatBytes(artSize)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => void commands.openViewerWindow(artPath)}
-                      title="open viewer"
-                    >
-                      <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
-                      title="reveal in finder"
-                    >
-                      <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
-                    </Button>
-                    {artItem.registered && (
-                      <ConfirmDeleteDialog
-                        trigger={
-                          <Button
-                            data-testid={`brain-delete-artifact-${artTestId}`}
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="delete"
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
-                        }
-                        title="delete artifact"
-                        description="this artifact will be permanently deleted. this cannot be undone."
-                        onConfirm={() => void handleDeleteArtifact(artItem)}
-                      />
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1124,6 +1540,9 @@ export function BrainSection() {
             // Memory card (unchanged from original)
             const memory = item.data;
             const isDeleting = deletingId === memory.id;
+            const isExpanded = expandedIds.has(memory.id);
+            const display = getCachedMemoryDisplay(memory.content);
+            const tags = memoryCardTags(memory.tags);
 
             return (
               <div
@@ -1142,33 +1561,11 @@ export function BrainSection() {
                   }`}
                 />
                 <div
-                  className="flex-1 min-w-0 cursor-text"
-                  onClick={() => {
-                    if (editingId !== memory.id) startEditing(memory);
-                  }}
+                  className="flex-1 min-w-0"
                 >
-                  {editingId === memory.id ? (
-                    <textarea
-                      ref={editRef}
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      onBlur={() => saveEdit(memory.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          saveEdit(memory.id);
-                        }
-                        if (e.key === "Escape") {
-                          setEditingId(null);
-                        }
-                      }}
-                      disabled={savingId === memory.id}
-                      className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-y focus:outline-none focus:border-foreground/40"
-                      rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
-                    />
-                  ) : (
+                  {isExpanded ? (
                     <CompactMarkdown
-                      expanded={expandedIds.has(memory.id)}
+                      expanded
                       onToggleExpanded={() => toggleExpanded(memory.id)}
                       suffix={
                         savingId === memory.id ? (
@@ -1178,6 +1575,31 @@ export function BrainSection() {
                     >
                       {memory.content}
                     </CompactMarkdown>
+                  ) : (
+                    <div className="space-y-1">
+                      <h3 className="text-sm font-semibold text-foreground leading-snug line-clamp-2">
+                        {display.title}
+                        {savingId === memory.id && (
+                          <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                        )}
+                      </h3>
+                      {display.preview && (
+                        <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">
+                          {display.preview}
+                        </p>
+                      )}
+                      {display.hasMore && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpanded(memory.id);
+                          }}
+                          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          show more
+                        </button>
+                      )}
+                    </div>
                   )}
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
@@ -1189,79 +1611,34 @@ export function BrainSection() {
                     >
                       {memory.source}
                     </Badge>
-                    <span className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full bg-muted text-muted-foreground">
-                      memory
-                    </span>
-                    {editingId === memory.id ? (
-                      <>
-                        {editTags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
-                          <span
+                    {tags.length > 0 &&
+                      tags.map((tag) => (
+                        tag.length > 30 ? (
+                          <TooltipProvider key={tag}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[10px] px-1 py-0 font-normal max-w-[120px] truncate cursor-default"
+                                >
+                                  {tag}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-xs break-all">{tag}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <Badge
                             key={tag}
-                            className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] rounded-full border border-border bg-muted"
+                            variant="secondary"
+                            className="text-[10px] px-1 py-0 font-normal"
                           >
-                            <Tag className="h-2 w-2" />
                             {tag}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeTagFromEdit(tag);
-                              }}
-                              className="hover:text-destructive"
-                            >
-                              <X className="h-2.5 w-2.5" />
-                            </button>
-                          </span>
-                        ))}
-                        <Input
-                          value={tagInput}
-                          onChange={(e) => setTagInput(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === "Enter" || e.key === ",") {
-                              e.preventDefault();
-                              addTagToEdit(tagInput);
-                            }
-                            if (e.key === "Backspace" && !tagInput && editTags.length > 0) {
-                              removeTagFromEdit(editTags[editTags.length - 1]);
-                            }
-                          }}
-                          placeholder="+ tag"
-                          className="h-5 text-[10px] w-16 px-1 border-dashed inline-flex"
-                        />
-                      </>
-                    ) : (
-                      <>
-                        {memory.tags.length > 0 &&
-                          memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
-                            tag.length > 30 ? (
-                              <TooltipProvider key={tag}>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Badge
-                                      variant="secondary"
-                                      className="text-[10px] px-1 py-0 font-normal max-w-[120px] truncate cursor-default"
-                                    >
-                                      {tag}
-                                    </Badge>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="text-xs break-all">{tag}</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            ) : (
-                              <Badge
-                                key={tag}
-                                variant="secondary"
-                                className="text-[10px] px-1 py-0 font-normal"
-                              >
-                                {tag}
-                              </Badge>
-                            )
-                          ))}
-                      </>
-                    )}
+                          </Badge>
+                        )
+                      ))}
                     {memory.importance > 0 && (
                       <span
                         className="flex items-center gap-1"
@@ -1283,6 +1660,7 @@ export function BrainSection() {
 
                 <div className="flex items-center gap-0.5 shrink-0">
                   <Button
+                    data-testid={`brain-edit-memory-${memory.id}`}
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"

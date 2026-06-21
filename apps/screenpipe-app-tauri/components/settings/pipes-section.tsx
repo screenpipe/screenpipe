@@ -2343,27 +2343,28 @@ export function PipesSection() {
               </div>
 
               {/* Action bar — always visible, brand-aligned (sharp, monochrome).
-                  edit + remix are the install->create lever. */}
+                  optimize + remix are the install->create lever. */}
               <div className="flex items-center gap-1 px-3 pb-2.5 pt-0.5">
-                {/* edit with ai — opens a chat to tweak this pipe in plain english */}
+                {/* optimize with ai — opens a chat that reads the pipe's prompt
+                    + recent run logs and suggests improvements in plain english */}
                 {!isReceivedTeamPipe(pipe) && (
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 gap-1.5 px-2 shrink-0 text-muted-foreground hover:text-foreground"
                     onClick={() => {
-                      posthog.capture("pipe_edit_started", { source: "row_button" });
+                      posthog.capture("pipe_optimize_started", { source: "row_button" });
                       navigateHomeAndPrefill({
-                        context: "the user wants to edit their pipe",
+                        context: "the user wants to optimize their pipe",
                         prompt: buildOptimizePrompt(pipe.config.name),
                         displayLabel: buildOptimizeDisplayLabel(pipe.config.name),
                         autoSend: true,
                       });
                     }}
-                    title="edit this pipe with ai — describe what you want to change"
+                    title="optimize this pipe with ai — reads recent runs and improves the prompt"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
-                    edit
+                    optimize with ai
                   </Button>
                 )}
 
@@ -2436,7 +2437,7 @@ export function PipesSection() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      {/* "edit with ai" lives on the row as a visible button now */}
+                      {/* "optimize with ai" lives on the row as a visible button now */}
 
                       {/* Team sharing — own pipes can be shared, updated,
                           unshared; received team pipes are read-only and can

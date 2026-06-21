@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { RetentionModePreview } from "./setting-previews";
 import {
   Select,
   SelectContent,
@@ -462,6 +463,8 @@ export function RetentionSettings() {
               </Button>
             )}
           </div>
+
+          {effective !== "off" && <RetentionModePreview mode={effective} />}
 
           {effective !== "off" && status && (
             <div className="text-xs text-muted-foreground space-y-1 pl-6">

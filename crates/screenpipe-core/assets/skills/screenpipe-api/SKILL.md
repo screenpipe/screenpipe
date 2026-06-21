@@ -64,6 +64,7 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | `speaker_name` | string | No | Filter audio by speaker (case-insensitive partial) |
 | `focused` | boolean | No | Only focused windows |
 | `tags` | string | No | Comma-separated; return only items carrying ALL of them (e.g. `person:ada,project:atlas`). Works for screen/audio and, with `content_type=memory`, memories. See Tags below. |
+| `include_related` | boolean | No | With `tags`, also return a `related` map of co-occurring tags (people/projects/workflows seen alongside yours), most-frequent first. One call for the surrounding context instead of several. See Tags below. |
 | `max_content_length` | integer | No | Truncate each result's text (middle-truncation) |
 | `format` | string | No | `json` (default), `csv`, or `tsv`/`table`. CSV/TSV return a columnar table (column names written once) instead of one JSON object per row, much cheaper to read on list-shaped results. CSV is lossless; TSV collapses newlines (worse for long `ocr` text). |
 | `fields` | string | No | Comma-separated column allowlist of dotted paths, e.g. `type,content.app_name,content.text`. Returns only those columns (handy for dropping the repeated absolute `content.file_path`). Works for `json` too (sparse objects). |
@@ -76,7 +77,15 @@ Tags are a shared label layer across screen, audio, and memories under one strin
 - Add to a memory: include `tags` in `POST /memories` (or `PUT /memories/{id}`).
 - Retrieve by tag: `GET /search?tags=person:ada&start_time=30d%20ago` (screen+audio), or add `content_type=memory` for memories. Multiple tags AND together; matching is exact, not substring.
 
-Frames are pruned by retention, so for a durable link tag a memory (memories also carry `created_at` and a `frame_id` back to the moment). Tag frames/audio for short-term recall. To pull everything about a person across time: one call for captures (`content_type=all&tags=person:ada`) plus one for facts (`content_type=memory&tags=person:ada`).
+Frames are pruned by retention, so for a durable link tag a memory (memories also carry `created_at` and a `frame_id` back to the moment — jump there with `GET /frames/{frame_id}`). Tag frames/audio for short-term recall. To pull everything about a person across time: one call for captures (`content_type=all&tags=person:ada`) plus one for facts (`content_type=memory&tags=person:ada`).
+
+Add `include_related=true` to a tag query to get the surrounding context in the same response — the tags that co-occur with yours, grouped by namespace (prefix pluralized: `person:`→`people`, `project:`→`projects`) and ranked by frequency. Replaces the 2-3 follow-up "who/what else" calls with one:
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/search?tags=person:ada&include_related=true&limit=5"
+# data: [...], related: { "people": ["connor","drew"], "projects": ["atlas"], "workflows": ["planning"] }
+```
 
 ### Critical Rules
 
@@ -500,7 +509,7 @@ curl -X DELETE http://localhost:3030/memories/1
 
 Parameters for `GET /memories`: `q` (FTS search), `source`, `tags`, `min_importance`, `start_time`, `end_time`, `limit`, `offset`.
 
-Use `/memories` directly — `/search` does not currently surface `content_type=memory` results.
+`GET /memories` is the direct read (richest filters: `min_importance`, `source`). Memories also come back via `GET /search?content_type=memory` (note: `content_type=all` does NOT include them — ask for `memory` explicitly), which is the path that supports `tags` + `include_related` for tag-linked recall.
 
 ### Creating Memories
 

@@ -17,8 +17,8 @@
  */
 export interface RegistrySkillLike {
   name: string;
-  description: string;
-  source: string;
+  description?: string;
+  source?: string;
   repo: string;
   path: string;
   /** App-name keywords this skill is relevant to (for usage-based ranking). */
@@ -46,15 +46,15 @@ const SOURCE_ORDER = ["anthropic", "openai", "screenpipe", "community"];
 
 /** Badge text for a skill's provenance. Unknown sources are Title-cased; an
  *  empty source reads as "Community". */
-export function sourceLabel(source: string): string {
-  const key = source.trim().toLowerCase();
+export function sourceLabel(source?: string | null): string {
+  const key = (source ?? "").trim().toLowerCase();
   if (!key) return "Community";
   return SOURCE_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
 
 /** Sort weight for a source — lower comes first. */
-export function sourceRank(source: string): number {
-  const i = SOURCE_ORDER.indexOf(source.trim().toLowerCase());
+export function sourceRank(source?: string | null): number {
+  const i = SOURCE_ORDER.indexOf((source ?? "").trim().toLowerCase());
   return i === -1 ? SOURCE_ORDER.length : i;
 }
 
@@ -95,7 +95,7 @@ export function filterSkills<T extends RegistrySkillLike>(
   const terms = q.split(/\s+/).filter(Boolean);
   return skills.filter((s) => {
     const hay =
-      `${s.name} ${s.description} ${sourceLabel(s.source)} ${s.repo} ${s.path}`.toLowerCase();
+      `${s.name} ${s.description ?? ""} ${sourceLabel(s.source)} ${s.repo} ${s.path}`.toLowerCase();
     return terms.every((t) => hay.includes(t));
   });
 }
