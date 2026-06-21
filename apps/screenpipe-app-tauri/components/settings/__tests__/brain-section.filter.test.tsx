@@ -24,8 +24,8 @@ const MEMORIES = Array.from({ length: 8 }, (_, i) => ({
 const ARTIFACTS = Array.from({ length: 5 }, (_, i) => ({
   registered: i % 2 === 0,
   id: i % 2 === 0 ? 100 + i : null,
-  source: "glob-pipe",
-  source_type: "pipe",
+  source: i === 0 ? "chat-b" : "glob-pipe",
+  source_type: i === 0 ? "chat" : "pipe",
   title: `note-${i}.md`,
   kind: "markdown",
   path: `/tmp/pipes/glob-pipe/output/note-${i}.md`,
@@ -88,6 +88,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => undefined) }));
 
 vi.mock("@/components/settings/compact-markdown", () => ({
   CompactMarkdown: ({ children, "data-testid": testId }: { children: string; "data-testid"?: string }) => (
@@ -101,8 +102,25 @@ vi.mock("@/components/ui/use-toast", () => ({
 
 import { BrainSection } from "../brain-section";
 import { localFetch } from "@/lib/api";
+import { emit } from "@tauri-apps/api/event";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  useChatStore.getState().actions.hydrateFromDisk([
+    {
+      id: "chat-b",
+      title: "chat b",
+      preview: "",
+      status: "idle",
+      messageCount: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      kind: "chat",
+    },
+  ]);
   // jsdom has no IntersectionObserver
   (globalThis as any).IntersectionObserver = class {
     observe() {}
@@ -213,7 +231,7 @@ describe("BrainSection type filter", () => {
     expect(within(panel).getAllByText(MEMORIES[0].content).length).toBeGreaterThan(0);
   });
 
-  it("opens an artifact in the side detail panel", async () => {
+  it("opens an artifact in its source chat with the preview sidebar", async () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
@@ -222,8 +240,12 @@ describe("BrainSection type filter", () => {
 
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
 
-    expect(screen.getByTestId("brain-detail-panel")).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("full")).toBeTruthy());
+    expect(screen.queryByTestId("brain-detail-panel")).toBeNull();
+    expect(emit).toHaveBeenCalledWith("chat-load-conversation", {
+      conversationId: "chat-b",
+      targetWindow: "home",
+      filePreviewPath: "/tmp/pipes/glob-pipe/output/note-0.md",
+    });
   });
 
   it("edits memory tags from the edit dialog", async () => {

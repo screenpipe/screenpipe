@@ -10,6 +10,7 @@ export type ChatFilePreviewState = {
   path: string;
   visible: boolean;
   previousMode: "browser" | "hidden";
+  conversationId: string | null;
 };
 
 export function useChatFilePreview(conversationId: string | null) {
@@ -18,14 +19,20 @@ export function useChatFilePreview(conversationId: string | null) {
   );
 
   useEffect(() => {
-    setFilePreview(null);
+    setFilePreview((prev) =>
+      !prev || prev.conversationId === conversationId ? prev : null,
+    );
   }, [conversationId]);
 
   const openFilePreview = useCallback(
-    (path: string, previousMode: ChatFilePreviewState["previousMode"] = "hidden") => {
-      setFilePreview({ path, visible: true, previousMode });
+    (
+      path: string,
+      previousMode: ChatFilePreviewState["previousMode"] = "hidden",
+      targetConversationId: string | null = conversationId,
+    ) => {
+      setFilePreview({ path, visible: true, previousMode, conversationId: targetConversationId });
     },
-    [],
+    [conversationId],
   );
 
   const closeFilePreview = useCallback(() => {

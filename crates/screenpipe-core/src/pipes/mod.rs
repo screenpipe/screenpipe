@@ -1454,10 +1454,10 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
 
 /// Manages all pipes: loading, scheduling, execution, logs.
 /// Callback fired after each scheduled pipe run completes.
-/// Args: (pipe_name, success, duration_secs, error_type)
+/// Args: (pipe_name, execution_id, success, duration_secs, error_type)
 /// `error_type` is a sanitized category (e.g. "rate_limited", "auth_failed", "timeout", "crash")
 /// — never contains user data.
-pub type OnPipeRunComplete = Arc<dyn Fn(&str, bool, f64, Option<&str>) + Send + Sync>;
+pub type OnPipeRunComplete = Arc<dyn Fn(&str, Option<i64>, bool, f64, Option<&str>) + Send + Sync>;
 
 /// Callback fired for each stdout line from a running pipe.
 /// Args: (pipe_name, execution_id, line)
@@ -2692,6 +2692,7 @@ impl PipeManager {
             if let Some(ref cb) = on_complete {
                 cb(
                     &name_for_cb,
+                    exec_id,
                     success,
                     duration_secs,
                     cb_error_type.as_deref(),
@@ -3997,7 +3998,7 @@ impl PipeManager {
                                     }
                                 }
                                 if let Some(ref cb) = on_run_complete {
-                                    cb(name, false, 0.0, Some("missing_connections"));
+                                    cb(name, None, false, 0.0, Some("missing_connections"));
                                 }
                                 continue;
                             }
@@ -4544,6 +4545,7 @@ impl PipeManager {
                         if let Some(ref cb) = on_complete {
                             cb(
                                 &name_for_cb,
+                                exec_id,
                                 success,
                                 duration_secs,
                                 cb_error_type.as_deref(),

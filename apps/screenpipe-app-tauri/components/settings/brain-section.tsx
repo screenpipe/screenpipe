@@ -279,20 +279,18 @@ export function BrainSection() {
   );
 
   const openArtifactOrigin = useCallback(
-    (target: ArtifactOpenTarget) => {
+    (target: ArtifactOpenTarget, filePreviewPath: string) => {
       if (target.mode === "artifact-only") {
-        toast({
-          title: "artifact has no linked chat",
-          description: "opening it here without attaching it to the current chat",
-        });
+        void commands.openViewerWindow(filePreviewPath);
         return;
       }
       void emit("chat-load-conversation", {
         conversationId: target.conversationId,
         targetWindow: "home",
+        filePreviewPath,
       });
     },
-    [toast],
+    [],
   );
 
   // batch selection
@@ -685,12 +683,12 @@ export function BrainSection() {
   const allVisibleSelected =
     unifiedItems.length > 0 && selectedIds.size === unifiedItems.length;
   const selectedDetail = React.useMemo(() => {
-    if (!selectedItem) return null;
+    if (!selectedItem || selectedItem.kind !== "memory") return null;
     const item = unifiedItems.find((entry) => {
       if (entry.kind === "memory") {
-        return selectedItem.kind === "memory" && `mem:${entry.data.id}` === selectedItem.key;
+        return `mem:${entry.data.id}` === selectedItem.key;
       }
-      return selectedItem.kind === "artifact" && artifactItemKey(entry.data) === selectedItem.key;
+      return false;
     });
     return item ?? null;
   }, [selectedItem, unifiedItems]);
@@ -1468,20 +1466,32 @@ export function BrainSection() {
               const artKey = artifactItemKey(artItem);
               const artTestId = artItem.registered ? String(artItem.id) : artKey;
               const display = getArtifactCardDisplay(artItem);
-              const isSelected =
-                selectedItem?.kind === "artifact" && selectedItem.key === artKey;
               const isChecked = selectedIds.has(artKey);
               const target = artifactOpenTarget(artItem, artKey);
               return (
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
-                  className={`group relative min-h-[315px] cursor-default overflow-hidden rounded-none border border-border bg-background transition-colors hover:bg-muted/20 ${
-                    isSelected || isChecked ? "bg-muted/30 ring-1 ring-border" : ""
+                  className={`group relative min-h-[315px] cursor-pointer overflow-hidden rounded-none border border-border bg-background transition-colors hover:bg-muted/20 ${
+                    isChecked ? "bg-muted/30 ring-1 ring-border" : ""
                   }`}
                   onClick={() => {
-                    setSelectedItem({ kind: "artifact", key: artKey });
-                    void loadArtifactContent(artKey, artPath);
+                    if (selectionMode) {
+                      toggleSelected(artKey);
+                      return;
+                    }
+                    openArtifactOrigin(target, artPath);
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    if (selectionMode) {
+                      toggleSelected(artKey);
+                      return;
+                    }
+                    openArtifactOrigin(target, artPath);
                   }}
                 >
                   <Checkbox
@@ -1560,9 +1570,9 @@ export function BrainSection() {
                               className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openArtifactOrigin(target);
+                                openArtifactOrigin(target, artPath);
                               }}
-                              title={target.mode === "pipe-run" ? "open pipe run" : "open chat"}
+                              title={target.mode === "pipe-run" ? "open pipe run with preview" : "open chat with preview"}
                             >
                               <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
                             </Button>
@@ -1957,7 +1967,7 @@ export function BrainSection() {
                             size="sm"
                             variant="outline"
                             className="h-7 text-[10px] px-2"
-                            onClick={() => openArtifactOrigin(target)}
+                            onClick={() => openArtifactOrigin(target, artifact.path)}
                           >
                             {target.mode === "pipe-run" ? "open run" : "open chat"}
                           </Button>

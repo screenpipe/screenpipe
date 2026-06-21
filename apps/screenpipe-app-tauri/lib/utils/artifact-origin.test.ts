@@ -9,7 +9,7 @@ describe("resolveArtifactOpenTarget", () => {
   it("opens exact chat-origin artifacts in their source chat", () => {
     expect(
       resolveArtifactOpenTarget(
-        { source: "chat-b", source_type: "chat" },
+        { source: "chat-b", source_type: "chat", modified_at: "2026-06-21T10:00:00Z" },
         "output:1",
         { "chat-a": { kind: "chat" }, "chat-b": { kind: "chat" } },
       ),
@@ -19,7 +19,7 @@ describe("resolveArtifactOpenTarget", () => {
   it("does not fall back to an unrelated current chat", () => {
     expect(
       resolveArtifactOpenTarget(
-        { source: "missing-chat", source_type: "chat" },
+        { source: "missing-chat", source_type: "chat", modified_at: "2026-06-21T10:00:00Z" },
         "output:1",
         { "current-chat": { kind: "chat" } },
       ),
@@ -33,24 +33,60 @@ describe("resolveArtifactOpenTarget", () => {
   it("opens exact pipe-run artifacts only when the session is a pipe run", () => {
     expect(
       resolveArtifactOpenTarget(
-        { source: "run-1", source_type: "pipe-run" },
+        { source: "run-1", source_type: "pipe-run", modified_at: "2026-06-21T10:00:00Z" },
         "output:2",
         { "run-1": { kind: "pipe-run" } },
       ),
     ).toEqual({ mode: "pipe-run", conversationId: "run-1", artifactKey: "output:2" });
   });
 
-  it("does not infer a pipe run from pipe name", () => {
+  it("opens legacy pipe artifacts in the nearest saved pipe run for that pipe", () => {
     expect(
       resolveArtifactOpenTarget(
-        { source: "daily-summary-pipe", source_type: "pipe" },
+        { source: "daily-summary-pipe", source_type: "pipe", modified_at: "2026-06-21T10:00:05Z" },
         "artifact:daily-summary-pipe:/tmp/report.md",
-        { "run-1": { kind: "pipe-run" } },
+        {
+          "pipe:other-pipe:1": {
+            kind: "pipe-run",
+            pipeContext: { pipeName: "other-pipe", executionId: 1, startedAt: "2026-06-21T09:00:00Z" },
+            updatedAt: Date.parse("2026-06-21T10:00:00Z"),
+          },
+          "pipe:daily-summary-pipe:1": {
+            kind: "pipe-run",
+            pipeContext: { pipeName: "daily-summary-pipe", executionId: 1, startedAt: "2026-06-21T08:00:00Z" },
+            updatedAt: Date.parse("2026-06-21T08:30:00Z"),
+          },
+          "pipe:daily-summary-pipe:2": {
+            kind: "pipe-run",
+            pipeContext: { pipeName: "daily-summary-pipe", executionId: 2, startedAt: "2026-06-21T09:58:00Z" },
+            updatedAt: Date.parse("2026-06-21T10:00:00Z"),
+          },
+        },
+      ),
+    ).toEqual({
+      mode: "pipe-run",
+      conversationId: "pipe:daily-summary-pipe:2",
+      artifactKey: "artifact:daily-summary-pipe:/tmp/report.md",
+    });
+  });
+
+  it("does not map legacy pipe artifacts to unrelated pipe runs", () => {
+    expect(
+      resolveArtifactOpenTarget(
+        { source: "daily-summary-pipe", source_type: "pipe", modified_at: "2026-06-21T10:00:05Z" },
+        "artifact:daily-summary-pipe:/tmp/report.md",
+        {
+          "pipe:other-pipe:1": {
+            kind: "pipe-run",
+            pipeContext: { pipeName: "other-pipe", executionId: 1, startedAt: "2026-06-21T09:00:00Z" },
+            updatedAt: Date.parse("2026-06-21T10:00:00Z"),
+          },
+        },
       ),
     ).toEqual({
       mode: "artifact-only",
       artifactKey: "artifact:daily-summary-pipe:/tmp/report.md",
-      reason: "missing-origin",
+      reason: "origin-not-found",
     });
   });
 });

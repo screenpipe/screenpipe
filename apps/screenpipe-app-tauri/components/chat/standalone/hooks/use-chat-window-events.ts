@@ -224,6 +224,7 @@ interface UseChatConversationRoutingEventsOptions {
   tryInChatStartNewRef: React.MutableRefObject<(() => Promise<void> | void) | null>;
   piSessionIdRef: React.MutableRefObject<string>;
   focusMessageById: (messageId: string) => void;
+  openFilePreview: (path: string, previousMode?: "browser" | "hidden", targetConversationId?: string | null) => void;
 }
 
 export function useChatConversationRoutingEvents({
@@ -232,6 +233,7 @@ export function useChatConversationRoutingEvents({
   tryInChatStartNewRef,
   piSessionIdRef,
   focusMessageById,
+  openFilePreview,
 }: UseChatConversationRoutingEventsOptions) {
   const loadConversationRef = useRef(loadConversation);
   const startNewConversationRef = useRef(startNewConversation);
@@ -272,7 +274,7 @@ export function useChatConversationRoutingEvents({
 
   useEffect(() => {
     const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
-      const { conversationId: convId, targetWindow, focusMessageId } = event.payload;
+      const { conversationId: convId, targetWindow, focusMessageId, filePreviewPath } = event.payload;
       const windowLabel = getCurrentWindow().label;
       if (!shouldHandleChatLoadConversationForWindow(
         { conversationId: convId, targetWindow },
@@ -284,11 +286,14 @@ export function useChatConversationRoutingEvents({
       if (focusMessageId) {
         focusMessageById(focusMessageId);
       }
+      if (filePreviewPath) {
+        openFilePreview(filePreviewPath, "hidden", convId);
+      }
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [focusMessageById, openConversationLocally]);
+  }, [focusMessageById, openConversationLocally, openFilePreview]);
 
   useEffect(() => {
     const pendingId = localStorage.getItem("pending-chat-conversation");

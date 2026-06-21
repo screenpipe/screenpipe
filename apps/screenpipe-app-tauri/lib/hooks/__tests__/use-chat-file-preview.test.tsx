@@ -21,10 +21,31 @@ describe("useChatFilePreview", () => {
       path: "/tmp/alpha.md",
       visible: true,
       previousMode: "browser",
+      conversationId: "chat-a",
     });
 
     rerender({ conversationId: "chat-b" });
 
     expect(result.current.filePreview).toBeNull();
+  });
+
+  it("keeps a preview that was opened for the destination conversation", () => {
+    const { result, rerender } = renderHook(
+      ({ conversationId }) => useChatFilePreview(conversationId),
+      { initialProps: { conversationId: "chat-a" as string | null } },
+    );
+
+    act(() => {
+      result.current.openFilePreview("/tmp/beta.md", "hidden", "chat-b");
+    });
+
+    rerender({ conversationId: "chat-b" });
+
+    expect(result.current.filePreview).toEqual({
+      path: "/tmp/beta.md",
+      visible: true,
+      previousMode: "hidden",
+      conversationId: "chat-b",
+    });
   });
 });

@@ -87,6 +87,8 @@ export interface ChatLoadConversationPayload {
   conversationId: string;
   targetWindow?: ChatTargetWindow;
   focusMessageId?: string;
+  /** Open this local file in the destination chat's preview sidebar after loading. */
+  filePreviewPath?: string;
 }
 
 export const RECENT_CHAT_SEARCH_HANDOFF_EVENT = "recent-chat-search-handoff";
