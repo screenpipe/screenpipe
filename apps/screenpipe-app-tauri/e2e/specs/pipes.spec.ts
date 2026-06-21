@@ -435,13 +435,6 @@ describe('Pipes: discover → install → play', function () {
     };
 
     if (!(await isOnPage())) {
-      // Default sub-tab is "scheduled"; the installed pipe may be classified
-      // as manual or triggered. Click the Manual sub-tab if the row isn't
-      // visible. The sub-tabs (pipes-section.tsx:1525-1543) don't carry a
-      // testid, so we walk visible buttons inside the pipes section and
-      // match the literal "manual" label. Done in one execute() to avoid
-      // wdio's text-match selector syntax (`button*=manual`), which is not
-      // valid CSS and chokes when concatenated into a comma-list.
       const subTabs: ('manual' | 'triggered')[] = ['manual', 'triggered'];
       for (const label of subTabs) {
         const clicked = (await browser.execute((labelArg: string) => {
@@ -450,7 +443,6 @@ describe('Pipes: discover → install → play', function () {
           const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('button'));
           const tab = buttons.find((b) => {
             const txt = (b.textContent || '').trim().toLowerCase();
-            // sub-tabs render as "manual (3)" / "triggered (0)" etc.
             return txt === labelArg || txt.startsWith(`${labelArg} (`);
           });
           if (tab) {
@@ -477,12 +469,11 @@ describe('Pipes: discover → install → play', function () {
 
   // ─── Step 5: hover the row to reveal play button, click it ───────────────
 
-  it('plays the installed pipe', async function () {
+  it('plays and stops the installed pipe', async function () {
     if (!installedPipeName) {
       this.skip();
       return;
     }
-
     // Walk visible buttons inside the pipes section and find the row by
     // text content, then scroll it into view. wdio's `$('button=NAME')`
     // text-match selector is recognised by its own parser but the
@@ -521,16 +512,86 @@ describe('Pipes: discover → install → play', function () {
     // No fallback — if we can't find the play button for the installed pipe, fail explicitly
     expect(played).toBe(true);
 
+    // Wait for THIS pipe's row to actually enter the running state — i.e. its
+    // own "stop pipe" button renders. A manual run starts a real pi subprocess
+    // that stays alive for tens of seconds, but runPipe() first awaits any
+    // pending preset save plus a 2s min-delay before POSTing /run, and the row
+    // only flips after the UI's next status poll — so this legitimately takes a
+    // few seconds. Scope strictly to the row (not a global stop-button query or
+    // page text): the scheduler may be running other pipes concurrently, and a
+    // loose match would let the test race ahead before this run registers.
     await browser.waitUntil(
-      async () => {
-        if (await $$('button[title="stop pipe"]').length > 0) return true;
-        const body = (await browser.execute(() => document.body.innerText || '')) as string;
-        return body.toLowerCase().includes('running');
-      },
-      { timeout: 30_000, timeoutMsg: 'Pipe did not enter running state within timeout' }
+      async () =>
+        (await browser.execute((name: string) => {
+          for (const nameBtn of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+            if (nameBtn.textContent?.trim() !== name) continue;
+            const row = nameBtn.closest<HTMLElement>('div.group');
+            if (!row) continue;
+            return !!row.querySelector('button[title="stop pipe"]');
+          }
+          return false;
+        }, installedPipeName)) as boolean,
+      {
+        timeout: 60_000,
+        timeoutMsg: `Pipe "${installedPipeName}" did not enter running state within timeout`,
+      }
     );
 
     const filepath = await saveScreenshot('pipes-running');
     expect(existsSync(filepath)).toBe(true);
+
+    // Click the row's stop button. Poll-and-click so a brief disabled flicker
+    // (stoppingPipe spinner from an earlier interaction) doesn't lose the race;
+    // returns true on the first successful click and stops.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute((name: string) => {
+          // Match the name in a <button> OR <span>. The pipe name renders as a
+          // <span> (pipes-section.tsx), so a 'button'-only scan never locates
+          // the row and the stop click times out ("Could not click stop
+          // button") — even though the running-state wait above, which already
+          // uses 'button, span', passed. Keep the two locators in sync.
+          for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+            if (nameEl.textContent?.trim() !== name) continue;
+            const row = nameEl.closest<HTMLElement>('div.group');
+            if (!row) continue;
+            const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
+            if (stopBtn && !stopBtn.disabled) {
+              stopBtn.click();
+              return true;
+            }
+          }
+          return false;
+        }, installedPipeName)) as boolean,
+      {
+        timeout: 10_000,
+        timeoutMsg: `Could not click stop button for "${installedPipeName}"`,
+      }
+    );
+
+    // Stop is best-effort (SIGTERM then a delayed SIGKILL pass), so give the
+    // subprocess time to die and the row to flip back to the run button.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute((name: string) => {
+          // Same 'button, span' locator as above — the name is a <span>.
+          for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+            if (nameEl.textContent?.trim() !== name) continue;
+            const row = nameEl.closest<HTMLElement>('div.group');
+            if (!row) continue;
+            const hasStop = !!row.querySelector('button[title="stop pipe"]');
+            const hasRun = !!row.querySelector('button[title="run pipe"]');
+            return !hasStop && hasRun;
+          }
+          return false;
+        }, installedPipeName)) as boolean,
+      {
+        timeout: 60_000,
+        timeoutMsg: 'Pipe did not leave running state after clicking stop',
+      }
+    );
+
+    const stoppedFilepath = await saveScreenshot('pipes-stopped');
+    expect(existsSync(stoppedFilepath)).toBe(true);
   });
 });

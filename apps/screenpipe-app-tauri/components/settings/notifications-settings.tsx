@@ -7,6 +7,7 @@ import React from "react";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
 import type { SettingsField } from "./settings-search";
+import { NotificationSamplePreview } from "./setting-previews";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -63,6 +64,8 @@ export function NotificationsSettings() {
         </p>
       </div>
 
+      <NotificationSamplePreview />
+
       <div className="space-y-1">
         {/* Capture stalls */}
         <div className="flex items-center justify-between py-3 border-b border-border">
@@ -89,7 +92,7 @@ export function NotificationsSettings() {
           <div>
             <p className="text-sm font-medium">Power mode changes</p>
             <p className="text-xs text-muted-foreground">
-              Toast when battery saver kicks in (Balanced / Saver). Critical alerts when capture is paused for low battery still fire.
+              Tells you when battery saver turns on (Balanced or Saver). You&apos;ll still get critical alerts if recording pauses on low battery.
             </p>
           </div>
           <Switch
@@ -190,7 +193,7 @@ export function NotificationsSettings() {
           <div>
             <p className="text-sm font-medium">Display changes</p>
             <p className="text-xs text-muted-foreground">
-              Toast when a monitor is plugged, unplugged, or switched (clamshell, dock)
+              Tells you when a monitor is plugged in, unplugged, or switched (laptop lid closed, docking)
             </p>
           </div>
           <Switch

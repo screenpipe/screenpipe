@@ -27,7 +27,7 @@ use crate::{
             merge_frames_handler, remove_tags, validate_media_handler,
         },
         data::{
-            backup_handler, checkpoint_handler, delete_device_data_handler,
+            backup_handler, checkpoint_handler, compact_handler, delete_device_data_handler,
             delete_time_range_handler, device_storage_handler, evict_media_handler,
             storage_preview_handler,
         },
@@ -771,6 +771,7 @@ impl SCServer {
             // Database backup & checkpoint
             .post("/data/checkpoint", checkpoint_handler)
             .get("/data/backup", backup_handler)
+            .post("/data/compact", compact_handler)
             .route_yaml_spec("/openapi.yaml")
             .route_json_spec("/openapi.json")
             .freeze();

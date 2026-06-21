@@ -42,6 +42,15 @@ pub struct MeetingDetector {
     /// stamped by [`Self::on_audio_activity`]. 0 = none observed yet. The
     /// engine's detection loop reads this to gate its expensive AX scan.
     last_audio_activity_ms: AtomicU64,
+    /// Wall-clock ms of the most recent chunk received from an OUTPUT
+    /// (speaker/loopback) device, active or not, stamped by
+    /// [`Self::on_audio_chunk`]. On Windows, WASAPI loopback only delivers
+    /// callbacks while audio is rendering, so a recent output chunk proves
+    /// the speaker capture path is alive. The device monitor's speaker
+    /// watchdog reads this to detect "in a meeting but capturing nothing".
+    last_output_chunk_ms: AtomicU64,
+    /// Same as above for INPUT (microphone) devices.
+    last_input_chunk_ms: AtomicU64,
     /// Fired on the rising edge of audio activity (quiet -> active) so the
     /// detection loop can wake immediately and scan instead of waiting out a
     /// slow idle interval.
@@ -59,6 +68,8 @@ impl MeetingDetector {
         Self {
             v2_override: AtomicBool::new(false),
             last_audio_activity_ms: AtomicU64::new(0),
+            last_output_chunk_ms: AtomicU64::new(0),
+            last_input_chunk_ms: AtomicU64::new(0),
             audio_onset: Notify::new(),
         }
     }
@@ -116,6 +127,34 @@ impl MeetingDetector {
     /// while audio is flowing.
     pub fn audio_active_within(&self, window_ms: u64) -> bool {
         let last = self.last_audio_activity_ms.load(Ordering::Relaxed);
+        last != 0 && now_ms().saturating_sub(last) < window_ms
+    }
+
+    /// Record receipt of a capture chunk, active or silent. Unlike
+    /// [`Self::on_audio_activity`] this stamps unconditionally — it answers
+    /// "is the capture stream delivering data at all?", not "is anyone
+    /// speaking?". The device monitor's speaker watchdog compares this
+    /// against OS-reported render activity to catch a loopback capture
+    /// that is silently broken during a meeting.
+    pub fn on_audio_chunk(&self, device_type: &crate::core::device::DeviceType) {
+        let stamp = match device_type {
+            crate::core::device::DeviceType::Output => &self.last_output_chunk_ms,
+            crate::core::device::DeviceType::Input => &self.last_input_chunk_ms,
+        };
+        stamp.store(now_ms(), Ordering::Relaxed);
+    }
+
+    /// True if any OUTPUT (speaker/loopback) chunk arrived within the last
+    /// `window_ms`.
+    pub fn output_chunk_within(&self, window_ms: u64) -> bool {
+        let last = self.last_output_chunk_ms.load(Ordering::Relaxed);
+        last != 0 && now_ms().saturating_sub(last) < window_ms
+    }
+
+    /// True if any INPUT (microphone) chunk arrived within the last
+    /// `window_ms`.
+    pub fn input_chunk_within(&self, window_ms: u64) -> bool {
+        let last = self.last_input_chunk_ms.load(Ordering::Relaxed);
         last != 0 && now_ms().saturating_sub(last) < window_ms
     }
 
@@ -179,6 +218,35 @@ mod tests {
     fn inactive_chunks_do_not_mark_recent() {
         let detector = MeetingDetector::new();
         detector.on_audio_activity(&crate::core::device::DeviceType::Input, false);
+        assert!(!detector.audio_active_within(45_000));
+    }
+
+    #[test]
+    fn chunk_recency_starts_inactive() {
+        let detector = MeetingDetector::new();
+        assert!(!detector.output_chunk_within(u64::MAX));
+        assert!(!detector.input_chunk_within(u64::MAX));
+    }
+
+    #[test]
+    fn chunk_recency_is_per_device_type() {
+        let detector = MeetingDetector::new();
+        detector.on_audio_chunk(&crate::core::device::DeviceType::Input);
+        // Mic chunk must not mark the speaker path alive — the watchdog
+        // exists precisely for "mic works, speakers dead".
+        assert!(detector.input_chunk_within(45_000));
+        assert!(!detector.output_chunk_within(45_000));
+
+        detector.on_audio_chunk(&crate::core::device::DeviceType::Output);
+        assert!(detector.output_chunk_within(45_000));
+    }
+
+    #[test]
+    fn chunk_stamp_does_not_mark_activity() {
+        // A silent chunk proves the stream is alive but must not count as
+        // "someone is speaking" for the engine's scan gating.
+        let detector = MeetingDetector::new();
+        detector.on_audio_chunk(&crate::core::device::DeviceType::Output);
         assert!(!detector.audio_active_within(45_000));
     }
 

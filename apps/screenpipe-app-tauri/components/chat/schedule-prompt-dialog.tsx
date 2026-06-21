@@ -109,7 +109,6 @@ interface SchedulePromptDialogProps {
   onClose: () => void;
   onSchedule: (message: string, displayLabel: string) => void;
   originalPrompt: string;
-  responsePreview: string;
 }
 
 export function SchedulePromptDialog({
@@ -117,7 +116,6 @@ export function SchedulePromptDialog({
   onClose,
   onSchedule,
   originalPrompt,
-  responsePreview,
 }: SchedulePromptDialogProps) {
   const [pipeName, setPipeName] = useState("");
   const [selectedSchedule, setSelectedSchedule] = useState(SCHEDULE_OPTIONS[1].value);

@@ -110,6 +110,34 @@ describe("computeLiveCaptureState", () => {
     ).toBe("audio-not-started");
   });
 
+  it("surfaces no-input-device from backend capture status (no false recording)", () => {
+    const state = computeLiveCaptureState({
+      isLive: true,
+      health: {
+        audio_status: "no_input_device",
+        audio_pipeline: null,
+        capture_status: {
+          status: "no_input_device",
+          severity: "ok",
+          reason:
+            "no microphone detected — audio capture idle, screen recording continues",
+        },
+      },
+      devices: [activeOutput],
+    });
+    expect(state.kind).toBe("no-input-device");
+  });
+
+  it("falls back to no-input-device from audio_status alone", () => {
+    expect(
+      computeLiveCaptureState({
+        isLive: true,
+        health: { audio_status: "no_input_device", audio_pipeline: null },
+        devices: [activeOutput],
+      }).kind,
+    ).toBe("no-input-device");
+  });
+
   it("surfaces stale audio as stalled", () => {
     expect(
       computeLiveCaptureState({

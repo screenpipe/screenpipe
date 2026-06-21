@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { commands } from "@/lib/utils/tauri";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 
 export default function GlobalError({
@@ -28,17 +28,9 @@ export default function GlobalError({
       stack: error?.stack,
     };
     console.error("global error boundary caught:", serialized);
-    // Also bypass the buffered console interceptor and write straight to the
-    // Rust log — the buffer flush may never fire if the error boundary
-    // unmounts Providers before the 2s flush timer (which is what was happening
-    // for the enterprise #185 crash on MBP — error.tsx logged but the entry
-    // never reached ~/.screenpipe/screenpipe-app.<date>.log).
-    commands.writeBrowserLogs([
-      {
-        level: "error",
-        message: `error boundary: ${JSON.stringify(serialized)}`,
-      },
-    ]).catch(() => {});
+    writeBrowserLogNow("error", `error boundary: ${JSON.stringify(serialized)}`, {
+      stack: error?.stack,
+    });
   }, [error]);
 
   return (

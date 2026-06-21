@@ -28,6 +28,15 @@ async function processInBatches<T>(
 
 const BATCH_SIZE = 20; // Max concurrent API calls
 
+// Frames the user just tagged/untagged — a batch load that lands right after must
+// not clobber that optimistic state (which would resurrect a just-removed tag).
+const recentTagEdits = new Map<string, number>();
+const TAG_EDIT_GUARD_MS = 5000;
+function markTagEdited(frameIds: string[]) {
+	const t = Date.now();
+	for (const id of frameIds) recentTagEdits.set(id, t);
+}
+
 interface TimelineSelectionStore {
 	selectionRange: TimelineSelection | null;
 	setSelectionRange: (range: TimelineSelection | null) => void;
@@ -47,6 +56,7 @@ export const useTimelineSelection = create<TimelineSelectionStore>((set, get) =>
 	tags: {},
 
 	tagFrames: async (frameIds, tag) => {
+		markTagEdited(frameIds);
 		// Optimistic update
 		set((state) => {
 			const newTags = { ...state.tags };
@@ -89,6 +99,7 @@ export const useTimelineSelection = create<TimelineSelectionStore>((set, get) =>
 	},
 
 	removeTagFromFrames: async (frameIds, tag) => {
+		markTagEdited(frameIds);
 		// Optimistic update
 		const prevTags = get().tags;
 		set((state) => {
@@ -147,10 +158,15 @@ export const useTimelineSelection = create<TimelineSelectionStore>((set, get) =>
 
 			set((state) => {
 				const newTags = { ...state.tags };
-				for (const [id, frameTags] of Object.entries(tagsMap)) {
-					if (frameTags.length > 0) {
-						newTags[id] = frameTags;
-					}
+				// Authoritative for the frames we asked about: set each to exactly what
+				// the DB returned (clearing emptied ones), but skip any the user just
+				// edited so a stale load can't resurrect a just-removed tag.
+				const now = Date.now();
+				for (const id of frameIds) {
+					if (recentTagEdits.has(id) && now - (recentTagEdits.get(id) ?? 0) < TAG_EDIT_GUARD_MS) continue;
+					const backendTags = tagsMap[id] ?? [];
+					if (backendTags.length > 0) newTags[id] = backendTags;
+					else delete newTags[id];
 				}
 				return { tags: newTags };
 			});

@@ -477,6 +477,10 @@ impl VisionManager {
         };
         // Mitsukeru fork: apply per-parameter CLI / settings overrides if any.
         // These force the value regardless of the active PowerProfile.
+        // Carry the user's explicit idle override as a *pin* as well as the
+        // live value, so a runtime PowerProfile transition can't relax the
+        // guaranteed capture floor back to the profile's (much larger) value.
+        capture_config.idle_capture_interval_override_ms = self.config.idle_capture_interval_ms;
         if let Some(v) = self.config.idle_capture_interval_ms {
             capture_config.idle_capture_interval_ms = v;
         }

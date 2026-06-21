@@ -5,7 +5,7 @@
 
 import React from "react";
 import { ShareLogsButton } from "@/components/share-logs-button";
-import { MessageSquare, Github, Lightbulb, FileText, Youtube, BookOpen, Play } from "lucide-react";
+import { MessageSquare, Github, Lightbulb, FileText, Youtube, BookOpen, Play, ClipboardList } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 
 function DiscordIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -30,6 +30,17 @@ export function FeedbackSection() {
       </p>
 
       <div className="space-y-2">
+        <div className="px-3 py-2.5 bg-card border border-border">
+          <div className="flex items-center gap-2.5 mb-2.5">
+            <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div>
+              <h3 className="text-sm font-medium text-foreground">Send logs</h3>
+              <p className="text-xs text-muted-foreground">logs are included automatically</p>
+            </div>
+          </div>
+          <ShareLogsButton />
+        </div>
+
         <button
           type="button"
           onClick={() => open("https://youtu.be/OLUMknhvxWY")}
@@ -64,16 +75,25 @@ export function FeedbackSection() {
           </span>
         </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
-          <div className="flex items-center gap-2.5 mb-2.5">
-            <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div>
-              <h3 className="text-sm font-medium text-foreground">Send logs</h3>
-              <p className="text-xs text-muted-foreground">logs are included automatically</p>
+        <button
+          type="button"
+          data-testid="help-survey-link"
+          onClick={() => open("https://screenpipe.com/survey?utm_source=app&utm_medium=help")}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <ClipboardList className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Shape screenpipe</h3>
+                <p className="text-xs text-muted-foreground">90-second survey — tell us what&apos;s working and what&apos;s not</p>
+              </div>
             </div>
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
+              take survey →
+            </span>
           </div>
-          <ShareLogsButton />
-        </div>
+        </button>
 
         <div className="px-3 py-2.5 bg-card border border-border">
           <div className="flex items-center justify-between">

@@ -6,6 +6,7 @@ export type LiveCaptureKind =
   | "idle"
   | "recording"
   | "audio-disabled"
+  | "no-input-device"
   | "input-paused"
   | "audio-not-started"
   | "audio-stalled"
@@ -94,6 +95,17 @@ const STATES: Record<LiveCaptureKind, LiveCaptureState> = {
       "audio capture is disabled — resume audio to transcribe this meeting",
     recordingContinues: false,
   },
+  "no-input-device": {
+    kind: "no-input-device",
+    severity: "warning",
+    label: "No microphone",
+    shortLabel: "no mic",
+    description:
+      "No microphone was detected, so audio can't be captured for this meeting. Screen recording continues.",
+    transcriptEmptyCopy:
+      "no microphone detected — connect a mic to transcribe this meeting",
+    recordingContinues: false,
+  },
   "input-paused": {
     kind: "input-paused",
     severity: "warning",
@@ -163,6 +175,7 @@ const STATES: Record<LiveCaptureKind, LiveCaptureState> = {
 const BACKEND_STATUS_TO_KIND: Record<string, LiveCaptureKind> = {
   recording: "recording",
   disabled: "audio-disabled",
+  no_input_device: "no-input-device",
   mic_paused: "input-paused",
   audio_not_started: "audio-not-started",
   audio_stalled: "audio-stalled",
@@ -193,6 +206,7 @@ export function computeLiveCaptureState({
   const pausedInputs = inputDevices.filter((device) => !device.active);
 
   if (audioStatus === "disabled") return STATES["audio-disabled"];
+  if (audioStatus === "no_input_device") return STATES["no-input-device"];
 
   if (inputDevices.length > 0 && pausedInputs.length === inputDevices.length) {
     return STATES["input-paused"];

@@ -50,6 +50,7 @@ mod embedded_server;
 mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
+mod events;
 mod google_calendar;
 mod hardware;
 mod ics_calendar;
@@ -176,14 +177,15 @@ use tokio::time::{sleep, Duration};
 #[tauri::command]
 #[specta::specta]
 async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
-    use std::path::Path;
-
     const MAX_RETRIES: u32 = 3;
     const INITIAL_DELAY_MS: u64 = 100;
 
     debug!("Reading media file: {}", file_path);
 
-    let path = Path::new(file_path);
+    // Media paths can arrive home-relative (e.g. `~/Downloads/clip.mp4`) when the
+    // agent prints a friendly path in chat. `Path::new` does not expand `~`, so
+    // resolve it the same way the in-app file viewer does before touching disk.
+    let path = viewer::expand_tilde(file_path);
 
     // Retry loop to handle files that may be in the process of being written
     let mut last_error = String::new();
@@ -198,7 +200,7 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
         }
 
         if !path.exists() {
-            last_error = format!("File does not exist: {}", file_path);
+            last_error = format!("File does not exist: {}", path.display());
             if attempt < MAX_RETRIES {
                 continue;
             }
@@ -206,7 +208,7 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
         }
 
         // Read file contents
-        match tokio::fs::read(path).await {
+        match tokio::fs::read(&path).await {
             Ok(contents) => {
                 // Check for empty or suspiciously small files (might still be writing)
                 if contents.is_empty() {
@@ -368,11 +370,27 @@ macro_rules! define_specta_builder {
             .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
             .typ::<oauth::OAuthStatus>()
+            .typ::<events::JobEvent>()
+            .typ::<events::ExportEvent>()
+            .typ::<events::ExportRequestInfo>()
+            .typ::<events::EngineEvent>()
+            .typ::<events::NotificationActionEvent>()
+            .typ::<meeting_export::MeetingExportSummary>()
+            .typ::<meeting_export::StartExportRecordingResponse>()
     }};
 }
 
 #[tokio::main]
 async fn main() {
+    // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
+    // embeds the engine in-process, so it never ran the engine binary's main()
+    // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
+    // high-tier SQLite pool (up to ~37 connections × 3 fds) plus video/audio/
+    // sockets. Exhausting it makes SQLite hit SQLITE_IOERR (522) mid-write and
+    // desync the WAL-index into "database disk image is malformed" (code 11).
+    // Shared single source of truth with the CLI; see engine `fd_limit` module.
+    screenpipe_engine::fd_limit::set_fd_limit();
+
     let _ = fix_path_env::fix();
 
     #[cfg(target_os = "windows")]
@@ -1176,6 +1194,22 @@ async fn main() {
             // Resolve data directory from user setting (custom dir or ~/.screenpipe)
             let (data_dir, data_dir_fell_back) = config::resolve_data_dir(&store.data_dir);
             info!("Recording data directory: {}", data_dir.display());
+
+            // Pin SCREENPIPE_DATA_DIR to the *resolved* dir so every consumer of
+            // `default_screenpipe_data_dir()` agrees with the engine on where the
+            // data lives. Without this, a user with a custom/relocated data dir
+            // hit a split: the engine (server_core) reads its SecretStore from
+            // `config.data_dir` (the custom path) while OAuth token writes
+            // (`open_secret_store`, chatgpt_oauth, …) went to the default
+            // `~/.screenpipe`. Tokens landed in one db.sqlite and were read from
+            // another → "no credentials found … cannot authenticate" 401s on
+            // every Microsoft 365 / Google / ChatGPT call, reconnecting forever
+            // never helping. Setting the env var here (before any OAuth callback
+            // can fire) makes `default_screenpipe_data_dir()` self-consistent and
+            // also propagates the correct dir to child processes (the CLI
+            // sidecar inherits this env).
+            std::env::set_var("SCREENPIPE_DATA_DIR", &data_dir);
+
             if data_dir_fell_back {
                 let app_handle_fb = app_handle.clone();
                 tauri::async_runtime::spawn(async move {

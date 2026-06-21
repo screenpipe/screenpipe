@@ -31,7 +31,6 @@ screenpipe-secrets = { path = "../screenpipe-secrets" }
 
 # Image processing
 image = { workspace = true }
-imageproc = "0.25"
 
 # Dates
 chrono = { workspace = true }

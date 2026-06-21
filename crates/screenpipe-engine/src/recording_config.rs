@@ -56,6 +56,10 @@ pub struct RecordingConfig {
     /// setting; consumed when building the text + image worker
     /// policies.
     pub pii_redaction_labels: Vec<String>,
+    /// WHICH columns the worker scrubs (stable keys; see `RedactColumns`).
+    /// Mirrors the `piiRedactionColumns` setting; consumed when building the
+    /// worker's `WorkerConfig.columns`.
+    pub pii_redaction_columns: Vec<String>,
     /// Render redacted PII as consistent pseudonym tokens
     /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags.
     /// Mirrors the `piiRedactionPseudonyms` setting; consumed when
@@ -264,6 +268,7 @@ impl RecordingConfig {
             async_image_pii_redaction: settings.async_image_pii_redaction,
             pii_backend: settings.pii_backend.clone(),
             pii_redaction_labels: settings.pii_redaction_labels.clone(),
+            pii_redaction_columns: settings.pii_redaction_columns.clone(),
             pii_redaction_pseudonyms: settings.pii_redaction_pseudonyms,
             filter_music: settings.filter_music,
             enable_workflow_events: settings.enable_workflow_events,

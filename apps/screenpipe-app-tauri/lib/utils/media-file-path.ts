@@ -28,6 +28,19 @@ export function normalizeMediaFilePath(path: string): string {
   );
   if (windowsMatch) return windowsMatch[0].trim();
 
+  // Home-relative paths (e.g. `~/Downloads/clip.mp4`, or `~\Downloads\clip.mp4`
+  // on Windows). The Unix matcher below anchors on the first `/`, which would
+  // silently drop the leading `~` and turn `~/Downloads/clip.mp4` into
+  // `/Downloads/clip.mp4` — a path that never exists. Match the tilde explicitly
+  // first so the home prefix survives; the backend expands `~` to the real home
+  // directory when reading the file. Require the `~` to sit at a path boundary
+  // (start, or after whitespace) so a directory that merely ends in `~`
+  // (e.g. `/Users/me~/clip.mp4`) isn't mistaken for a home reference.
+  const tildeMatch = cleaned.match(
+    new RegExp(`(?:^|\\s)(~[\\\\/][^\\n\\r\`"<>]+?\\.(?:${MEDIA_EXTENSION_PATTERN}))`, "i"),
+  );
+  if (tildeMatch) return tildeMatch[1].trim();
+
   const unixMatch = cleaned.match(
     new RegExp(`/[^\\n\\r\`"<>]+?\\.(${MEDIA_EXTENSION_PATTERN})`, "i"),
   );

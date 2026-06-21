@@ -314,3 +314,228 @@ async fn bench_tag_filter_scaling() {
         );
     }
 }
+
+/// Scaling check for `related_tags` (powers `?include_related=true`).
+///
+/// Ignored by default. Run explicitly:
+///   cargo test -p screenpipe-db --test tag_filter_bench related_tags -- --ignored --nocapture
+///
+/// `related_tags` is the inverse-shaped sibling of the tag filter: instead of
+/// "items carrying this tag", it returns "every OTHER tag on those items,
+/// counted". Two cost drivers to pin down:
+///   1. a HOT input tag — on many items, each carrying many other tags — makes
+///      the `co` CTE materialize (items × tags-per-item) rows before GROUP BY.
+///   2. memories have no tag index, so the memory leg full-scans + json_each
+///      (same linear cost the tag-filter bench already documents).
+/// This seed maximizes (1): `person:hot` is on 50k frames that EACH carry 4
+/// extra co-tags (so 50k×5 = 250k rows feed the aggregation) plus a 50k-memory
+/// store for (2). `person:cold` (200 items) is the realistic case.
+#[tokio::test]
+#[ignore]
+async fn bench_related_tags_scaling() {
+    const N_FRAMES_R: i64 = 200_000;
+    const HOT_FRAMES: i64 = 50_000; // person:hot is on the first 50k frames
+    const CO_POOL: i64 = 50; // each hot frame carries 4 of these → wide fan-out
+    const COLD_FRAMES: i64 = 200; // realistic tag
+    const N_MEM_R: i64 = 50_000;
+    const HOT_MEM: i64 = 50_000; // every memory carries person:hot + a co tag
+
+    let db = migrated_db().await;
+    let seed = Instant::now();
+
+    exec(
+        &db,
+        "INSERT INTO video_chunks (file_path, device_name) VALUES ('v.mp4','dev')",
+    )
+    .await;
+    let chunk_id: i64 = sqlx::query_scalar("SELECT id FROM video_chunks LIMIT 1")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO frames (video_chunk_id, offset_index, timestamp, name, app_name, window_name, focused, device_name) \
+             WITH RECURSIVE seq(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM seq WHERE i < {n}-1) \
+             SELECT {chunk}, i, datetime('2026-01-01 00:00:00', '+'||i||' seconds'), 'f'||i, 'app', 'win', 0, 'dev' FROM seq",
+            n = N_FRAMES_R,
+            chunk = chunk_id
+        ),
+    )
+    .await;
+
+    // Tags: person:hot (1), person:cold (2), then CO_POOL co:N tags (3..).
+    exec(
+        &db,
+        "INSERT INTO tags (name) VALUES ('person:hot'), ('person:cold')",
+    )
+    .await;
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO tags (name) WITH RECURSIVE s(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM s WHERE i<{p}-1) SELECT 'co:'||i FROM s",
+            p = CO_POOL
+        ),
+    )
+    .await;
+    let hot: i64 = sqlx::query_scalar("SELECT id FROM tags WHERE name='person:hot'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let cold: i64 = sqlx::query_scalar("SELECT id FROM tags WHERE name='person:cold'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let co_base: i64 = sqlx::query_scalar("SELECT id FROM tags WHERE name='co:0'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+    // person:hot on the first HOT_FRAMES frames.
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO vision_tags (vision_id, tag_id) \
+             WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<{k}) SELECT i, {hot} FROM s",
+            k = HOT_FRAMES,
+            hot = hot
+        ),
+    )
+    .await;
+    // Each hot frame also carries 4 co-tags → wide co-occurrence fan-out.
+    for off in 0..4i64 {
+        exec(
+            &db,
+            &format!(
+                "INSERT OR IGNORE INTO vision_tags (vision_id, tag_id) \
+                 WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<{k}) \
+                 SELECT i, {base} + ((i + {off}) % {pool}) FROM s",
+                k = HOT_FRAMES,
+                base = co_base,
+                off = off,
+                pool = CO_POOL
+            ),
+        )
+        .await;
+    }
+    // person:cold on the first COLD_FRAMES frames (they already carry co-tags).
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO vision_tags (vision_id, tag_id) \
+             WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<{k}) SELECT i, {cold} FROM s",
+            k = COLD_FRAMES,
+            cold = cold
+        ),
+    )
+    .await;
+
+    // Memories: every one carries person:hot + a rotating co:N (full-scan leg).
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO memories (content, tags, importance) \
+             WITH RECURSIVE s(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM s WHERE i<{n}-1) \
+             SELECT 'mem '||i, \
+               CASE WHEN i<{k} THEN '[\"person:hot\",\"co:'||(i%{pool})||'\"]' ELSE '[\"noise:'||(i%500)||'\"]' END, \
+               0.5 FROM s",
+            n = N_MEM_R,
+            k = HOT_MEM,
+            pool = CO_POOL
+        ),
+    )
+    .await;
+
+    let counts: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM frames), (SELECT COUNT(*) FROM vision_tags), (SELECT COUNT(*) FROM memories)",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    println!(
+        "seeded in {:?}: frames={} vision_tags={} memories={}",
+        seed.elapsed(),
+        counts.0,
+        counts.1,
+        counts.2
+    );
+
+    // ---- query plan: confirm the vision/audio legs ride the tag indexes and
+    // only the memories leg scans (the documented, accepted linear cost). ----
+    let related_sql = r#"
+        WITH input(name) AS (SELECT DISTINCT value FROM json_each(?1)),
+             n(c) AS (SELECT COUNT(*) FROM input),
+             vision_matches(id) AS (
+                 SELECT vt.vision_id FROM vision_tags vt JOIN tags t ON vt.tag_id = t.id
+                 WHERE t.name IN (SELECT name FROM input)
+                 GROUP BY vt.vision_id HAVING COUNT(DISTINCT t.name) = (SELECT c FROM n)
+             ),
+             audio_matches(id) AS (
+                 SELECT aud.audio_chunk_id FROM audio_tags aud JOIN tags t ON aud.tag_id = t.id
+                 WHERE t.name IN (SELECT name FROM input)
+                 GROUP BY aud.audio_chunk_id HAVING COUNT(DISTINCT t.name) = (SELECT c FROM n)
+             ),
+             memory_matches(id) AS (
+                 SELECT m.id FROM memories m
+                 WHERE (SELECT COUNT(DISTINCT j.value)
+                        FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
+                        WHERE j.value IN (SELECT name FROM input)) = (SELECT c FROM n)
+             ),
+             co(name) AS (
+                 SELECT t.name FROM vision_tags vt JOIN tags t ON vt.tag_id = t.id
+                 WHERE vt.vision_id IN (SELECT id FROM vision_matches)
+                 UNION ALL
+                 SELECT t.name FROM audio_tags aud JOIN tags t ON aud.tag_id = t.id
+                 WHERE aud.audio_chunk_id IN (SELECT id FROM audio_matches)
+                 UNION ALL
+                 SELECT j.value FROM memories m,
+                        json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
+                 WHERE m.id IN (SELECT id FROM memory_matches)
+             )
+        SELECT name, COUNT(*) AS count FROM co
+        WHERE name IS NOT NULL AND name != '' AND name NOT IN (SELECT name FROM input)
+        GROUP BY name ORDER BY count DESC, name ASC LIMIT ?2"#;
+    let plan: Vec<(i64, i64, i64, String)> =
+        sqlx::query_as(&format!("EXPLAIN QUERY PLAN {related_sql}"))
+            .bind("[\"person:hot\"]")
+            .bind(30i64)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    println!("\n--- PLAN: related_tags(person:hot) ---");
+    for (_, _, _, detail) in plan {
+        println!("  {detail}");
+    }
+
+    // ---- timings (best of 3 after warm-up) ----
+    let bench = |label: &'static str, tags: Vec<String>| {
+        let db = &db;
+        async move {
+            let _ = db.related_tags(&tags, 30).await.unwrap(); // warm-up
+            let mut best = std::time::Duration::MAX;
+            let mut rows = 0usize;
+            let mut top = String::new();
+            for _ in 0..3 {
+                let t = Instant::now();
+                let r = db.related_tags(&tags, 30).await.unwrap();
+                best = best.min(t.elapsed());
+                rows = r.len();
+                top = r
+                    .first()
+                    .map(|(n, c)| format!("{n}={c}"))
+                    .unwrap_or_default();
+            }
+            println!("related {label:<40} -> {rows:>3} groups (top {top}), best {best:?}");
+        }
+    };
+
+    println!("\n--- timings ---");
+    bench("person:hot (50k items, wide fan-out)", vec!["person:hot".to_string()]).await;
+    bench("person:cold (200 items, realistic)", vec!["person:cold".to_string()]).await;
+    bench(
+        "person:hot+co:0 (AND, two inputs)",
+        vec!["person:hot".to_string(), "co:0".to_string()],
+    )
+    .await;
+    bench("nonexistent:tag (no matches)", vec!["nonexistent:tag".to_string()]).await;
+}

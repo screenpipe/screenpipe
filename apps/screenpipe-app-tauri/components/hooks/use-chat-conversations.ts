@@ -26,7 +26,7 @@ import {
   getCachedBrowserStateEntry,
   resolveNewestBrowserState,
 } from "@/lib/browser-state-cache";
-import { commands, type AIPreset } from "@/lib/utils/tauri";
+import { type AIPreset } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
   loadConversationFile,
@@ -42,7 +42,6 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import type { ContentBlock, Message } from "@/lib/chat/types";
-export type { ContentBlock, Message, ToolCall } from "@/lib/chat/types";
 
 // --- Hook options ---
 
@@ -55,7 +54,6 @@ interface UseChatConversationsOpts {
   inputRef: RefObject<HTMLTextAreaElement | null>;
   isLoading: boolean;
   isStreaming: boolean;
-  piInfo: { running: boolean; projectDir: string | null; pid: number | null } | null;
   piStreamingTextRef: MutableRefObject<string>;
   piMessageIdRef: MutableRefObject<string | null>;
   piContentBlocksRef: MutableRefObject<ContentBlock[]>;
@@ -119,7 +117,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     inputRef,
     isLoading,
     isStreaming,
-    piInfo,
     piStreamingTextRef,
     piMessageIdRef,
     piContentBlocksRef,

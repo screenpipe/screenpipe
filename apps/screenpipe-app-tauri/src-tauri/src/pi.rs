@@ -2398,6 +2398,36 @@ fn build_prompt_command(
     Ok(cmd)
 }
 
+async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let db_path = data_dir.join("db.sqlite");
+    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
+        crate::secrets::KeyResult::Found(k) => Some(k),
+        _ => None,
+    };
+    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
+        .await
+        .ok()
+}
+
+async fn foreground_connections_context(app: &AppHandle) -> String {
+    let api = crate::recording::local_api_context_from_app(app);
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let store = open_secret_store_for_connection_context().await;
+    screenpipe_connect::connections::render_context(&data_dir, api.port, store.as_ref()).await
+}
+
+async fn attach_foreground_connections_context(app: &AppHandle, message: String) -> String {
+    let ctx = foreground_connections_context(app).await;
+    if ctx.trim().is_empty() {
+        return message;
+    }
+    format!(
+        "Current Screenpipe connected integrations context, refreshed for this turn:\n{}\n\nUser request:\n{}",
+        ctx, message
+    )
+}
+
 fn queued_payload_to_steer_command(payload: Value) -> Result<Value, String> {
     let message = payload
         .get("message")
@@ -2421,6 +2451,7 @@ fn queued_payload_to_steer_command(payload: Value) -> Result<Value, String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn pi_prompt(
+    app: AppHandle,
     state: State<'_, PiState>,
     session_id: Option<String>,
     message: String,
@@ -2441,6 +2472,7 @@ pub async fn pi_prompt(
     };
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
+    let message = attach_foreground_connections_context(&app, message).await;
     let cmd = build_prompt_command(message, images)?;
     let (queue_id, rx) = queue
         .send_prompt(
@@ -2461,6 +2493,7 @@ pub async fn pi_prompt(
 #[tauri::command]
 #[specta::specta]
 pub async fn pi_queue_prompt(
+    app: AppHandle,
     state: State<'_, PiState>,
     session_id: Option<String>,
     message: String,
@@ -2481,6 +2514,7 @@ pub async fn pi_queue_prompt(
     };
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
+    let message = attach_foreground_connections_context(&app, message).await;
     let cmd = build_prompt_command(message, images)?;
     let (queue_id, _rx) = queue
         .send_prompt(
@@ -2499,6 +2533,7 @@ pub async fn pi_queue_prompt(
 #[tauri::command]
 #[specta::specta]
 pub async fn pi_steer(
+    app: AppHandle,
     state: State<'_, PiState>,
     session_id: Option<String>,
     message: String,
@@ -2517,6 +2552,7 @@ pub async fn pi_steer(
             .ok_or("Pi command queue not initialized")?
     };
 
+    let message = attach_foreground_connections_context(&app, message).await;
     let mut cmd = json!({
         "type": "steer",
         "message": message,

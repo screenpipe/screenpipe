@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 sqlx = { workspace = true }
+screenpipe-config = { path = "../screenpipe-config" }
 base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

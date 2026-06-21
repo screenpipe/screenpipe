@@ -16,9 +16,9 @@ import type { ConversationMeta } from "@/lib/chat-storage";
 interface InlineChatHistoryProps {
   hideInlineHistory?: boolean;
   showHistory: boolean;
-  setShowHistory: (show: boolean) => void;
+  onCloseHistory: () => void;
   historySearch: string;
-  setHistorySearch: (value: string) => void;
+  onHistorySearchChange: (value: string) => void;
   groupedConversations: { label: string; conversations: ConversationMeta[] }[];
   conversationId: string | null;
   loadConversation: (conversation: ConversationMeta) => Promise<void> | void;
@@ -29,9 +29,9 @@ interface InlineChatHistoryProps {
 export function InlineChatHistory({
   hideInlineHistory,
   showHistory,
-  setShowHistory,
+  onCloseHistory,
   historySearch,
-  setHistorySearch,
+  onHistorySearchChange,
   groupedConversations,
   conversationId,
   loadConversation,
@@ -60,7 +60,7 @@ export function InlineChatHistory({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setShowHistory(false)}
+                  onClick={onCloseHistory}
                   className="h-6 w-6 p-0"
                 >
                   <ChevronLeft size={14} />
@@ -71,7 +71,7 @@ export function InlineChatHistory({
                 <Input
                   placeholder="Search conversations..."
                   value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
+                  onChange={(e) => onHistorySearchChange(e.target.value)}
                   className="h-8 pl-8 text-xs bg-background/50"
                 />
               </div>

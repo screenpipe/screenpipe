@@ -102,7 +102,9 @@ ort = { workspace = true, features = ["download-binaries", "tls-native"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
+    "Win32_System_Threading",
     "Win32_Devices_FunctionDiscovery",
     "Win32_UI_Shell_PropertiesSystem",
 ] }

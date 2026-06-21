@@ -65,6 +65,9 @@ GEMINI_FLEX_INTERACTIVE = "false"
 # - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = always glm-5
 #   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
 #   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
+# - PIPE_FRONTIER_POLICY ("downgrade"): background/pipe traffic on a frontier model
+#   (opus/gpt-5.5/*-pro/fable, output>=$20/Mtok) → "downgrade" to PIPE_FRONTIER_FALLBACK
+#   (default "auto"), or "reject" with a 403. Pipes shouldn't run frontier models.
 # - ROUTER_SAMPLE_PCT ("100"): % of devices in the router arm for A/B (deterministic
 #   by device hash). 50 = half ON / half control → measure ON vs control in cost_log
 #   via the router_tier column ('control' = baseline arm). 0 = effectively off.

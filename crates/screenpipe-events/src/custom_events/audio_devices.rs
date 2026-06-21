@@ -23,8 +23,16 @@ pub enum AudioDeviceFallbackState {
     /// device is now running in its place.
     Engaged,
     /// The pinned device returned and the substitute was stopped. Capture
-    /// is back on the user's selected device.
+    /// is back on the user's selected device. Also emitted (with empty
+    /// device fields) when capture recovers after an `Unavailable` episode.
     Cleared,
+    /// The pinned device went missing past the grace window and there was
+    /// **no** other input device to fall back to — mic capture has stopped
+    /// entirely. Distinct from the user disabling their only other mic for
+    /// privacy (which stays silent on purpose); this is an unintended,
+    /// surprising loss the user should be told about. `fallback_device` is
+    /// empty.
+    Unavailable,
 }
 
 /// Published as `"audio_device_fallback_engaged"` or
@@ -58,11 +66,22 @@ impl AudioDeviceFallbackEvent {
         }
     }
 
+    /// The pinned device is gone and there is nothing to fall back to —
+    /// mic capture has stopped. `fallback_device` is empty by construction.
+    pub fn unavailable(pinned: impl Into<String>) -> Self {
+        Self {
+            state: AudioDeviceFallbackState::Unavailable,
+            pinned_device: pinned.into(),
+            fallback_device: String::new(),
+        }
+    }
+
     /// Event name to publish on the bus.
     pub fn event_name(&self) -> &'static str {
         match self.state {
             AudioDeviceFallbackState::Engaged => "audio_device_fallback_engaged",
             AudioDeviceFallbackState::Cleared => "audio_device_fallback_cleared",
+            AudioDeviceFallbackState::Unavailable => "audio_device_fallback_unavailable",
         }
     }
 }

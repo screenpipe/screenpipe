@@ -77,11 +77,35 @@ export async function isCodexMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
+// Grok CLI (superagent-ai/grok-cli) keeps user settings in
+// ~/.grok/user-settings.json. MCP servers live in an *array* under
+// `mcp.servers[]` (each entry: { id, label, enabled, transport, command,
+// args, env? }) — unlike Claude/Cursor's `mcpServers` object map.
+export async function getGrokConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".grok", "user-settings.json");
+}
+
+export function hasEnabledGrokMcp(content: string): boolean {
+  try {
+    const servers = JSON.parse(content)?.mcp?.servers;
+    if (!Array.isArray(servers)) return false;
+    return servers.some((s) => s?.id === "screenpipe" && s?.enabled !== false);
+  } catch { return false; }
+}
+
+export async function isGrokMcpInstalled(): Promise<boolean> {
+  try {
+    return hasEnabledGrokMcp(await readTextFile(await getGrokConfigPath()));
+  } catch { return false; }
+}
+
 export function useHardcodedTiles(): HardcodedTile[] {
   const os = typeof window !== "undefined" ? platform() : "";
   const [claudeInstalled, setClaudeInstalled] = useState(false);
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [codexInstalled, setCodexInstalled] = useState(false);
+  const [grokInstalled, setGrokInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
   const [customMcpDetected, setCustomMcpDetected] = useState(false);
@@ -95,6 +119,7 @@ export function useHardcodedTiles(): HardcodedTile[] {
 
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
     isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
+    isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
 
     commands.chatgptOauthStatus()
       .then(res => setChatgptConnected(res.status === "ok" && res.data.logged_in))
@@ -133,6 +158,7 @@ export function useHardcodedTiles(): HardcodedTile[] {
     { id: "claude", name: "Claude Desktop", icon: "claude", connected: claudeInstalled },
     { id: "cursor", name: "Cursor", icon: "cursor", connected: cursorInstalled },
     { id: "codex", name: "Codex", icon: "codex", connected: codexInstalled },
+    { id: "grok", name: "Grok CLI", icon: "grok", connected: grokInstalled },
     { id: "claude-code", name: "Claude Code", icon: "claude-code", connected: false },
     { id: "warp", name: "Warp", icon: "warp", connected: false },
     { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected },

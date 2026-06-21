@@ -118,7 +118,7 @@ export function AppContextPopover({
 		const transcripts: { text: string; time: Date; speaker?: string }[] = [];
 		const seenChunks = new Set<number>();
 		for (const frame of frames) {
-			for (const device of frame.devices) {
+			for (const device of frame.devices ?? []) {
 				for (const audio of device.audio || []) {
 					if (!audio.transcription?.trim()) continue;
 					if (seenChunks.has(audio.audio_chunk_id)) continue;

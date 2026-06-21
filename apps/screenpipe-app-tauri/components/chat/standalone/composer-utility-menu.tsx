@@ -19,19 +19,21 @@ type ActiveChatFilters = {
   tagNames: string[];
 };
 
-type FilterType = "time" | "content" | "app" | "speaker" | "tag";
-
 interface ComposerUtilityMenuProps {
   canChat: boolean;
   activeFilterCount: number;
   activeFilters: ActiveChatFilters;
   filterSearch: string;
-  setFilterSearch: React.Dispatch<React.SetStateAction<string>>;
+  onFilterSearchChange: (value: string) => void;
+  onClearFilterSearch: () => void;
   filterSearchGroups: { label: string; suggestions: MentionSuggestion[] }[];
   filterSearchResults: MentionSuggestion[];
   isLoadingFilterSearch: boolean;
   selectedFilterResultIndex: number;
-  setSelectedFilterResultIndex: React.Dispatch<React.SetStateAction<number>>;
+  onSelectFilterResultIndex: (index: number) => void;
+  onSelectNextFilterResult: () => void;
+  onSelectPreviousFilterResult: () => void;
+  onApplySelectedFilterResult: () => void;
   staticMentionSuggestions: MentionSuggestion[];
   appMentionSuggestions: MentionSuggestion[];
   allTagMentionSuggestions: MentionSuggestion[];
@@ -41,15 +43,19 @@ interface ComposerUtilityMenuProps {
   tagsLoading: boolean;
   connections: ConnectedIntegration[];
   isWindows: boolean;
-  setAppFilterOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setInput: React.Dispatch<React.SetStateAction<string>>;
-  removeFilter: (filterType: FilterType, label?: string) => void;
+  onCloseFilterMenu: () => void;
   getFilterSuggestionState: (suggestion: MentionSuggestion) => {
     tagName: string;
     speakerName: string;
     isActive: boolean;
   };
   applyFilterSuggestion: (suggestion: MentionSuggestion) => void;
+  applyTimeFilterSuggestion: (suggestion: MentionSuggestion) => void;
+  applyContentFilterSuggestion: (suggestion: MentionSuggestion) => void;
+  applyAppFilterSuggestion: (suggestion: MentionSuggestion) => void;
+  applyTagFilterSuggestion: (suggestion: MentionSuggestion) => void;
+  applyConnectionFilterTag: (tag: string) => void;
+  applySpeakerFilterSuggestion: (suggestion: MentionSuggestion) => void;
   handleFilePicker: () => Promise<void>;
 }
 
@@ -58,12 +64,16 @@ export function ComposerUtilityMenu({
   activeFilterCount,
   activeFilters,
   filterSearch,
-  setFilterSearch,
+  onFilterSearchChange,
+  onClearFilterSearch,
   filterSearchGroups,
   filterSearchResults,
   isLoadingFilterSearch,
   selectedFilterResultIndex,
-  setSelectedFilterResultIndex,
+  onSelectFilterResultIndex,
+  onSelectNextFilterResult,
+  onSelectPreviousFilterResult,
+  onApplySelectedFilterResult,
   staticMentionSuggestions,
   appMentionSuggestions,
   allTagMentionSuggestions,
@@ -73,11 +83,15 @@ export function ComposerUtilityMenu({
   tagsLoading,
   connections,
   isWindows,
-  setAppFilterOpen,
-  setInput,
-  removeFilter,
+  onCloseFilterMenu,
   getFilterSuggestionState,
   applyFilterSuggestion,
+  applyTimeFilterSuggestion,
+  applyContentFilterSuggestion,
+  applyAppFilterSuggestion,
+  applyTagFilterSuggestion,
+  applyConnectionFilterTag,
+  applySpeakerFilterSuggestion,
   handleFilePicker,
 }: ComposerUtilityMenuProps) {
   const timeLabels: Record<string, string> = {
@@ -99,7 +113,7 @@ export function ComposerUtilityMenu({
       <button
         key={`${suggestion.category}-${suggestion.tag}`}
         type="button"
-        onMouseEnter={() => setSelectedFilterResultIndex(resultIndex)}
+        onMouseEnter={() => onSelectFilterResultIndex(resultIndex)}
         onClick={() => applyFilterSuggestion(suggestion)}
         className={cn(
           "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
@@ -123,7 +137,7 @@ export function ComposerUtilityMenu({
           type="button"
           disabled={!canChat}
           onClick={async () => {
-            setAppFilterOpen(false);
+            onCloseFilterMenu();
             await handleFilePicker();
           }}
           className="w-full flex items-center gap-2 px-2 py-2 text-left text-sm rounded-md hover:bg-muted disabled:opacity-40 disabled:pointer-events-none transition-colors"
@@ -146,35 +160,24 @@ export function ComposerUtilityMenu({
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={filterSearch}
-            onChange={(event) => setFilterSearch(event.target.value)}
+            onChange={(event) => onFilterSearchChange(event.target.value)}
             onKeyDown={(event) => {
               event.stopPropagation();
               if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setSelectedFilterResultIndex((index) =>
-                  filterSearchResults.length === 0
-                    ? 0
-                    : (index + 1) % filterSearchResults.length,
-                );
+                onSelectNextFilterResult();
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
-                setSelectedFilterResultIndex((index) =>
-                  filterSearchResults.length === 0
-                    ? 0
-                    : (index - 1 + filterSearchResults.length) %
-                      filterSearchResults.length,
-                );
+                onSelectPreviousFilterResult();
               } else if (event.key === "Enter") {
                 event.preventDefault();
-                const selectedSuggestion =
-                  filterSearchResults[selectedFilterResultIndex];
-                if (selectedSuggestion) applyFilterSuggestion(selectedSuggestion);
+                onApplySelectedFilterResult();
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 if (filterSearch) {
-                  setFilterSearch("");
+                  onClearFilterSearch();
                 } else {
-                  setAppFilterOpen(false);
+                  onCloseFilterMenu();
                 }
               }
             }}
@@ -185,7 +188,7 @@ export function ComposerUtilityMenu({
           {filterSearch && (
             <button
               type="button"
-              onClick={() => setFilterSearch("")}
+              onClick={onClearFilterSearch}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               aria-label="Clear filter search"
             >
@@ -238,19 +241,7 @@ export function ComposerUtilityMenu({
                 <button
                   key={s.tag}
                   type="button"
-                  onClick={() => {
-                    if (isActive) {
-                      removeFilter("time", timeLabels[s.description]);
-                    } else {
-                      removeFilter("time");
-                      setTimeout(() => {
-                        setInput(
-                          (prev) => `${s.tag} ${prev.trim()}`.trim() + " ",
-                        );
-                      }, 0);
-                    }
-                    setAppFilterOpen(false);
-                  }}
+                  onClick={() => applyTimeFilterSuggestion(s)}
                   className={cn(
                     "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
                     isActive && "bg-muted",
@@ -283,19 +274,7 @@ export function ComposerUtilityMenu({
                 <button
                   key={s.tag}
                   type="button"
-                  onClick={() => {
-                    if (isActive) {
-                      removeFilter("content");
-                    } else {
-                      removeFilter("content");
-                      setTimeout(() => {
-                        setInput(
-                          (prev) => `${s.tag} ${prev.trim()}`.trim() + " ",
-                        );
-                      }, 0);
-                    }
-                    setAppFilterOpen(false);
-                  }}
+                  onClick={() => applyContentFilterSuggestion(s)}
                   className={cn(
                     "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
                     isActive && "bg-muted",
@@ -323,17 +302,7 @@ export function ComposerUtilityMenu({
                 <button
                   key={`app-${suggestion.tag}`}
                   type="button"
-                  onClick={() => {
-                    if (isActive) {
-                      removeFilter("app");
-                    } else {
-                      if (activeFilters.appName) removeFilter("app");
-                      setInput(
-                        (prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ",
-                      );
-                    }
-                    setAppFilterOpen(false);
-                  }}
+                  onClick={() => applyAppFilterSuggestion(suggestion)}
                   className={cn(
                     "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
                     isActive && "bg-muted",
@@ -368,17 +337,7 @@ export function ComposerUtilityMenu({
                     <button
                       key={`tag-${section.label}-${suggestion.tag}`}
                       type="button"
-                      onClick={() => {
-                        if (isActive) {
-                          removeFilter("tag", tagName);
-                        } else {
-                          setInput(
-                            (prev) =>
-                              `${suggestion.tag} ${prev.trim()}`.trim() + " ",
-                          );
-                        }
-                        setAppFilterOpen(false);
-                      }}
+                      onClick={() => applyTagFilterSuggestion(suggestion)}
                       className={cn(
                         "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
                         isActive && "bg-muted",
@@ -406,10 +365,7 @@ export function ComposerUtilityMenu({
                   <button
                     key={`conn-${connection.id}`}
                     type="button"
-                    onClick={() => {
-                      setInput((prev) => `${tag} ${prev.trim()}`.trim() + " ");
-                      setAppFilterOpen(false);
-                    }}
+                    onClick={() => applyConnectionFilterTag(tag)}
                     className="w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2"
                   >
                     <span className="flex items-center gap-1.5 min-w-0">
@@ -441,17 +397,7 @@ export function ComposerUtilityMenu({
                   <button
                     key={`speaker-${s.tag}`}
                     type="button"
-                    onClick={() => {
-                      if (isActive) {
-                        removeFilter("speaker");
-                      } else {
-                        if (activeFilters.speakerName) removeFilter("speaker");
-                        setInput(
-                          (prev) => `${s.tag} ${prev.trim()}`.trim() + " ",
-                        );
-                      }
-                      setAppFilterOpen(false);
-                    }}
+                    onClick={() => applySpeakerFilterSuggestion(s)}
                     className={cn(
                       "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
                       isActive && "bg-muted",

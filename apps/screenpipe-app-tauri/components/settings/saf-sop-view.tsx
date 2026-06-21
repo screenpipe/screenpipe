@@ -168,6 +168,7 @@ interface SafArtifactBodyProps {
   content: string | null;
   expanded: boolean;
   onToggleExpanded: () => void;
+  hideTitle?: boolean;
 }
 
 /**
@@ -181,10 +182,11 @@ export function SafArtifactBody({
   content,
   expanded,
   onToggleExpanded,
+  hideTitle = false,
 }: SafArtifactBodyProps) {
   let body: React.ReactNode = null;
   if (!expanded) {
-    body = <p className="text-sm font-medium">{title}</p>;
+    body = hideTitle ? null : <p className="text-sm font-medium">{title}</p>;
   } else if (content == null) {
     body = <p className="text-xs text-muted-foreground">loading artifact…</p>;
   } else {

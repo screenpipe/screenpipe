@@ -36,9 +36,9 @@
  * await the same promise and return the same unmount fn.
  */
 
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenTyped, TAURI_EVENTS } from "./tauri-events";
 import {
-  AGENT_TOPICS,
   type AgentEventEnvelope,
   type AgentTerminatedPayload,
   type AgentSessionEvictedPayload,
@@ -181,17 +181,17 @@ export async function mountAgentEventBus(): Promise<UnlistenFn> {
   if (internals.mountPromise) return internals.mountPromise;
 
   internals.mountPromise = (async () => {
-    const eventUnlisten = await listen<AgentEventEnvelope>(
-      AGENT_TOPICS.event,
-      (event) => void dispatchEvent(event.payload),
+    const eventUnlisten = await listenTyped(
+      TAURI_EVENTS.agentEvent,
+      (event) => void dispatchEvent(event),
     );
-    const terminatedUnlisten = await listen<AgentTerminatedPayload>(
-      AGENT_TOPICS.terminated,
-      (event) => void dispatchTerminated(event.payload),
+    const terminatedUnlisten = await listenTyped(
+      TAURI_EVENTS.agentTerminated,
+      (event) => void dispatchTerminated(event),
     );
-    const evictedUnlisten = await listen<AgentSessionEvictedPayload>(
-      AGENT_TOPICS.evicted,
-      (event) => void dispatchEvicted(event.payload),
+    const evictedUnlisten = await listenTyped(
+      TAURI_EVENTS.agentSessionEvicted,
+      (event) => void dispatchEvicted(event),
     );
     internals.unlisteners.push(eventUnlisten, terminatedUnlisten, evictedUnlisten);
     internals.mounted = true;

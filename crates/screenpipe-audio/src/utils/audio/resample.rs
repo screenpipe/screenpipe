@@ -8,6 +8,26 @@ use rubato::{
 };
 use tracing::debug;
 
+/// Reject a zero sample rate before it reaches rubato.
+///
+/// The resampling ratio is `to / from`. A `from` of 0 makes that ratio
+/// infinite: `resample()` then panics inside rubato, and `StreamResampler::new`
+/// silently builds a broken resampler (`inf as usize` saturates to `usize::MAX`
+/// in the frame-size math) that crashes on the first `process`. A device that
+/// reports a 0 sample rate — possible with broken virtual/non-default endpoints
+/// — must therefore be rejected here with a clean error rather than crash the
+/// capture/transcription pipeline. See issue #3858.
+fn ensure_nonzero_rates(from_sample_rate: u32, to_sample_rate: u32) -> Result<()> {
+    if from_sample_rate == 0 || to_sample_rate == 0 {
+        anyhow::bail!(
+            "invalid resample rates: from={} to={} (sample rate must be non-zero)",
+            from_sample_rate,
+            to_sample_rate
+        );
+    }
+    Ok(())
+}
+
 fn sinc_params() -> SincInterpolationParameters {
     SincInterpolationParameters {
         sinc_len: 256,
@@ -25,6 +45,7 @@ fn sinc_params() -> SincInterpolationParameters {
 /// continuous stream — use [`StreamResampler`] there.
 pub fn resample(input: &[f32], from_sample_rate: u32, to_sample_rate: u32) -> Result<Vec<f32>> {
     debug!("Resampling audio");
+    ensure_nonzero_rates(from_sample_rate, to_sample_rate)?;
     let mut resampler = SincFixedIn::<f32>::new(
         to_sample_rate as f64 / from_sample_rate as f64,
         2.0,
@@ -55,6 +76,7 @@ pub struct StreamResampler {
 
 impl StreamResampler {
     pub fn new(from_sample_rate: u32, to_sample_rate: u32) -> Result<Self> {
+        ensure_nonzero_rates(from_sample_rate, to_sample_rate)?;
         let chunk_size = (from_sample_rate as usize / 100).max(64);
         let resampler = SincFixedIn::<f32>::new(
             to_sample_rate as f64 / from_sample_rate as f64,
@@ -163,6 +185,37 @@ pub fn resample_stream_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for issue #3858: a device that reports a 0 sample rate must
+    /// produce a clean error, never a panic. Before the guard, `resample` with
+    /// `from_sample_rate == 0` panicked inside rubato (infinite ratio).
+    #[test]
+    fn resample_zero_from_rate_errors_not_panics() {
+        let r = resample(&[0.1f32; 480], 0, 16_000);
+        assert!(r.is_err(), "0 from-rate must be a clean error");
+    }
+
+    #[test]
+    fn resample_zero_to_rate_errors() {
+        assert!(resample(&[0.1f32; 480], 48_000, 0).is_err());
+    }
+
+    /// Before the guard, this silently returned `Ok` with an infinite-ratio
+    /// resampler that crashed on the first `process`. It must now error.
+    #[test]
+    fn stream_resampler_zero_rate_errors() {
+        assert!(StreamResampler::new(0, 16_000).is_err());
+        assert!(StreamResampler::new(48_000, 0).is_err());
+    }
+
+    /// `resample_stream_frame` is the realtime entry point; a 0 device rate
+    /// must surface as an error there too (not a panic in the audio thread).
+    #[test]
+    fn resample_stream_frame_zero_rate_errors() {
+        let mut slot = None;
+        let r = resample_stream_frame(&mut slot, vec![0.2f32; 320], 0, 16_000);
+        assert!(r.is_err(), "0 device rate must error, not panic");
+    }
 
     #[test]
     fn stream_resampler_handles_variable_frame_sizes() {

@@ -19,7 +19,7 @@ pub mod sync;
 
 use crate::agents::{
     pi::{PiExecutor, SCREENPIPE_API_URL},
-    AgentExecutor, ExecutionHandle,
+    AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
 use crate::pipes::connections::parse_mcp_connection_id;
 use crate::pipes::mcp_access::McpSessionAccessRegistry;
@@ -430,7 +430,10 @@ fn select_newest_files(
 /// Returns `true` if the extension is user-facing for fallback artifact
 /// discovery. Pipes producing other types should declare them in `artifacts:`.
 fn is_user_facing_artifact_ext(ext: &str) -> bool {
-    matches!(ext, "md" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+    matches!(
+        ext,
+        "md" | "html" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -852,6 +855,46 @@ pub struct PipeRunLog {
     pub success: bool,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PipeStopStatus {
+    Stopping,
+    StopPending,
+    NotRunning,
+}
+
+fn spawn_pid_watcher(
+    running: Arc<Mutex<HashMap<String, ExecutionHandle>>>,
+    store: Option<Arc<dyn PipeStore>>,
+    pipe_name: String,
+    exec_id: Option<i64>,
+    shared_pid: SharedPid,
+    pipes_dir: PathBuf,
+) {
+    tokio::spawn(async move {
+        // Poll for up to ~10s (400 * 25ms): long enough to cover slow agent
+        // subprocess spawn on developer machines without persisting the
+        // stop-pending sentinel as if it were a real child PID.
+        for _ in 0..400 {
+            let pid = shared_pid.load(std::sync::atomic::Ordering::SeqCst);
+            if pid != 0 && pid != STOP_REQUESTED_PID {
+                {
+                    let mut r = running.lock().await;
+                    if let Some(handle) = r.get_mut(&pipe_name) {
+                        handle.pid = pid;
+                    }
+                }
+                write_pid_file(&pipes_dir, &pipe_name, pid);
+                if let (Some(ref store), Some(id)) = (&store, exec_id) {
+                    let _ = store.set_execution_running(id, Some(pid)).await;
+                }
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    });
 }
 
 /// Runtime status for a pipe (not persisted in pipe.md).
@@ -2021,6 +2064,7 @@ impl PipeManager {
                 for (path, _) in select_newest_files(candidates, fallback_cap) {
                     let kind = match path.extension().and_then(|e| e.to_str()) {
                         Some("md") => "markdown",
+                        Some("html") => "html",
                         Some("json") => "json",
                         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
                         _ => "text",
@@ -2218,6 +2262,14 @@ impl PipeManager {
             ));
         }
 
+        // Shared PID — updated synchronously by the executor as soon as the
+        // subprocess spawns. The stop API can set an early-stop sentinel on
+        // this atomic before the PID exists.
+        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let handle = ExecutionHandle::new(shared_pid.clone());
+        let run_handle = handle.clone();
+        let stop_requested = handle.stop_requested.clone();
+
         // Mark as running
         {
             let mut running = self.running.lock().await;
@@ -2228,7 +2280,7 @@ impl PipeManager {
                     name
                 ));
             }
-            running.insert(name.to_string(), ExecutionHandle { pid: 0 });
+            running.insert(name.to_string(), handle);
         }
 
         // Defense-in-depth: check PID file (cross-process lock)
@@ -2339,34 +2391,16 @@ impl PipeManager {
             let _ = store.set_execution_running(id, None).await;
         }
 
-        // Shared PID — set synchronously by the executor right after spawn
-        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let shared_pid_for_kill = shared_pid.clone();
 
-        // Spawn PID watcher
-        let running_for_pid = self.running.clone();
-        let store_for_pid = self.store.clone();
-        let name_for_pid = pipe_name.clone();
-        let exec_id_for_pid = exec_id;
-        let shared_pid_watcher = shared_pid.clone();
-        let pipes_dir_for_pidfile = self.pipes_dir.clone();
-        let pipe_name_for_pidfile = pipe_name.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let pid = shared_pid_watcher.load(std::sync::atomic::Ordering::SeqCst);
-            if pid != 0 {
-                {
-                    let mut r = running_for_pid.lock().await;
-                    if let Some(handle) = r.get_mut(&name_for_pid) {
-                        handle.pid = pid;
-                    }
-                }
-                write_pid_file(&pipes_dir_for_pidfile, &pipe_name_for_pidfile, pid);
-                if let (Some(ref store), Some(id)) = (&store_for_pid, exec_id_for_pid) {
-                    let _ = store.set_execution_running(id, Some(pid)).await;
-                }
-            }
-        });
+        spawn_pid_watcher(
+            self.running.clone(),
+            self.store.clone(),
+            pipe_name.clone(),
+            exec_id,
+            shared_pid.clone(),
+            self.pipes_dir.clone(),
+        );
 
         // Pre-configure pi
         let mut pipe_token: Option<String> = None;
@@ -2399,6 +2433,7 @@ impl PipeManager {
         let pipes_dir_for_log = self.pipes_dir.clone();
         let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
         let mcp_session_access = self.mcp_session_access.clone();
+        let stop_requested_for_result = stop_requested.clone();
 
         // Spawn the actual execution in a background task
         tokio::spawn(async move {
@@ -2455,6 +2490,9 @@ impl PipeManager {
                 ),
             )
             .await;
+            if run_result.is_ok() {
+                run_handle.mark_finished();
+            }
             if let Some(ref registry) = mcp_session_access {
                 registry.clear_session(&session_owner).await;
             }
@@ -2472,15 +2510,20 @@ impl PipeManager {
             }
             remove_pid_file(&pipes_dir_for_log, &pipe_name);
 
+            let was_cancelled = stop_requested_for_result.load(std::sync::atomic::Ordering::SeqCst);
             let (log, cb_error_type): (PipeRunLog, Option<String>) = match run_result {
                 Ok(Ok(output)) => {
                     let filtered_stdout = filter_ndjson_stdout(&output.stdout);
-                    let (error_type, error_message) = if !output.success {
+                    let (error_type, error_message) = if was_cancelled {
+                        (Some("cancelled".to_string()), None)
+                    } else if !output.success {
                         parse_error_type_from_output(&output.stderr, &filtered_stdout)
                     } else {
                         (None, None)
                     };
-                    let status = if output.success {
+                    let status = if was_cancelled {
+                        "cancelled"
+                    } else if output.success {
                         "completed"
                     } else {
                         "failed"
@@ -2503,10 +2546,10 @@ impl PipeManager {
                     }
                     if let Some(ref store) = store_ref {
                         let _ = store
-                            .upsert_scheduler_state(&pipe_name, output.success)
+                            .upsert_scheduler_state(&pipe_name, output.success && !was_cancelled)
                             .await;
                     }
-                    let et = if output.success {
+                    let et = if output.success && !was_cancelled {
                         None
                     } else {
                         Some(error_type.unwrap_or_else(|| "unknown".to_string()))
@@ -2516,7 +2559,7 @@ impl PipeManager {
                             pipe_name: pipe_name.clone(),
                             started_at,
                             finished_at,
-                            success: output.success,
+                            success: output.success && !was_cancelled,
                             stdout: filtered_stdout.clone(),
                             stderr: output.stderr.clone(),
                         },
@@ -2524,16 +2567,23 @@ impl PipeManager {
                     )
                 }
                 Ok(Err(e)) => {
+                    let status = if was_cancelled { "cancelled" } else { "failed" };
+                    let error_type = if was_cancelled { "cancelled" } else { "crash" };
+                    let error_message = if was_cancelled {
+                        None
+                    } else {
+                        Some(e.to_string())
+                    };
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
-                                "failed",
+                                status,
                                 "",
                                 &e.to_string(),
                                 None,
-                                Some("crash"),
-                                Some(&e.to_string()),
+                                Some(error_type),
+                                error_message.as_deref(),
                                 None,
                             )
                             .await;
@@ -2555,19 +2605,35 @@ impl PipeManager {
                 }
                 Err(_elapsed) => {
                     let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
-                    if real_pid != 0 {
+                    if real_pid != 0 && real_pid != STOP_REQUESTED_PID {
                         let _ = crate::agents::pi::kill_process_group(real_pid);
                     }
+                    run_handle.mark_finished();
+                    let status = if was_cancelled {
+                        "cancelled"
+                    } else {
+                        "timed_out"
+                    };
+                    let error_type = if was_cancelled {
+                        "cancelled".to_string()
+                    } else {
+                        "timeout".to_string()
+                    };
+                    let error_message = if was_cancelled {
+                        None
+                    } else {
+                        Some(format!("execution timed out after {}s", pipe_timeout))
+                    };
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
-                                "timed_out",
+                                status,
                                 "",
                                 "",
                                 None,
-                                Some("timeout"),
-                                Some(&format!("execution timed out after {}s", pipe_timeout)),
+                                Some(&error_type),
+                                error_message.as_deref(),
                                 None,
                             )
                             .await;
@@ -2584,7 +2650,7 @@ impl PipeManager {
                             stdout: String::new(),
                             stderr: format!("execution timed out after {}s", pipe_timeout),
                         },
-                        Some("timeout".to_string()),
+                        Some(error_type),
                     )
                 }
             };
@@ -2676,6 +2742,11 @@ impl PipeManager {
                 ));
             }
 
+            let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let handle = ExecutionHandle::new(shared_pid.clone());
+            let run_handle = handle.clone();
+            let stop_requested = handle.stop_requested.clone();
+
             // Mark as running
             {
                 let mut running = self.running.lock().await;
@@ -2686,8 +2757,7 @@ impl PipeManager {
                         name
                     ));
                 }
-                // Placeholder handle; real PID comes via SharedPid
-                running.insert(name.to_string(), ExecutionHandle { pid: 0 });
+                running.insert(name.to_string(), handle);
             }
 
             // Defense-in-depth: check PID file (cross-process lock)
@@ -2852,8 +2922,6 @@ impl PipeManager {
             );
             let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
 
-            // Shared PID — set synchronously by the executor right after spawn
-            let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
             let shared_pid_for_kill = shared_pid.clone();
 
             // Mark as running in DB
@@ -2861,30 +2929,14 @@ impl PipeManager {
                 let _ = store.set_execution_running(id, None).await;
             }
 
-            // Spawn PID watcher: when PID arrives, update running map + DB + PID file
-            let running_ref = self.running.clone();
-            let store_for_pid = self.store.clone();
-            let name_for_pid = name.to_string();
-            let exec_id_for_pid = exec_id;
-            let shared_pid_watcher = shared_pid.clone();
-            let pipes_dir_for_pidfile = self.pipes_dir.clone();
-            let pipe_name_for_pidfile = name.to_string();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                let pid = shared_pid_watcher.load(std::sync::atomic::Ordering::SeqCst);
-                if pid != 0 {
-                    {
-                        let mut r = running_ref.lock().await;
-                        if let Some(handle) = r.get_mut(&name_for_pid) {
-                            handle.pid = pid;
-                        }
-                    }
-                    write_pid_file(&pipes_dir_for_pidfile, &pipe_name_for_pidfile, pid);
-                    if let (Some(ref store), Some(id)) = (&store_for_pid, exec_id_for_pid) {
-                        let _ = store.set_execution_running(id, Some(pid)).await;
-                    }
-                }
-            });
+            spawn_pid_watcher(
+                self.running.clone(),
+                self.store.clone(),
+                name.to_string(),
+                exec_id,
+                shared_pid.clone(),
+                self.pipes_dir.clone(),
+            );
 
             // Pre-configure pi with the pipe's provider so models.json has the
             // right entry before the agent subprocess starts.
@@ -2913,6 +2965,7 @@ impl PipeManager {
             // Run with timeout + streaming
             let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
             let timeout_duration = std::time::Duration::from_secs(pipe_timeout);
+            let was_cancelled = || stop_requested.load(std::sync::atomic::Ordering::SeqCst);
 
             let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let drain_pipe_name = name.to_string();
@@ -2963,6 +3016,9 @@ impl PipeManager {
                 ),
             )
             .await;
+            if run_result.is_ok() {
+                run_handle.mark_finished();
+            }
             if let Some(ref registry) = self.mcp_session_access {
                 registry.clear_session(&session_owner).await;
             }
@@ -2985,13 +3041,18 @@ impl PipeManager {
                 Ok(Ok(output)) => {
                     // Normal completion
                     let filtered_stdout = filter_ndjson_stdout(&output.stdout);
-                    let (error_type, error_message) = if !output.success {
+                    let cancelled = was_cancelled();
+                    let (error_type, error_message) = if cancelled {
+                        (Some("cancelled".to_string()), None)
+                    } else if !output.success {
                         parse_error_type_from_output(&output.stderr, &filtered_stdout)
                     } else {
                         (None, None)
                     };
 
-                    let status = if output.success {
+                    let status = if cancelled {
+                        "cancelled"
+                    } else if output.success {
                         "completed"
                     } else {
                         "failed"
@@ -3013,16 +3074,18 @@ impl PipeManager {
                             .await;
                     }
                     if let Some(ref store) = self.store {
-                        let _ = store.upsert_scheduler_state(name, output.success).await;
+                        let _ = store
+                            .upsert_scheduler_state(name, output.success && !cancelled)
+                            .await;
                     }
 
                     // Update circuit breaker state — always record failures
                     // even with a single preset, so the breaker is pre-tripped
                     // when the user adds a fallback preset later.
                     if let Some(ref pid) = active_preset_id {
-                        if output.success {
+                        if output.success && !cancelled {
                             self.fallback_registry.record_success(pid);
-                        } else {
+                        } else if !cancelled {
                             self.fallback_registry.record_failure_from_output(
                                 pid,
                                 &output.stderr,
@@ -3035,23 +3098,27 @@ impl PipeManager {
                         pipe_name: name.to_string(),
                         started_at,
                         finished_at,
-                        success: output.success,
+                        success: output.success && !cancelled,
                         stdout: filtered_stdout.clone(),
                         stderr: output.stderr.clone(),
                     }
                 }
                 Ok(Err(e)) => {
                     // Executor error (not timeout)
+                    let cancelled = was_cancelled();
+                    let status = if cancelled { "cancelled" } else { "failed" };
+                    let error_type = if cancelled { "cancelled" } else { "crash" };
+                    let error_message = if cancelled { None } else { Some(e.to_string()) };
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
-                                "failed",
+                                status,
                                 "",
                                 &e.to_string(),
                                 None,
-                                Some("crash"),
-                                Some(&e.to_string()),
+                                Some(error_type),
+                                error_message.as_deref(),
                                 None,
                             )
                             .await;
@@ -3071,25 +3138,38 @@ impl PipeManager {
                 }
                 Err(_elapsed) => {
                     // Timeout — kill the process
+                    let cancelled = was_cancelled();
                     warn!(
                         "pipe '{}' timed out after {}s, killing process",
                         name, pipe_timeout
                     );
                     let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
-                    if real_pid != 0 {
+                    if real_pid != 0 && real_pid != STOP_REQUESTED_PID {
                         let _ = crate::agents::pi::kill_process_group(real_pid);
                     }
+                    run_handle.mark_finished();
 
+                    let status = if cancelled { "cancelled" } else { "timed_out" };
+                    let error_type = if cancelled {
+                        "cancelled".to_string()
+                    } else {
+                        "timeout".to_string()
+                    };
+                    let error_message = if cancelled {
+                        None
+                    } else {
+                        Some(format!("execution timed out after {}s", pipe_timeout))
+                    };
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
-                                "timed_out",
+                                status,
                                 "",
                                 "",
                                 None,
-                                Some("timeout"),
-                                Some(&format!("execution timed out after {}s", pipe_timeout)),
+                                Some(&error_type),
+                                error_message.as_deref(),
                                 None,
                             )
                             .await;
@@ -3104,10 +3184,15 @@ impl PipeManager {
                         finished_at,
                         success: false,
                         stdout: String::new(),
-                        stderr: format!("execution timed out after {}s", pipe_timeout),
+                        stderr: if cancelled {
+                            String::new()
+                        } else {
+                            format!("execution timed out after {}s", pipe_timeout)
+                        },
                     }
                 }
             };
+            let cancelled_for_retry = was_cancelled();
 
             // Clean up pipe token from server registry
             if let Some(ref token) = pipe_token {
@@ -3125,7 +3210,9 @@ impl PipeManager {
             // crashes — so gating fallback on it meant the next model silently
             // never ran when the main one timed out or errored (#3914).
             let max_attempts = config.preset.len().min(preset_fallback::MAX_FALLBACK_DEPTH);
-            if let (false, Some(cur_idx)) = (log.success, active_preset_idx) {
+            if let (false, Some(cur_idx), false) =
+                (log.success, active_preset_idx, cancelled_for_retry)
+            {
                 let next_idx = cur_idx + 1;
                 if next_idx < max_attempts {
                     if let Some(next_preset_id) = config.preset.get(next_idx) {
@@ -3508,6 +3595,7 @@ impl PipeManager {
         {
             let mut running = self.running.lock().await;
             if let Some(handle) = running.remove(name) {
+                let _ = handle.request_stop();
                 if let Some(executor) = self
                     .pipes
                     .lock()
@@ -3559,37 +3647,58 @@ impl PipeManager {
     }
 
     /// Stop a running pipe.
-    pub async fn stop_pipe(&self, name: &str) -> Result<()> {
+    pub async fn stop_pipe(&self, name: &str) -> Result<PipeStopStatus> {
         let handle = {
-            let mut running = self.running.lock().await;
-            running.remove(name)
+            let running = self.running.lock().await;
+            running.get(name).cloned()
         };
 
-        let exec_id = {
-            let mut exec_ids = self.running_execution_ids.lock().await;
-            exec_ids.remove(name)
+        let Some(handle) = handle else {
+            return Ok(PipeStopStatus::NotRunning);
         };
 
-        if let Some(handle) = handle {
-            if handle.pid != 0 {
-                let pipes = self.pipes.lock().await;
-                if let Some((config, _, _)) = pipes.get(name) {
-                    if let Some(executor) = self.executors.get(&config.agent) {
-                        executor.kill(&handle)?;
-                    }
-                }
-            }
-
-            // Update DB row
-            if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
-                let _ = store
-                    .finish_execution(id, "cancelled", "", "", None, Some("cancelled"), None, None)
-                    .await;
-            }
-
-            info!("stopped pipe '{}'", name);
+        if handle.is_finished() {
+            self.running.lock().await.remove(name);
+            self.running_execution_ids.lock().await.remove(name);
+            return Ok(PipeStopStatus::NotRunning);
         }
-        Ok(())
+
+        let current_pid = handle.current_pid();
+        if current_pid != 0 && !is_process_alive(current_pid) {
+            handle.mark_finished();
+            self.running.lock().await.remove(name);
+            self.running_execution_ids.lock().await.remove(name);
+            return Ok(PipeStopStatus::NotRunning);
+        }
+
+        let pid = handle.request_stop();
+        if let Some(pid) = pid {
+            if !is_process_alive(pid) {
+                handle.clear_stop_request();
+                handle.mark_finished();
+                self.running.lock().await.remove(name);
+                self.running_execution_ids.lock().await.remove(name);
+                return Ok(PipeStopStatus::NotRunning);
+            }
+            let pipes = self.pipes.lock().await;
+            if let Some((config, _, _)) = pipes.get(name) {
+                if let Some(executor) = self.executors.get(&config.agent) {
+                    executor.kill(&handle)?;
+                } else {
+                    let _ = crate::agents::pi::kill_process_group(pid);
+                }
+            } else {
+                let _ = crate::agents::pi::kill_process_group(pid);
+            }
+            info!("stop requested for pipe '{}' (pid {})", name, pid);
+            Ok(PipeStopStatus::Stopping)
+        } else {
+            info!(
+                "stop requested for pipe '{}' before subprocess PID was available",
+                name
+            );
+            Ok(PipeStopStatus::StopPending)
+        }
     }
 
     /// Start the background scheduler.  Spawns a tokio task that checks
@@ -4094,11 +4203,16 @@ impl PipeManager {
                             None
                         };
 
+                        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+                        let handle = ExecutionHandle::new(shared_pid.clone());
+                        let run_handle = handle.clone();
+                        let stop_requested = handle.stop_requested.clone();
+
                         // Mark running + write PID file only after acquiring the permit,
                         // so the UI shows accurate state (not "running" while queued).
                         {
                             let mut r = running_ref.lock().await;
-                            r.insert(pipe_name.clone(), ExecutionHandle { pid: 0 });
+                            r.insert(pipe_name.clone(), handle);
                         }
                         // Sentinel 0 — see start_pipe_background.
                         write_pid_file(&pipes_dir_for_mark, &pipe_name, 0);
@@ -4135,40 +4249,20 @@ impl PipeManager {
                             let _ = store.set_execution_running(id, None).await;
                         }
 
-                        // Shared PID — set synchronously by the executor right after spawn
-                        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
                         let shared_pid_for_kill = shared_pid.clone();
-                        let pipes_dir_for_pidfile = pipes_dir_for_log.clone();
-                        let pipe_name_for_pidfile = pipe_name.clone();
-
-                        // Update running HashMap + DB + PID file once PID is available
-                        let running_for_pid = running_ref.clone();
-                        let store_for_pid = store_ref.clone();
-                        let name_for_pid = pipe_name.clone();
-                        let exec_id_for_pid = exec_id;
-                        let shared_pid_watcher = shared_pid.clone();
-                        tokio::spawn(async move {
-                            // Brief wait for the synchronous PID store
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            let pid = shared_pid_watcher.load(std::sync::atomic::Ordering::SeqCst);
-                            if pid != 0 {
-                                {
-                                    let mut r = running_for_pid.lock().await;
-                                    if let Some(handle) = r.get_mut(&name_for_pid) {
-                                        handle.pid = pid;
-                                    }
-                                }
-                                write_pid_file(&pipes_dir_for_pidfile, &pipe_name_for_pidfile, pid);
-                                if let (Some(ref store), Some(id)) =
-                                    (&store_for_pid, exec_id_for_pid)
-                                {
-                                    let _ = store.set_execution_running(id, Some(pid)).await;
-                                }
-                            }
-                        });
+                        spawn_pid_watcher(
+                            running_ref.clone(),
+                            store_ref.clone(),
+                            pipe_name.clone(),
+                            exec_id,
+                            shared_pid.clone(),
+                            pipes_dir_for_log.clone(),
+                        );
 
                         let started_at = Utc::now();
                         let timeout_duration = std::time::Duration::from_secs(pipe_timeout);
+                        let was_cancelled =
+                            || stop_requested.load(std::sync::atomic::Ordering::SeqCst);
 
                         // Create streaming channel and drainer for scheduler
                         let (line_tx, mut line_rx) =
@@ -4221,6 +4315,9 @@ impl PipeManager {
                             ),
                         )
                         .await;
+                        if run_result.is_ok() {
+                            run_handle.mark_finished();
+                        }
                         if let Some(ref registry) = mcp_session_access_ref {
                             registry.clear_session(&session_owner).await;
                         }
@@ -4245,12 +4342,17 @@ impl PipeManager {
                         let (log, cb_error_type): (PipeRunLog, Option<String>) = match run_result {
                             Ok(Ok(output)) => {
                                 let filtered_stdout = filter_ndjson_stdout(&output.stdout);
-                                let (error_type, error_message) = if !output.success {
+                                let cancelled = was_cancelled();
+                                let (error_type, error_message) = if cancelled {
+                                    (Some("cancelled".to_string()), None)
+                                } else if !output.success {
                                     parse_error_type_from_output(&output.stderr, &filtered_stdout)
                                 } else {
                                     (None, None)
                                 };
-                                let status = if output.success {
+                                let status = if cancelled {
+                                    "cancelled"
+                                } else if output.success {
                                     "completed"
                                 } else {
                                     "failed"
@@ -4273,16 +4375,19 @@ impl PipeManager {
                                 }
                                 if let Some(ref store) = store_ref {
                                     let _ = store
-                                        .upsert_scheduler_state(&pipe_name, output.success)
+                                        .upsert_scheduler_state(
+                                            &pipe_name,
+                                            output.success && !cancelled,
+                                        )
                                         .await;
                                 }
 
-                                if output.success {
+                                if output.success && !cancelled {
                                     info!("pipe '{}' completed successfully", pipe_name);
                                 } else {
                                     warn!("pipe '{}' failed: {}", pipe_name, output.stderr);
                                 }
-                                let et = if output.success {
+                                let et = if output.success && !cancelled {
                                     None
                                 } else {
                                     Some(error_type.unwrap_or_else(|| "unknown".to_string()))
@@ -4292,7 +4397,7 @@ impl PipeManager {
                                         pipe_name: pipe_name.clone(),
                                         started_at,
                                         finished_at,
-                                        success: output.success,
+                                        success: output.success && !cancelled,
                                         stdout: filtered_stdout.clone(),
                                         stderr: output.stderr.clone(),
                                     },
@@ -4301,16 +4406,21 @@ impl PipeManager {
                             }
                             Ok(Err(e)) => {
                                 error!("pipe '{}' error: {}", pipe_name, e);
+                                let cancelled = was_cancelled();
+                                let status = if cancelled { "cancelled" } else { "failed" };
+                                let error_type = if cancelled { "cancelled" } else { "crash" };
+                                let error_message =
+                                    if cancelled { None } else { Some(e.to_string()) };
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
                                         .finish_execution(
                                             id,
-                                            "failed",
+                                            status,
                                             "",
                                             &e.to_string(),
                                             None,
-                                            Some("crash"),
-                                            Some(&e.to_string()),
+                                            Some(error_type),
+                                            error_message.as_deref(),
                                             None,
                                         )
                                         .await;
@@ -4331,25 +4441,35 @@ impl PipeManager {
                                 )
                             }
                             Err(_elapsed) => {
+                                let cancelled = was_cancelled();
                                 warn!("pipe '{}' timed out after {}s", pipe_name, pipe_timeout);
                                 let real_pid =
                                     shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
-                                if real_pid != 0 {
+                                if real_pid != 0 && real_pid != STOP_REQUESTED_PID {
                                     let _ = crate::agents::pi::kill_process_group(real_pid);
                                 }
+                                run_handle.mark_finished();
+                                let status = if cancelled { "cancelled" } else { "timed_out" };
+                                let error_type = if cancelled {
+                                    "cancelled".to_string()
+                                } else {
+                                    "timeout".to_string()
+                                };
+                                let error_message = if cancelled {
+                                    None
+                                } else {
+                                    Some(format!("execution timed out after {}s", pipe_timeout))
+                                };
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
                                         .finish_execution(
                                             id,
-                                            "timed_out",
+                                            status,
                                             "",
                                             "",
                                             None,
-                                            Some("timeout"),
-                                            Some(&format!(
-                                                "execution timed out after {}s",
-                                                pipe_timeout
-                                            )),
+                                            Some(&error_type),
+                                            error_message.as_deref(),
                                             None,
                                         )
                                         .await;
@@ -4364,12 +4484,13 @@ impl PipeManager {
                                         finished_at,
                                         success: false,
                                         stdout: String::new(),
-                                        stderr: format!(
-                                            "execution timed out after {}s",
-                                            pipe_timeout
-                                        ),
+                                        stderr: if cancelled {
+                                            String::new()
+                                        } else {
+                                            format!("execution timed out after {}s", pipe_timeout)
+                                        },
                                     },
-                                    Some("timeout".to_string()),
+                                    Some(error_type),
                                 )
                             }
                         };
@@ -5383,6 +5504,7 @@ impl Drop for PipeManager {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Timelike};
+    use std::sync::atomic::Ordering;
 
     // -- scheduler lifecycle tests ------------------------------------------
 
@@ -5534,6 +5656,7 @@ mod tests {
     fn test_is_user_facing_artifact_ext() {
         // positive cases
         assert!(is_user_facing_artifact_ext("md"));
+        assert!(is_user_facing_artifact_ext("html"));
         assert!(is_user_facing_artifact_ext("png"));
         assert!(is_user_facing_artifact_ext("jpg"));
         assert!(is_user_facing_artifact_ext("jpeg"));
@@ -5573,6 +5696,7 @@ mod tests {
         // Create mixed files in output/
         let files = vec![
             "report.md",
+            "report.html",
             "screenshot.png",
             "data.json",
             "runner.ts",
@@ -5598,7 +5722,102 @@ mod tests {
             .collect();
         names.sort();
 
-        assert_eq!(names, vec!["output/report.md", "output/screenshot.png"]);
+        assert_eq!(
+            names,
+            vec![
+                "output/report.html",
+                "output/report.md",
+                "output/screenshot.png"
+            ]
+        );
+
+        let html_decl = pipe_decls
+            .1
+            .iter()
+            .find(|(decl, _)| decl.path == "output/report.html")
+            .expect("html artifact should be discovered");
+        assert_eq!(html_decl.0.kind.as_deref(), Some("html"));
+    }
+
+    #[test]
+    fn spawned_pid_install_honors_pending_stop_request() {
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(STOP_REQUESTED_PID));
+        assert!(crate::agents::install_spawned_pid(&shared_pid, 4242));
+        assert_eq!(shared_pid.load(Ordering::SeqCst), 4242);
+    }
+
+    #[tokio::test]
+    async fn stop_pipe_returns_not_running_when_absent() {
+        let pm = test_pipe_manager();
+        let status = pm.stop_pipe("missing").await.unwrap();
+        assert_eq!(status, PipeStopStatus::NotRunning);
+    }
+
+    #[tokio::test]
+    async fn stop_pipe_marks_pending_before_pid_is_available() {
+        let pm = test_pipe_manager();
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let handle = ExecutionHandle::new(shared_pid.clone());
+        let stop_requested = handle.stop_requested.clone();
+
+        pm.running.lock().await.insert("demo".to_string(), handle);
+
+        let status = pm.stop_pipe("demo").await.unwrap();
+        assert_eq!(status, PipeStopStatus::StopPending);
+        assert_eq!(shared_pid.load(Ordering::SeqCst), STOP_REQUESTED_PID);
+        assert!(stop_requested.load(Ordering::SeqCst));
+        assert!(pm.running.lock().await.contains_key("demo"));
+    }
+
+    #[tokio::test]
+    async fn stop_pipe_returns_not_running_once_handle_finished() {
+        let pm = test_pipe_manager();
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(4242));
+        let handle = ExecutionHandle::new(shared_pid);
+        handle.mark_finished();
+
+        pm.running.lock().await.insert("done".to_string(), handle);
+
+        let status = pm.stop_pipe("done").await.unwrap();
+        assert_eq!(status, PipeStopStatus::NotRunning);
+    }
+
+    #[test]
+    fn execution_handle_current_pid_hides_stop_pending_sentinel() {
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(STOP_REQUESTED_PID));
+        let handle = ExecutionHandle::new(shared_pid);
+        assert_eq!(handle.current_pid(), 0);
+    }
+
+    #[tokio::test]
+    async fn pid_watcher_ignores_stop_pending_sentinel_until_real_pid_arrives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "watcher";
+        std::fs::create_dir_all(tmp.path().join(pipe_name)).unwrap();
+
+        let running = Arc::new(Mutex::new(HashMap::new()));
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(STOP_REQUESTED_PID));
+        let handle = ExecutionHandle::new(shared_pid.clone());
+        running.lock().await.insert(pipe_name.to_string(), handle);
+
+        spawn_pid_watcher(
+            running.clone(),
+            None,
+            pipe_name.to_string(),
+            None,
+            shared_pid.clone(),
+            tmp.path().to_path_buf(),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert_eq!(read_pid_file(tmp.path(), pipe_name), None);
+
+        shared_pid.store(4242, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        assert_eq!(read_pid_file(tmp.path(), pipe_name), Some(4242));
+        let running = running.lock().await;
+        assert_eq!(running.get(pipe_name).map(|h| h.pid), Some(4242));
     }
 
     #[tokio::test]

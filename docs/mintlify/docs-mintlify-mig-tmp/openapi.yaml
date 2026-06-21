@@ -279,11 +279,6 @@ paths:
         in: path
         required: true
         style: simple
-      - name: redact_pii
-        schema:
-          type: boolean
-        in: query
-        style: form
       responses:
         '200':
           description: OK
@@ -3026,14 +3021,6 @@ components:
       required:
       - frame_id
       - text_positions
-    GetFrameQuery:
-      description: Query parameters for frame retrieval
-      type: object
-      properties:
-        redact_pii:
-          type: boolean
-      required:
-      - redact_pii
     GetSimilarSpeakersRequest:
       type: object
       properties:

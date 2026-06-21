@@ -592,6 +592,25 @@ jobs:
         run: |
           mkdir -p screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin
           cp target/${{ matrix.target }}/release/screenpipe screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/
+          # Bundle a static tesseract + English language data next to the binary.
+          # Unlike the .deb (which `depends` on tesseract-ocr), the npm CLI has no
+          # package manager to provide tesseract, so OCR on a host without a system
+          # install crashes (rusty-tesseract panics on the missing subprocess —
+          # SCREENPIPE-CLI-V3/T0, "tesseract not found" CLI-4R). The engine prepends
+          # bin/ to PATH and points TESSDATA_PREFIX at bin/tessdata at startup.
+          # Static build + tessdata_fast (LSTM, matches the engine's oem=1) mirror
+          # the AppImage bundle.
+          PKG_BIN="screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin"
+          for i in 1 2 3; do
+            curl -fsSL https://github.com/DanielMYT/tesseract-static/releases/download/tesseract-5.5.0/tesseract -o "$PKG_BIN/tesseract" && break || sleep $((5 * i))
+          done
+          chmod +x "$PKG_BIN/tesseract"
+          [ -s "$PKG_BIN/tesseract" ] || { echo "ERROR: bundled tesseract missing/empty"; exit 1; }
+          mkdir -p "$PKG_BIN/tessdata"
+          for i in 1 2 3; do
+            curl -fsSL https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata -o "$PKG_BIN/tessdata/eng.traineddata" && break || sleep $((5 * i))
+          done
+          [ -s "$PKG_BIN/tessdata/eng.traineddata" ] || { echo "ERROR: bundled eng.traineddata missing/empty"; exit 1; }
           tar -czf screenpipe-${{ env.VERSION }}-${{ matrix.target }}.tar.gz -C screenpipe-${{ env.VERSION }}-${{ matrix.target }} .
 
       - name: Calculate SHA256

@@ -377,6 +377,52 @@ export function DisplaySection() {
         )}
 
         {/*
+         * macOS-only: hide the Dock icon (menu-bar-only "agent" app). The Rust
+         * reset_to_regular_and_refresh_tray in src-tauri/src/window/panel.rs
+         * reads `hideDockIcon` from the settings store, so we persist the value
+         * and then call reset_main_window to re-apply the activation policy
+         * immediately (it reads the freshly-saved value). The tray icon stays
+         * visible either way, so the app is always reachable. Default OFF.
+         */}
+        {isMac && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Hide Dock Icon
+                      <HelpTooltip text="Run screenpipe as a menu-bar-only app with no icon in the Dock. The menu-bar (tray) icon stays — click it to open screenpipe. Useful if you only need the app occasionally and don't want it in the Dock." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Menu bar only — keep screenpipe out of the Dock
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  checked={settings?.hideDockIcon ?? false}
+                  onCheckedChange={async (checked) => {
+                    await updateSettings({ hideDockIcon: checked });
+                    // Re-apply the activation policy now (reset_main_window
+                    // reads the freshly-saved hideDockIcon from the store).
+                    commands.resetMainWindow().catch(() => {});
+                    toast({
+                      title: checked
+                        ? "dock icon hidden — menu bar only"
+                        : "dock icon visible",
+                      description: checked
+                        ? "open screenpipe from the menu bar icon."
+                        : undefined,
+                    });
+                  }}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/*
          * Windows-only: hide-to-tray toggle. The Rust close handler in
          * src-tauri/src/main.rs reads `minimizeToTrayOnClose` directly from the
          * settings store, so this switch only needs to round-trip the value —

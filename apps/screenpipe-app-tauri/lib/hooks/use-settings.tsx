@@ -302,9 +302,14 @@ export type Settings = SettingsStore & {
 	localRetentionEnabled?: boolean;
 	/** Days to keep data locally before auto-deleting (default: 14) */
 	localRetentionDays?: number;
-	/** What gets deleted past the cutoff: "media" keeps DB rows (search/timeline still
-	 * work), only reclaims mp4/wav/jpeg files. "all" wipes everything. Default: "media". */
-	localRetentionMode?: "media" | "all";
+	/** What gets deleted past the cutoff:
+	 * - "media" (default): keep all DB rows (search/timeline still work), only
+	 *   reclaim mp4/wav/jpeg files on disk.
+	 * - "lean": also strip the heavy accessibility/OCR element tree, the raw AX
+	 *   tree JSON, and the ui_events stream — shrinks the database itself while
+	 *   keeping text, transcripts, and memories searchable.
+	 * - "all": wipe everything past the cutoff. */
+	localRetentionMode?: "media" | "lean" | "all";
 	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
 	translucentSidebar?: boolean;
 	/** Hide model "thinking" reasoning blocks in chat (default: true) */
@@ -388,6 +393,11 @@ export type Settings = SettingsStore & {
 	 * tray (and removes it from the taskbar) instead of minimizing. The Rust
 	 * close handler in src-tauri/src/main.rs reads this directly. Default off. */
 	minimizeToTrayOnClose?: boolean;
+	/** macOS-only: when true, run as a menu-bar-only "agent" app with no Dock
+	 * icon (NSApplication Accessory activation policy). The tray icon stays
+	 * visible. Read by reset_to_regular_and_refresh_tray in
+	 * src-tauri/src/window/panel.rs at startup and on window events. Default off. */
+	hideDockIcon?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {

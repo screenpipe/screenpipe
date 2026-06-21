@@ -131,7 +131,6 @@ function useHarness(args: {
     inputRef,
     isLoading: false,
     isStreaming: false,
-    piInfo: { running: true, projectDir: null, pid: 1 },
     piStreamingTextRef,
     piMessageIdRef,
     piContentBlocksRef,

@@ -9,7 +9,7 @@ import type { SettingsField } from "./settings-search";
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   { label: "Blocklist", keywords: ["ignore", "exclude", "block"] },
-  { label: "PII masking", keywords: ["mask", "redact"] },
+  { label: "PII masking", keywords: ["mask", "redact", "columns", "url", "fields"] },
   { label: "Telemetry" },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
@@ -31,6 +31,7 @@ import {
   Keyboard,
   MousePointerClick,
   FolderTree,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -279,6 +280,199 @@ function EncryptDataCard({
   );
 }
 
+// Live, on-device-only illustration of what the current "what to hide"
+// selection masks. Pure example text — never real captured data. Each token
+// maps to a SpanLabel; it renders as the redaction placeholder when its
+// category is selected (secret is always on), otherwise as the raw value.
+// Makes the abstract category checkboxes concrete without a real frame.
+const REDACTION_PREVIEW_PARTS: (
+  | { text: string }
+  | { cat: string; value: string; ph: string }
+)[] = [
+  { text: "hi, i'm " },
+  { cat: "person", value: "Jordan Lee", ph: "[PERSON]" },
+  { text: " — email " },
+  { cat: "email", value: "jordan@example.com", ph: "[EMAIL]" },
+  { text: ", cell " },
+  { cat: "phone", value: "(555) 010-2983", ph: "[PHONE]" },
+  { text: ", ssn " },
+  { cat: "id", value: "412-09-1764", ph: "[ID]" },
+  { text: ", key " },
+  { cat: "secret", value: "AKIA…X7Q", ph: "[SECRET]" },
+  { text: "." },
+];
+
+function RedactionExamplePreview({ labels }: { labels: string[] }) {
+  const isOn = (cat: string) => cat === "secret" || labels.includes(cat);
+  return (
+    <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+        Preview
+      </p>
+      <p className="text-xs leading-relaxed text-foreground">
+        {REDACTION_PREVIEW_PARTS.map((part, i) =>
+          "text" in part ? (
+            <span key={i} className="text-muted-foreground">
+              {part.text}
+            </span>
+          ) : isOn(part.cat) ? (
+            <span
+              key={i}
+              className="rounded-[3px] bg-foreground px-1 py-0.5 font-mono text-[10px] text-background align-baseline"
+            >
+              {part.ph}
+            </span>
+          ) : (
+            <span key={i} className="font-medium">
+              {part.value}
+            </span>
+          ),
+        )}
+      </p>
+    </div>
+  );
+}
+
+// Hover-to-highlight preview for the "where we look" (surfaces) axis: a tiny
+// mock app window whose regions light up when you hover the matching row and
+// get a redaction bar when that surface is on. Pure illustration — fabricated
+// content, never real captured data. Grayscale per DESIGN.md.
+function RedactionWherePreview({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: {
+    value: string;
+    label: string;
+    desc: string;
+    recommended?: boolean;
+  }[];
+  selected: string[];
+  onToggle: (value: string, checked: boolean) => void;
+}) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const on = (v: string) => selected.includes(v);
+
+  // A redactable region of the mock screen, tagged with the surface it maps
+  // to. Outlines on hover of that row; covered by a bar when the surface is
+  // on. Helper (not a nested component) so it keeps the parent's hover state.
+  const region = (r: string, content: React.ReactNode, mono?: boolean) => (
+    <span
+      className={cn(
+        "relative inline-block rounded-[3px] align-baseline",
+        hovered === r &&
+          "outline outline-2 outline-foreground outline-offset-2",
+      )}
+    >
+      <span className={cn(mono && "font-mono", on(r) && "invisible")}>
+        {content}
+      </span>
+      {on(r) && (
+        <span className="absolute inset-0 rounded-[3px] bg-foreground" />
+      )}
+    </span>
+  );
+
+  return (
+    <div className="mt-1">
+      <div className="space-y-1.5">
+        {options.map((opt) => (
+          <label
+            key={opt.value}
+            className="flex items-start gap-2 text-xs cursor-pointer"
+            onMouseEnter={() => setHovered(opt.value)}
+            onMouseLeave={() => setHovered(null)}
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={on(opt.value)}
+              onChange={(e) => onToggle(opt.value, e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-foreground">{opt.label}</span>
+              {opt.recommended && (
+                <span className="text-muted-foreground"> (recommended)</span>
+              )}
+              <span className="text-muted-foreground"> — {opt.desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {/* Mock app window — hover a row above to see the matching area. */}
+      <div className="mt-2.5 overflow-hidden rounded-md border border-border bg-card">
+        <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+          <span className="h-2 w-2 rounded-full bg-border" />
+          <span className="h-2 w-2 rounded-full bg-border" />
+          <span className="h-2 w-2 rounded-full bg-border" />
+          <span className="ml-1 min-w-0 flex-1 text-[10px]">
+            {region(
+              "browser_url",
+              <span className="block truncate rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                app.example.com/account
+              </span>,
+              true,
+            )}
+          </span>
+        </div>
+        <div className="space-y-2 px-3 py-2.5 text-xs">
+          <div className="flex gap-3">
+            {region(
+              "ui_element_name",
+              <span className="font-medium text-foreground">dashboard</span>,
+            )}
+            {region(
+              "ui_element_name",
+              <span className="text-muted-foreground">settings</span>,
+            )}
+          </div>
+
+          <div>
+            <div className="mb-0.5 text-[10px] text-muted-foreground">email</div>
+            <div className="rounded border border-border px-1.5 py-1">
+              {region("element_properties", "jordan@example.com")}
+            </div>
+            <div className="mt-0.5 text-[10px]">
+              {region(
+                "ui_element_description",
+                <span className="text-muted-foreground">
+                  we&apos;ll never share your email
+                </span>,
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-0.5 text-[10px] text-muted-foreground">
+              password
+            </div>
+            <div className="rounded border border-border px-1.5 py-1 font-mono">
+              {region("element_properties", "hunter2-s3cret", true)}
+            </div>
+          </div>
+
+          <div className="text-[10px]">
+            {region(
+              "a11y_url_field",
+              <span className="text-foreground underline">reset password</span>,
+            )}
+          </div>
+
+          <div className="space-y-1 pt-0.5">
+            <div className="h-1.5 w-full rounded bg-foreground" />
+            <div className="h-1.5 w-4/5 rounded bg-foreground" />
+            <div className="text-[9px] text-muted-foreground">
+              typed text, transcripts &amp; on-screen text — always hidden
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
   const isEnterprise = useIsEnterpriseBuild();
@@ -464,6 +658,29 @@ export function PrivacySection() {
     handlePiiModeChange(checked ? "basic" : "off");
   };
 
+  // Smart mode runs two independent AI workers — text (DB columns) and
+  // image (screenshot pixels). They're separate flags, so let the user
+  // pick either or both. Switching to Smart turns both on; unchecking the
+  // last one degrades cleanly to Basic (keep the regex safety net).
+  const textRedactionOn = Boolean(settings.asyncPiiRedaction ?? false);
+  const imageRedactionOn = Boolean(settings.asyncImagePiiRedaction ?? false);
+  const handleModalityToggle = (which: "text" | "image", checked: boolean) => {
+    const text = which === "text" ? checked : textRedactionOn;
+    const image = which === "image" ? checked : imageRedactionOn;
+    if (!text && !image) {
+      handlePiiModeChange("basic");
+      return;
+    }
+    handleSettingsChange(
+      {
+        usePiiRemoval: true,
+        asyncPiiRedaction: text,
+        asyncImagePiiRedaction: image,
+      },
+      true,
+    );
+  };
+
   // Cloud media analysis (Gemma 4 E4B inside our Tinfoil enclave) —
   // toggling this also rewrites the screenpipe-api skill markdown so
   // agents see the capability iff the toggle is on. Defaults to true.
@@ -532,15 +749,15 @@ export function PrivacySection() {
     desc: string;
     always?: boolean;
   }[] = [
-    { value: "secret", label: "Secrets", desc: "passwords, API keys, tokens", always: true },
-    { value: "id", label: "IDs", desc: "SSNs, credit cards, account & license numbers" },
+    { value: "secret", label: "Passwords & keys", desc: "passwords, API keys, tokens", always: true },
+    { value: "id", label: "ID numbers", desc: "SSNs, credit cards, account & license numbers" },
     { value: "person", label: "Names", desc: "people's names" },
-    { value: "email", label: "Emails", desc: "email addresses" },
+    { value: "email", label: "Email addresses", desc: "email addresses" },
     { value: "phone", label: "Phone numbers", desc: "phone numbers" },
-    { value: "address", label: "Addresses", desc: "postal addresses" },
-    { value: "url", label: "URLs", desc: "links carrying tokens or session IDs" },
+    { value: "address", label: "Mailing addresses", desc: "postal addresses" },
+    { value: "url", label: "Links with tokens", desc: "links carrying tokens or session IDs" },
     { value: "date", label: "Dates", desc: "dates of birth, timestamps" },
-    { value: "sensitive", label: "Sensitive info", desc: "health, financial, identity context" },
+    { value: "sensitive", label: "Health & financial details", desc: "health, financial, identity context" },
   ];
 
   const piiRedactionLabels = useMemo<string[]>(() => {
@@ -570,6 +787,90 @@ export function PrivacySection() {
   const handlePseudonymsToggle = (checked: boolean) => {
     handleSettingsChange(
       { piiRedactionPseudonyms: checked } as Partial<Settings>,
+      true,
+    );
+  };
+
+  // WHICH captured columns get scrubbed (orthogonal to the categories
+  // above). Typed text / clipboard / transcripts / window titles /
+  // on-screen text are always redacted; these extra surfaces are opt-in.
+  // Stored as the full list of stable column keys in `piiRedactionColumns`
+  // (see `RedactColumns` in screenpipe-redact). The core keys are always
+  // persisted so this UI only toggles the extras.
+  const CORE_REDACTION_COLUMNS = [
+    "accessibility_text",
+    "accessibility_tree",
+    "window_name",
+    "audio_transcription",
+    "ui_text_content",
+    "ui_element_value",
+    "ui_window_title",
+    "element_text",
+  ];
+  // Form-field values default ON: it's the surface where real PII (typed
+  // passwords / field values a11y exposes that OCR never sees) actually
+  // lives. Kept OUT of CORE so the user can still uncheck it — it only
+  // seeds the default. Keep in sync with the Rust defaults
+  // (`RedactColumns::default` / `default_pii_redaction_columns`).
+  const DEFAULT_OPTIONAL_COLUMNS = ["element_properties"];
+  const PII_COLUMN_OPTIONS: {
+    value: string;
+    label: string;
+    desc: string;
+    recommended?: boolean;
+  }[] = [
+    {
+      value: "element_properties",
+      label: "Form field values",
+      desc: "what you type into forms — catches passwords and field contents that on-screen text misses",
+      recommended: true,
+    },
+    {
+      value: "browser_url",
+      label: "Web addresses",
+      desc: "the address bar — usually not private, and hiding them breaks links",
+    },
+    {
+      value: "ui_element_name",
+      label: "Button & menu labels",
+      desc: "names like “Submit” or “Search” — rarely private",
+    },
+    {
+      value: "ui_element_description",
+      label: "Help text on controls",
+      desc: "the longer description some buttons and menus expose",
+    },
+    {
+      value: "a11y_url_field",
+      label: "Links inside app data",
+      desc: "URLs embedded in an app’s underlying structure",
+    },
+  ];
+
+  const piiRedactionColumns = useMemo<string[]>(() => {
+    return (
+      (settings.piiRedactionColumns as string[] | undefined) ?? [
+        ...CORE_REDACTION_COLUMNS,
+        ...DEFAULT_OPTIONAL_COLUMNS,
+      ]
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.piiRedactionColumns]);
+
+  const handlePiiColumnToggle = (value: string, checked: boolean) => {
+    const next = new Set(piiRedactionColumns);
+    if (checked) next.add(value);
+    else next.delete(value);
+    // Core surfaces are always redacted — never drop them.
+    CORE_REDACTION_COLUMNS.forEach((c) => next.add(c));
+    // Persist in canonical order (core first, then extras) for stable diffs.
+    const order = [
+      ...CORE_REDACTION_COLUMNS,
+      ...PII_COLUMN_OPTIONS.map((o) => o.value),
+    ];
+    const ordered = order.filter((v) => next.has(v));
+    handleSettingsChange(
+      { piiRedactionColumns: ordered } as Partial<Settings>,
       true,
     );
   };
@@ -1205,47 +1506,91 @@ export function PrivacySection() {
                       </span>
                     </span>
                   </label>
+
+                  {piiMode === "smart" && (
+                    <div className="ml-6 space-y-1.5 pt-1">
+                      <p className="text-xs font-medium text-foreground">
+                        Apply to
+                      </p>
+                      <label className="flex items-start gap-2 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={textRedactionOn}
+                          onChange={(e) =>
+                            handleModalityToggle("text", e.target.checked)
+                          }
+                        />
+                        <span>
+                          <span className="font-medium text-foreground">
+                            Text
+                          </span>
+                          <span className="text-muted-foreground">
+                            {" "}— scrub captured text (OCR, accessibility,
+                            transcripts, typed &amp; clipboard input)
+                          </span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={imageRedactionOn}
+                          onChange={(e) =>
+                            handleModalityToggle("image", e.target.checked)
+                          }
+                        />
+                        <span>
+                          <span className="font-medium text-foreground">
+                            Images
+                          </span>
+                          <span className="text-muted-foreground">
+                            {" "}— black out PII in screenshot frames (on-device
+                            vision model)
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
             {aiPiiRemovalEnabled && (
               <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
-                <p className="text-xs font-medium text-foreground">Where it runs</p>
-                <label className={`flex items-start gap-2 text-xs ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
-                  <input
-                    type="radio"
-                    name="piiBackend"
-                    className="mt-0.5"
-                    checked={piiBackend === "local"}
-                    disabled={!!managedPiiBackend}
-                    onChange={() => handlePiiBackendChange("local")}
-                  />
-                  <span>
-                    <span className="font-medium text-foreground">Local</span>
-                    <span className="text-muted-foreground">
-                      {" "}— on your device. Strongest privacy. Slower on weak hardware.
-                    </span>
-                  </span>
-                </label>
-                <label className={`flex items-start gap-2 text-xs ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
-                  <input
-                    type="radio"
-                    name="piiBackend"
-                    className="mt-0.5"
-                    checked={piiBackend === "tinfoil"}
-                    disabled={!!managedPiiBackend}
-                    onChange={() => handlePiiBackendChange("tinfoil")}
-                  />
-                  <span>
-                    <span className="font-medium text-foreground">Cloud (enclave)</span>
-                    <span className="text-muted-foreground">
-                      {" "}— screenpipe&apos;s confidential-compute enclave. Fast everywhere; your device cryptographically verifies the enclave is running the open-source build before sending anything.
-                    </span>
-                  </span>
-                </label>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                  <span className="font-medium text-foreground">Where it runs</span>
+                  <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                    <input
+                      type="radio"
+                      name="piiBackend"
+                      checked={piiBackend === "local"}
+                      disabled={!!managedPiiBackend}
+                      onChange={() => handlePiiBackendChange("local")}
+                    />
+                    <span className="text-foreground">Local</span>
+                  </label>
+                  <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                    <input
+                      type="radio"
+                      name="piiBackend"
+                      checked={piiBackend === "tinfoil"}
+                      disabled={!!managedPiiBackend}
+                      onChange={() => handlePiiBackendChange("tinfoil")}
+                    />
+                    <span className="text-foreground">Cloud (enclave)</span>
+                  </label>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Local stays on-device — strongest privacy, slower on weak
+                  hardware. Cloud uses screenpipe&apos;s attested
+                  confidential-compute enclave — fast everywhere; your device
+                  verifies the open-source build before sending anything.
+                </p>
 
+                {/* Axis 1 — WHAT to hide (PII categories). The primary knob:
+                    content-type, applies wherever it's found. */}
                 <p className="text-xs font-medium text-foreground pt-2">
-                  Fields to redact
+                  What to hide
                 </p>
                 {PII_FIELD_OPTIONS.map((opt) => {
                   const checked =
@@ -1283,10 +1628,43 @@ export function PrivacySection() {
                     </label>
                   );
                 })}
+                {textRedactionOn && (
+                  <RedactionExamplePreview labels={piiRedactionLabels} />
+                )}
                 <p className="text-[11px] text-muted-foreground pt-0.5">
                   Unselected types stay visible so your timeline remains
                   searchable. Secrets are always removed in both modes.
                 </p>
+
+                {/* Axis 2 — WHERE to look (captured surfaces). Advanced and
+                    orthogonal to the categories above; collapsed by default so
+                    most users only deal with "What to hide". Text-only, so
+                    hide it entirely when text redaction is off (Images-only
+                    Smart mode). */}
+                {textRedactionOn && (
+                  <details className="group pt-3 mt-1.5 border-t border-border">
+                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-foreground list-none [&::-webkit-details-marker]:hidden">
+                      <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
+                      Where we look
+                      <span className="font-normal text-muted-foreground">
+                        — advanced
+                      </span>
+                    </summary>
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-[11px] text-muted-foreground">
+                        We always scan what you type, your clipboard,
+                        transcripts, window titles, and on-screen text. Turn on
+                        any of these extra places the same info can hide —
+                        hover a row to see what it covers.
+                      </p>
+                      <RedactionWherePreview
+                        options={PII_COLUMN_OPTIONS}
+                        selected={piiRedactionColumns}
+                        onToggle={handlePiiColumnToggle}
+                      />
+                    </div>
+                  </details>
+                )}
 
                 <label className="flex items-start gap-2 text-xs cursor-pointer pt-2 mt-1.5 border-t border-border">
                   <input

@@ -43,6 +43,11 @@ uuid = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
+# Bee "connect" device-pairing flow: NaCl crypto_box (X25519 + XSalsa20-Poly1305)
+# to decrypt the app-pairing token the auth service seals to our ephemeral
+# public key. `salsa20` feature = `SalsaBox` (libsodium/tweetnacl-compatible).
+crypto_box = { version = "0.9", features = ["salsa20"] }
+getrandom = { version = "0.2" }
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mdns-sd = "0.13"
 sqlx = { workspace = true }

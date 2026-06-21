@@ -26,7 +26,6 @@ interface SummaryCardsProps {
   onDeleteCustomTemplate: (id: string) => void;
   userName?: string;
   templatePipes?: TemplatePipe[];
-  pipesLoading?: boolean;
 }
 
 export interface ConnectionSetupSuggestion {
@@ -135,7 +134,6 @@ export function SummaryCards({
   onDeleteCustomTemplate,
   userName,
   templatePipes = [],
-  pipesLoading = false,
 }: SummaryCardsProps) {
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);

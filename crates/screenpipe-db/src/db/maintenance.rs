@@ -553,6 +553,142 @@ impl DatabaseManager {
         })
     }
 
+    /// Lean retention: strip the heavy *text* a frame carries while keeping the
+    /// frame row, its searchable `full_text`, transcripts, and memories alive.
+    ///
+    /// Drops the biggest db.sqlite text contributors for [start, end]:
+    ///   - `elements` rows (the per-node OCR *and* accessibility tree)
+    ///   - `frames.accessibility_tree_json` (the raw AX tree JSON blob)
+    ///   - `frames.text_json` (the per-word OCR bounding-box blob) — dropped
+    ///     symmetrically with the AX blob so OCR detail isn't left behind
+    ///   - `ui_events` (the keystroke/click/scroll stream)
+    ///
+    /// What is KEPT so search/timeline/memories keep working: `frames.full_text`
+    /// (the single searchable OCR+a11y text, indexed by `frames_fts`),
+    /// `audio_transcriptions`, and `memories`. So OCR *text* survives — only the
+    /// OCR/AX *geometry detail* (bounds, tree) is dropped. FTS stays in sync
+    /// automatically: `elements_ad`/`ui_events_ad` delete triggers issue the
+    /// FTS5 'delete' command, and nulling `text_json`/`accessibility_tree_json`
+    /// fires no trigger (`frames_au` only watches
+    /// full_text/app_name/window_name/browser_url).
+    ///
+    /// Anchor handling mirrors `delete_time_range_batch`: elements owned by an
+    /// in-range frame but referenced by a still-kept out-of-range frame are
+    /// migrated to that referrer first, so recent frames don't lose elements.
+    pub async fn strip_heavy_text_in_range(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<StripTextResult, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        let start_str = start.to_rfc3339();
+        let end_str = end.to_rfc3339();
+
+        // Migrate elements off in-range anchor frames that are referenced by
+        // out-of-range (kept) frames, so those kept frames retain their
+        // elements once we delete the in-range owners below.
+        let anchor_ids: Vec<i64> = sqlx::query_scalar(
+            r#"SELECT DISTINCT f.id FROM frames f
+               WHERE f.timestamp BETWEEN ?1 AND ?2
+               AND EXISTS (
+                   SELECT 1 FROM frames ref
+                   WHERE ref.elements_ref_frame_id = f.id
+                   AND ref.timestamp NOT BETWEEN ?1 AND ?2
+               )"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        for anchor_id in &anchor_ids {
+            let new_anchor_id: Option<i64> = sqlx::query_scalar(
+                r#"SELECT MIN(id) FROM frames
+                   WHERE elements_ref_frame_id = ?1
+                   AND timestamp NOT BETWEEN ?2 AND ?3"#,
+            )
+            .bind(anchor_id)
+            .bind(&start_str)
+            .bind(&end_str)
+            .fetch_optional(&mut **tx.conn())
+            .await?
+            .flatten();
+
+            if let Some(new_id) = new_anchor_id {
+                sqlx::query("UPDATE elements SET frame_id = ?1 WHERE frame_id = ?2")
+                    .bind(new_id)
+                    .bind(anchor_id)
+                    .execute(&mut **tx.conn())
+                    .await?;
+                sqlx::query(
+                    "UPDATE frames SET elements_ref_frame_id = ?1 WHERE elements_ref_frame_id = ?2",
+                )
+                .bind(new_id)
+                .bind(anchor_id)
+                .execute(&mut **tx.conn())
+                .await?;
+                sqlx::query("UPDATE frames SET elements_ref_frame_id = NULL WHERE id = ?1")
+                    .bind(new_id)
+                    .execute(&mut **tx.conn())
+                    .await?;
+            }
+        }
+
+        // Delete elements for in-range frames (elements_ad keeps elements_fts in sync)
+        let elements_result = sqlx::query(
+            "DELETE FROM elements WHERE frame_id IN (SELECT id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let elements_deleted = elements_result.rows_affected();
+
+        // Null the heavy per-frame geometry blobs: the raw accessibility tree
+        // JSON and the per-word OCR bounding boxes (text_json). Neither is
+        // FTS-indexed nor watched by frames_au, so no trigger fires — full_text
+        // (the searchable OCR+a11y text) is deliberately left intact.
+        let frames_result = sqlx::query(
+            r#"UPDATE frames SET accessibility_tree_json = NULL, text_json = NULL
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND (accessibility_tree_json IS NOT NULL OR text_json IS NOT NULL)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let frames_stripped = frames_result.rows_affected();
+
+        // Delete the UI event stream (its delete trigger keeps ui_events_fts in sync)
+        let ui_events_result =
+            sqlx::query("DELETE FROM ui_events WHERE timestamp BETWEEN ?1 AND ?2")
+                .bind(&start_str)
+                .bind(&end_str)
+                .execute(&mut **tx.conn())
+                .await?;
+        let ui_events_deleted = ui_events_result.rows_affected();
+
+        tx.commit().await.map_err(|e| {
+            error!(
+                "failed to commit strip_heavy_text_in_range transaction: {}",
+                e
+            );
+            e
+        })?;
+
+        debug!(
+            "strip_heavy_text_in_range committed: elements={}, frames_stripped={}, ui_events={}",
+            elements_deleted, frames_stripped, ui_events_deleted
+        );
+
+        Ok(StripTextResult {
+            elements_deleted,
+            frames_stripped,
+            ui_events_deleted,
+        })
+    }
+
     /// Estimate disk reclaimable by `evict_media_in_range` for [start, end].
     /// Returns (file count, total bytes). Reads file sizes from disk via
     /// `tokio::fs::metadata`, so cost is O(N) syscalls — keep ranges
@@ -1222,5 +1358,41 @@ impl DatabaseManager {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Rebuild the database with a full `VACUUM` to return freed pages to the
+    /// OS. The retention loop's `incremental_vacuum` is a no-op while the DB is
+    /// `auto_vacuum=NONE` (how it ships) — it only recycles pages internally.
+    /// A full `VACUUM` always shrinks the file, but needs free disk roughly
+    /// equal to the live data size, so this is an explicit user action, never
+    /// part of the background loop.
+    ///
+    /// Concurrency: VACUUM needs an exclusive lock and would otherwise fail
+    /// with SQLITE_BUSY against the live capture pipeline (the pool's default
+    /// busy_timeout is only 5s). We make it reliable the way `repair_database`
+    /// does: hold the single-permit `write_semaphore` so writers queue instead
+    /// of contending (the "recording briefly pauses" the UI warns about —
+    /// writes resume the moment VACUUM commits), and run checkpoint + VACUUM on
+    /// one connection with busy_timeout bumped to 60s so VACUUM waits out active
+    /// readers (WAL readers stay live) rather than erroring. The timeout is
+    /// reset to the 5s default before the connection returns to the pool. On
+    /// insufficient disk VACUUM errors (surfaced as 500) without corrupting
+    /// anything.
+    pub async fn compact(&self) -> Result<(), sqlx::Error> {
+        let _write_guard = self.write_semaphore.acquire().await.ok();
+
+        let mut conn = self.pool.acquire().await?;
+        let _ = sqlx::query("PRAGMA busy_timeout = 60000")
+            .execute(&mut *conn)
+            .await;
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&mut *conn)
+            .await;
+        let result = sqlx::query("VACUUM").execute(&mut *conn).await.map(|_| ());
+        // Restore the default busy_timeout on this pooled connection.
+        let _ = sqlx::query("PRAGMA busy_timeout = 5000")
+            .execute(&mut *conn)
+            .await;
+        result
     }
 }

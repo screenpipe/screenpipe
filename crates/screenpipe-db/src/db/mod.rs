@@ -106,6 +106,17 @@ pub struct EvictMediaResult {
     pub snapshot_files: Vec<String>,
 }
 
+/// Outcome of `strip_heavy_text_in_range`. Keeps the frame rows and their
+/// searchable `full_text`/transcripts/memories intact, but drops the bulky
+/// per-element accessibility/OCR tree (`elements`), the raw accessibility
+/// tree JSON blob (`frames.accessibility_tree_json`), and the keystroke/click
+/// stream (`ui_events`) — the three biggest text contributors to db.sqlite.
+pub struct StripTextResult {
+    pub elements_deleted: u64,
+    pub frames_stripped: u64,
+    pub ui_events_deleted: u64,
+}
+
 /// A transaction wrapper that uses `BEGIN IMMEDIATE` to acquire the write lock upfront,
 /// preventing WAL deadlocks. Automatically rolls back on drop if not committed.
 ///

@@ -124,6 +124,7 @@ import posthog from "posthog-js";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch } from "lucide-react";
+import { requestPipeStop } from "@/lib/pipe-stop";
 
 const PIPE_CREATION_PROMPT = `create a screenpipe pipe that does the following.
 
@@ -1156,10 +1157,16 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
-      // First load: skip executions for speed. Executions load lazily per-pipe.
+      // Load pipes WITH recent executions inline so the list shows the real
+      // last-run status. Without this the "last run" column always reads
+      // "never run" for pipes that have actually run (the badge is driven by
+      // recent_executions). The engine batches this into one fast per-pipe
+      // index-seek query with stdout/stderr stripped (~30ms for 100 pipes), so
+      // it's cheap enough for the 10s poll. Full output for the expanded RUNS
+      // tab still loads lazily via /pipes/:name/executions.
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5_000);
-      const res = await fetch(`${apiBase}/pipes`, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal }).finally(() => clearTimeout(timeout));
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -1732,13 +1739,21 @@ export function PipesSection() {
     posthog.capture("pipe_stopped", { pipe: name });
     setStoppingPipe(name);
     try {
-      await fetch(`${apiBase}/pipes/${name}/stop`, {
-        method: "POST",
-      });
+      const result = await requestPipeStop(name, { apiBase });
+      if (!result.ok && result.status !== "not_running") {
+        throw new Error(result.error);
+      }
       if (expanded === name) {
         fetchLogs(name);
         fetchExecutions(name);
       }
+    } catch (error) {
+      toast({
+        title: "pipe stop failed",
+        description:
+          error instanceof Error ? error.message : `could not stop "${name}"`,
+        variant: "destructive",
+      });
     } finally {
       setStoppingPipe(null);
       fetchPipes();
@@ -2328,27 +2343,28 @@ export function PipesSection() {
               </div>
 
               {/* Action bar — always visible, brand-aligned (sharp, monochrome).
-                  edit + remix are the install->create lever. */}
+                  optimize + remix are the install->create lever. */}
               <div className="flex items-center gap-1 px-3 pb-2.5 pt-0.5">
-                {/* edit with ai — opens a chat to tweak this pipe in plain english */}
+                {/* optimize with ai — opens a chat that reads the pipe's prompt
+                    + recent run logs and suggests improvements in plain english */}
                 {!isReceivedTeamPipe(pipe) && (
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 gap-1.5 px-2 shrink-0 text-muted-foreground hover:text-foreground"
                     onClick={() => {
-                      posthog.capture("pipe_edit_started", { source: "row_button" });
+                      posthog.capture("pipe_optimize_started", { source: "row_button" });
                       navigateHomeAndPrefill({
-                        context: "the user wants to edit their pipe",
+                        context: "the user wants to optimize their pipe",
                         prompt: buildOptimizePrompt(pipe.config.name),
                         displayLabel: buildOptimizeDisplayLabel(pipe.config.name),
                         autoSend: true,
                       });
                     }}
-                    title="edit this pipe with ai — describe what you want to change"
+                    title="optimize this pipe with ai — reads recent runs and improves the prompt"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
-                    edit
+                    optimize with ai
                   </Button>
                 )}
 
@@ -2421,7 +2437,7 @@ export function PipesSection() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      {/* "edit with ai" lives on the row as a visible button now */}
+                      {/* "optimize with ai" lives on the row as a visible button now */}
 
                       {/* Team sharing — own pipes can be shared, updated,
                           unshared; received team pipes are read-only and can

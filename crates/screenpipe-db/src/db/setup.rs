@@ -34,27 +34,25 @@ impl DatabaseManager {
             sqlx::Sqlite::create_database(&connection_string).await?;
         }
 
-        let connect_options: SqliteConnectOptions = connection_string
+        // busy_timeout is per-connection; setting it here ensures ALL pooled
+        // connections wait before returning SQLITE_BUSY ("database is locked").
+        // Keep this short (5s) so pool connections aren't held for ages waiting
+        // for the write lock — the app-level retry in begin_immediate_with_retry
+        // handles retries with backoff.
+        //
+        // cache_size + mmap_size are tier-configurable and applied here; the
+        // WAL-safety pragmas that MUST be identical on every other pool over this
+        // file (the secret-store pool in screenpipe-secrets) come from the single
+        // source of truth `WAL_SAFETY_PRAGMAS` so the two pools can never diverge
+        // and race checkpoints on the shared -shm into code-11 corruption.
+        let mut connect_options: SqliteConnectOptions = connection_string
             .parse::<SqliteConnectOptions>()?
-            // busy_timeout is per-connection; setting it here ensures ALL pooled
-            // connections wait before returning SQLITE_BUSY ("database is locked").
-            // Keep this short (5s) so pool connections aren't held for ages waiting
-            // for the write lock — the app-level retry in begin_immediate_with_retry
-            // handles retries with backoff.
             .busy_timeout(Duration::from_secs(5))
-            .pragma("journal_mode", "WAL")
-            // NORMAL is safe with WAL mode — commits only need to wait for WAL
-            // write, not fsync to main DB. Reduces commit latency significantly.
-            // Default (FULL) fsyncs on every commit which is unnecessary in WAL.
-            .pragma("synchronous", "NORMAL")
             .pragma("cache_size", format!("-{}", config.cache_size_kb))
-            .pragma("mmap_size", config.mmap_size.to_string())
-            .pragma("temp_store", "MEMORY")
-            // Checkpoint after 4000 pages (~16MB) instead of default 1000 (~4MB).
-            // Reduces checkpoint stalls during write bursts — checkpoint happens
-            // during idle periods instead. WAL grows to ~16MB max (+12MB).
-            // Crash recovery: ~200ms replay at most.
-            .pragma("wal_autocheckpoint", "4000");
+            .pragma("mmap_size", config.mmap_size.to_string());
+        for (pragma, value) in screenpipe_config::WAL_SAFETY_PRAGMAS {
+            connect_options = connect_options.pragma(pragma, value);
+        }
 
         // Fresh DB conversion to journal_mode=WAL requires an exclusive lock.
         // When the pool opens read_pool + write_pool connections concurrently,

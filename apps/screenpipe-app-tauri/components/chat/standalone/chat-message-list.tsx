@@ -19,24 +19,22 @@ import {
   getMessageIntentLabel,
   isSteeredAssistantMessage,
 } from "@/lib/chat/message-rendering";
-import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
-import type { ImageViewerState } from "@/components/chat/standalone/image-viewer-dialog";
 import type { Message } from "@/lib/chat/types";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
-interface ChatMessageListProps {
+export interface ChatMessageListProps {
   messages: Message[];
   isLoading: boolean;
   isStreaming: boolean;
   activeSourceFooterMessageId: string | null;
   expandedSteerWorkIds: Set<string>;
-  setExpandedSteerWorkIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  onToggleCollapsedSteerWork: (id: string) => void;
   highlightedMessageId: string | null;
   editingMessageId: string | null;
-  setEditingMessageId: React.Dispatch<React.SetStateAction<string | null>>;
   editDraft: string;
-  setEditDraft: React.Dispatch<React.SetStateAction<string>>;
+  onEditDraftChange: (value: string) => void;
+  onCancelEdit: (message: Message) => void;
   pendingCaretRef: React.MutableRefObject<number | null>;
   pendingEditDownXYRef: React.MutableRefObject<{ x: number; y: number } | null>;
   editTextareaRef: React.MutableRefObject<HTMLTextAreaElement | null>;
@@ -45,12 +43,13 @@ interface ChatMessageListProps {
   commitEditedMessage: (message: Message, draft: string) => void;
   citationPlan: MarkdownCitationPlan;
   copiedMessageId: string | null;
-  setCopiedMessageId: React.Dispatch<React.SetStateAction<string | null>>;
+  onCopyMessage: (message: Message) => Promise<void> | void;
   openMessageMenuId: string | null;
-  setOpenMessageMenuId: React.Dispatch<React.SetStateAction<string | null>>;
-  setImageViewer: React.Dispatch<React.SetStateAction<ImageViewerState>>;
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  setScheduleDialogMessage: React.Dispatch<React.SetStateAction<{ prompt: string; response: string } | null>>;
+  onMessageMenuOpenChange: (messageId: string, open: boolean) => void;
+  onCloseMessageMenu: () => void;
+  onOpenImageViewer: (images: string[], index: number) => void;
+  onRetryAssistantMessage: (messageId: string) => void;
+  onOpenScheduleDialog: (messageId: string) => void;
   sendMessage: (message: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>;
   openFilePreview: (path: string) => void;
   branchConversation: (messageId: string) => Promise<void> | void;
@@ -63,12 +62,12 @@ export function ChatMessageList({
   isStreaming,
   activeSourceFooterMessageId,
   expandedSteerWorkIds,
-  setExpandedSteerWorkIds,
+  onToggleCollapsedSteerWork,
   highlightedMessageId,
   editingMessageId,
-  setEditingMessageId,
   editDraft,
-  setEditDraft,
+  onEditDraftChange,
+  onCancelEdit,
   pendingCaretRef,
   pendingEditDownXYRef,
   editTextareaRef,
@@ -77,12 +76,13 @@ export function ChatMessageList({
   commitEditedMessage,
   citationPlan,
   copiedMessageId,
-  setCopiedMessageId,
+  onCopyMessage,
   openMessageMenuId,
-  setOpenMessageMenuId,
-  setImageViewer,
-  setMessages,
-  setScheduleDialogMessage,
+  onMessageMenuOpenChange,
+  onCloseMessageMenu,
+  onOpenImageViewer,
+  onRetryAssistantMessage,
+  onOpenScheduleDialog,
   sendMessage,
   openFilePreview,
   branchConversation,
@@ -111,14 +111,7 @@ export function ChatMessageList({
                   key={item.id}
                   item={item}
                   expanded={expanded}
-                  onToggle={() => {
-                    setExpandedSteerWorkIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(item.id)) next.delete(item.id);
-                      else next.add(item.id);
-                      return next;
-                    });
-                  }}
+                  onToggle={() => onToggleCollapsedSteerWork(item.id)}
                 />
               );
             }
@@ -226,14 +219,12 @@ export function ChatMessageList({
                               }
                             }}
                             value={editDraft}
-                            onChange={(e) => setEditDraft(e.target.value)}
+                            onChange={(e) => onEditDraftChange(e.target.value)}
                             onBlur={() => commitEditedMessage(message, editDraft)}
                             onKeyDown={(e) => {
                               if (e.key === "Escape") {
                                 e.preventDefault();
-                                setEditingMessageId(null);
-                                pendingCaretRef.current = null;
-                                setEditDraft(message.content);
+                                onCancelEdit(message);
                               }
                               if (e.key === "Enter" && !e.shiftKey) {
                                 e.preventDefault();
@@ -251,9 +242,7 @@ export function ChatMessageList({
                               onMouseUp={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setEditingMessageId(null);
-                                pendingCaretRef.current = null;
-                                setEditDraft(message.content);
+                                onCancelEdit(message);
                               }}
                             >
                               Cancel
@@ -280,7 +269,7 @@ export function ChatMessageList({
                             citationPlan.deferredMessageIds.has(message.id) ||
                             message.id === activeSourceFooterMessageId
                           }
-                          onImageClick={(images, index) => setImageViewer({ images, index })}
+                          onImageClick={onOpenImageViewer}
                           onRetry={(prompt) => sendMessage(prompt)}
                           onOpenViewerPath={openFilePreview}
                         />
@@ -292,11 +281,7 @@ export function ChatMessageList({
                       {editingMessageId !== message.id && (
                         <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 transition-all duration-200">
                           <button
-                            onClick={async () => {
-                              await commands.copyTextToClipboard(message.content);
-                              setCopiedMessageId(message.id);
-                              setTimeout(() => setCopiedMessageId(null), 2000);
-                            }}
+                            onClick={() => onCopyMessage(message)}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
                             title="Copy message"
                           >
@@ -322,17 +307,7 @@ export function ChatMessageList({
                           )}
                           {message.role === "assistant" && !isLoading && (
                             <button
-                              onClick={() => {
-                                const msgIndex = messages.findIndex((m) => m.id === message.id);
-                                let userMsgIndex = -1;
-                                for (let i = msgIndex - 1; i >= 0; i--) {
-                                  if (messages[i].role === "user") { userMsgIndex = i; break; }
-                                }
-                                if (userMsgIndex === -1) return;
-                                const userMsg = messages[userMsgIndex];
-                                setMessages((prev) => prev.slice(0, userMsgIndex));
-                                sendMessage(userMsg.content, userMsg.displayContent);
-                              }}
+                              onClick={() => onRetryAssistantMessage(message.id)}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
                               title="Retry"
                             >
@@ -342,7 +317,7 @@ export function ChatMessageList({
                           {message.role === "assistant" && (
                             <Popover
                               open={openMessageMenuId === message.id}
-                              onOpenChange={(open) => setOpenMessageMenuId(open ? message.id : null)}
+                              onOpenChange={(open) => onMessageMenuOpenChange(message.id, open)}
                             >
                               <PopoverTrigger asChild>
                                 <button
@@ -361,18 +336,8 @@ export function ChatMessageList({
                                   message.content !== "Processing..." && (
                                   <button
                                     onClick={() => {
-                                      setOpenMessageMenuId(null);
-                                      const msgIndex = messages.findIndex((m) => m.id === message.id);
-                                      const userMsg = messages
-                                        .slice(0, msgIndex)
-                                        .reverse()
-                                        .find((m) => m.role === "user");
-                                      if (userMsg) {
-                                        setScheduleDialogMessage({
-                                          prompt: userMsg.content,
-                                          response: message.content,
-                                        });
-                                      }
+                                      onCloseMessageMenu();
+                                      onOpenScheduleDialog(message.id);
                                     }}
                                     className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
                                   >
@@ -382,7 +347,7 @@ export function ChatMessageList({
                                 )}
                                 <button
                                   onClick={() => {
-                                    setOpenMessageMenuId(null);
+                                    onCloseMessageMenu();
                                     branchConversation(message.id);
                                   }}
                                   className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
@@ -429,11 +394,11 @@ export function ChatMessageList({
 
           if (blocks && blocks.length > 0) {
             const lastBlock = blocks[blocks.length - 1];
-            if (lastBlock.type === "thinking" && (lastBlock as any).isThinking) {
+            if (lastBlock.type === "thinking" && lastBlock.isThinking) {
               loaderPhase = "thinking";
-            } else if (lastBlock.type === "tool" && (lastBlock as any).toolCall?.isRunning) {
+            } else if (lastBlock.type === "tool" && lastBlock.toolCall.isRunning) {
               loaderPhase = "tool";
-              toolName = (lastBlock as any).toolCall?.toolName;
+              toolName = lastBlock.toolCall.toolName;
             } else if (lastBlock.type === "text" && lastBlock.text) {
               loaderPhase = "streaming";
             }

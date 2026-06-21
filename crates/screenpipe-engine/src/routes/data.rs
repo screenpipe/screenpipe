@@ -472,3 +472,52 @@ pub(crate) async fn backup_handler(
         size_bytes: size,
     }))
 }
+
+#[derive(Serialize, OaSchema)]
+pub struct CompactResponse {
+    pub success: bool,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+    pub bytes_reclaimed: u64,
+}
+
+/// POST /data/compact — rebuild the database with a full `VACUUM` to return
+/// freed pages to the OS. Use after deleting/stripping data (e.g. retention
+/// "lean"/"all") to physically shrink db.sqlite. Explicit user action: takes a
+/// brief exclusive lock (recording writes pause until it finishes) and needs
+/// free disk roughly equal to the current database size.
+#[oasgen]
+pub(crate) async fn compact_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<CompactResponse>, (StatusCode, JsonResponse<Value>)> {
+    let db_path = state.screenpipe_dir.join("db.sqlite");
+    let size_of = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let bytes_before = size_of(&db_path);
+
+    info!(
+        "compacting database (VACUUM); size before = {} bytes",
+        bytes_before
+    );
+
+    state.db.compact().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": format!("compact failed: {}", e)})),
+        )
+    })?;
+
+    let bytes_after = size_of(&db_path);
+    let bytes_reclaimed = bytes_before.saturating_sub(bytes_after);
+
+    info!(
+        "database compact complete: before={} after={} reclaimed={} bytes",
+        bytes_before, bytes_after, bytes_reclaimed
+    );
+
+    Ok(JsonResponse(CompactResponse {
+        success: true,
+        bytes_before,
+        bytes_after,
+        bytes_reclaimed,
+    }))
+}

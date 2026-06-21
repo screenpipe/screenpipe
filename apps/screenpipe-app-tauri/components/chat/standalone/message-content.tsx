@@ -6,11 +6,11 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Calendar, ChevronDown, ChevronRight, ChevronUp, ExternalLink, ImageIcon, Plug, RefreshCw } from "lucide-react";
+import { Calendar, ChevronDown, ChevronUp, Plug, RefreshCw } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
-import { IntegrationIcon, INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
+import { IntegrationIcon } from "@/components/settings/connections-section";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { cn } from "@/lib/utils";
@@ -33,7 +33,6 @@ import {
 } from "@/lib/chat/tool-presentation";
 import {
   sourceCitationsFromMessage,
-  type SourceCitation,
 } from "@/lib/source-citations";
 
 const MermaidDiagram = React.lazy(() =>
@@ -55,16 +54,6 @@ function MermaidDiagramBlock({ chart }: { chart: string }) {
     </React.Suspense>
   );
 }
-
-const TOOL_ICONS: Record<string, string> = {
-  bash: "⚡",
-  read: "📄",
-  edit: "✏️",
-  write: "📝",
-  grep: "🔍",
-  find: "🔎",
-  ls: "📁",
-};
 
 // Animation phase for the grid dissolve loader.
 export type LoaderPhase = "analyzing" | "thinking" | "tool" | "streaming";
@@ -923,7 +912,7 @@ function toolCallRenderKey(toolCall: ToolCall, index: number): string {
   return `${toolCall.id || toolCall.toolName || "tool"}:${index}`;
 }
 
-export function ToolCallGroup({
+function ToolCallGroup({
   toolCalls,
   defaultExpanded = false,
   summaryOverride,

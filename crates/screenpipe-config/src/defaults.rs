@@ -146,6 +146,35 @@ impl Default for DbConfig {
     }
 }
 
+/// SQLite pragmas that MUST be identical on **every** connection/pool opened
+/// against the same `db.sqlite`. The single source of truth shared by the engine
+/// `DatabaseManager` pools (`screenpipe-db`) and the secret-store pool
+/// (`screenpipe-secrets`).
+///
+/// Why this exists: those two long-lived pools both write the same WAL and its
+/// shared `-shm` WAL-index. If they disagree on these pragmas they race
+/// checkpoints on `-shm` and it desyncs into "database disk image is malformed"
+/// (`SQLITE_CORRUPT`, code 11). The historical bug: the secret pool set only
+/// `journal_mode`/`synchronous` and silently inherited SQLite's default
+/// `wal_autocheckpoint=1000` while the engine used `4000`, so the two pools
+/// checkpointed the same WAL on different thresholds. Apply EXACTLY these on
+/// every pool; never set any of them to a different value on a side pool.
+///
+/// `mmap_size` (must stay `0`, see [`DbConfig`]) and `cache_size` are applied
+/// per-pool because they're tier-configurable; correctness only needs
+/// `mmap_size == 0` everywhere, which the pool-parity test asserts separately.
+pub const WAL_SAFETY_PRAGMAS: [(&str, &str); 4] = [
+    ("journal_mode", "WAL"),
+    // NORMAL is safe under WAL (commit waits for the WAL write, not an fsync of
+    // the main DB) and cuts commit latency vs the FULL default.
+    ("synchronous", "NORMAL"),
+    ("temp_store", "MEMORY"),
+    // Checkpoint after ~4000 pages (~16MB) not SQLite's default 1000 (~4MB).
+    // CRITICAL: every pool over this file must use the SAME threshold or they
+    // race checkpoints on the shared -shm WAL-index (the corruption above).
+    ("wal_autocheckpoint", "4000"),
+];
+
 /// Audio/transcription channel capacities tuned per device tier.
 ///
 /// Controls the `crossbeam::channel::bounded` sizes in `AudioManager`.

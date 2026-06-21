@@ -157,7 +157,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 				searchResults: [],
 				searchGroups: [],
 				uiEventResults: [],
-				isSearchingUiEvents: true,
+				isSearchingUiEvents: false,
 				currentResultIndex: -1,
 				activeRequestId: requestId,
 				isSearching: true,
@@ -236,8 +236,10 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 				params.append("limit", options.limit.toString());
 			}
 
-			// Fire UI events search in parallel (only on initial search)
-			if (isInitialSearch) {
+			const loadUiEventsAfterKeyword = () => {
+				if (!isInitialSearch || get().activeRequestId !== requestId) return;
+
+				set({ isSearchingUiEvents: true });
 				const uiParams = new URLSearchParams({
 					content_type: "input",
 					q: query,
@@ -275,7 +277,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 					.catch(() => {
 						set({ isSearchingUiEvents: false });
 					});
-			}
+			};
 
 			const response = await localFetch(
 				`/search/keyword?${params}`,
@@ -328,6 +330,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 						lastRequest: searchRequest,
 						currentAbortController: null,
 					});
+					loadUiEventsAfterKeyword();
 				}
 			}
 		} catch (error) {
@@ -389,4 +392,3 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 		set({ currentResultIndex: prevIndex });
 	},
 }));
-

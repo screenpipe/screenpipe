@@ -21,15 +21,37 @@
 export interface PresetLike {
   id?: string;
   defaultPreset?: boolean;
+  model?: string;
+}
+
+// Frontier/premium models that must NOT run on a pipe (unattended, often
+// high-volume — a cost bomb for marginal gain). Mirrors the gateway's price-based
+// block (output >= $20/Mtok): opus, fable, gpt-5.5, and any *-pro variant. The
+// gateway is the hard backstop; this is the client-side prevention so a pipe is
+// never even assigned one.
+const FRONTIER_PIPE_MODELS: RegExp[] = [
+  /^claude-opus/i,
+  /^claude-fable/i,
+  /gpt-5\.5/i,
+  /-pro\b/i,
+];
+
+export function isFrontierPipeModel(model?: string | null): boolean {
+  return !!model && FRONTIER_PIPE_MODELS.some((re) => re.test(model));
 }
 
 export function pickPipePreset<T extends PresetLike>(
   presets: T[] | null | undefined,
 ): T | null {
   if (!presets || presets.length === 0) return null;
-  return (
+  const picked =
     presets.find((p) => p?.id === "pipes") ??
     presets.find((p) => p?.defaultPreset) ??
-    null
-  );
+    null;
+  // A pipe must never run a frontier model. If the picked preset is pinned to one
+  // (e.g. an Opus default), coerce its model to `auto` (cheap + tier-safe).
+  if (picked && isFrontierPipeModel(picked.model)) {
+    return { ...picked, model: "auto" };
+  }
+  return picked;
 }

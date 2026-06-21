@@ -304,8 +304,10 @@ This is the fallback for when asset protocol scope doesn't cover the file path.
 Don't remove the existing endpoint. It serves as:
 - Fallback for platforms without HEVC browser support (Linux)
 - Fallback for corrupt video files where `<video>` fails
-- Support for PII redaction (`?redact_pii=true`)
 - Export functionality that needs JPEG frames
+
+Note: frame images are redacted at rest by the image-PII worker (rfdetr →
+black boxes); there is no per-request `?redact_pii` query param.
 
 ### 5.2 Frontend Changes
 

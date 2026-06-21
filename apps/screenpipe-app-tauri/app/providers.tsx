@@ -13,7 +13,6 @@ import { PermissionMonitorProvider } from "@/lib/hooks/use-permission-monitor";
 import { AuthGuard } from "@/lib/auth-guard";
 import { forwardRef } from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
-import { commands } from "@/lib/utils/tauri";
 import { useUpdateListener } from "@/components/update-banner";
 import { AppEntitlementGate } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
@@ -56,69 +55,6 @@ export const Providers = forwardRef<
   const isOverlay = pathname === "/shortcut-reminder";
   useEffect(() => {
     setMounted(true);
-  }, []);
-
-  // Hook console to write to disk — batched to avoid IPC-per-log CPU drain
-  useEffect(() => {
-    const origLog = console.log;
-    const origError = console.error;
-    const origWarn = console.warn;
-    const origDebug = console.debug;
-
-    let buffer: { level: string; message: string }[] = [];
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
-    const MAX_BUFFER = 100;
-    const FLUSH_INTERVAL_MS = 2000;
-
-    function flush() {
-      if (buffer.length === 0) return;
-      const entries = buffer;
-      buffer = [];
-      commands.writeBrowserLogs(entries).catch(() => {});
-    }
-
-    function enqueue(level: string, args: unknown[]) {
-      const message = args
-        .map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a)))
-        .join(" ");
-      buffer.push({ level, message });
-      if (buffer.length >= MAX_BUFFER) {
-        if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = null;
-        flush();
-      } else if (!flushTimer) {
-        flushTimer = setTimeout(() => {
-          flushTimer = null;
-          flush();
-        }, FLUSH_INTERVAL_MS);
-      }
-    }
-
-    console.log = (...args) => {
-      origLog(...args);
-      enqueue("info", args);
-    };
-    console.error = (...args) => {
-      origError(...args);
-      enqueue("error", args);
-    };
-    console.warn = (...args) => {
-      origWarn(...args);
-      enqueue("warn", args);
-    };
-    console.debug = (...args) => {
-      origDebug(...args);
-      enqueue("debug", args);
-    };
-
-    return () => {
-      console.log = origLog;
-      console.error = origError;
-      console.warn = origWarn;
-      console.debug = origDebug;
-      if (flushTimer) clearTimeout(flushTimer);
-      flush(); // drain remaining logs on unmount
-    };
   }, []);
 
   useEffect(() => {

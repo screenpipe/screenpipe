@@ -5,6 +5,7 @@ import { Env, RequestBody } from '../types';
 import { createProvider, resolveModelAlias } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
+import { isFrontierModel } from '../services/cost-tracker';
 import { isFlexEligible } from '../utils/latency';
 import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
 import { captureException } from '@sentry/cloudflare';
@@ -35,19 +36,16 @@ export const AUTO_WATERFALL_VISION = [
 ];
 
 // Background waterfall — for latency-tolerant traffic (pipes, daily summary,
-// suggestions) where no user is waiting. This is the lane to BUY intelligence:
-// latency is free, so lead with gpt-5.4 (AA ~54 at its default reasoning effort,
-// 0.1x cache discount) on the OpenAI credit pool — smarter pipes, and it bleeds
-// background load OFF the strained GCP/Vertex credits. gemini-3.5-flash (flex)
-// + glm-5 + gemini-3-flash are the cheaper fallbacks if OpenAI 429s/errors;
-// runChain cascades on transient failures, and flex applies to the gemini
-// entries only (gpt-5.4 has no Vertex flex tier — it runs standard OpenAI).
-// NOTE: gpt-5.4 is ~3-4x the per-token cost of gemini-flex, so watch the $30k
-// OpenAI credit burn — at full background volume it can run ~$1-2k/day.
+// suggestions) where no user is waiting. Leads with gemini-3.5-flash on the FLEX
+// tier: background is ~84% cache-reads, so flex's 0.1x cache discount makes it the
+// cheapest decent-quality option ($/Mtok ≈ glm-5 but with the cache discount glm-5
+// lacks). Measured (6/19): gpt-5.4 here cost $590/day vs $177 on flex for the SAME
+// traffic — 3.3x more, on the small OpenAI pool, for a marginal IQ gain (54 vs ~50-55)
+// that pipes don't need; reverted (#4285→). glm-5 + gemini-3-flash are standard-tier
+// fallbacks for when flex is throttled.
 export const AUTO_WATERFALL_BACKGROUND = [
-  'gpt-5.4',          // smart reasoning model on OpenAI credits — latency-tolerant lane
-  'gemini-3.5-flash', // flex fallback (cheap) if OpenAI throttles/errors
-  'glm-5',            // free Vertex MaaS fallback
+  'gemini-3.5-flash', // flex tier — cheapest on the cache-heavy background mix
+  'glm-5',            // free Vertex MaaS fallback, standard tier
   'gemini-3-flash',   // near-free safety net
 ];
 
@@ -223,25 +221,35 @@ async function tryModel(
       delete (reqBody as Partial<RequestBody>).tool_choice;
     }
 
-    // Flex tier applies only to the Vertex Gemini lane. Setting it on the body
-    // here (vs the shared request body) keeps it scoped to this attempt, so a
-    // cascade from flex-gemini → glm-5 runs glm-5 at standard tier.
+    // Flex tier applies only to the Vertex Gemini lane. Set per-attempt (not on
+    // the shared body) so a cascade to glm-5 runs standard tier.
     const useFlex = flexEligible && isGeminiModel(model);
-    if (useFlex) {
-      (reqBody as RequestBody).serviceTier = 'flex';
-    }
 
-    if (body.stream) {
-      const stream = await provider.createStreamingCompletion(reqBody);
-      return tagServedTier(new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
-      }), useFlex);
+    const callOnce = async (withFlex: boolean): Promise<Response> => {
+      const rb = { ...reqBody } as RequestBody;
+      if (withFlex) rb.serviceTier = 'flex';
+      else delete (rb as Partial<RequestBody>).serviceTier;
+      if (body.stream) {
+        const stream = await provider.createStreamingCompletion(rb);
+        return tagServedTier(new Response(stream, {
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+        }), withFlex);
+      }
+      return tagServedTier(await provider.createCompletion(rb), withFlex);
+    };
+
+    try {
+      return await callOnce(useFlex);
+    } catch (flexErr: any) {
+      // Flex isn't enabled for our project/region on some Gemini models
+      // ("Flex API is not supported for project ... or selected region", 400 —
+      // SCREENPIPE-AI-PROXY-V/1A, 650+/day). Retry the SAME model at standard
+      // tier instead of 400'ing or cascading through more flex-rejecting siblings.
+      if (useFlex && /flex api is not supported/i.test(String(flexErr?.message || ''))) {
+        return await callOnce(false);
+      }
+      throw flexErr;
     }
-    return tagServedTier(await provider.createCompletion(reqBody), useFlex);
   } catch (error: any) {
     // Prefer error.status (UpstreamError, etc); fall back to parsing the
     // message for providers that throw plain Error("... 524 ..."). Defaults
@@ -324,9 +332,19 @@ async function tryModel(
 }
 
 /**
- * Run a chain of models in order, returning the first success. Each
- * model is wrapped in tryModel; only transient failures advance to the
- * next entry, fatal errors bubble out immediately.
+ * Run a chain of models in order, returning the first success.
+ *
+ * A chain exists precisely to fall back, so we try EVERY entry and only fail
+ * once the chain is exhausted — even on a "fatal" (non-transient) error. A
+ * model-specific reject (e.g. gpt-5.4's stricter tool_call-id length limit, a
+ * region block, or a model-not-enabled) routinely succeeds on the next entry
+ * (glm-5/Gemini accept what OpenAI rejected). Before, a 400 broke the loop and
+ * the whole request hard-failed despite a working fallback being one line down
+ * (gpt-5.4 background pipes, SCREENPIPE-AI-PROXY auto_fatal, 600+/day).
+ *
+ * The `transient` flag still governs Sentry noise inside tryModel; here it no
+ * longer controls cascade. Cost: a genuinely universal failure now tries the
+ * whole (short) chain before surfacing — acceptable for a fallback chain.
  */
 async function runChain(
   chain: string[],
@@ -345,7 +363,7 @@ async function runChain(
       return { response, model };
     } catch (error: any) {
       lastError = error;
-      if (!error?.transient) break; // fatal — don't keep trying
+      // keep going — the next model in the chain may accept this request.
     }
   }
   return { error: lastError, lastModel };
@@ -377,8 +395,8 @@ export function friendlyError(model: string, status: number, fellThrough: boolea
     // model won't help; point the user at the real fix instead of a bare
     // "request failed (404)". (#3786)
     return fellThrough
-      ? `No available model accepted the request. "${model}" and the fallbacks may not be enabled on your account or API key. Pick a different model, or check your provider access.`
-      : `"${model}" isn't available on your account or API key (${status}). Pick a different model, or check that your provider or key has access to it.`;
+      ? `No available model could complete this request (${status}). It may contain an unsupported parameter or a malformed tool call, or the models may not be enabled on your account or API key. Try simplifying the request or picking a different model.`
+      : `"${model}" couldn't complete this request (${status}) — it may contain an unsupported parameter or tool call, or not be enabled on your account or API key. Pick a different model, or check your provider access.`;
   }
   if (status === 401 || status === 403) {
     return `Your provider rejected the request for "${model}" (${status}). Check that the API key in your AI preset is valid and has access to this model.`;
@@ -452,6 +470,20 @@ export async function handleChatCompletions(
   // before the hint injection masks the emptiness. No Sentry — client bug.
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
     return errorResponse(body, 400, 'The request must include at least one message.');
+  }
+
+  // Pipes / background are unattended, often high-volume automations where a
+  // frontier model (opus, gpt-5.5, *-pro, fable) is a cost bomb for marginal gain.
+  // Block them on the background lane: downgrade to 'auto' (→ cheap background
+  // chain) by default, or hard-reject via PIPE_FRONTIER_POLICY=reject. The client
+  // also hides frontier models from pipe presets; this is the worker backstop that
+  // catches old pipes / custom integrations / the passthrough that slip through.
+  if (latency === 'background' && body.model !== 'auto' && isFrontierModel(body.model)) {
+    if (String((env as any)?.PIPE_FRONTIER_POLICY ?? 'downgrade').toLowerCase() === 'reject') {
+      return errorResponse(body, 403, `"${body.model}" (a frontier model) isn't available for scheduled pipes / background tasks. Use "auto" or a fast model (glm-5, gemini, sonnet, haiku).`);
+    }
+    const fallback = String((env as any)?.PIPE_FRONTIER_FALLBACK ?? 'auto');
+    body = { ...body, model: fallback };
   }
 
   body = ensureScreenpipeHint(body);

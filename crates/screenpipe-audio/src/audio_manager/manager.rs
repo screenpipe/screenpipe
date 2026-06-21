@@ -785,6 +785,10 @@ impl AudioManager {
                 //   silence = 0.0, audio playing = 0.0028, loud output = 0.06
                 // For output we just need "is audio playing?" not "is someone speaking?"
                 if let Some(ref meeting) = meeting_detector {
+                    // Stamp chunk receipt first (unconditional) — the device
+                    // monitor's speaker watchdog uses this to tell a dead
+                    // loopback stream apart from a quiet one.
+                    meeting.on_audio_chunk(&audio.device.device_type);
                     let rms = {
                         let sum_sq: f32 = audio.data.iter().map(|&x| x * x).sum();
                         (sum_sq / audio.data.len() as f32).sqrt()

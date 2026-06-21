@@ -78,11 +78,35 @@ pub fn main_label_for_mode(mode: &str) -> &'static str {
     }
 }
 
-/// Reset activation policy to Regular so dock icon and tray are visible.
+/// Apply the desired macOS activation policy (and keep the tray reachable).
+///
+/// Default is `Regular` — dock icon and tray both visible. Two cases switch to
+/// `Accessory` (menu-bar-only "agent" app, no dock icon):
+///   1. enterprise hidden-UI policy, or
+///   2. the user opted into `hideDockIcon` in Settings → Display.
+///
+/// The tray icon is unaffected in every case, so the app stays reachable. This
+/// is a single explicit call (on startup, window close, and when the user
+/// toggles the setting) — NOT the per-tick watchdog toggling that was removed
+/// for causing crashes; setting the policy once on a real event is safe.
 #[cfg(target_os = "macos")]
 pub fn reset_to_regular_and_refresh_tray(app: &AppHandle) {
     if crate::enterprise_policy::is_app_ui_hidden() {
         info!("Setting activation policy to Accessory (enterprise hidden UI mode)");
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        return;
+    }
+
+    // `hideDockIcon` is a frontend-only setting, so it lands in the store's
+    // untyped `extra` map rather than a typed field.
+    let hide_dock_icon = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|s| s.extra.get("hideDockIcon").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+
+    if hide_dock_icon {
+        info!("Setting activation policy to Accessory (hideDockIcon — menu bar only)");
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         return;
     }

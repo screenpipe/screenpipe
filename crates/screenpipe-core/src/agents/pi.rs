@@ -7,7 +7,7 @@
 //! Implements [`AgentExecutor`] for the pi CLI (`@earendil-works/pi-coding-agent`).
 //! Pi is installed via bun and executed as a subprocess in "print" mode (`pi -p`).
 
-use super::{AgentExecutor, AgentOutput, ExecutionHandle};
+use super::{install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use serde_json::json;
@@ -371,6 +371,10 @@ impl PiExecutor {
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
             ),
+            (
+                "render-html-report",
+                include_str!("../../assets/skills/render-html-report/SKILL.md"),
+            ),
         ];
 
         // Clean up deprecated skills from the 8→2 consolidation.
@@ -430,8 +434,12 @@ impl PiExecutor {
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
     /// importer already rejects these names; this guards any folder that reaches
     /// the store another way.
-    const BASELINE_SKILL_NAMES: [&'static str; 3] =
-        ["screenpipe-api", "screenpipe-cli", "screenpipe-team"];
+    const BASELINE_SKILL_NAMES: [&'static str; 4] = [
+        "screenpipe-api",
+        "screenpipe-cli",
+        "screenpipe-team",
+        "render-html-report",
+    ];
 
     /// Mirror the user's imported skills from the global store
     /// (`<data_dir>/skills/<name>/`) into `project_dir/.pi/skills/` so every
@@ -566,6 +574,13 @@ impl PiExecutor {
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
                 Box::new(|_| true), // always installed — pipe & connection management
+            ),
+            (
+                "render-html-report",
+                include_str!("../../assets/skills/render-html-report/SKILL.md"),
+                // Output-formatting skill, not endpoint-gated — always staged,
+                // loaded on-demand by the agent only when the task is visual.
+                Box::new(|_| true),
             ),
         ];
 
@@ -1239,9 +1254,15 @@ impl PiExecutor {
         let child = cmd.spawn()?;
         let pid = child.id();
 
-        // Set PID synchronously — no async race
+        // Set PID synchronously. If a stop was requested before spawn
+        // completed, honor it immediately against the fresh process group.
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
-            sp.store(p, std::sync::atomic::Ordering::SeqCst);
+            if install_spawned_pid(sp, p) {
+                // If the child is still entering setsid(), this first TERM can
+                // race the new process group; kill_process_group's delayed
+                // SIGKILL pass covers that short window.
+                let _ = kill_process_group(p);
+            }
         }
 
         let output = child.wait_with_output().await?;
@@ -1384,9 +1405,15 @@ impl PiExecutor {
         let mut child = cmd.spawn()?;
         let pid = child.id();
 
-        // Set PID synchronously — no async race
+        // Set PID synchronously. If a stop was requested before spawn
+        // completed, honor it immediately against the fresh process group.
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
-            sp.store(p, std::sync::atomic::Ordering::SeqCst);
+            if install_spawned_pid(sp, p) {
+                // If the child is still entering setsid(), this first TERM can
+                // race the new process group; kill_process_group's delayed
+                // SIGKILL pass covers that short window.
+                let _ = kill_process_group(p);
+            }
         }
 
         // Take stdout for streaming reads; stderr will be read after exit
@@ -1755,7 +1782,11 @@ impl AgentExecutor for PiExecutor {
     }
 
     fn kill(&self, handle: &ExecutionHandle) -> Result<()> {
-        kill_process_group(handle.pid)
+        let pid = handle.current_pid();
+        if pid == 0 {
+            return Ok(());
+        }
+        kill_process_group(pid)
     }
 
     fn is_available(&self) -> bool {

@@ -36,6 +36,8 @@ once_cell = { workspace = true }
 
 [dev-dependencies]
 screenpipe-core = { path = "../screenpipe-core" }
+screenpipe-secrets = { path = "../screenpipe-secrets" }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "db_benchmarks"

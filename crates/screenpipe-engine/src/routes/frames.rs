@@ -11,14 +11,11 @@ use axum::{
 use oasgen::{oasgen, OaSchema};
 
 use chrono::{DateTime, Utc};
-use screenpipe_core::pii_removal::detect_pii_regions;
 use screenpipe_db::TextPosition;
 
-use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -26,75 +23,66 @@ use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error};
 
-use crate::{
-    server::AppState,
-    video_utils::{extract_frame_from_video, redact_frame_pii},
-};
+use crate::{server::AppState, video_utils::extract_frame_from_video};
 
 use tokio::time::timeout;
-
-/// Query parameters for frame retrieval
-#[derive(Debug, Deserialize, OaSchema)]
-pub struct GetFrameQuery {
-    /// If true, blur/redact any detected PII (credit cards, SSNs, emails) in the frame
-    #[serde(default)]
-    pub redact_pii: bool,
-}
 
 #[oasgen]
 pub async fn get_frame_data(
     State(state): State<Arc<AppState>>,
     Path(frame_id): Path<i64>,
-    Query(query): Query<GetFrameQuery>,
 ) -> Result<Response<Body>, (StatusCode, JsonResponse<Value>)> {
     let start_time = Instant::now();
 
     match timeout(Duration::from_secs(5), async {
-        // Skip cache if redact_pii is requested (need fresh processing)
-        if !query.redact_pii {
-            // Try to get frame from cache if enabled
-            if let Some(cache) = &state.frame_image_cache {
-                let cache_result = cache.try_lock();
-                match cache_result {
-                    Ok(mut cache) => {
-                        if let Some((file_path, timestamp)) = cache.get(&frame_id) {
-                            // Increased TTL from 5 minutes to 30 minutes.
-                            // Frames are immutable once captured, so longer caching is safe
-                            // and significantly improves timeline scrolling performance.
-                            if timestamp.elapsed() < Duration::from_secs(1800) {
-                                let path_owned = file_path.clone();
-                                drop(cache);
-                                match serve_file(&path_owned).await {
-                                    Ok(resp) => {
-                                        debug!(
-                                            "Cache hit for frame_id: {}. Retrieved in {:?}",
-                                            frame_id,
-                                            start_time.elapsed()
-                                        );
-                                        return Ok(resp);
-                                    }
-                                    Err(_) => {
-                                        // File was deleted (e.g. by compaction) — evict stale entry
-                                        // and fall through to DB lookup for updated path
-                                        debug!(
-                                            "Cache stale for frame_id: {} (file gone), evicting",
-                                            frame_id
-                                        );
-                                        if let Ok(mut cache) =
-                                            state.frame_image_cache.as_ref().unwrap().try_lock()
-                                        {
-                                            cache.pop(&frame_id);
-                                        }
+        // Frame images are redacted AT REST by the image-PII worker
+        // (rfdetr → black boxes, atomic overwrite) when "AI PII removal" is
+        // on, so serving the file already serves the redacted pixels — no
+        // per-request redaction step. (The old text/OCR-driven on-serve blur
+        // was removed: it only worked on OCR-fallback frames and was a second
+        // unreliable path. Screenshot redaction relies on the image model.)
+        // Try to get frame from cache if enabled.
+        if let Some(cache) = &state.frame_image_cache {
+            let cache_result = cache.try_lock();
+            match cache_result {
+                Ok(mut cache) => {
+                    if let Some((file_path, timestamp)) = cache.get(&frame_id) {
+                        // Increased TTL from 5 minutes to 30 minutes.
+                        // Frames are immutable once captured, so longer caching is safe
+                        // and significantly improves timeline scrolling performance.
+                        if timestamp.elapsed() < Duration::from_secs(1800) {
+                            let path_owned = file_path.clone();
+                            drop(cache);
+                            match serve_file(&path_owned).await {
+                                Ok(resp) => {
+                                    debug!(
+                                        "Cache hit for frame_id: {}. Retrieved in {:?}",
+                                        frame_id,
+                                        start_time.elapsed()
+                                    );
+                                    return Ok(resp);
+                                }
+                                Err(_) => {
+                                    // File was deleted (e.g. by compaction) — evict stale entry
+                                    // and fall through to DB lookup for updated path
+                                    debug!(
+                                        "Cache stale for frame_id: {} (file gone), evicting",
+                                        frame_id
+                                    );
+                                    if let Ok(mut cache) =
+                                        state.frame_image_cache.as_ref().unwrap().try_lock()
+                                    {
+                                        cache.pop(&frame_id);
                                     }
                                 }
-                            } else {
-                                cache.pop(&frame_id);
                             }
+                        } else {
+                            cache.pop(&frame_id);
                         }
                     }
-                    Err(_) => {
-                        debug!("Cache lock contention for frame_id: {}", frame_id);
-                    }
+                }
+                Err(_) => {
+                    debug!("Cache lock contention for frame_id: {}", frame_id);
                 }
             }
         }
@@ -136,9 +124,6 @@ pub async fn get_frame_data(
                     // Snapshot frame — serve JPEG directly (no ffmpeg needed)
                     match serve_file(&file_path).await {
                         Ok(resp) => {
-                            if query.redact_pii {
-                                return apply_pii_redaction(&state, frame_id, &file_path).await;
-                            }
                             // Cache snapshot path
                             if let Some(cache) = &state.frame_image_cache {
                                 if let Ok(mut cache) = cache.try_lock() {
@@ -158,9 +143,7 @@ pub async fn get_frame_data(
                                 "Snapshot file missing for frame {}, trying nearest frame",
                                 frame_id
                             );
-                            if let Some(fallback) =
-                                try_nearest_frame(&state, frame_id, query.redact_pii).await
-                            {
+                            if let Some(fallback) = try_nearest_frame(&state, frame_id).await {
                                 return Ok(fallback);
                             }
                             return Err((
@@ -176,14 +159,8 @@ pub async fn get_frame_data(
                 }
 
                 // Legacy video-chunk frame — extract via ffmpeg
-                match try_extract_and_serve_frame(
-                    &state,
-                    frame_id,
-                    &file_path,
-                    offset_index,
-                    query.redact_pii,
-                )
-                .await
+                match try_extract_and_serve_frame(&state, frame_id, &file_path, offset_index)
+                    .await
                 {
                     Ok(response) => {
                         debug!("Frame {} extracted in {:?}", frame_id, start_time.elapsed());
@@ -195,9 +172,7 @@ pub async fn get_frame_data(
                             "Frame {} extraction failed ({}), trying nearest frame",
                             frame_id, e
                         );
-                        if let Some(fallback) =
-                            try_nearest_frame(&state, frame_id, query.redact_pii).await
-                        {
+                        if let Some(fallback) = try_nearest_frame(&state, frame_id).await {
                             return Ok(fallback);
                         }
 
@@ -283,7 +258,6 @@ async fn try_extract_and_serve_frame(
     frame_id: i64,
     file_path: &str,
     offset_index: i64,
-    redact_pii: bool,
 ) -> Result<Response<Body>, anyhow::Error> {
     let _permit = state
         .frame_extraction_semaphore
@@ -293,12 +267,6 @@ async fn try_extract_and_serve_frame(
 
     let jpeg_q = crate::video::video_quality_to_jpeg_q(&state.video_quality);
     let frame_path = extract_frame_from_video(file_path, offset_index, jpeg_q).await?;
-
-    if redact_pii {
-        return apply_pii_redaction(state, frame_id, &frame_path)
-            .await
-            .map_err(|(status, _)| anyhow::anyhow!("PII redaction failed: {}", status));
-    }
 
     // Store in cache if enabled
     if let Some(cache) = &state.frame_image_cache {
@@ -314,11 +282,7 @@ async fn try_extract_and_serve_frame(
 
 /// Find the nearest extractable frame by searching backward then forward.
 /// Checks file existence/size before expensive ffmpeg extraction to stay fast.
-async fn try_nearest_frame(
-    state: &Arc<AppState>,
-    frame_id: i64,
-    redact_pii: bool,
-) -> Option<Response<Body>> {
+async fn try_nearest_frame(state: &Arc<AppState>, frame_id: i64) -> Option<Response<Body>> {
     // Keep small: each miss spawns ffmpeg (~100-500ms). 3 candidates per
     // direction is enough — the bad frame is almost always at a chunk boundary
     // so the very next frame in the other chunk works.
@@ -341,17 +305,7 @@ async fn try_nearest_frame(
             if is_snapshot {
                 // Snapshot frame — just check file exists
                 if tokio::fs::metadata(&file_path).await.is_ok() {
-                    if redact_pii {
-                        if let Ok(response) =
-                            apply_pii_redaction(state, candidate_id, &file_path).await
-                        {
-                            debug!(
-                                "Frame {} unavailable, serving nearest snapshot {} ({})",
-                                frame_id, candidate_id, dir_name
-                            );
-                            return Some(response);
-                        }
-                    } else if let Ok(response) = serve_file(&file_path).await {
+                    if let Ok(response) = serve_file(&file_path).await {
                         debug!(
                             "Frame {} unavailable, serving nearest snapshot {} ({})",
                             frame_id, candidate_id, dir_name
@@ -368,15 +322,7 @@ async fn try_nearest_frame(
                 _ => continue,
             }
 
-            match try_extract_and_serve_frame(
-                state,
-                candidate_id,
-                &file_path,
-                offset_index,
-                redact_pii,
-            )
-            .await
-            {
+            match try_extract_and_serve_frame(state, candidate_id, &file_path, offset_index).await {
                 Ok(response) => {
                     debug!(
                         "Frame {} unavailable, serving nearest frame {} ({})",
@@ -1016,92 +962,6 @@ pub async fn run_frame_ocr(
         frame_id,
         text_positions,
     }))
-}
-
-/// Apply PII redaction to a frame image
-pub(crate) async fn apply_pii_redaction(
-    state: &Arc<AppState>,
-    frame_id: i64,
-    frame_path: &str,
-) -> Result<Response<Body>, (StatusCode, JsonResponse<Value>)> {
-    // Read the frame file
-    let frame_data = match tokio::fs::read(frame_path).await {
-        Ok(data) => data,
-        Err(e) => {
-            error!("Failed to read frame file for PII redaction: {}", e);
-            return serve_file(frame_path).await; // Fall back to unredacted
-        }
-    };
-
-    // Get OCR text_json for this frame
-    let text_json_str = match state.db.get_frame_ocr_text_json(frame_id).await {
-        Ok(Some(json)) => json,
-        Ok(None) => {
-            debug!("No OCR data for frame {}, serving unredacted", frame_id);
-            return serve_file(frame_path).await;
-        }
-        Err(e) => {
-            error!("Failed to get OCR data for frame {}: {}", frame_id, e);
-            return serve_file(frame_path).await;
-        }
-    };
-
-    // Parse the text_json
-    let text_json: Vec<HashMap<String, String>> = match serde_json::from_str(&text_json_str) {
-        Ok(json) => json,
-        Err(e) => {
-            debug!("Failed to parse OCR text_json: {}", e);
-            return serve_file(frame_path).await;
-        }
-    };
-
-    // Get image dimensions
-    let img = match image::load_from_memory(&frame_data) {
-        Ok(img) => img,
-        Err(e) => {
-            error!("Failed to load image for PII detection: {}", e);
-            return serve_file(frame_path).await;
-        }
-    };
-    let (width, height) = img.dimensions();
-
-    // Detect PII regions
-    let pii_regions = detect_pii_regions(&text_json, width, height);
-
-    if pii_regions.is_empty() {
-        debug!("No PII detected in frame {}", frame_id);
-        return serve_file(frame_path).await;
-    }
-
-    debug!(
-        "Detected {} PII regions in frame {}: {:?}",
-        pii_regions.len(),
-        frame_id,
-        pii_regions.iter().map(|r| &r.pii_type).collect::<Vec<_>>()
-    );
-
-    // Apply redaction
-    match redact_frame_pii(&frame_data, &pii_regions) {
-        Ok(redacted_data) => {
-            let body = Body::from(redacted_data);
-            Response::builder()
-                .header("content-type", "image/jpeg")
-                .header("cache-control", "no-cache") // Don't cache redacted frames
-                .header("x-pii-redacted", "true")
-                .header("x-pii-regions-count", pii_regions.len().to_string())
-                .body(body)
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        JsonResponse(json!({"error": format!("Failed to create response: {}", e)})),
-                    )
-                })
-        }
-        Err(e) => {
-            error!("Failed to redact PII from frame {}: {}", frame_id, e);
-            serve_file(frame_path).await // Fall back to unredacted
-        }
-    }
 }
 
 pub(crate) async fn serve_file(path: &str) -> Result<Response, (StatusCode, JsonResponse<Value>)> {

@@ -28,16 +28,22 @@ fn parse_relative_time(s: &str) -> Option<DateTime<Utc>> {
     let value: f64 = trimmed[..num_end].parse().ok()?;
     let unit = trimmed[num_end..].trim();
 
+    // `value as i64` saturates a huge/inf float to i64::MAX rather than
+    // wrapping, and the `Duration::*` / `DateTime - Duration` operators both
+    // *panic* on overflow. A user passing `start_time=99999999999999w` (or any
+    // absurd magnitude) would otherwise panic the request handler instead of
+    // getting a clean "invalid time" 400. Use the checked constructors and a
+    // checked subtraction so out-of-range input falls through to `None`.
     let duration = match unit {
-        "s" | "sec" | "second" | "seconds" => Duration::seconds(value as i64),
-        "m" | "min" | "minute" | "minutes" => Duration::minutes(value as i64),
-        "h" | "hr" | "hour" | "hours" => Duration::hours(value as i64),
-        "d" | "day" | "days" => Duration::days(value as i64),
-        "w" | "week" | "weeks" => Duration::weeks(value as i64),
+        "s" | "sec" | "second" | "seconds" => Duration::try_seconds(value as i64),
+        "m" | "min" | "minute" | "minutes" => Duration::try_minutes(value as i64),
+        "h" | "hr" | "hour" | "hours" => Duration::try_hours(value as i64),
+        "d" | "day" | "days" => Duration::try_days(value as i64),
+        "w" | "week" | "weeks" => Duration::try_weeks(value as i64),
         _ => return None,
-    };
+    }?;
 
-    Some(Utc::now() - duration)
+    Utc::now().checked_sub_signed(duration)
 }
 
 /// Try to parse a string as either ISO 8601 or relative time.
@@ -146,5 +152,18 @@ mod tests {
     fn test_parse_invalid() {
         assert!(parse_flexible_datetime("banana").is_err());
         assert!(parse_flexible_datetime("").is_err());
+    }
+
+    #[test]
+    fn test_parse_overflow_does_not_panic() {
+        // Previously these panicked inside chrono's Duration constructors /
+        // the DateTime subtraction. They must return a clean Err instead so
+        // the request handler answers 400, not a connection reset.
+        assert!(parse_flexible_datetime("99999999999999w").is_err());
+        assert!(parse_flexible_datetime("99999999999999999999d ago").is_err());
+        assert!(parse_flexible_datetime("1e30h").is_err());
+        // Valid Duration magnitude but the resulting instant is before the
+        // representable DateTime range — checked_sub_signed yields None.
+        assert!(parse_flexible_datetime("20000000w").is_err());
     }
 }

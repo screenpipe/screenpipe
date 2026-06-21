@@ -53,9 +53,15 @@ struct RetentionRuntime {
     run_now: Arc<tokio::sync::Notify>,
 }
 
-/// What old data gets cleaned up. `Media` (default) keeps DB rows (search,
-/// timeline, transcripts) and only reclaims mp4/wav/jpeg files; `All` is the
-/// legacy behavior that wipes everything past the cutoff.
+/// What old data gets cleaned up.
+/// - `Media` (default): keeps every DB row (search, timeline, transcripts) and
+///   only reclaims mp4/wav/jpeg files on disk.
+/// - `Lean`: also reclaims media AND strips the heavy text a frame carries —
+///   the per-node accessibility/OCR `elements`, the raw accessibility tree
+///   JSON, and the `ui_events` stream — while keeping `full_text`, transcripts,
+///   and memories searchable. Shrinks db.sqlite itself (the element tree is the
+///   biggest contributor), unlike `Media` which only frees disk files.
+/// - `All`: the legacy behavior that wipes everything past the cutoff.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, OaSchema, ValueEnum, Default,
 )]
@@ -64,6 +70,7 @@ struct RetentionRuntime {
 pub enum RetentionMode {
     #[default]
     Media,
+    Lean,
     All,
 }
 
@@ -124,6 +131,21 @@ pub async fn retention_configure(
         return Err((
             StatusCode::BAD_REQUEST,
             JsonResponse(json!({"error": "retention_days must be at least 1"})),
+        ));
+    }
+
+    // Enforce a sane maximum. 100 years is absurdly generous for "keep the last
+    // N days" yet far below where `Utc::now() - Duration::days(..)` overflows
+    // chrono's date range and panics the retention loop. The loop also guards
+    // this defensively (see `retention_cutoff`), but reject it here with a clear
+    // error rather than silently accepting a value that can never take effect.
+    const MAX_RETENTION_DAYS: u32 = 36_500;
+    if retention_days > MAX_RETENTION_DAYS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(
+                json!({"error": format!("retention_days must be at most {MAX_RETENTION_DAYS}")}),
+            ),
         ));
     }
 
@@ -306,7 +328,16 @@ fn spawn_retention_loop(
                 }
             };
 
-            let cutoff = Utc::now() - Duration::days(retention_days as i64);
+            let cutoff = match retention_cutoff(retention_days, Utc::now()) {
+                Some(c) => c,
+                None => {
+                    warn!(
+                        "retention: retention_days={} out of range, skipping cleanup cycle",
+                        retention_days
+                    );
+                    continue;
+                }
+            };
 
             info!(
                 "retention: cleaning up data before {} ({}d retention, mode={:?})",
@@ -337,6 +368,17 @@ fn spawn_retention_loop(
             }
         }
     })
+}
+
+/// Compute the deletion cutoff: data older than the returned instant is
+/// eligible for removal. Returns `None` when `retention_days` is so large the
+/// subtraction would underflow chrono's representable date range — in which
+/// case `Utc::now() - Duration::days(..)` would *panic*. `retention_days` is a
+/// `u32` with no hard upper bound at every entry point (a persisted config from
+/// an older client can bypass the endpoint's range check), so the loop must
+/// treat an out-of-range value as "skip", never delete-from-a-bogus-window.
+fn retention_cutoff(retention_days: u32, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    Duration::try_days(retention_days as i64).and_then(|d| now.checked_sub_signed(d))
 }
 
 async fn do_local_cleanup(
@@ -448,6 +490,59 @@ async fn do_local_cleanup(
                     );
                 }
             },
+            RetentionMode::Lean => {
+                // 1. Reclaim media files on disk (same as Media mode).
+                match db.evict_media_in_range(batch_start, batch_end).await {
+                    Ok(result) => {
+                        let evicted = result.video_chunks_evicted
+                            + result.audio_chunks_evicted
+                            + result.snapshots_evicted;
+                        if evicted > 0 {
+                            any_deleted = true;
+                        }
+                        total += evicted;
+
+                        for path in result
+                            .video_files
+                            .iter()
+                            .chain(result.audio_files.iter())
+                            .chain(result.snapshot_files.iter())
+                        {
+                            if let Err(e) = tokio::fs::remove_file(path).await {
+                                warn!("retention: failed to evict file {}: {}", path, e);
+                            }
+                        }
+                    }
+                    Err(e) => warn!(
+                        "retention: lean media evict failed for range {} to {}: {}",
+                        batch_start, batch_end, e
+                    ),
+                }
+
+                // 2. Strip the heavy text rows (elements tree, AX JSON,
+                //    ui_events). full_text/transcripts/memories stay searchable.
+                match db.strip_heavy_text_in_range(batch_start, batch_end).await {
+                    Ok(result) => {
+                        let stripped = result.elements_deleted
+                            + result.frames_stripped
+                            + result.ui_events_deleted;
+                        if stripped > 0 {
+                            any_deleted = true;
+                            info!(
+                                "retention: lean stripped elements={} frames_ax_json={} ui_events={}",
+                                result.elements_deleted,
+                                result.frames_stripped,
+                                result.ui_events_deleted,
+                            );
+                        }
+                        total += stripped;
+                    }
+                    Err(e) => warn!(
+                        "retention: lean text strip failed for range {} to {}: {}",
+                        batch_start, batch_end, e
+                    ),
+                }
+            }
         }
 
         batch_start = batch_end;
@@ -456,15 +551,54 @@ async fn do_local_cleanup(
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
-    if any_deleted && matches!(mode, RetentionMode::All) {
-        if let Err(e) = db.cleanup_orphaned_chunks().await {
-            warn!("retention: orphan chunk cleanup failed: {}", e);
+    if any_deleted {
+        // Only `All` deletes frames/transcriptions, which can orphan chunk
+        // rows. `Lean` keeps them (it evicts files + strips text), so the
+        // expensive orphan scan isn't needed.
+        if matches!(mode, RetentionMode::All) {
+            if let Err(e) = db.cleanup_orphaned_chunks().await {
+                warn!("retention: orphan chunk cleanup failed: {}", e);
+            }
         }
-        info!("retention: running incremental vacuum to reclaim disk space");
-        if let Err(e) = db.execute_raw_sql("PRAGMA incremental_vacuum(1000)").await {
-            warn!("retention: incremental vacuum failed: {}", e);
+        // Both `All` and `Lean` free pages in db.sqlite. NOTE: this only hands
+        // pages back to the OS when the DB is auto_vacuum=INCREMENTAL; today it
+        // ships as auto_vacuum=NONE, so this is effectively a no-op and the
+        // freed pages are reused by future writes instead. Net effect for the
+        // user: growth halts and space is reused, but the file doesn't shrink
+        // without a full VACUUM (intentionally not run here — it takes an
+        // exclusive lock that would stall live capture). Kept so the reclaim
+        // becomes real if/when the DB is migrated to incremental auto_vacuum.
+        if matches!(mode, RetentionMode::All | RetentionMode::Lean) {
+            info!("retention: running incremental vacuum (reclaims pages only under auto_vacuum=incremental)");
+            if let Err(e) = db.execute_raw_sql("PRAGMA incremental_vacuum(1000)").await {
+                warn!("retention: incremental vacuum failed: {}", e);
+            }
         }
     }
 
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_cutoff_normal_values() {
+        let now = Utc::now();
+        // 14 days back is exactly 14 days before now.
+        let c = retention_cutoff(14, now).expect("14d is in range");
+        assert_eq!(now - c, Duration::days(14));
+        // The configure endpoint's max (100 years) must still compute.
+        assert!(retention_cutoff(36_500, now).is_some());
+    }
+
+    #[test]
+    fn retention_cutoff_out_of_range_is_none_not_panic() {
+        let now = Utc::now();
+        // u32::MAX days (~11.7M years) underflows chrono's date range. The old
+        // `now - Duration::days(..)` panicked here; the guard must yield None so
+        // the retention loop skips the cycle instead of crashing.
+        assert_eq!(retention_cutoff(u32::MAX, now), None);
+    }
 }

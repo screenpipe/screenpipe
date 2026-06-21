@@ -1,0 +1,140 @@
+name: PR media check (potential AI slop)
+
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+# flags PRs whose description has no before/after screen recording. uses
+# pull_request_target so it can label/comment on fork PRs (it only reads PR
+# metadata via the api — it never checks out untrusted PR code).
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-media-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body for a before/after video
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+            const issue_number = pr.number;
+
+            const LABEL = "potential-ai-slop";
+            const MARKER = "<!-- potential-ai-slop-check -->";
+
+            // ---- detect a video in the PR description -------------------------
+            // strip image markdown first, so github drag-dropped IMAGES
+            //   ![alt](https://github.com/user-attachments/assets/<uuid>)
+            // don't count. videos are inserted by github as a BARE url on their
+            // own line, so a bare user-attachments link == video.
+            const body = pr.body || "";
+            const withoutImages = body.replace(/!\[[^\]]*\]\([^)]*\)/g, "");
+
+            const videoPatterns = [
+              /<video[\s>]/i,                                                                 // html5 embed
+              /\.(mp4|mov|webm|m4v|avi|mkv|ogv|mpe?g|gif)(\?[^\s)"'<>]*)?/i,                   // video / recording file links
+              /https?:\/\/(www\.)?(youtube\.com|youtu\.be|loom\.com|vimeo\.com|streamable\.com|vidyard\.com|wistia\.com|tella\.tv|screen\.studio)\b/i, // video hosts
+              /https?:\/\/github\.com\/user-attachments\/assets\/[0-9a-f-]+/i,                // github drag-drop (video; images stripped above)
+              /https?:\/\/user-images\.githubusercontent\.com\/\S+\.(mp4|mov|webm|m4v|gif)/i, // legacy attachment host
+            ];
+
+            const hasVideo = videoPatterns.some((re) => re.test(withoutImages));
+            core.info(`PR #${issue_number} hasVideo=${hasVideo}`);
+
+            // ---- helpers ------------------------------------------------------
+            async function ensureLabel() {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: LABEL,
+                  color: "b60205",
+                  description: "no before/after video in pr — may be ai slop and closed",
+                });
+              }
+            }
+
+            async function findMarkerComment() {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+              return comments.find((c) => c.body && c.body.includes(MARKER));
+            }
+
+            // ---- act ----------------------------------------------------------
+            const existing = await findMarkerComment();
+
+            if (!hasVideo) {
+              await ensureLabel();
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number,
+                labels: [LABEL],
+              });
+
+              if (!existing) {
+                const commentBody = [
+                  MARKER,
+                  "👋 thanks for the pr!",
+                  "",
+                  "i couldn't find a **before/after screen recording** in the description. prs without a video showing the change in action are hard to review and may be **closed soon** as potential ai slop.",
+                  "",
+                  "to clear this:",
+                  "- add a short screen recording of the app/cli **before** and **after** your change to the pr description",
+                  "- drag the file into the description box — github hosts it (never commit media into the repo)",
+                  "- the `" + LABEL + "` label drops automatically once a video is detected",
+                  "",
+                  "if a video genuinely doesn't apply (docs / ci / pure refactor), reply here and a maintainer can remove the label.",
+                ].join("\n");
+
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number,
+                  body: commentBody,
+                });
+                core.info(`Flagged PR #${issue_number} as ${LABEL}`);
+              }
+            } else {
+              // video present — clean up any prior flag so the check self-heals.
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: LABEL,
+                });
+                core.info(`Removed ${LABEL} from PR #${issue_number}`);
+              } catch (e) {
+                if (e.status !== 404) throw e; // 404 == label wasn't set, fine
+              }
+
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                });
+                core.info(`Deleted stale slop comment on PR #${issue_number}`);
+              }
+            }
