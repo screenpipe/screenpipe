@@ -839,6 +839,14 @@ export function StandaloneChat({
     turnIntentTextValuesMatch,
   });
 
+  const messageHistory = React.useMemo(
+    () =>
+      messages
+        .filter((message) => message.role === "user" && message.content.trim())
+        .map((message) => message.content),
+    [messages],
+  );
+
   const {
     handleKeyDown,
     handlePaste,
@@ -865,12 +873,7 @@ export function StandaloneChat({
     pastedImages,
     pendingDocsRef,
     attachedDocsRef,
-    messageHistory: messages
-      .filter(
-        (message) =>
-          message.role === "user" && (message.displayContent ?? message.content).trim(),
-      )
-      .map((message) => message.displayContent ?? message.content),
+    messageHistory,
     queuedPrompts,
     steerShortcutInFlightRef,
     isKnownConnectionId: (id) => INTEGRATION_ICON_KEYS.has(id),
