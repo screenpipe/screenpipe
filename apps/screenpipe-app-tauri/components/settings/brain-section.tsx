@@ -43,6 +43,7 @@ import {
   AlertCircle,
   FolderOpen,
   Eye,
+  MessageSquare,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { CompactMarkdown } from "@/components/settings/compact-markdown";
@@ -57,12 +58,18 @@ import {
 } from "@/lib/hooks/use-unified-artifacts";
 import { commands } from "@/lib/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { parseBrainSearchQuery } from "@/lib/utils/brain-search";
 import { getArtifactCardDisplay } from "@/lib/utils/artifact-display";
+import {
+  resolveArtifactOpenTarget,
+  type ArtifactOpenTarget,
+} from "@/lib/utils/artifact-origin";
 import {
   getMemoryCardDisplay,
   type MemoryCardDisplay,
 } from "@/lib/utils/memory-display";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 interface MemoryRecord {
   id: number;
@@ -223,6 +230,7 @@ type SortDir = "desc" | "asc";
 
 export function BrainSection() {
   const { toast } = useToast();
+  const chatSessions = useChatStore((state) => state.sessions);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -263,6 +271,29 @@ export function BrainSection() {
       } catch {}
     }
   };
+
+  const artifactOpenTarget = useCallback(
+    (artifact: UnifiedArtifact, key: string): ArtifactOpenTarget =>
+      resolveArtifactOpenTarget(artifact, key, chatSessions),
+    [chatSessions],
+  );
+
+  const openArtifactOrigin = useCallback(
+    (target: ArtifactOpenTarget) => {
+      if (target.mode === "artifact-only") {
+        toast({
+          title: "artifact has no linked chat",
+          description: "opening it here without attaching it to the current chat",
+        });
+        return;
+      }
+      void emit("chat-load-conversation", {
+        conversationId: target.conversationId,
+        targetWindow: "home",
+      });
+    },
+    [toast],
+  );
 
   // batch selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1418,7 +1449,13 @@ export function BrainSection() {
         <div
           ref={scrollRef}
           className={`min-h-0 overflow-y-auto pr-1 ${
-            selectedDetail ? "w-[52%] shrink-0" : "flex-1"
+            typeFilter === "artifacts"
+              ? selectedDetail
+                ? "w-[38%] shrink-0 space-y-3"
+                : "grid flex-1 auto-rows-max grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3"
+              : selectedDetail
+                ? "w-[52%] shrink-0"
+                : "flex-1"
           }`}
         >
           {unifiedItems.slice(0, visibleCount).map((item) => {
@@ -1434,14 +1471,13 @@ export function BrainSection() {
               const isSelected =
                 selectedItem?.kind === "artifact" && selectedItem.key === artKey;
               const isChecked = selectedIds.has(artKey);
+              const target = artifactOpenTarget(artItem, artKey);
               return (
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
-                  className={`group flex cursor-default items-start gap-2 border-b border-border/70 px-2 py-2.5 transition-colors hover:bg-muted/30 ${
-                    isSelected ? "bg-muted/50" : ""
-                  } ${
-                    isChecked ? "bg-muted/40" : ""
+                  className={`group relative min-h-[315px] cursor-default overflow-hidden rounded-none border border-border bg-background transition-colors hover:bg-muted/20 ${
+                    isSelected || isChecked ? "bg-muted/30 ring-1 ring-border" : ""
                   }`}
                   onClick={() => {
                     setSelectedItem({ kind: "artifact", key: artKey });
@@ -1453,108 +1489,157 @@ export function BrainSection() {
                     checked={isChecked}
                     onClick={(e) => e.stopPropagation()}
                     onCheckedChange={() => toggleSelected(artKey)}
-                    className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
+                    className={`absolute left-3 top-3 z-10 h-3.5 w-3.5 transition-opacity ${
                       !selectionMode && !isChecked
                         ? "opacity-0 group-hover:opacity-100"
                         : "opacity-100"
                     }`}
                   />
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="truncate text-sm font-medium text-foreground">
-                            {display.title}
-                          </h3>
-                          <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
-                            {artifactKindLabel(artItem.kind)}
-                          </Badge>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                          <span className="truncate">{display.subtitle}</span>
-                          {artDate && (
-                            <>
-                              <span className="text-muted-foreground/40">·</span>
-                              <span>{timeAgo(artDate)}</span>
-                            </>
-                          )}
-                          {artSize != null && (
-                            <>
-                              <span className="text-muted-foreground/40">·</span>
-                              <span>{formatBytes(artSize)}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-0.5 shrink-0">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void commands.openViewerWindow(artPath);
-                          }}
-                          title="open viewer"
-                        >
-                          <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void invoke("reveal_in_default_browser", { path: artPath });
-                          }}
-                          title="reveal in finder"
-                        >
-                          <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
-                        </Button>
-                        {artItem.registered && (
-                          <ConfirmDeleteDialog
-                            trigger={
-                              <Button
-                                data-testid={`brain-delete-artifact-${artTestId}`}
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                                title="delete"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                              </Button>
-                            }
-                            title="delete artifact"
-                            description="this artifact will be permanently deleted. this cannot be undone."
-                            onConfirm={() => void handleDeleteArtifact(artItem)}
-                          />
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-0 top-0 z-10 h-8 w-8 overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-muted/40 [clip-path:polygon(100%_0,100%_100%,0_0)]" />
+                    <div className="absolute right-[15px] top-[-7px] h-[46px] w-px origin-top rotate-[-45deg] bg-border" />
+                  </div>
+                  <div className="flex h-full flex-col">
+                    <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 px-6 py-6 text-foreground">
+                      <div className="max-w-[92%] space-y-3">
+                        <h3 className="line-clamp-2 text-[19px] font-semibold leading-tight">
+                          {display.title}
+                        </h3>
+                        {display.summary ? (
+                          <p
+                            data-testid={`brain-artifact-preview-${artTestId}`}
+                            className="line-clamp-4 font-serif text-[15px] leading-relaxed text-muted-foreground"
+                          >
+                            {display.summary}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            {display.subtitle}
+                          </p>
                         )}
                       </div>
                     </div>
-                    {display.summary && (
-                      <p
-                        data-testid={`brain-artifact-preview-${artTestId}`}
-                        className="line-clamp-2 text-xs leading-relaxed text-muted-foreground"
-                      >
-                        {display.summary}
-                      </p>
-                    )}
-                    {artItem.saf_kind && (
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span
-                          data-testid={`brain-artifact-saf-kind-${artTestId}`}
-                          className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full border border-border font-mono text-foreground/80"
-                        >
-                          {artItem.saf_kind}
-                          {artItem.saf_version != null && (
-                            <span className="ml-1 text-muted-foreground/70">
-                              v{artItem.saf_version}
-                            </span>
-                          )}
-                        </span>
+                    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <h4 className="line-clamp-2 text-[15px] font-semibold leading-snug">
+                            {display.title}
+                          </h4>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                            <span className="truncate">{display.subtitle}</span>
+                            {artDate && (
+                              <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span>{timeAgo(artDate)}</span>
+                              </>
+                            )}
+                            {artSize != null && (
+                              <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span>{formatBytes(artSize)}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
+                          {artifactKindLabel(artItem.kind)}
+                        </Badge>
                       </div>
-                    )}
+                      <div className="mt-auto flex items-center justify-between gap-2">
+                        <Badge variant="secondary" className="max-w-[120px] truncate text-[10px] px-1.5 py-0 font-normal">
+                          {target.mode === "artifact-only" ? "artifact" : target.mode}
+                        </Badge>
+                        <div className="flex items-center gap-0.5">
+                          {target.mode !== "artifact-only" && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openArtifactOrigin(target);
+                              }}
+                              title={target.mode === "pipe-run" ? "open pipe run" : "open chat"}
+                            >
+                              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                            </Button>
+                          )}
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void commands.openViewerWindow(artPath);
+                            }}
+                            title="open viewer"
+                          >
+                            <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void invoke("reveal_in_default_browser", { path: artPath });
+                            }}
+                            title="reveal in finder"
+                          >
+                            <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              commands.copyTextToClipboard(artPath);
+                            }}
+                            title="copy path"
+                          >
+                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                          {artItem.registered && (
+                            <ConfirmDeleteDialog
+                              trigger={
+                                <Button
+                                  data-testid={`brain-delete-artifact-${artTestId}`}
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="delete"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                                </Button>
+                              }
+                              title="delete artifact"
+                              description="this artifact will be permanently deleted. this cannot be undone."
+                              onConfirm={() => void handleDeleteArtifact(artItem)}
+                            />
+                          )}
+                        </div>
+                      </div>
+                      {artItem.saf_kind && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            data-testid={`brain-artifact-saf-kind-${artTestId}`}
+                            className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full border border-border font-mono text-foreground/80"
+                          >
+                            {artItem.saf_kind}
+                            {artItem.saf_version != null && (
+                              <span className="ml-1 text-muted-foreground/70">
+                                v{artItem.saf_version}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -1759,7 +1844,9 @@ export function BrainSection() {
         {selectedDetail && (
           <aside
             data-testid="brain-detail-panel"
-            className="flex min-w-0 flex-1 flex-col border-l border-border pl-3"
+            className={`flex min-w-0 flex-1 flex-col border-l border-border ${
+              selectedDetail.kind === "artifact" ? "pl-5" : "pl-3"
+            }`}
           >
             {selectedDetail.kind === "memory" ? (
               (() => {
@@ -1825,6 +1912,7 @@ export function BrainSection() {
                 const display = getArtifactCardDisplay(artifact);
                 const isHtmlArtifact = isHtmlFileName(artifact.path);
                 const detailContent = fullContent ?? artifact.preview ?? "";
+                const target = artifactOpenTarget(artifact, artKey);
                 return (
                   <>
                     <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
@@ -1863,17 +1951,53 @@ export function BrainSection() {
                           )}
                         </div>
                       </div>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 shrink-0"
-                        onClick={() => setSelectedItem(null)}
-                        title="close detail"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {target.mode !== "artifact-only" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-[10px] px-2"
+                            onClick={() => openArtifactOrigin(target)}
+                          >
+                            {target.mode === "pipe-run" ? "open run" : "open chat"}
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[10px] px-2"
+                          onClick={() => void commands.openViewerWindow(artifact.path)}
+                        >
+                          open
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[10px] px-2"
+                          onClick={() => void invoke("reveal_in_default_browser", { path: artifact.path })}
+                        >
+                          reveal
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[10px] px-2"
+                          onClick={() => commands.copyTextToClipboard(detailContent)}
+                        >
+                          copy
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={() => setSelectedItem(null)}
+                          title="close artifact"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto py-3 pr-1">
+                    <div className="min-h-0 flex-1 overflow-y-auto border border-border border-t-0 bg-background px-5 py-5">
                       {artifact.saf_kind ? (
                         <SafArtifactBody
                           title={display.title}
