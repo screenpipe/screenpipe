@@ -202,6 +202,7 @@ export function useChatMessageActions({
     sendMessage,
     openFilePreview,
     branchConversation,
+    suppressSourceFooters: true,
   };
 
   return {
