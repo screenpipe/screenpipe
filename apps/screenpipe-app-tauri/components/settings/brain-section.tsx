@@ -213,11 +213,26 @@ function filterTagKind(tag: string): "label" | "person" | "date" | "source" {
   return "label";
 }
 
-function memoryCardTags(tags: string[]): string[] {
+function memoryCardTags(
+  tags: string[],
+  source: string,
+  kind: MemoryCardDisplay["kind"],
+): string[] {
+  const hiddenTags = new Set([
+    source,
+    filterTagLabel(source),
+    kind,
+    `clone:${kind}`,
+  ]);
+
   return Array.from(
     new Set(
       tags
-        .filter((tag) => !isDateFilterTag(tag) && !/^\d+$/.test(tag))
+        .filter((tag) => {
+          if (isDateFilterTag(tag) || /^\d+$/.test(tag)) return false;
+          const label = filterTagLabel(tag);
+          return !hiddenTags.has(tag) && !hiddenTags.has(label);
+        })
         .map(filterTagLabel),
     ),
   );
@@ -1757,7 +1772,7 @@ export function BrainSection() {
             const isDeleting = deletingId === memory.id;
             const memKey = `mem:${memory.id}`;
             const display = getCachedMemoryDisplay(memory);
-            const tags = memoryCardTags(memory.tags);
+            const tags = memoryCardTags(memory.tags, memory.source, display.kind);
             const isSelected =
               selectedItem?.kind === "memory" && selectedItem.key === memKey;
             const isChecked = selectedIds.has(memKey);
@@ -1976,9 +1991,6 @@ export function BrainSection() {
                           {display.subtitle}
                         </p>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal">
-                            {memory.source}
-                          </Badge>
                           <span className="text-[10px] text-muted-foreground">
                             {timeAgo(memory.created_at)}
                           </span>
