@@ -1614,19 +1614,19 @@ export function BrainSection() {
                   </div>
                   <div className="flex h-full flex-col">
                     <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 px-6 py-6 text-foreground">
-                      <div className="max-w-[92%] space-y-3">
-                        <h3 className="line-clamp-2 text-[19px] font-semibold leading-tight">
+                      <div className="max-w-[92%] space-y-2.5">
+                        <h3 className="line-clamp-2 text-[16px] font-semibold leading-tight">
                           {display.title}
                         </h3>
                         {display.summary ? (
                           <p
                             data-testid={`brain-artifact-preview-${artTestId}`}
-                            className="line-clamp-4 font-serif text-[15px] leading-relaxed text-muted-foreground"
+                            className="line-clamp-4 font-serif text-[13px] leading-relaxed text-muted-foreground"
                           >
                             {display.summary}
                           </p>
                         ) : (
-                          <p className="text-sm text-muted-foreground">
+                          <p className="text-[13px] text-muted-foreground">
                             {display.subtitle}
                           </p>
                         )}
@@ -1635,7 +1635,7 @@ export function BrainSection() {
                     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 space-y-1">
-                          <h4 className="line-clamp-2 text-[15px] font-semibold leading-snug">
+                          <h4 className="line-clamp-2 text-[16px] font-semibold leading-snug">
                             {display.title}
                           </h4>
                           <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
