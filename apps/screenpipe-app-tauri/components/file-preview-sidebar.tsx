@@ -45,14 +45,6 @@ export function FilePreviewSidebar({
   );
   const breadcrumb = useMemo(() => viewerPathBreadcrumb(effectivePath), [effectivePath]);
 
-  const openInDefault = useCallback(async () => {
-    try {
-      await commands.openNotePath(effectivePath);
-    } catch (e) {
-      console.error("open preview path failed", e);
-    }
-  }, [effectivePath]);
-
   const revealInFinder = useCallback(async () => {
     try {
       await commands.revealInDefaultBrowser(effectivePath);
@@ -95,13 +87,6 @@ export function FilePreviewSidebar({
         </div>
         {!notFound && (
           <>
-            <button
-              onClick={openInDefault}
-              title="Open file"
-              className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-            >
-              open
-            </button>
             <button
               onClick={revealInFinder}
               title="Reveal file"
