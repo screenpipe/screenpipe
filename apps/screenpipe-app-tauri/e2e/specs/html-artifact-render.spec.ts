@@ -38,11 +38,29 @@ import { authHeaders, getLocalApiConfig } from "../helpers/api-utils.js";
 // Unique signature color so we can prove containment: if this hex ever appears
 // in a HOST <style>, the artifact leaked into the app DOM (the original bug).
 const SIGNATURE = "1a1a2e";
+const VIEWER_LABEL_PREFIX = "viewer-";
 const FIXTURE_HTML =
   "<!doctype html><html><head><meta charset='utf-8'><title>e2e</title><style>" +
   `*{margin:0;padding:0}body{background:linear-gradient(135deg,#${SIGNATURE} 0%,#16213e 100%);` +
   "color:#fff;min-height:100vh}h1{-webkit-text-fill-color:transparent}" +
   "</style></head><body><h1>E2E Time Usage</h1><p>rendered inside the sandbox</p></body></html>";
+
+async function viewerHandles(): Promise<string[]> {
+  return (await browser.getWindowHandles()).filter((h) =>
+    h.startsWith(VIEWER_LABEL_PREFIX),
+  );
+}
+
+async function waitForViewerCount(count: number, timeoutMs = t(10_000)): Promise<void> {
+  await browser.waitUntil(
+    async () => (await viewerHandles()).length === count,
+    {
+      timeout: timeoutMs,
+      interval: 250,
+      timeoutMsg: `Expected ${count} viewer-* window handle(s); have ${(await viewerHandles()).length}`,
+    },
+  );
+}
 
 describe("HTML artifact rendering (Brain, sandboxed)", function () {
   this.timeout(180_000);
@@ -114,13 +132,23 @@ describe("HTML artifact rendering (Brain, sandboxed)", function () {
     const rowTestId = `brain-item-artifact-${artifactId}`;
     const row = await waitForTestId(rowTestId, 20_000);
 
-    // Select it so the side detail panel renders the full artifact.
+    // Select it so Brain opens the full artifact in the viewer window.
+    const viewerCount = (await viewerHandles()).length;
     await row.click();
-    const panel = await waitForTestId("brain-detail-panel", 15_000);
+    await waitForViewerCount(viewerCount + 1, t(12_000));
+
+    const opened = (await viewerHandles()).at(-1) as string;
+    await browser.switchToWindow(opened);
+    await browser.waitUntil(
+      async () => (await browser.getUrl()).includes("/viewer"),
+      { timeout: t(10_000), interval: 250, timeoutMsg: "viewer URL never loaded" },
+    );
+    const url = new URL(await browser.getUrl());
+    expect(url.pathname).toBe("/viewer");
 
     // A full document defaults to rendered → a sandboxed iframe mounts once the
     // file content loads.
-    const iframe = await panel.$("iframe");
+    const iframe = await $("iframe");
     await iframe.waitForExist({ timeout: t(20_000) });
 
     // SECURITY: scripts only — never same-origin (which would expose Tauri IPC).
@@ -142,5 +170,6 @@ describe("HTML artifact rendering (Brain, sandboxed)", function () {
 
     const shot = await saveScreenshot("html-artifact-render-sandboxed");
     expect(existsSync(shot)).toBe(true);
+    await browser.switchToWindow("home");
   });
 });

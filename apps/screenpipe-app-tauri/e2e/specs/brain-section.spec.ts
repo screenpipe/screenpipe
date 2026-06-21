@@ -14,7 +14,7 @@
  *   - Batch select + delete count
  *   - Selection count prunes after individual delete
  *   - Add new memory
- *   - Artifact markdown detail panel rendering
+ *   - Orphan artifact markdown opens in the viewer window
  *
  * Seeds deterministic test data via API in the before hook.
  * Does not depend on the recording pipeline; passes with `no-recording` seed.
@@ -27,14 +27,14 @@ import { invokeOrThrow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 
-// Seed enough content that the compact row preview differs from the full
-// artifact body shown in the detail panel.
+// Seed enough content that the compact card preview differs from the full
+// artifact body shown in the viewer window.
 const ARTIFACT_CONTENT = [
   "# E2E Test Artifact",
   "",
   "This is a seeded artifact with enough content to exceed the 150 character",
   "truncation threshold used by CompactMarkdown. The preview test relies on",
-  "this text being long enough that the detail panel has more to render.",
+  "this text being long enough that the viewer window has more to render.",
   "",
   "## Section two",
   "",
@@ -99,6 +99,24 @@ async function fetchJson(
 }
 
 const TEST_SOURCE = "e2e-brain-test";
+const VIEWER_LABEL_PREFIX = "viewer-";
+
+async function viewerHandles(): Promise<string[]> {
+  return (await browser.getWindowHandles()).filter((h) =>
+    h.startsWith(VIEWER_LABEL_PREFIX),
+  );
+}
+
+async function waitForViewerCount(count: number, timeoutMs = t(10_000)): Promise<void> {
+  await browser.waitUntil(
+    async () => (await viewerHandles()).length === count,
+    {
+      timeout: timeoutMs,
+      interval: 250,
+      timeoutMsg: `Expected ${count} viewer-* window handle(s); have ${(await viewerHandles()).length}`,
+    },
+  );
+}
 
 /** Navigate away from Brain and back to force a component remount + fresh data fetch. */
 async function reloadBrainSection() {
@@ -693,7 +711,7 @@ describe("Brain section", function () {
     await saveScreenshot("brain-after-add-memory");
   });
 
-  it("artifact markdown preview opens full content in the detail panel", async () => {
+  it("artifact markdown preview opens full content in the viewer window", async () => {
     // Filter to artifacts so the seeded artifact is visible
     const artFilter = await $('[data-testid="brain-filter-artifacts"]');
     await artFilter.click();
@@ -714,22 +732,30 @@ describe("Brain section", function () {
     );
     expect(await preview.isExisting()).toBe(true);
 
+    const viewerCount = (await viewerHandles()).length;
     await artRow.click();
-    const detailPanel = await $('[data-testid="brain-detail-panel"]');
-    await detailPanel.waitForExist({
-      timeout: t(10_000),
-      timeoutMsg: "Detail panel did not open for artifact",
-    });
+    await waitForViewerCount(viewerCount + 1, t(12_000));
+
+    const opened = (await viewerHandles()).at(-1) as string;
+    await browser.switchToWindow(opened);
+    await browser.waitUntil(
+      async () => (await browser.getUrl()).includes("/viewer"),
+      { timeout: t(10_000), interval: 250, timeoutMsg: "viewer URL never loaded" },
+    );
+    const url = new URL(await browser.getUrl());
+    expect(url.pathname).toBe("/viewer");
+    expect(decodeURIComponent(url.searchParams.get("path") ?? "")).toBe(tempArtifactPath);
 
     // Wait for full content to load from disk
     await browser.waitUntil(
       async () => {
-        const text = await detailPanel.getText();
+        const text = await $("body").getText();
         return text.toLowerCase().includes("markdown content for preview testing");
       },
-      { timeout: t(10_000), timeoutMsg: "Full artifact content did not load in detail panel" },
+      { timeout: t(10_000), timeoutMsg: "Full artifact content did not load in viewer" },
     );
 
-    await saveScreenshot("brain-artifact-detail-panel");
+    await saveScreenshot("brain-artifact-viewer");
+    await browser.switchToWindow("home");
   });
 });
