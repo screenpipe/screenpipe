@@ -1590,17 +1590,6 @@ export function BrainSection() {
                     openArtifactOrigin(target, artPath);
                   }}
                 >
-                  <Checkbox
-                    data-testid={`brain-checkbox-artifact-${artTestId}`}
-                    checked={isChecked}
-                    onClick={(e) => e.stopPropagation()}
-                    onCheckedChange={() => toggleSelected(artKey)}
-                    className={`absolute left-3 top-3 z-10 h-3.5 w-3.5 transition-opacity ${
-                      !selectionMode && !isChecked
-                        ? "opacity-0 group-hover:opacity-100"
-                        : "opacity-100"
-                    }`}
-                  />
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute right-0 top-0 z-10 h-8 w-8 overflow-hidden"
@@ -1655,9 +1644,22 @@ export function BrainSection() {
                         </Badge>
                       </div>
                       <div className="mt-auto flex items-center justify-between gap-2">
-                        <Badge variant="secondary" className="max-w-[120px] truncate text-[10px] px-1.5 py-0 font-normal">
-                          {target.mode === "artifact-only" ? "artifact" : target.mode}
-                        </Badge>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Checkbox
+                            data-testid={`brain-checkbox-artifact-${artTestId}`}
+                            checked={isChecked}
+                            onClick={(e) => e.stopPropagation()}
+                            onCheckedChange={() => toggleSelected(artKey)}
+                            className={`h-3.5 w-3.5 shrink-0 transition-opacity ${
+                              !selectionMode && !isChecked
+                                ? "hidden opacity-0 group-hover:block group-hover:opacity-100"
+                                : "opacity-100"
+                            }`}
+                          />
+                          <Badge variant="secondary" className="max-w-[120px] truncate text-[10px] px-1.5 py-0 font-normal">
+                            {target.mode === "artifact-only" ? "artifact" : target.mode}
+                          </Badge>
+                        </div>
                         <div className="flex items-center gap-0.5">
                           {target.mode !== "artifact-only" && (
                             <Button
