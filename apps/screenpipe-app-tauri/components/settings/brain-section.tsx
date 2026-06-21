@@ -137,6 +137,38 @@ type SelectedBrainItem =
   | { kind: "memory"; key: string }
   | { kind: "artifact"; key: string };
 
+type BrainViewState = {
+  typeFilter: TypeFilter;
+  searchQuery: string;
+  activeTags: string[];
+  visibleCountByType: Record<TypeFilter, number>;
+  scrollTopByType: Record<TypeFilter, number>;
+};
+
+const brainViewState: BrainViewState = {
+  typeFilter: "memories",
+  searchQuery: "",
+  activeTags: [],
+  visibleCountByType: {
+    memories: RENDER_WINDOW,
+    artifacts: RENDER_WINDOW,
+  },
+  scrollTopByType: {
+    memories: 0,
+    artifacts: 0,
+  },
+};
+
+export function resetBrainViewStateForTests() {
+  brainViewState.typeFilter = "memories";
+  brainViewState.searchQuery = "";
+  brainViewState.activeTags = [];
+  brainViewState.visibleCountByType.memories = RENDER_WINDOW;
+  brainViewState.visibleCountByType.artifacts = RENDER_WINDOW;
+  brainViewState.scrollTopByType.memories = 0;
+  brainViewState.scrollTopByType.artifacts = 0;
+}
+
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "just now";
@@ -253,10 +285,13 @@ export function BrainSection() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+  const didMountRenderResetRef = useRef(false);
   const memoryDisplayCacheRef = useRef<Map<string, MemoryCardDisplay>>(new Map());
 
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("memories");
-  const [visibleCount, setVisibleCount] = useState(RENDER_WINDOW);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>(brainViewState.typeFilter);
+  const [visibleCount, setVisibleCount] = useState(
+    brainViewState.visibleCountByType[brainViewState.typeFilter],
+  );
   const [selectedItem, setSelectedItem] = useState<SelectedBrainItem | null>(null);
   const [artifactContents, setArtifactContents] = useState<Map<string, string>>(new Map());
 
@@ -307,9 +342,9 @@ export function BrainSection() {
   };
 
   // search, filter & sort
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [activeTags, setActiveTags] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState(brainViewState.searchQuery);
+  const [debouncedQuery, setDebouncedQuery] = useState(brainViewState.searchQuery);
+  const [activeTags, setActiveTags] = useState<string[]>(brainViewState.activeTags);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -329,11 +364,53 @@ export function BrainSection() {
     parsedSearch.artifactSource ??
     (typeFilter === "artifacts" ? activeTags[0] ?? null : null);
 
+  const saveCurrentListPosition = useCallback(() => {
+    brainViewState.scrollTopByType[typeFilter] =
+      scrollRef.current?.scrollTop ?? brainViewState.scrollTopByType[typeFilter];
+    brainViewState.visibleCountByType[typeFilter] = visibleCount;
+  }, [typeFilter, visibleCount]);
+
+  const restoreCurrentListPosition = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (!scrollRef.current) return;
+      scrollRef.current.scrollTop = brainViewState.scrollTopByType[typeFilter];
+    });
+  }, [typeFilter]);
+
+  const switchTypeFilter = useCallback(
+    (nextTypeFilter: TypeFilter) => {
+      if (nextTypeFilter === typeFilter) return;
+      saveCurrentListPosition();
+      brainViewState.typeFilter = nextTypeFilter;
+      setTypeFilter(nextTypeFilter);
+      setActiveTags([]);
+      setSelectedIds(new Set());
+      setVisibleCount(
+        Math.max(
+          brainViewState.visibleCountByType[nextTypeFilter],
+          RENDER_WINDOW,
+        ),
+      );
+    },
+    [saveCurrentListPosition, typeFilter],
+  );
+
   // debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  useEffect(() => {
+    brainViewState.typeFilter = typeFilter;
+    brainViewState.searchQuery = searchQuery;
+    brainViewState.activeTags = activeTags;
+    brainViewState.visibleCountByType[typeFilter] = visibleCount;
+  }, [activeTags, searchQuery, typeFilter, visibleCount]);
+
+  useEffect(() => {
+    return () => saveCurrentListPosition();
+  }, [saveCurrentListPosition]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedFilterSearch(filterSearch), 180);
@@ -785,8 +862,26 @@ export function BrainSection() {
 
   // Collapse the render window whenever the visible dataset changes shape.
   useEffect(() => {
+    if (!didMountRenderResetRef.current) {
+      didMountRenderResetRef.current = true;
+      return;
+    }
     setVisibleCount(RENDER_WINDOW);
-  }, [debouncedQuery, activeTags, typeFilter, sortField, sortDir]);
+    brainViewState.scrollTopByType[typeFilter] = 0;
+  }, [debouncedQuery, activeTags, sortField, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (typeFilter === "memories" && loading) return;
+    if (typeFilter === "artifacts" && artifactsLoading) return;
+    restoreCurrentListPosition();
+  }, [
+    artifactsLoading,
+    loading,
+    restoreCurrentListPosition,
+    typeFilter,
+    unifiedItems.length,
+    visibleCount,
+  ]);
 
   // infinite scroll via IntersectionObserver — grows the render window and
   // pulls the next page of whichever source is running low
@@ -970,11 +1065,7 @@ export function BrainSection() {
             <button
               key={value}
               data-testid={`brain-filter-${value}`}
-              onClick={() => {
-                setTypeFilter(value);
-                setActiveTags([]);
-                setSelectedIds(new Set());
-              }}
+              onClick={() => switchTypeFilter(value)}
               className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                 typeFilter === value
                   ? "border-foreground text-foreground"
@@ -1446,6 +1537,11 @@ export function BrainSection() {
         <div className="flex min-h-0 flex-1 gap-3">
         <div
           ref={scrollRef}
+          data-testid="brain-scroll-container"
+          onScroll={(event) => {
+            brainViewState.scrollTopByType[typeFilter] =
+              event.currentTarget.scrollTop;
+          }}
           className={`min-h-0 overflow-y-auto pr-1 ${
             typeFilter === "artifacts"
               ? selectedDetail

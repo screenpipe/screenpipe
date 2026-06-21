@@ -100,13 +100,14 @@ vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-import { BrainSection } from "../brain-section";
+import { BrainSection, resetBrainViewStateForTests } from "../brain-section";
 import { localFetch } from "@/lib/api";
 import { emit } from "@tauri-apps/api/event";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetBrainViewStateForTests();
   useChatStore.getState().actions.hydrateFromDisk([
     {
       id: "chat-b",
@@ -246,6 +247,28 @@ describe("BrainSection type filter", () => {
       targetWindow: "home",
       filePreviewPath: "/tmp/pipes/glob-pipe/output/note-0.md",
     });
+  });
+
+  it("keeps the artifacts tab when Brain remounts", async () => {
+    const firstRender = render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+    expect(memoryRows().length).toBe(0);
+
+    const scrollContainer = screen.getByTestId("brain-scroll-container");
+    scrollContainer.scrollTop = 320;
+    fireEvent.scroll(scrollContainer);
+
+    firstRender.unmount();
+    render(<BrainSection />);
+
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+    expect(memoryRows().length).toBe(0);
+    await waitFor(() =>
+      expect(screen.getByTestId("brain-scroll-container").scrollTop).toBe(320),
+    );
   });
 
   it("edits memory tags from the edit dialog", async () => {
