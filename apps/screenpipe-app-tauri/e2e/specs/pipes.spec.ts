@@ -546,9 +546,14 @@ describe('Pipes: discover → install → play', function () {
     await browser.waitUntil(
       async () =>
         (await browser.execute((name: string) => {
-          for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
-            if (nameBtn.textContent?.trim() !== name) continue;
-            const row = nameBtn.closest<HTMLElement>('div.group');
+          // Match the name in a <button> OR <span>. The pipe name renders as a
+          // <span> (pipes-section.tsx), so a 'button'-only scan never locates
+          // the row and the stop click times out ("Could not click stop
+          // button") — even though the running-state wait above, which already
+          // uses 'button, span', passed. Keep the two locators in sync.
+          for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+            if (nameEl.textContent?.trim() !== name) continue;
+            const row = nameEl.closest<HTMLElement>('div.group');
             if (!row) continue;
             const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
             if (stopBtn && !stopBtn.disabled) {
@@ -569,9 +574,10 @@ describe('Pipes: discover → install → play', function () {
     await browser.waitUntil(
       async () =>
         (await browser.execute((name: string) => {
-          for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
-            if (nameBtn.textContent?.trim() !== name) continue;
-            const row = nameBtn.closest<HTMLElement>('div.group');
+          // Same 'button, span' locator as above — the name is a <span>.
+          for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+            if (nameEl.textContent?.trim() !== name) continue;
+            const row = nameEl.closest<HTMLElement>('div.group');
             if (!row) continue;
             const hasStop = !!row.querySelector('button[title="stop pipe"]');
             const hasRun = !!row.querySelector('button[title="run pipe"]');

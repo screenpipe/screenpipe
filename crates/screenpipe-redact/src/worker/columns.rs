@@ -80,21 +80,24 @@ pub struct RedactColumns {
 }
 
 impl Default for RedactColumns {
-    /// The default allow-list: the clear, lighter capture surfaces ON, the
-    /// debatable / lossy / heavy ones OFF (opt-in).
+    /// The default allow-list: the clear capture surfaces ON (incl.
+    /// `element_properties` — form-field values), the debatable / lossy ones
+    /// OFF (opt-in).
     ///
     /// OFF by default: `browser_url` (URLs are structured, often non-PII,
-    /// lossy to redact), `ui_element_name` / `ui_element_description`
-    /// (usually build-time control labels), `a11y_url_field` (the `url` key
-    /// inside the a11y JSON), and `element_properties`.
+    /// lossy to redact and redacting breaks links), `ui_element_name` /
+    /// `ui_element_description` (usually build-time control labels), and
+    /// `a11y_url_field` (the `url` key inside the a11y JSON).
     ///
-    /// `element_properties` is off by deliberate choice: it's the per-element
-    /// accessibility value JSON (millions of rows — the heaviest surface).
-    /// The focused-field value is still caught on the lighter surfaces that
-    /// ARE on by default (`accessibility_tree` node `value`, and
-    /// `ui_element_value` on click/focus). Enable `element_properties` for
-    /// full per-element value coverage (incl. password-field values a11y
-    /// exposes that OCR never sees).
+    /// `element_properties` is ON by default: it's the per-element
+    /// accessibility value JSON — the surface where real PII actually lives
+    /// (incl. password-field values a11y exposes that OCR never sees), so it
+    /// carries the most leak risk. It is also the heaviest surface (millions
+    /// of rows), so redacting it costs more worker CPU; users who want a
+    /// lighter scan can uncheck it (the focused-field value is still caught
+    /// via `accessibility_tree` node `value` and `ui_element_value` on
+    /// click/focus). KEEP IN SYNC with `default_pii_redaction_columns()` in
+    /// screenpipe-config and the `--pii-redaction-columns` clap default.
     fn default() -> Self {
         Self {
             accessibility_text: true,
@@ -108,7 +111,7 @@ impl Default for RedactColumns {
             ui_element_name: false,
             ui_element_description: false,
             element_text: true,
-            element_properties: false,
+            element_properties: true,
             a11y_url_field: false,
         }
     }
@@ -224,15 +227,17 @@ mod tests {
     #[test]
     fn default_has_clear_pii_on_debatable_off() {
         let d = RedactColumns::default();
-        // Clear, lighter capture surfaces — on.
+        // Clear capture surfaces — on.
         assert!(d.accessibility_text && d.accessibility_tree && d.window_name);
         assert!(d.audio_transcription && d.ui_text_content && d.ui_element_value);
         assert!(d.ui_window_title && d.element_text);
-        // Debatable / lossy / heavy — off (opt-in).
+        // Form-field values — on by default (the real PII surface, incl.
+        // password-field values OCR never sees).
+        assert!(d.element_properties);
+        // Debatable / lossy — off (opt-in).
         assert!(!d.browser_url);
         assert!(!d.ui_element_name && !d.ui_element_description);
         assert!(!d.a11y_url_field);
-        assert!(!d.element_properties);
     }
 
     #[test]

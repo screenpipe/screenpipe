@@ -461,13 +461,14 @@ pub struct RecordArgs {
     /// browser_url, audio_transcription, ui_text_content, ui_element_value,
     /// ui_window_title, ui_element_name, ui_element_description, element_text,
     /// element_properties, a11y_url_field. The list is exact (key present →
-    /// on, absent → off); `full_text` is always redacted. Default leaves
-    /// browser_url / ui_element_name / ui_element_description / a11y_url_field
-    /// / element_properties OFF (opt-in).
+    /// on, absent → off); `full_text` is always redacted. Default scrubs the
+    /// clear surfaces plus element_properties (form-field values — the real
+    /// PII surface); leaves browser_url / ui_element_name /
+    /// ui_element_description / a11y_url_field OFF (opt-in).
     #[arg(
         long,
         value_delimiter = ',',
-        default_value = "accessibility_text,accessibility_tree,window_name,audio_transcription,ui_text_content,ui_element_value,ui_window_title,element_text"
+        default_value = "accessibility_text,accessibility_tree,window_name,audio_transcription,ui_text_content,ui_element_value,ui_window_title,element_text,element_properties"
     )]
     pub pii_redaction_columns: Vec<String>,
 

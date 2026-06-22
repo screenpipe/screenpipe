@@ -430,7 +430,10 @@ fn select_newest_files(
 /// Returns `true` if the extension is user-facing for fallback artifact
 /// discovery. Pipes producing other types should declare them in `artifacts:`.
 fn is_user_facing_artifact_ext(ext: &str) -> bool {
-    matches!(ext, "md" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+    matches!(
+        ext,
+        "md" | "html" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1451,10 +1454,10 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
 
 /// Manages all pipes: loading, scheduling, execution, logs.
 /// Callback fired after each scheduled pipe run completes.
-/// Args: (pipe_name, success, duration_secs, error_type)
+/// Args: (pipe_name, execution_id, success, duration_secs, error_type)
 /// `error_type` is a sanitized category (e.g. "rate_limited", "auth_failed", "timeout", "crash")
 /// — never contains user data.
-pub type OnPipeRunComplete = Arc<dyn Fn(&str, bool, f64, Option<&str>) + Send + Sync>;
+pub type OnPipeRunComplete = Arc<dyn Fn(&str, Option<i64>, bool, f64, Option<&str>) + Send + Sync>;
 
 /// Callback fired for each stdout line from a running pipe.
 /// Args: (pipe_name, execution_id, line)
@@ -2061,6 +2064,7 @@ impl PipeManager {
                 for (path, _) in select_newest_files(candidates, fallback_cap) {
                     let kind = match path.extension().and_then(|e| e.to_str()) {
                         Some("md") => "markdown",
+                        Some("html") => "html",
                         Some("json") => "json",
                         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => "image",
                         _ => "text",
@@ -2688,6 +2692,7 @@ impl PipeManager {
             if let Some(ref cb) = on_complete {
                 cb(
                     &name_for_cb,
+                    exec_id,
                     success,
                     duration_secs,
                     cb_error_type.as_deref(),
@@ -3993,7 +3998,7 @@ impl PipeManager {
                                     }
                                 }
                                 if let Some(ref cb) = on_run_complete {
-                                    cb(name, false, 0.0, Some("missing_connections"));
+                                    cb(name, None, false, 0.0, Some("missing_connections"));
                                 }
                                 continue;
                             }
@@ -4540,6 +4545,7 @@ impl PipeManager {
                         if let Some(ref cb) = on_complete {
                             cb(
                                 &name_for_cb,
+                                exec_id,
                                 success,
                                 duration_secs,
                                 cb_error_type.as_deref(),
@@ -5652,6 +5658,7 @@ mod tests {
     fn test_is_user_facing_artifact_ext() {
         // positive cases
         assert!(is_user_facing_artifact_ext("md"));
+        assert!(is_user_facing_artifact_ext("html"));
         assert!(is_user_facing_artifact_ext("png"));
         assert!(is_user_facing_artifact_ext("jpg"));
         assert!(is_user_facing_artifact_ext("jpeg"));
@@ -5691,6 +5698,7 @@ mod tests {
         // Create mixed files in output/
         let files = vec![
             "report.md",
+            "report.html",
             "screenshot.png",
             "data.json",
             "runner.ts",
@@ -5716,7 +5724,21 @@ mod tests {
             .collect();
         names.sort();
 
-        assert_eq!(names, vec!["output/report.md", "output/screenshot.png"]);
+        assert_eq!(
+            names,
+            vec![
+                "output/report.html",
+                "output/report.md",
+                "output/screenshot.png"
+            ]
+        );
+
+        let html_decl = pipe_decls
+            .1
+            .iter()
+            .find(|(decl, _)| decl.path == "output/report.html")
+            .expect("html artifact should be discovered");
+        assert_eq!(html_decl.0.kind.as_deref(), Some("html"));
     }
 
     #[test]

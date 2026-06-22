@@ -134,6 +134,21 @@ pub async fn retention_configure(
         ));
     }
 
+    // Enforce a sane maximum. 100 years is absurdly generous for "keep the last
+    // N days" yet far below where `Utc::now() - Duration::days(..)` overflows
+    // chrono's date range and panics the retention loop. The loop also guards
+    // this defensively (see `retention_cutoff`), but reject it here with a clear
+    // error rather than silently accepting a value that can never take effect.
+    const MAX_RETENTION_DAYS: u32 = 36_500;
+    if retention_days > MAX_RETENTION_DAYS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(
+                json!({"error": format!("retention_days must be at most {MAX_RETENTION_DAYS}")}),
+            ),
+        ));
+    }
+
     let mut guard = state.retention_state.inner.write().await;
 
     let wants_enabled = request.enabled.unwrap_or(true);
@@ -313,7 +328,16 @@ fn spawn_retention_loop(
                 }
             };
 
-            let cutoff = Utc::now() - Duration::days(retention_days as i64);
+            let cutoff = match retention_cutoff(retention_days, Utc::now()) {
+                Some(c) => c,
+                None => {
+                    warn!(
+                        "retention: retention_days={} out of range, skipping cleanup cycle",
+                        retention_days
+                    );
+                    continue;
+                }
+            };
 
             info!(
                 "retention: cleaning up data before {} ({}d retention, mode={:?})",
@@ -344,6 +368,17 @@ fn spawn_retention_loop(
             }
         }
     })
+}
+
+/// Compute the deletion cutoff: data older than the returned instant is
+/// eligible for removal. Returns `None` when `retention_days` is so large the
+/// subtraction would underflow chrono's representable date range — in which
+/// case `Utc::now() - Duration::days(..)` would *panic*. `retention_days` is a
+/// `u32` with no hard upper bound at every entry point (a persisted config from
+/// an older client can bypass the endpoint's range check), so the loop must
+/// treat an out-of-range value as "skip", never delete-from-a-bogus-window.
+fn retention_cutoff(retention_days: u32, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    Duration::try_days(retention_days as i64).and_then(|d| now.checked_sub_signed(d))
 }
 
 async fn do_local_cleanup(
@@ -542,4 +577,28 @@ async fn do_local_cleanup(
     }
 
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_cutoff_normal_values() {
+        let now = Utc::now();
+        // 14 days back is exactly 14 days before now.
+        let c = retention_cutoff(14, now).expect("14d is in range");
+        assert_eq!(now - c, Duration::days(14));
+        // The configure endpoint's max (100 years) must still compute.
+        assert!(retention_cutoff(36_500, now).is_some());
+    }
+
+    #[test]
+    fn retention_cutoff_out_of_range_is_none_not_panic() {
+        let now = Utc::now();
+        // u32::MAX days (~11.7M years) underflows chrono's date range. The old
+        // `now - Duration::days(..)` panicked here; the guard must yield None so
+        // the retention loop skips the cycle instead of crashing.
+        assert_eq!(retention_cutoff(u32::MAX, now), None);
+    }
 }

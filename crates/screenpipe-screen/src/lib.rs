@@ -65,4 +65,14 @@ pub mod stream_invalidation {
     pub fn invalidate_monitor_stream(monitor_id: u32) {
         sck_rs::invalidate_monitor_stream(monitor_id);
     }
+
+    /// Current frame-delivery sequence for a monitor's persistent stream, if
+    /// one is cached. Monotonic; bumped once per OS-latched frame. `None` when
+    /// no stream exists yet. Compared across captures to detect a wedged
+    /// stream: a healthy stream keeps advancing this even on a static screen
+    /// (SCK delivers identical frames at the frame interval), so a stalled
+    /// sequence means the OS callback died, not that the screen is idle.
+    pub fn monitor_frame_seq(monitor_id: u32) -> Option<u64> {
+        sck_rs::monitor_frame_seq(monitor_id)
+    }
 }

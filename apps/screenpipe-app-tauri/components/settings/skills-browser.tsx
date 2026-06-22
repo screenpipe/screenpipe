@@ -151,7 +151,7 @@ export function SkillsBrowser({
       try {
         const res = await commands.installRegistrySkill(
           s.repo,
-          s.git_ref,
+          s.git_ref ?? "main",
           s.path,
           s.name,
         );

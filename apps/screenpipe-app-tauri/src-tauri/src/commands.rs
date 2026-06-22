@@ -76,6 +76,16 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
         .as_ref()
         .and_then(|v| v.get("type"))
         .and_then(|v| v.as_str());
+    crate::events::emit_notification_action(
+        app,
+        crate::events::NotificationActionEvent {
+            action_type: action_type.map(str::to_string),
+            raw_json: json.clone(),
+            payload: parsed
+                .clone()
+                .unwrap_or_else(|| serde_json::Value::String(json.clone())),
+        },
+    );
 
     // "manage" — open the Home window to notifications settings. Handled in
     // Rust rather than via JS emit so it works even when no React window is
@@ -896,30 +906,147 @@ pub fn save_enterprise_team_config(
 #[tauri::command]
 #[specta::specta]
 pub fn write_browser_log(level: String, message: String) {
-    match level.as_str() {
-        "error" => error!("[webview] {}", message),
-        "warn" => warn!("[webview] {}", message),
-        "debug" => debug!("[webview] {}", message),
-        _ => info!("[webview] {}", message),
-    }
+    write_browser_log_entry(BrowserLogEntry {
+        level,
+        message,
+        window_label: None,
+        route: None,
+        session_id: None,
+        job_id: None,
+        conversation_id: None,
+        stack: None,
+        timestamp_ms: None,
+    });
 }
 
-#[derive(serde::Deserialize, specta::Type)]
+#[derive(Debug, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub struct BrowserLogEntry {
     pub level: String,
     pub message: String,
+    pub window_label: Option<String>,
+    pub route: Option<String>,
+    pub session_id: Option<String>,
+    pub job_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub stack: Option<String>,
+    pub timestamp_ms: Option<f64>,
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn write_browser_logs(entries: Vec<BrowserLogEntry>) {
-    for entry in entries {
-        match entry.level.as_str() {
-            "error" => error!("[webview] {}", entry.message),
-            "warn" => warn!("[webview] {}", entry.message),
-            "debug" => debug!("[webview] {}", entry.message),
-            _ => info!("[webview] {}", entry.message),
-        }
+    for entry in entries.into_iter().take(200) {
+        write_browser_log_entry(entry);
+    }
+}
+
+fn truncate_browser_log_field(value: String, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value;
+    }
+    let mut out = value.chars().take(max_chars).collect::<String>();
+    out.push_str("... [truncated]");
+    out
+}
+
+fn write_browser_log_entry(mut entry: BrowserLogEntry) {
+    entry.message = truncate_browser_log_field(entry.message, 16_000);
+    entry.stack = entry
+        .stack
+        .map(|stack| truncate_browser_log_field(stack, 16_000));
+
+    match entry.level.as_str() {
+        "error" => error!(
+            target: "screenpipe::browser",
+            window_label = ?entry.window_label,
+            route = ?entry.route,
+            session_id = ?entry.session_id,
+            job_id = ?entry.job_id,
+            conversation_id = ?entry.conversation_id,
+            stack = ?entry.stack,
+            timestamp_ms = ?entry.timestamp_ms,
+            "[webview] {}",
+            entry.message
+        ),
+        "warn" => warn!(
+            target: "screenpipe::browser",
+            window_label = ?entry.window_label,
+            route = ?entry.route,
+            session_id = ?entry.session_id,
+            job_id = ?entry.job_id,
+            conversation_id = ?entry.conversation_id,
+            stack = ?entry.stack,
+            timestamp_ms = ?entry.timestamp_ms,
+            "[webview] {}",
+            entry.message
+        ),
+        "debug" => debug!(
+            target: "screenpipe::browser",
+            window_label = ?entry.window_label,
+            route = ?entry.route,
+            session_id = ?entry.session_id,
+            job_id = ?entry.job_id,
+            conversation_id = ?entry.conversation_id,
+            stack = ?entry.stack,
+            timestamp_ms = ?entry.timestamp_ms,
+            "[webview] {}",
+            entry.message
+        ),
+        _ => info!(
+            target: "screenpipe::browser",
+            window_label = ?entry.window_label,
+            route = ?entry.route,
+            session_id = ?entry.session_id,
+            job_id = ?entry.job_id,
+            conversation_id = ?entry.conversation_id,
+            stack = ?entry.stack,
+            timestamp_ms = ?entry.timestamp_ms,
+            "[webview] {}",
+            entry.message
+        ),
+    }
+}
+
+#[cfg(test)]
+mod browser_log_tests {
+    use super::BrowserLogEntry;
+
+    #[test]
+    fn browser_log_entry_accepts_legacy_shape() {
+        let entry: BrowserLogEntry =
+            serde_json::from_value(serde_json::json!({ "level": "info", "message": "hello" }))
+                .unwrap();
+
+        assert_eq!(entry.level, "info");
+        assert_eq!(entry.message, "hello");
+        assert!(entry.window_label.is_none());
+        assert!(entry.route.is_none());
+        assert!(entry.job_id.is_none());
+    }
+
+    #[test]
+    fn browser_log_entry_accepts_context_shape() {
+        let entry: BrowserLogEntry = serde_json::from_value(serde_json::json!({
+            "level": "error",
+            "message": "failed",
+            "windowLabel": "main",
+            "route": "/home",
+            "sessionId": "s1",
+            "jobId": "j1",
+            "conversationId": "c1",
+            "stack": "stack",
+            "timestampMs": 123.0
+        }))
+        .unwrap();
+
+        assert_eq!(entry.window_label.as_deref(), Some("main"));
+        assert_eq!(entry.route.as_deref(), Some("/home"));
+        assert_eq!(entry.session_id.as_deref(), Some("s1"));
+        assert_eq!(entry.job_id.as_deref(), Some("j1"));
+        assert_eq!(entry.conversation_id.as_deref(), Some("c1"));
+        assert_eq!(entry.stack.as_deref(), Some("stack"));
+        assert_eq!(entry.timestamp_ms, Some(123.0));
     }
 }
 

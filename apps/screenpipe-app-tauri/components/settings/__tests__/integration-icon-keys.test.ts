@@ -12,7 +12,7 @@ import { connectionNameToId } from "../../../lib/utils/connection-chip";
 describe("INTEGRATION_ICON_KEYS", () => {
   it("is non-empty and includes core integrations", () => {
     expect(INTEGRATION_ICON_KEYS.size).toBeGreaterThan(0);
-    for (const id of ["slack", "gmail", "input-monitoring", "obsidian"]) {
+    for (const id of ["slack", "gmail", "obsidian"]) {
       expect(INTEGRATION_ICON_KEYS.has(id)).toBe(true);
     }
   });

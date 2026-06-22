@@ -700,6 +700,12 @@ pub async fn event_driven_capture_loop(
     } else {
         None
     };
+    // Frozen-stream watchdog: tracks the persistent capture stream's
+    // frame-delivery sequence across captures. A live stream keeps advancing it
+    // even on a static screen, so a stalled sequence means the OS callback has
+    // wedged and `capture_image()` is returning a stale buffer. See
+    // `StreamLivenessWatch`.
+    let mut freeze_watch = StreamLivenessWatch::new(Instant::now());
     let mut last_visual_check = Instant::now();
     // Focus-aware Warm cadence: cheap visual-diff only every 5s. Tracked
     // separately from `last_visual_check` to avoid colliding with the Active
@@ -1435,6 +1441,25 @@ pub async fn event_driven_capture_loop(
                             let _ = comparer.compare(&output.image);
                         }
 
+                        // Frozen-stream detection: a live persistent stream
+                        // advances its frame-delivery sequence even on a static
+                        // screen (ScreenCaptureKit keeps delivering identical
+                        // frames at the frame interval), so a sequence that
+                        // stays flat across captures means the OS callback has
+                        // wedged and `capture_image()` is returning a stale
+                        // buffer. Deterministic — idle content, look-alike
+                        // window switches, and other-monitor activity all still
+                        // advance the sequence, so none of them can false-trip.
+                        if freeze_watch.observe(monitor.last_capture_seq(), Instant::now()) {
+                            warn!(
+                                "monitor {}: capture stream frozen — no new frame delivered for \
+                                 ~{}s; invalidating persistent stream to rebuild it",
+                                monitor_id,
+                                STREAM_STALL_TIMEOUT.as_secs()
+                            );
+                            monitor.release_capture_stream();
+                        }
+
                         if let Some(ref result) = output.result {
                             // Full capture — update hash, metrics, cache
                             last_content_hash = result.content_hash;
@@ -1839,6 +1864,93 @@ fn is_lock_screen_app(app_name: &str) -> bool {
     app_name.eq_ignore_ascii_case("loginwindow")
         || app_name.eq_ignore_ascii_case("screensaverengine")
         || app_name.eq_ignore_ascii_case("lockscreen")
+}
+
+/// How long the persistent stream's frame-delivery sequence may stay flat
+/// before the stream is declared frozen. The screenshot stream delivers at
+/// ~2fps, so a live stream advances the sequence roughly every 500ms even on a
+/// static screen; staying flat for several seconds means the OS callback has
+/// wedged. Comfortably above the frame interval so transient reconfigurations
+/// (exclusion-filter updates, HD toggles) can't trip it.
+const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Minimum gap between stream-recovery attempts, so a stream that stays wedged
+/// after a rebuild — or a rare spurious detection — can't thrash the capture
+/// session by tearing the stream down repeatedly.
+const STREAM_RECOVERY_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// Detects a frozen capture stream from its frame-delivery sequence.
+///
+/// A live persistent stream advances the sequence continuously — even on a
+/// static screen, because ScreenCaptureKit keeps delivering identical frames at
+/// the frame interval (proven: HD records a steady 10fps over known-idle
+/// stretches). So a sequence that stays flat across captures spanning
+/// `STREAM_STALL_TIMEOUT` means the OS callback has wedged and `capture_image()`
+/// is returning a stale buffer. When confirmed, the caller invalidates the
+/// monitor's persistent stream so the next capture rebuilds it with live frames.
+///
+/// This is **deterministic**, not heuristic: idle content, look-alike window
+/// switches, and activity on another monitor all still advance the sequence, so
+/// none of them can cause a false positive — the failure mode the earlier
+/// pixel-contradiction approach couldn't fully rule out. It also catches a
+/// freeze during a fully-static stretch (no window switch required), which the
+/// pixel approach could not.
+///
+/// `None` (no persistent stream cached — e.g. just after a release, or on a
+/// platform without a delivery counter) resets the watch: there's nothing to
+/// judge until a stream exists again.
+struct StreamLivenessWatch {
+    /// Last observed delivery sequence.
+    last_seq: Option<u64>,
+    /// When the sequence was last seen to advance (or the watch last reset).
+    last_advance: Instant,
+    /// When we last tore the stream down, for the recovery cooldown.
+    last_recovery: Option<Instant>,
+}
+
+impl StreamLivenessWatch {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_seq: None,
+            last_advance: now,
+            last_recovery: None,
+        }
+    }
+
+    /// Feed the current delivery sequence (read right after a capture). Returns
+    /// `true` when the stream looks frozen and should be recovered now.
+    fn observe(&mut self, seq: Option<u64>, now: Instant) -> bool {
+        let Some(seq) = seq else {
+            // No persistent stream right now (just released / rebuilding, or
+            // unsupported platform) — nothing to judge.
+            self.last_seq = None;
+            self.last_advance = now;
+            return false;
+        };
+        // `seq != prev` covers both a normal advance and a post-rebuild reset
+        // to 0 (seq < prev) — both mean "the stream is delivering", so we treat
+        // them as healthy and re-anchor.
+        if self.last_seq != Some(seq) {
+            self.last_seq = Some(seq);
+            self.last_advance = now;
+            return false;
+        }
+        // Sequence hasn't advanced since the last capture.
+        if now.saturating_duration_since(self.last_advance) < STREAM_STALL_TIMEOUT {
+            return false;
+        }
+        let cooled = self
+            .last_recovery
+            .map(|t| now.saturating_duration_since(t) >= STREAM_RECOVERY_COOLDOWN)
+            .unwrap_or(true);
+        if !cooled {
+            return false;
+        }
+        self.last_recovery = Some(now);
+        // Re-anchor the stall clock so we re-measure from the rebuild.
+        self.last_advance = now;
+        true
+    }
 }
 
 /// Decide whether content dedup applies to this capture attempt.
@@ -3570,5 +3682,88 @@ mod tests {
         assert_eq!(o.on_controller_state(Some(33), 100), Some(33));
         // Exit override — restore the saver baseline.
         assert_eq!(o.on_controller_state(None, 33), Some(1000));
+    }
+
+    // ---- StreamLivenessWatch: deterministic frozen-stream detection ----
+
+    #[test]
+    fn liveness_advancing_seq_never_recovers() {
+        // The critical no-false-positive case: a live stream keeps advancing the
+        // delivery sequence (even on a static screen), so no matter how long we
+        // observe, it must never be declared frozen. Idle content, look-alike
+        // switches, and other-monitor activity all reduce to "seq advances".
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        for i in 0..1000u64 {
+            // Far apart in time AND advancing the seq each time.
+            assert!(!w.observe(Some(i + 1), t0 + Duration::from_secs(i)));
+        }
+    }
+
+    #[test]
+    fn liveness_none_seq_never_recovers() {
+        // No cached stream → nothing to judge, even across a long span.
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        for i in 0..100u64 {
+            assert!(!w.observe(None, t0 + Duration::from_secs(i)));
+        }
+    }
+
+    #[test]
+    fn liveness_recovers_when_seq_flat_past_timeout() {
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        assert!(!w.observe(Some(42), t0)); // anchor
+        assert!(!w.observe(Some(42), t0 + Duration::from_secs(1))); // flat, within window
+        assert!(!w.observe(
+            Some(42),
+            t0 + STREAM_STALL_TIMEOUT - Duration::from_millis(1)
+        ));
+        // Flat past the stall window → frozen.
+        assert!(w.observe(
+            Some(42),
+            t0 + STREAM_STALL_TIMEOUT + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn liveness_advance_resets_stall_clock() {
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        assert!(!w.observe(Some(1), t0));
+        assert!(!w.observe(Some(1), t0 + Duration::from_secs(3))); // flat, < timeout
+        assert!(!w.observe(Some(2), t0 + Duration::from_secs(4))); // single advance re-anchors
+                                                                   // Timeout is measured from the advance, so shortly after is still fine.
+        assert!(!w.observe(Some(2), t0 + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn liveness_post_rebuild_seq_reset_is_healthy() {
+        // After a rebuild the counter restarts at 0 (seq < prev) — that's the
+        // stream delivering again, not a stall.
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        assert!(!w.observe(Some(5000), t0));
+        assert!(!w.observe(Some(0), t0 + Duration::from_secs(10)));
+        assert!(!w.observe(Some(1), t0 + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn liveness_cooldown_prevents_thrash() {
+        let mut w = StreamLivenessWatch::new(Instant::now());
+        let t0 = Instant::now();
+        assert!(!w.observe(Some(7), t0));
+        let t1 = t0 + STREAM_STALL_TIMEOUT + Duration::from_millis(1);
+        assert!(w.observe(Some(7), t1)); // first recovery
+                                         // Still wedged and past the stall window again, but within the
+                                         // recovery cooldown → no second teardown.
+        assert!(!w.observe(
+            Some(7),
+            t1 + STREAM_STALL_TIMEOUT + Duration::from_millis(1)
+        ));
+        // After the cooldown elapses, recovery is allowed again.
+        let later = t1 + STREAM_RECOVERY_COOLDOWN + STREAM_STALL_TIMEOUT + Duration::from_secs(1);
+        assert!(w.observe(Some(7), later));
     }
 }

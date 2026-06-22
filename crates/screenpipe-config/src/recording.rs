@@ -709,11 +709,14 @@ fn default_pii_redaction_labels() -> Vec<String> {
     vec!["secret".to_string()]
 }
 
-/// Default columns the worker scrubs: every clear capture surface ON, the
-/// debatable / lossy ones OFF (browser_url, ui element name/description, a11y
+/// Default columns the worker scrubs: every clear capture surface ON, plus
+/// `element_properties` (form-field values — the surface where real PII like
+/// typed passwords actually lives, which OCR never sees). The debatable /
+/// lossy ones stay OFF (browser_url, ui element name/description, a11y
 /// url-field). KEEP IN SYNC with `RedactColumns::default()` in
-/// screenpipe-redact (this crate can't depend on it). `full_text` is always
-/// redacted regardless and is intentionally not a key here.
+/// screenpipe-redact (this crate can't depend on it) and the
+/// `--pii-redaction-columns` clap default. `full_text` is always redacted
+/// regardless and is intentionally not a key here.
 fn default_pii_redaction_columns() -> Vec<String> {
     [
         "accessibility_text",
@@ -724,6 +727,7 @@ fn default_pii_redaction_columns() -> Vec<String> {
         "ui_element_value",
         "ui_window_title",
         "element_text",
+        "element_properties",
     ]
     .iter()
     .map(|s| s.to_string())

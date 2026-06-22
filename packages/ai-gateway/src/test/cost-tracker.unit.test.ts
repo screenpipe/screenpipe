@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { getModelCost, logCost, isZeroCostModel, inferProvider } from '../services/cost-tracker';
+import { getModelCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
 
 describe('getModelCost — cache-aware pricing', () => {
 	it('charges full price when no cache info is given (legacy behavior unchanged)', () => {
@@ -126,6 +126,13 @@ describe('getModelCost — cache-aware pricing', () => {
 	it('does not change zero-cost or provider inference behavior', () => {
 		expect(isZeroCostModel('glm-5')).toBe(true);
 		expect(inferProvider('claude-opus-4-8')).toBe('anthropic');
+	});
+
+	it('isFrontierModel flags the premium tier (blocked on pipes), not mid/cheap', () => {
+		for (const m of ['claude-opus-4-8', 'claude-opus-4-6', 'claude-fable-5', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro'])
+			expect(isFrontierModel(m)).toBe(true);
+		for (const m of ['claude-sonnet-4-5', 'gpt-5.4', 'gpt-5.4-mini', 'claude-haiku-4-5', 'glm-5', 'gemini-3.5-flash', 'gpt-5-nano'])
+			expect(isFrontierModel(m)).toBe(false);
 	});
 });
 

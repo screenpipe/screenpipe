@@ -459,6 +459,19 @@ async exportRecording(meetingId: number | null, start: string | null, end: strin
 }
 },
 /**
+ * Return the curated catalog, each entry flagged `imported` against the store.
+ * Prefers the remote catalog so it can grow without an app release, but never
+ * fails the panel — any hiccup falls back to the bundled copy.
+ */
+async fetchSkillsRegistry() : Promise<Result<RegistrySkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("fetch_skills_registry") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Force-regenerate suggestions immediately, bypassing the scheduler's
  * CPU/power guards. Returns the fresh suggestions and updates the cache.
  */
@@ -770,13 +783,13 @@ async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
 }
 },
 /**
- * Return the curated catalog, each entry flagged `imported` against the store.
- * Prefers the remote catalog so it can grow without an app release, but never
- * fails the panel — any hiccup falls back to the bundled copy.
+ * Initialize sync with password.
+ * This initializes both the local SyncManager (for device queries) and
+ * the server's SyncService (for actual data sync).
  */
-async fetchSkillsRegistry() : Promise<Result<RegistrySkill[], string>> {
+async initSync(password: string) : Promise<Result<boolean, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("fetch_skills_registry") };
+    return { status: "ok", data: await TAURI_INVOKE("init_sync", { password }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -790,19 +803,6 @@ async fetchSkillsRegistry() : Promise<Result<RegistrySkill[], string>> {
 async installRegistrySkill(repo: string, gitRef: string, path: string, name: string) : Promise<Result<ImportedSkill, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("install_registry_skill", { repo, gitRef, path, name }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Initialize sync with password.
- * This initializes both the local SyncManager (for device queries) and
- * the server's SyncService (for actual data sync).
- */
-async initSync(password: string) : Promise<Result<boolean, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("init_sync", { password }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2035,6 +2035,17 @@ async startCapture() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Start an MP4 export in the background and return its job id immediately.
+ */
+async startExportRecording(meetingId: number | null, start: string | null, end: string | null, outputPath: string) : Promise<Result<StartExportRecordingResponse, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_export_recording", { meetingId, start, end, outputPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Stop recording without killing the server.
  * Pipes, memories, search, and the HTTP API remain accessible.
  */
@@ -2246,7 +2257,7 @@ sinceEpochSecs: number }
  * Also includes whether the browser is currently running.
  */
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
-export type BrowserLogEntry = { level: string; message: string }
+export type BrowserLogEntry = { level: string; message: string; windowLabel: string | null; route: string | null; sessionId: string | null; jobId: string | null; conversationId: string | null; stack: string | null; timestampMs: number | null }
 export type CacheFile = { path: string; label: string; size_bytes: number }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type CalendarEventItem = { id: string; title: string;
@@ -2309,8 +2320,11 @@ export type DiscoveredHost = { host: string; port: number; user: string | null; 
 alias?: string | null }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
+export type EngineEvent = { name: string; data: JsonValue }
 export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
+export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
+export type ExportRequestInfo = { meetingId: number | null; start: string | null; end: string | null; outputPath: string }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**
@@ -2321,17 +2335,13 @@ export type ImportedSkill = { name: string; description: string;
  * Absolute path inside `<data_dir>/skills/`.
  */
 path: string }
-/**
- * A skill offered by the curated registry. Installing one downloads its folder
- * (the directory containing `SKILL.md`) from a public GitHub repo into the
- * store, reusing the same store the device/folder importers write to.
- */
-export type RegistrySkill = { name: string; description: string; repo: string; git_ref: string; path: string; source: string; repo_url: string | null; homepage: string | null; apps: string[]; featured: boolean; imported: boolean }
+export type JobEvent = { kind: "started"; jobId: string; label: string; message: string | null } | { kind: "progress"; jobId: string; label: string; progress: number; message: string | null } | { kind: "completed"; jobId: string; label: string; outputPath: string | null; message: string | null } | { kind: "failed"; jobId: string; label: string; error: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
-export type MeetingExportSummary = { output_path: string; frame_count: number; audio_chunk_count: number; duration_secs: number; file_size_bytes: number }
+export type MeetingExportSummary = { job_id: string; output_path: string; frame_count: number; audio_chunk_count: number; duration_secs: number; file_size_bytes: number }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
+export type NotificationActionEvent = { actionType: string | null; rawJson: string; payload: JsonValue }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null;
 /**
@@ -2421,6 +2431,57 @@ preview: string;
  */
 queuedAtMs: number }
 export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
+/**
+ * A skill offered by the curated registry. Installing one downloads its folder
+ * (the directory containing `SKILL.md`) from a public GitHub repo into the
+ * store, reusing the same store the device/folder importers write to.
+ */
+export type RegistrySkill = {
+/**
+ * Display name.
+ */
+name: string;
+/**
+ * One-line summary.
+ */
+description?: string;
+/**
+ * `owner/repo` on GitHub the skill folder lives in.
+ */
+repo: string;
+/**
+ * Git ref (branch / tag / commit) the download is pinned to.
+ */
+git_ref?: string;
+/**
+ * Path of the folder that directly contains `SKILL.md`, e.g. `skills/pdf`.
+ */
+path: string;
+/**
+ * Provenance for the badge: `anthropic` | `openai` | `screenpipe` | `community`.
+ */
+source?: string;
+/**
+ * Optional link to browse the skill's source.
+ */
+repo_url?: string | null;
+/**
+ * Optional docs / homepage link.
+ */
+homepage?: string | null;
+/**
+ * App-name keywords this skill is relevant to — used to rank skills the
+ * user is more likely to want first, against their recent app usage.
+ */
+apps?: string[];
+/**
+ * Curated "recommended" flag — surfaced first before any usage signal.
+ */
+featured?: boolean;
+/**
+ * True when a skill of the same normalized name is already in the store.
+ */
+imported?: boolean }
 /**
  * Configuration for remote sync.
  */
@@ -2799,11 +2860,14 @@ piiBackend?: string;
 piiRedactionLabels?: string[];
 /**
  * WHICH captured columns the redaction worker scrubs (orthogonal to
- * `piiRedactionLabels`, which picks PII categories). Full list of stable
- * column keys (see `RedactColumns` in screenpipe-redact); core surfaces
- * are always on, the extras (browser_url, ui_element_name/description,
- * a11y_url_field, element_properties) are opt-in. `full_text` is always
- * redacted regardless of this list.
+ * `pii_redaction_labels`, which picks the PII *categories*). The full
+ * list of columns to redact, by stable key (see `RedactColumns` in
+ * screenpipe-redact). Default = the clear, lighter capture surfaces ON,
+ * with the debatable / lossy / heavy ones OFF (opt-in): `browser_url`,
+ * `ui_element_name`, `ui_element_description`, `a11y_url_field`, and
+ * `element_properties` (per-element a11y value JSON — millions of rows;
+ * the focused-field value is still caught via `accessibility_tree` /
+ * `ui_element_value`). `full_text` is always redacted regardless.
  */
 piiRedactionColumns?: string[];
 /**
@@ -2985,6 +3049,7 @@ uiTheme?: string;
  */
 minimizeToTrayOnClose?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
+export type StartExportRecordingResponse = { jobId: string }
 export type Suggestion = { text: string;
 /**
  * Short preview with real data (e.g. "1h20m in VS Code — auth.rs, api.rs")

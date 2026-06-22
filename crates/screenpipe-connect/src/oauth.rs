@@ -267,13 +267,15 @@ pub(crate) async fn load_oauth_json_with_instance(
     }
 
     // Fallback B: callers that don't know about instances (instance=None)
-    // should still find the token when the user has a single named instance.
-    let instances = list_oauth_instances(store, integration_id).await;
-    let named: Vec<String> = instances.into_iter().flatten().collect();
-    match named.len() {
+    // should still find the token when the user has a single usable named
+    // instance. Count recoverable instances, not raw rows: old app versions
+    // and interrupted reconnects can leave stale named rows behind, and those
+    // must not make a single healthy account look ambiguous.
+    let recoverable_named = list_recoverable_named_oauth_instances(store, integration_id).await;
+    match recoverable_named.len() {
         0 => None,
         1 => {
-            let inst = named.into_iter().next().unwrap();
+            let inst = recoverable_named.into_iter().next().unwrap();
             tracing::debug!(
                 "oauth: {} default lookup empty, falling back to single instance {:?}",
                 integration_id,
@@ -288,10 +290,10 @@ pub(crate) async fn load_oauth_json_with_instance(
             // gets None (returning a random instance would be worse — we
             // could leak the wrong account's data).
             tracing::warn!(
-                "oauth: {} default lookup empty and {} instances exist ({}) — caller passed instance=None; pick one explicitly",
+                "oauth: {} default lookup empty and {} recoverable instances exist ({}) — caller passed instance=None; pick one explicitly",
                 integration_id,
-                named.len(),
-                named.join(", "),
+                recoverable_named.len(),
+                recoverable_named.join(", "),
             );
             None
         }
@@ -454,6 +456,26 @@ pub async fn list_connected_oauth_instances(
     connected
 }
 
+async fn list_recoverable_named_oauth_instances(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+) -> Vec<String> {
+    let mut instances = Vec::new();
+    for inst in list_oauth_instances(store, integration_id).await {
+        let Some(name) = inst else {
+            continue;
+        };
+        if load_oauth_json_exact(store, integration_id, Some(&name))
+            .await
+            .as_ref()
+            .is_some_and(oauth_json_is_recoverable)
+        {
+            instances.push(name);
+        }
+    }
+    instances
+}
+
 /// Build a human/AI-readable explanation of why an OAuth lookup failed for
 /// `(integration_id, instance)`. Without this, every miss collapses to the
 /// same "not connected" string — which is wrong (and infuriating) when the
@@ -471,22 +493,28 @@ pub async fn describe_oauth_error(
     display_name: &str,
     instance: Option<&str>,
 ) -> String {
-    let instances: Vec<String> = list_oauth_instances(store, integration_id)
+    let instances: Vec<String> =
+        list_recoverable_named_oauth_instances(store, integration_id).await;
+    let all_instances: Vec<String> = list_oauth_instances(store, integration_id)
         .await
         .into_iter()
         .flatten()
         .collect();
-    match (instance, instances.as_slice()) {
-        (Some(inst), _) => format!(
+    match (instance, instances.as_slice(), all_instances.as_slice()) {
+        (Some(inst), _, _) => format!(
             "{display_name} account '{inst}' is not connected or its token can't be refreshed — reconnect it in Settings > Connections"
         ),
-        (None, []) => format!(
+        (None, [], []) => format!(
             "{display_name} not connected — use 'Connect {display_name}' in Settings > Connections"
         ),
-        (None, [only]) => format!(
+        (None, [], stale) => format!(
+            "{display_name} has saved account row(s) ({}) but none can be refreshed — reconnect it in Settings > Connections",
+            stale.join(", "),
+        ),
+        (None, [only], _) => format!(
             "{display_name} account '{only}' token can't be refreshed — reconnect it in Settings > Connections"
         ),
-        (None, many) => format!(
+        (None, many, _) => format!(
             "multiple {display_name} accounts connected ({}) — specify which one with `instance`. On JSON-body endpoints add `\"instance\": \"<email>\"` to the request body; on proxy/query endpoints add `?instance=<email>` (e.g. instance=\"{}\")",
             many.join(", "),
             many[0],
@@ -1337,6 +1365,38 @@ mod tests {
 
         let got = load_oauth_json(Some(&store), id, None).await;
         assert!(got.is_none(), "expected ambiguous None, got {got:?}");
+    }
+
+    #[tokio::test]
+    async fn load_with_none_ignores_stale_named_instances_when_one_is_recoverable() {
+        // M365 support case: reconnects can leave stale named rows behind.
+        // A default proxy call should not fail as "ambiguous" when only one
+        // named account is actually usable.
+        let store = mem_store().await;
+        let id = "_t_stale_named_rows";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}:old@example.com", id),
+                &json!({"access_token": "old", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:kevin.sharpen@ami.ca", id),
+                &json!({
+                    "access_token": "fresh",
+                    "refresh_token": "rt",
+                    "expires_at": expired,
+                }),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, None).await.unwrap();
+        assert_eq!(got["access_token"], "fresh");
+        assert_eq!(got["refresh_token"], "rt");
     }
 
     #[tokio::test]

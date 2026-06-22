@@ -340,6 +340,16 @@ export function hasPricing(model: string | null | undefined): boolean {
   return findPricing(model) !== null;
 }
 
+// Output $/Mtok at/above which a model is "frontier" — too expensive for an
+// unattended high-volume pipe. Catches opus (25-75), fable-5 (50), gpt-5.5 (30),
+// gpt-*-pro (180); leaves sonnet (15), gpt-5.4 (15), haiku/flash/glm through.
+const FRONTIER_OUTPUT_USD = 20;
+/** Frontier/premium models that shouldn't run on background/pipe traffic. */
+export function isFrontierModel(model: string | null | undefined): boolean {
+  const p = findPricing(model);
+  return !!p && p.output >= FRONTIER_OUTPUT_USD;
+}
+
 /**
  * Cost attribution for routed requests. 'auto' (and explicit models with
  * fallback chains) can serve a DIFFERENT model than requested — the chat

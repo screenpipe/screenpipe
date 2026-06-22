@@ -579,7 +579,7 @@ fn default_per_pipe_limit() -> u32 {
 
 #[derive(OaSchema, Deserialize)]
 pub(crate) struct ListArtifactsQuery {
-    /// Case-insensitive substring match over title, source, and preview.
+    /// Case-insensitive substring match over title, source, preview, and paths.
     pub q: Option<String>,
     /// Exact source match (pipe name or chat source).
     pub source: Option<String>,
@@ -626,6 +626,22 @@ pub(crate) struct ArtifactListResponse {
     pub pagination: PaginationInfo,
     /// Distinct sources over the full (unfiltered) set, for filter pills.
     pub sources: Vec<String>,
+}
+
+fn artifact_matches_query(item: &ArtifactItem, q: &str) -> bool {
+    item.title.to_lowercase().contains(q)
+        || item.source.to_lowercase().contains(q)
+        || item.path.to_lowercase().contains(q)
+        || item
+            .original_path
+            .as_deref()
+            .map(|p| p.to_lowercase().contains(q))
+            .unwrap_or(false)
+        || item
+            .preview
+            .as_deref()
+            .map(|p| p.to_lowercase().contains(q))
+            .unwrap_or(false)
 }
 
 /// GET /artifacts — unified listing of AI-generated artifacts.
@@ -771,14 +787,7 @@ pub(crate) async fn list_artifacts_handler(
         .map(str::to_lowercase)
         .filter(|q| !q.is_empty())
     {
-        items.retain(|i| {
-            i.title.to_lowercase().contains(&q)
-                || i.source.to_lowercase().contains(&q)
-                || i.preview
-                    .as_deref()
-                    .map(|p| p.to_lowercase().contains(&q))
-                    .unwrap_or(false)
-        });
+        items.retain(|i| artifact_matches_query(i, &q));
     }
 
     // Newest first by parsed instant — sources emit different UTC offsets,
@@ -826,8 +835,21 @@ pub async fn auto_register_pipe_artifacts(
         std::path::PathBuf,
     )>,
     pipe_name: &str,
+    execution_id: Option<i64>,
     screenpipe_dir: &std::path::Path,
 ) {
+    let artifact_source = execution_id
+        .map(|id| format!("pipe:{}:{}", pipe_name, id))
+        .unwrap_or_else(|| pipe_name.to_string());
+    let artifact_source_type = if execution_id.is_some() {
+        "pipe-run"
+    } else {
+        "pipe"
+    };
+    let output_path_source = execution_id
+        .map(|id| format!("{}-{}", pipe_name, id))
+        .unwrap_or_else(|| pipe_name.to_string());
+
     for (decl, abs_path) in items {
         if !abs_path.is_file() {
             continue;
@@ -837,7 +859,12 @@ pub async fn auto_register_pipe_artifacts(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("output");
-        let dest = match build_output_path(screenpipe_dir, "pipe", pipe_name, filename) {
+        let dest = match build_output_path(
+            screenpipe_dir,
+            artifact_source_type,
+            &output_path_source,
+            filename,
+        ) {
             Some(d) => d,
             None => continue,
         };
@@ -891,7 +918,7 @@ pub async fn auto_register_pipe_artifacts(
         let mut existing = None;
         if let Some(f) = &saf {
             match db
-                .get_output_by_artifact_id(pipe_name, "pipe", &f.artifact_id)
+                .get_output_by_artifact_id(&artifact_source, artifact_source_type, &f.artifact_id)
                 .await
             {
                 Ok(row) => existing = row,
@@ -956,8 +983,8 @@ pub async fn auto_register_pipe_artifacts(
             None => {
                 if let Err(e) = db
                     .insert_output(
-                        pipe_name,
-                        "pipe",
+                        &artifact_source,
+                        artifact_source_type,
                         title,
                         kind,
                         Some(&original),
@@ -1060,6 +1087,34 @@ mod tests {
                 "/fake/screenpipe/outputs/pipe/my-pipe/report.txt"
             ))
         );
+    }
+
+    #[test]
+    fn artifact_query_matches_path_and_original_path() {
+        let item = ArtifactItem {
+            registered: true,
+            id: Some(1),
+            source: "focus-pipe".to_string(),
+            source_type: "pipe".to_string(),
+            title: "Daily focus report".to_string(),
+            kind: "html".to_string(),
+            path: "/Users/test/.screenpipe/outputs/pipe/focus-pipe/relatorio-foco-offline.html"
+                .to_string(),
+            original_path: Some(
+                "/Users/test/.screenpipe/pipes/focus-pipe/output/relatorio-foco.html".to_string(),
+            ),
+            size_bytes: 1024,
+            preview: Some("<html><body>Resumo do dia</body></html>".to_string()),
+            saf_kind: None,
+            artifact_id: None,
+            saf_version: None,
+            modified_at: "2026-06-20T00:00:00Z".to_string(),
+            created_at: Some("2026-06-20T00:00:00Z".to_string()),
+        };
+
+        assert!(artifact_matches_query(&item, "relatorio-foco-offline.html"));
+        assert!(artifact_matches_query(&item, "relatorio-foco.html"));
+        assert!(!artifact_matches_query(&item, "missing-file-name"));
     }
 
     // ── SAF envelope validator ────────────────────────────────────────────
@@ -1273,6 +1328,7 @@ mod tests {
             &db,
             vec![(decl("out/process-refund.saf.json"), f.clone())],
             "my-pipe",
+            None,
             &sp_dir,
         )
         .await;
@@ -1300,7 +1356,7 @@ mod tests {
         let items = || vec![(decl("out/process-refund.saf.json"), f.clone())];
 
         std::fs::write(&f, envelope_json("process-refund", 1)).unwrap();
-        auto_register_pipe_artifacts(&db, items(), "my-pipe", &sp_dir).await;
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", None, &sp_dir).await;
         let first_id = db
             .list_outputs(Some("my-pipe"), None, None, 100, 0)
             .await
@@ -1309,7 +1365,7 @@ mod tests {
 
         // higher version, same file → same row, bumped version
         std::fs::write(&f, envelope_json("process-refund", 2)).unwrap();
-        auto_register_pipe_artifacts(&db, items(), "my-pipe", &sp_dir).await;
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", None, &sp_dir).await;
         let rows = db
             .list_outputs(Some("my-pipe"), None, None, 100, 0)
             .await
@@ -1319,7 +1375,7 @@ mod tests {
         assert_eq!(rows[0].saf_version, Some(2));
 
         // same version again → idempotent
-        auto_register_pipe_artifacts(&db, items(), "my-pipe", &sp_dir).await;
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", None, &sp_dir).await;
         let rows = db
             .list_outputs(Some("my-pipe"), None, None, 100, 0)
             .await
@@ -1343,6 +1399,7 @@ mod tests {
             &db,
             vec![(decl("out/process-refund.saf.json"), f1)],
             "my-pipe",
+            None,
             &sp_dir,
         )
         .await;
@@ -1354,6 +1411,7 @@ mod tests {
             &db,
             vec![(decl("out/process-refund-v2.saf.json"), f2)],
             "my-pipe",
+            None,
             &sp_dir,
         )
         .await;
@@ -1390,6 +1448,7 @@ mod tests {
             &db,
             vec![(decl("out/broken.saf.json"), f)],
             "my-pipe",
+            None,
             &sp_dir,
         )
         .await;
@@ -1415,8 +1474,14 @@ mod tests {
 
         let f = pipe_out.join("notes.md");
         std::fs::write(&f, "# hello\nplain markdown output").unwrap();
-        auto_register_pipe_artifacts(&db, vec![(decl("out/notes.md"), f)], "my-pipe", &sp_dir)
-            .await;
+        auto_register_pipe_artifacts(
+            &db,
+            vec![(decl("out/notes.md"), f)],
+            "my-pipe",
+            None,
+            &sp_dir,
+        )
+        .await;
 
         let rows = db
             .list_outputs(Some("my-pipe"), None, None, 100, 0)
@@ -1427,6 +1492,39 @@ mod tests {
         assert_eq!(rows[0].saf_kind, None);
         assert_eq!(rows[0].artifact_id, None);
         assert_eq!(rows[0].saf_version, None);
+    }
+
+    #[tokio::test]
+    async fn auto_register_outputs_with_execution_id_links_pipe_run_source() {
+        let db = setup_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_out = tmp.path().join("pipes/my-pipe/out");
+        std::fs::create_dir_all(&pipe_out).unwrap();
+        let sp_dir = tmp.path().join("sp");
+
+        let f = pipe_out.join("notes.md");
+        std::fs::write(&f, "# hello\nrun-owned markdown output").unwrap();
+        auto_register_pipe_artifacts(
+            &db,
+            vec![(decl("out/notes.md"), f)],
+            "my-pipe",
+            Some(42),
+            &sp_dir,
+        )
+        .await;
+
+        let rows = db
+            .list_outputs(Some("pipe:my-pipe:42"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "pipe:my-pipe:42");
+        assert_eq!(rows[0].source_type, "pipe-run");
+        assert!(
+            rows[0].output_path.contains("my-pipe-42"),
+            "output path should use a filesystem-safe run key, got {}",
+            rows[0].output_path
+        );
     }
 
     #[tokio::test]
@@ -1444,6 +1542,7 @@ mod tests {
                 &db,
                 vec![(decl("out/process-refund.saf.json"), f)],
                 pipe,
+                None,
                 &sp_dir,
             )
             .await;

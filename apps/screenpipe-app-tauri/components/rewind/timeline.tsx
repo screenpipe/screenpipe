@@ -323,6 +323,30 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// index 0 (the original "stuck going right after ~5 moves" bug). The shift
 	// math lives in shiftIndexForPrependedFrames so it can be unit-tested; see
 	// lib/hooks/__tests__/timeline-live-edge-shift.test.ts.
+	//
+	// LIVE-EDGE AUTO-FOLLOW: when the user is parked on the newest frame (index
+	// 0) and isn't doing anything else, advance the *displayed* frame to the new
+	// newest as it streams in — otherwise the image freezes on an old frame
+	// while the scrubber grows (the "I came back and it was stuck until I hit
+	// refresh" report). Gated below so it never fights manual scrubbing,
+	// playback, seeking, navigation, or search review. Frame loads are debounced
+	// (use-frame-loading), so following sparse live frames is cheap.
+	const liveFollowBlockedRef = useRef(false);
+	useEffect(() => {
+		liveFollowBlockedRef.current =
+			isPlaying || !!seekingTimestamp || searchNavFrame || inSearchReviewMode;
+	}, [isPlaying, seekingTimestamp, searchNavFrame, inSearchReviewMode]);
+
+	// Mirror currentIndex into a ref so the store subscriber (which runs
+	// synchronously inside set(), before render) can read the user's current
+	// position. We CANNOT read this from inside the setCurrentIndex updater
+	// because React defers functional updaters until render — a value captured
+	// there is not yet set when the subscriber needs it.
+	const currentIndexRef = useRef(currentIndex);
+	useEffect(() => {
+		currentIndexRef.current = currentIndex;
+	}, [currentIndex]);
+
 	useEffect(() => {
 		let prevTs = 0;
 		return useTimelineStore.subscribe((state) => {
@@ -331,11 +355,27 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			prevTs = lastFlushTimestamp;
 
 			if (newFramesCount > 0) {
+				// Was the user parked on the newest frame (live edge) as of the last
+				// render? Read from the ref, not from inside the updater below.
+				const wasAtLiveEdge = currentIndexRef.current === 0;
+
 				setCurrentIndex((prev) => shiftIndexForPrependedFrames(prev, newFramesCount));
+
+				if (
+					wasAtLiveEdge &&
+					!liveFollowBlockedRef.current &&
+					!isNavigatingRef.current &&
+					!pendingNavigationRef.current
+				) {
+					// state is the post-flush snapshot, so frames[0] is the new newest.
+					const newest = state.frames[0];
+					if (newest) setCurrentFrame(newest);
+				}
+
 				clearNewFramesCount();
 			}
 		});
-	}, [clearNewFramesCount]);
+	}, [clearNewFramesCount, setCurrentFrame]);
 
 	// Listen for window focus events to refresh timeline data (debounced)
 	useEffect(() => {

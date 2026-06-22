@@ -5,6 +5,7 @@ import { Env, RequestBody } from '../types';
 import { createProvider, resolveModelAlias } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
+import { isFrontierModel } from '../services/cost-tracker';
 import { isFlexEligible } from '../utils/latency';
 import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
 import { captureException } from '@sentry/cloudflare';
@@ -469,6 +470,20 @@ export async function handleChatCompletions(
   // before the hint injection masks the emptiness. No Sentry — client bug.
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
     return errorResponse(body, 400, 'The request must include at least one message.');
+  }
+
+  // Pipes / background are unattended, often high-volume automations where a
+  // frontier model (opus, gpt-5.5, *-pro, fable) is a cost bomb for marginal gain.
+  // Block them on the background lane: downgrade to 'auto' (→ cheap background
+  // chain) by default, or hard-reject via PIPE_FRONTIER_POLICY=reject. The client
+  // also hides frontier models from pipe presets; this is the worker backstop that
+  // catches old pipes / custom integrations / the passthrough that slip through.
+  if (latency === 'background' && body.model !== 'auto' && isFrontierModel(body.model)) {
+    if (String((env as any)?.PIPE_FRONTIER_POLICY ?? 'downgrade').toLowerCase() === 'reject') {
+      return errorResponse(body, 403, `"${body.model}" (a frontier model) isn't available for scheduled pipes / background tasks. Use "auto" or a fast model (glm-5, gemini, sonnet, haiku).`);
+    }
+    const fallback = String((env as any)?.PIPE_FRONTIER_FALLBACK ?? 'auto');
+    body = { ...body, model: fallback };
   }
 
   body = ensureScreenpipeHint(body);

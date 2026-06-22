@@ -20,6 +20,10 @@ import { AnnouncementHost } from "@/components/announcement-host";
 import { usePathname, useSearchParams } from "next/navigation";
 import { commands } from "@/lib/utils/tauri";
 import {
+  installBrowserLogBridge,
+  writeBrowserLogNow,
+} from "@/lib/logging/browser-log";
+import {
   clearSearchOpenedFromChatSurface,
   markSearchOpenedFromChatSurface,
   openChatConversationInCurrentChatSurface,
@@ -35,15 +39,6 @@ function isChatFocusedRecentSwitcherRoute(
   if (pathname !== "/home") return false;
   return !section || section === "home";
 }
-
-// Debounced localStorage writer
-const createDebouncer = (wait: number) => {
-  let timeout: NodeJS.Timeout;
-  return (fn: Function) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => fn(), wait);
-  };
-};
 
 function RecentChatSwitcherMount() {
   const pathname = usePathname();
@@ -86,6 +81,8 @@ export default function RootLayout({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const uninstallBrowserLogBridge = installBrowserLogBridge();
 
     // Patch Tauri event listener race condition (APP-2/5/9/W, 69 users)
     // Tauri's unregisterListener doesn't null-check listeners[eventId]
@@ -165,28 +162,17 @@ export default function RootLayout({
 
     // Top-level error capture for crashes that happen before React's error
     // boundaries mount (or while they're tearing down their parent tree).
-    // The buffered console interceptor in app/providers.tsx flushes every
-    // 2s — that's enough for steady-state logs but loses entries when the
-    // page is mid-teardown. Going straight through __TAURI_INTERNALS__.invoke
-    // bypasses the buffer so the stack lands in ~/.screenpipe/screenpipe-app
-    // immediately. Wired in layout.tsx specifically because it mounts before
-    // providers.tsx finishes its first effect.
+    // Write immediately so the stack lands in ~/.screenpipe/screenpipe-app.
     const handleWindowError = (e: ErrorEvent) => {
-      commands.writeBrowserLogs([
-        {
-          level: "error",
-          message: `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno} :: stack=${e.error?.stack ?? "(no stack)"}`,
-        },
-      ]).catch(() => {});
+      writeBrowserLogNow("error", `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`, {
+        stack: e.error?.stack ?? "(no stack)",
+      });
     };
     const handleUnhandled = (e: PromiseRejectionEvent) => {
       const reason: any = e.reason;
-      commands.writeBrowserLogs([
-        {
-          level: "error",
-          message: `unhandledrejection: ${reason?.message ?? String(reason)} :: stack=${reason?.stack ?? "(no stack)"}`,
-        },
-      ]).catch(() => {});
+      writeBrowserLogNow("error", `unhandledrejection: ${reason?.message ?? String(reason)}`, {
+        stack: reason?.stack ?? "(no stack)",
+      });
     };
     window.addEventListener("error", handleWindowError);
     window.addEventListener("unhandledrejection", handleUnhandled);
@@ -209,91 +195,8 @@ export default function RootLayout({
     };
     window.addEventListener("unhandledrejection", handleUnhandledRejection);
 
-    const logs: string[] = [];
-    const MAX_LOGS = 1000;
-    const originalConsole = { ...console };
-    const debouncedWrite = createDebouncer(1000);
-
-    // Belt-and-suspenders: scrub well-known secret-bearing keys before they
-    // hit localStorage. Any `console.log(settings)` (recording page, agents,
-    // OAuth flows) used to leak deepgramApiKey, aiPresets[].apiKey,
-    // openaiCompatibleApiKey, and the user's Clerk JWT into feedback bundles.
-    // Scrubbing here means future debug logs can't reintroduce the leak even
-    // if someone forgets and dumps an object containing these keys.
-    const SECRET_KEYS = new Set([
-      "apiKey",
-      "deepgramApiKey",
-      "openaiCompatibleApiKey",
-      "openrouterApiKey",
-      "anthropicApiKey",
-      "openaiApiKey",
-      "geminiApiKey",
-      "groqApiKey",
-      "elevenLabsApiKey",
-      "token",
-      "accessToken",
-      "refreshToken",
-      "idToken",
-      "secret",
-      "clientSecret",
-      "password",
-      "authorization",
-    ]);
-    const stringifyRedacted = (arg: unknown): string => {
-      if (typeof arg !== "object" || arg === null) {
-        return String(arg);
-      }
-      try {
-        return JSON.stringify(arg, (key, value) => {
-          if (
-            SECRET_KEYS.has(key) &&
-            typeof value === "string" &&
-            value.length > 0
-          ) {
-            return "[redacted]";
-          }
-          return value;
-        });
-      } catch {
-        return "[unserializable]";
-      }
-    };
-
-    ["log", "error", "warn", "info"].forEach((level) => {
-      (console[level as keyof Console] as any) = (...args: any[]) => {
-        // Call original first for performance
-        (originalConsole[level as keyof Console] as Function)(...args);
-
-        // Add to memory buffer (with secret keys scrubbed)
-        logs.push(
-          `[${level.toUpperCase()}] ${args.map(stringifyRedacted).join(" ")}`
-        );
-
-        // Trim buffer if needed
-        if (logs.length > MAX_LOGS) {
-          logs.splice(0, logs.length - MAX_LOGS);
-        }
-
-        // Debounced write to localStorage
-        debouncedWrite(() => {
-          try {
-            // localStorage can be null in Tauri WKWebView during navigation
-            if (!localStorage) return;
-            localStorage.setItem("console_logs", logs.join("\n"));
-          } catch (e) {
-            try {
-              // If localStorage is full, clear half the logs
-              logs.splice(0, logs.length / 2);
-              if (localStorage) localStorage.setItem("console_logs", logs.join("\n"));
-            } catch {
-              // localStorage unavailable, skip silently
-            }
-          }
-        });
-      };
-    });
-
     return () => {
+      uninstallBrowserLogBridge();
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("mousedown", handlePointerRecovery, true);
       window.removeEventListener("keydown", markKeyActivity, true);

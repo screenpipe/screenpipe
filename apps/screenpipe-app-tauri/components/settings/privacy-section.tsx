@@ -31,6 +31,7 @@ import {
   Keyboard,
   MousePointerClick,
   FolderTree,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -40,11 +41,13 @@ import { Switch } from "@/components/ui/switch";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { WindowPicker } from "./window-picker";
+import { InputMonitoringPanel } from "./input-monitoring-card";
 import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { platform } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
@@ -279,9 +282,205 @@ function EncryptDataCard({
   );
 }
 
+// Live, on-device-only illustration of what the current "what to hide"
+// selection masks. Pure example text — never real captured data. Each token
+// maps to a SpanLabel; it renders as the redaction placeholder when its
+// category is selected (secret is always on), otherwise as the raw value.
+// Makes the abstract category checkboxes concrete without a real frame.
+const REDACTION_PREVIEW_PARTS: (
+  | { text: string }
+  | { cat: string; value: string; ph: string }
+)[] = [
+  { text: "hi, i'm " },
+  { cat: "person", value: "Jordan Lee", ph: "[PERSON]" },
+  { text: " — email " },
+  { cat: "email", value: "jordan@example.com", ph: "[EMAIL]" },
+  { text: ", cell " },
+  { cat: "phone", value: "(555) 010-2983", ph: "[PHONE]" },
+  { text: ", ssn " },
+  { cat: "id", value: "412-09-1764", ph: "[ID]" },
+  { text: ", key " },
+  { cat: "secret", value: "AKIA…X7Q", ph: "[SECRET]" },
+  { text: "." },
+];
+
+function RedactionExamplePreview({ labels }: { labels: string[] }) {
+  const isOn = (cat: string) => cat === "secret" || labels.includes(cat);
+  return (
+    <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+        Preview
+      </p>
+      <p className="text-xs leading-relaxed text-foreground">
+        {REDACTION_PREVIEW_PARTS.map((part, i) =>
+          "text" in part ? (
+            <span key={i} className="text-muted-foreground">
+              {part.text}
+            </span>
+          ) : isOn(part.cat) ? (
+            <span
+              key={i}
+              className="rounded-[3px] bg-foreground px-1 py-0.5 font-mono text-[10px] text-background align-baseline"
+            >
+              {part.ph}
+            </span>
+          ) : (
+            <span key={i} className="font-medium">
+              {part.value}
+            </span>
+          ),
+        )}
+      </p>
+    </div>
+  );
+}
+
+// Hover-to-highlight preview for the "where we look" (surfaces) axis: a tiny
+// mock app window whose regions light up when you hover the matching row and
+// get a redaction bar when that surface is on. Pure illustration — fabricated
+// content, never real captured data. Grayscale per DESIGN.md.
+function RedactionWherePreview({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: {
+    value: string;
+    label: string;
+    desc: string;
+    recommended?: boolean;
+  }[];
+  selected: string[];
+  onToggle: (value: string, checked: boolean) => void;
+}) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const on = (v: string) => selected.includes(v);
+
+  // A redactable region of the mock screen, tagged with the surface it maps
+  // to. Outlines on hover of that row; covered by a bar when the surface is
+  // on. Helper (not a nested component) so it keeps the parent's hover state.
+  const region = (r: string, content: React.ReactNode, mono?: boolean) => (
+    <span
+      className={cn(
+        "relative inline-block rounded-[3px] align-baseline",
+        hovered === r &&
+          "outline outline-2 outline-foreground outline-offset-2",
+      )}
+    >
+      <span className={cn(mono && "font-mono", on(r) && "invisible")}>
+        {content}
+      </span>
+      {on(r) && (
+        <span className="absolute inset-0 rounded-[3px] bg-foreground" />
+      )}
+    </span>
+  );
+
+  return (
+    <div className="mt-1">
+      <div className="space-y-1.5">
+        {options.map((opt) => (
+          <label
+            key={opt.value}
+            className="flex items-start gap-2 text-xs cursor-pointer"
+            onMouseEnter={() => setHovered(opt.value)}
+            onMouseLeave={() => setHovered(null)}
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={on(opt.value)}
+              onChange={(e) => onToggle(opt.value, e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-foreground">{opt.label}</span>
+              {opt.recommended && (
+                <span className="text-muted-foreground"> (recommended)</span>
+              )}
+              <span className="text-muted-foreground"> — {opt.desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {/* Mock app window — hover a row above to see the matching area. */}
+      <div className="mt-2.5 overflow-hidden rounded-md border border-border bg-card">
+        <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+          <span className="h-2 w-2 rounded-full bg-border" />
+          <span className="h-2 w-2 rounded-full bg-border" />
+          <span className="h-2 w-2 rounded-full bg-border" />
+          <span className="ml-1 min-w-0 flex-1 text-[10px]">
+            {region(
+              "browser_url",
+              <span className="block truncate rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                app.example.com/account
+              </span>,
+              true,
+            )}
+          </span>
+        </div>
+        <div className="space-y-2 px-3 py-2.5 text-xs">
+          <div className="flex gap-3">
+            {region(
+              "ui_element_name",
+              <span className="font-medium text-foreground">dashboard</span>,
+            )}
+            {region(
+              "ui_element_name",
+              <span className="text-muted-foreground">settings</span>,
+            )}
+          </div>
+
+          <div>
+            <div className="mb-0.5 text-[10px] text-muted-foreground">email</div>
+            <div className="rounded border border-border px-1.5 py-1">
+              {region("element_properties", "jordan@example.com")}
+            </div>
+            <div className="mt-0.5 text-[10px]">
+              {region(
+                "ui_element_description",
+                <span className="text-muted-foreground">
+                  we&apos;ll never share your email
+                </span>,
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-0.5 text-[10px] text-muted-foreground">
+              password
+            </div>
+            <div className="rounded border border-border px-1.5 py-1 font-mono">
+              {region("element_properties", "hunter2-s3cret", true)}
+            </div>
+          </div>
+
+          <div className="text-[10px]">
+            {region(
+              "a11y_url_field",
+              <span className="text-foreground underline">reset password</span>,
+            )}
+          </div>
+
+          <div className="space-y-1 pt-0.5">
+            <div className="h-1.5 w-full rounded bg-foreground" />
+            <div className="h-1.5 w-4/5 rounded bg-foreground" />
+            <div className="text-[9px] text-muted-foreground">
+              typed text, transcripts &amp; on-screen text — always hidden
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
   const isEnterprise = useIsEnterpriseBuild();
+  // Input Monitoring is a macOS-only TCC permission; the grant card only
+  // renders there (alongside the keyboard/click capture toggles it gates).
+  const isMacOS = typeof window !== "undefined" && platform() === "macos";
   const { toast } = useToast();
   // when the admin forces the PII backend (local/cloud) we lock the radios so
   // the employee can't override it (the value itself is applied to settings by
@@ -555,15 +754,15 @@ export function PrivacySection() {
     desc: string;
     always?: boolean;
   }[] = [
-    { value: "secret", label: "Secrets", desc: "passwords, API keys, tokens", always: true },
-    { value: "id", label: "IDs", desc: "SSNs, credit cards, account & license numbers" },
+    { value: "secret", label: "Passwords & keys", desc: "passwords, API keys, tokens", always: true },
+    { value: "id", label: "ID numbers", desc: "SSNs, credit cards, account & license numbers" },
     { value: "person", label: "Names", desc: "people's names" },
-    { value: "email", label: "Emails", desc: "email addresses" },
+    { value: "email", label: "Email addresses", desc: "email addresses" },
     { value: "phone", label: "Phone numbers", desc: "phone numbers" },
-    { value: "address", label: "Addresses", desc: "postal addresses" },
-    { value: "url", label: "URLs", desc: "links carrying tokens or session IDs" },
+    { value: "address", label: "Mailing addresses", desc: "postal addresses" },
+    { value: "url", label: "Links with tokens", desc: "links carrying tokens or session IDs" },
     { value: "date", label: "Dates", desc: "dates of birth, timestamps" },
-    { value: "sensitive", label: "Sensitive info", desc: "health, financial, identity context" },
+    { value: "sensitive", label: "Health & financial details", desc: "health, financial, identity context" },
   ];
 
   const piiRedactionLabels = useMemo<string[]>(() => {
@@ -613,31 +812,43 @@ export function PrivacySection() {
     "ui_window_title",
     "element_text",
   ];
-  const PII_COLUMN_OPTIONS: { value: string; label: string; desc: string }[] = [
+  // Form-field values default ON: it's the surface where real PII (typed
+  // passwords / field values a11y exposes that OCR never sees) actually
+  // lives. Kept OUT of CORE so the user can still uncheck it — it only
+  // seeds the default. Keep in sync with the Rust defaults
+  // (`RedactColumns::default` / `default_pii_redaction_columns`).
+  const DEFAULT_OPTIONAL_COLUMNS = ["element_properties"];
+  const PII_COLUMN_OPTIONS: {
+    value: string;
+    label: string;
+    desc: string;
+    recommended?: boolean;
+  }[] = [
     {
       value: "element_properties",
-      label: "Form field values (accessibility)",
-      desc: "the value of every captured control — catches password & form-field contents OCR can't see. Heaviest surface; off by default",
+      label: "Form field values",
+      desc: "what you type into forms — catches passwords and field contents that on-screen text misses",
+      recommended: true,
     },
     {
       value: "browser_url",
-      label: "Page URLs",
-      desc: "the browser address bar — often non-PII, and redacting breaks links",
+      label: "Web addresses",
+      desc: "the address bar — usually not private, and hiding them breaks links",
     },
     {
       value: "ui_element_name",
-      label: "Control names",
-      desc: "accessibility name of clicked/focused controls — usually static labels",
+      label: "Button & menu labels",
+      desc: "names like “Submit” or “Search” — rarely private",
     },
     {
       value: "ui_element_description",
-      label: "Control descriptions",
-      desc: "accessibility help text of controls",
+      label: "Help text on controls",
+      desc: "the longer description some buttons and menus expose",
     },
     {
       value: "a11y_url_field",
-      label: "URLs in accessibility data",
-      desc: "the url field inside captured accessibility nodes",
+      label: "Links inside app data",
+      desc: "URLs embedded in an app’s underlying structure",
     },
   ];
 
@@ -645,6 +856,7 @@ export function PrivacySection() {
     return (
       (settings.piiRedactionColumns as string[] | undefined) ?? [
         ...CORE_REDACTION_COLUMNS,
+        ...DEFAULT_OPTIONAL_COLUMNS,
       ]
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1183,6 +1395,26 @@ export function PrivacySection() {
         </CardContent>
       </Card>
 
+      {/* Input Monitoring permission (macOS) — the OS-level TCC grant that
+          lets the keyboard/click capture toggles above actually record.
+          Lives here, next to those toggles, instead of under Connections. */}
+      {isMacOS && (
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center space-x-2.5">
+              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                Input Monitoring permission
+                <HelpTooltip text="macOS permission that lets screenpipe capture keystrokes and mouse clicks. without it, capture runs in reduced mode — clipboard and app/window switches still work, but keyboard and click recording is dropped." />
+              </h3>
+            </div>
+            <div className="mt-2 ml-[26px]">
+              <InputMonitoringPanel />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Record While Locked */}
       <Card>
         <CardContent className="px-3 py-2.5">
@@ -1380,8 +1612,10 @@ export function PrivacySection() {
                   verifies the open-source build before sending anything.
                 </p>
 
+                {/* Axis 1 — WHAT to hide (PII categories). The primary knob:
+                    content-type, applies wherever it's found. */}
                 <p className="text-xs font-medium text-foreground pt-2">
-                  Fields to redact
+                  What to hide
                 </p>
                 {PII_FIELD_OPTIONS.map((opt) => {
                   const checked =
@@ -1419,51 +1653,42 @@ export function PrivacySection() {
                     </label>
                   );
                 })}
+                {textRedactionOn && (
+                  <RedactionExamplePreview labels={piiRedactionLabels} />
+                )}
                 <p className="text-[11px] text-muted-foreground pt-0.5">
                   Unselected types stay visible so your timeline remains
                   searchable. Secrets are always removed in both modes.
                 </p>
 
-                {/* Column allow-list is text-only — hide it when text
-                    redaction is off (Images-only Smart mode). */}
+                {/* Axis 2 — WHERE to look (captured surfaces). Advanced and
+                    orthogonal to the categories above; collapsed by default so
+                    most users only deal with "What to hide". Text-only, so
+                    hide it entirely when text redaction is off (Images-only
+                    Smart mode). */}
                 {textRedactionOn && (
-                  <>
-                    <p className="text-xs font-medium text-foreground pt-3 mt-1.5 border-t border-border">
-                      Where to redact (text)
-                    </p>
-                    {PII_COLUMN_OPTIONS.map((opt) => {
-                      const checked = piiRedactionColumns.includes(opt.value);
-                      return (
-                        <label
-                          key={opt.value}
-                          className="flex items-start gap-2 text-xs cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            className="mt-0.5"
-                            checked={checked}
-                            onChange={(e) =>
-                              handlePiiColumnToggle(opt.value, e.target.checked)
-                            }
-                          />
-                          <span>
-                            <span className="font-medium text-foreground">
-                              {opt.label}
-                            </span>
-                            <span className="text-muted-foreground">
-                              {" "}— {opt.desc}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                    <p className="text-[11px] text-muted-foreground pt-0.5">
-                      Typed text, clipboard, transcripts, window titles, and
-                      on-screen text are always redacted. These extra capture
-                      surfaces are off by default — enable any that matter for
-                      your threat model.
-                    </p>
-                  </>
+                  <details className="group pt-3 mt-1.5 border-t border-border">
+                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-foreground list-none [&::-webkit-details-marker]:hidden">
+                      <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
+                      Where we look
+                      <span className="font-normal text-muted-foreground">
+                        — advanced
+                      </span>
+                    </summary>
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-[11px] text-muted-foreground">
+                        We always scan what you type, your clipboard,
+                        transcripts, window titles, and on-screen text. Turn on
+                        any of these extra places the same info can hide —
+                        hover a row to see what it covers.
+                      </p>
+                      <RedactionWherePreview
+                        options={PII_COLUMN_OPTIONS}
+                        selected={piiRedactionColumns}
+                        onToggle={handlePiiColumnToggle}
+                      />
+                    </div>
+                  </details>
                 )}
 
                 <label className="flex items-start gap-2 text-xs cursor-pointer pt-2 mt-1.5 border-t border-border">
