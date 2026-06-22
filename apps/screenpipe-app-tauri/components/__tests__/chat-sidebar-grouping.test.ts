@@ -10,7 +10,6 @@ import {
   buildGroupedRecents,
   buildSidebarRecentsSections,
   recurringPipeGroupKeys,
-  validateSidebarGroupAssignmentState,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 import type { SessionRecord } from "@/lib/stores/chat-store";
@@ -397,18 +396,9 @@ describe("validateSidebarGroupName", () => {
     if (!result.ok) expect(result.reason).toBe("reserved");
   });
 
-  it("rejects names that collide with known pipe names", () => {
-    const result = validateSidebarGroupName("Daily-Summary", {
-      knownPipeNames: ["daily-summary", "focus-pulse"],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("pipe_conflict");
-  });
-
   it("allows reusing an existing manual group name", () => {
     const result = validateSidebarGroupName(" harsh ", {
       existingGroups: ["HARSH", "money"],
-      knownPipeNames: ["daily-summary"],
     });
     expect(result).toEqual({ ok: true, normalized: "HARSH" });
   });
@@ -421,34 +411,4 @@ describe("validateSidebarGroupName", () => {
     if (!result.ok) expect(result.reason).toBe("reserved");
   });
 
-  it("rejects legacy pipe-conflicting names even if they already exist", () => {
-    const result = validateSidebarGroupName("Daily-Summary", {
-      existingGroups: ["Daily-Summary", "money"],
-      knownPipeNames: ["daily-summary"],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("pipe_conflict");
-  });
-});
-
-describe("validateSidebarGroupAssignmentState", () => {
-  it("blocks group assignment while pipe names are loading", () => {
-    expect(
-      validateSidebarGroupAssignmentState({ pipeNamesLoading: true }),
-    ).toEqual({
-      ok: false,
-      reason: "pipe_names_loading",
-      message: "Pipe groups are still loading. Try again in a moment.",
-    });
-  });
-
-  it("blocks group assignment when pipe names failed to load", () => {
-    expect(
-      validateSidebarGroupAssignmentState({ pipeNamesError: "boom" }),
-    ).toEqual({
-      ok: false,
-      reason: "pipe_names_error",
-      message: "Pipe groups couldn't be loaded. Try again after they finish syncing.",
-    });
-  });
 });

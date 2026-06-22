@@ -27,47 +27,11 @@ const RESERVED_SIDEBAR_GROUP_NAMES = new Set([
 
 export interface SidebarGroupNameValidationOptions {
   existingGroups?: Iterable<string>;
-  knownPipeNames?: Iterable<string>;
-}
-
-export interface SidebarGroupAssignmentStateOptions {
-  pipeNamesLoading?: boolean;
-  pipeNamesError?: string | null;
 }
 
 export type SidebarGroupNameValidationResult =
   | { ok: true; normalized: string }
-  | { ok: false; reason: "empty" | "reserved" | "pipe_conflict"; message: string };
-
-export type SidebarGroupAssignmentStateResult =
-  | { ok: true }
-  | {
-      ok: false;
-      reason: "pipe_names_loading" | "pipe_names_error";
-      message: string;
-    };
-
-export function validateSidebarGroupAssignmentState(
-  options: SidebarGroupAssignmentStateOptions = {},
-): SidebarGroupAssignmentStateResult {
-  if (options.pipeNamesLoading) {
-    return {
-      ok: false,
-      reason: "pipe_names_loading",
-      message: "Pipe groups are still loading. Try again in a moment.",
-    };
-  }
-
-  if (options.pipeNamesError) {
-    return {
-      ok: false,
-      reason: "pipe_names_error",
-      message: "Pipe groups couldn't be loaded. Try again after they finish syncing.",
-    };
-  }
-
-  return { ok: true };
-}
+  | { ok: false; reason: "empty" | "reserved"; message: string };
 
 export function validateSidebarGroupName(
   raw: string,
@@ -88,16 +52,6 @@ export function validateSidebarGroupName(
       reason: "reserved",
       message: "This group name is reserved. Choose a different name.",
     };
-  }
-
-  for (const pipeName of options.knownPipeNames ?? []) {
-    if (pipeName.trim().toLowerCase() === normalized) {
-      return {
-        ok: false,
-        reason: "pipe_conflict",
-        message: "This name is already used by a pipe group. Choose a different name.",
-      };
-    }
   }
 
   // Reusing an existing manual group name should resolve to that same group

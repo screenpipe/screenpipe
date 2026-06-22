@@ -33,6 +33,8 @@ const PIPE_NAME = "daily-summary";
 // Regular sessions (manual grouping)
 const CHAT_M1 = "bbbbbbbb-1111-4bbb-8bbb-bbbbbbbbbbbb";
 const CHAT_M2 = "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb";
+const CHAT_CASE_1 = "cccccccc-1111-4ccc-8ccc-cccccccccccc";
+const CHAT_CASE_2 = "cccccccc-2222-4ccc-8ccc-cccccccccccc";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -153,6 +155,53 @@ async function elementExists(selector: string): Promise<boolean> {
   }, selector)) as boolean;
 }
 
+async function openSidebarConversationMenu(chatId: string): Promise<void> {
+  await browser.execute((id: string) => {
+    const row = document.querySelector(`[data-testid="chat-row-${id}"]`);
+    const trigger = row?.querySelector<HTMLElement>('[aria-label="Conversation actions"]');
+    trigger?.click();
+  }, chatId);
+
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute((id: string) =>
+        !!document.querySelector(`[data-testid="chat-row-move-to-group-${id}"]`),
+      , chatId)) as boolean,
+    {
+      timeout: t(5_000),
+      interval: 200,
+      timeoutMsg: `sidebar action menu did not open for ${chatId}`,
+    },
+  );
+}
+
+async function openSidebarMoveToGroupMenu(chatId: string): Promise<void> {
+  const trigger = await $(`[data-testid="chat-row-move-to-group-${chatId}"]`);
+  await trigger.waitForExist({ timeout: t(5_000) });
+  await trigger.click();
+  await browser.waitUntil(
+    async () =>
+      (await elementExists(`[data-testid="chat-row-move-to-group-menu-${chatId}"]`)),
+    {
+      timeout: t(5_000),
+      interval: 200,
+      timeoutMsg: `move-to-group submenu did not open for ${chatId}`,
+    },
+  );
+}
+
+async function clickSidebarGroupTarget(chatId: string, groupName: string): Promise<void> {
+  await browser.execute((id: string, target: string) => {
+    const menu = document.querySelector(
+      `[data-testid="chat-row-move-to-group-menu-${id}"]`,
+    );
+    const item = Array.from(menu?.querySelectorAll<HTMLElement>("[role='menuitem']") ?? []).find(
+      (el) => el.textContent?.trim() === target,
+    );
+    item?.click();
+  }, chatId, groupName);
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 describe("Chat sidebar groups", function () {
@@ -167,7 +216,7 @@ describe("Chat sidebar groups", function () {
   after(async () => {
     cleanupTestChats();
     // Clean up any sessions from the store
-    for (const id of [PIPE_A1, PIPE_A2, CHAT_M1, CHAT_M2]) {
+    for (const id of [PIPE_A1, PIPE_A2, CHAT_M1, CHAT_M2, CHAT_CASE_1, CHAT_CASE_2]) {
       await emitTauri("chat-deleted", { id });
     }
     // Clean up localStorage expand keys
@@ -441,6 +490,64 @@ describe("Chat sidebar groups", function () {
       // Both chats should now be in the default (ungrouped, no header) section
       const bothVisible = await visibleRowCount([CHAT_M1, CHAT_M2]);
       expect(bothVisible).toBe(2);
+    });
+  });
+
+  describe("manual group validation", () => {
+    const GROUP_NAME = "HARSH";
+    const GROUPED_TITLE = "existing harsh group";
+    const UNGROUPED_TITLE = "move me into harsh";
+
+    before(async () => {
+      writeRegularConversation(CHAT_CASE_1, GROUPED_TITLE, GROUP_NAME);
+      writeRegularConversation(CHAT_CASE_2, UNGROUPED_TITLE);
+
+      await emitTauri("chat-conversation-saved", {
+        id: CHAT_CASE_1,
+        title: GROUPED_TITLE,
+        titleSource: "fallback",
+      });
+      await browser.pause(t(300));
+      await emitTauri("chat-conversation-saved", {
+        id: CHAT_CASE_2,
+        title: UNGROUPED_TITLE,
+        titleSource: "fallback",
+      });
+
+      await browser.waitUntil(
+        async () => (await visibleRowCount([CHAT_CASE_1, CHAT_CASE_2])) >= 1,
+        {
+          timeout: t(10_000),
+          interval: 250,
+          timeoutMsg: "case-sensitivity chats did not load into the sidebar",
+        },
+      );
+    });
+
+    it("reuses the canonical manual group name instead of creating a lowercase duplicate", async () => {
+      await openSidebarConversationMenu(CHAT_CASE_2);
+      await openSidebarMoveToGroupMenu(CHAT_CASE_2);
+      await clickSidebarGroupTarget(CHAT_CASE_2, GROUP_NAME);
+
+      await browser.waitUntil(
+        async () => {
+          const inCanonicalSection = (await browser.execute((chatId: string, groupName: string) => {
+            const section = document.querySelector(
+              `[data-testid="chat-sidebar-group-${groupName}"]`,
+            );
+            return !!section?.querySelector(`[data-testid="chat-row-${chatId}"]`);
+          }, CHAT_CASE_2, GROUP_NAME)) as boolean;
+          const lowercaseSectionExists = await elementExists(
+            `[data-testid="chat-sidebar-group-${GROUP_NAME.toLowerCase()}"]`,
+          );
+          return inCanonicalSection && !lowercaseSectionExists;
+        },
+        {
+          timeout: t(10_000),
+          interval: 250,
+          timeoutMsg: "moving a chat into HARSH created a lowercase duplicate section",
+        },
+      );
     });
   });
 });

@@ -39,11 +39,7 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { usePipes } from "@/lib/hooks/use-pipes";
-import {
-  validateSidebarGroupAssignmentState,
-  validateSidebarGroupName,
-} from "@/lib/utils/chat-sidebar-grouping";
+import { validateSidebarGroupName } from "@/lib/utils/chat-sidebar-grouping";
 
 type HistoryTab = "active" | "archived" | "all";
 
@@ -74,11 +70,6 @@ export function ChatHistoryView({
   const migratedRef = React.useRef(false);
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const {
-    pipes: installedPipes,
-    loading: installedPipesLoading,
-    error: installedPipesError,
-  } = usePipes();
   const [bulkPending, setBulkPending] = useState<null | "archiving" | "restoring" | "deleting">(null);
   const [rowPendingIds, setRowPendingIds] = useState<Set<string>>(() => new Set());
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -322,31 +313,7 @@ export function ChatHistoryView({
     }
     return groups;
   }, [conversations]);
-  const knownPipeNames = useMemo(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
-    for (const pipe of installedPipes) {
-      const normalized = pipe.config?.name?.trim().toLowerCase();
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      names.push(normalized);
-    }
-    return names;
-  }, [installedPipes]);
-  const groupAssignmentState = useMemo(
-    () =>
-      validateSidebarGroupAssignmentState({
-        pipeNamesLoading: installedPipesLoading,
-        pipeNamesError: installedPipesError,
-      }),
-    [installedPipesError, installedPipesLoading],
-  );
-  const selectableExistingGroups = useMemo(() => {
-    if (!groupAssignmentState.ok) return [];
-    return existingGroups.filter((group) =>
-      validateSidebarGroupName(group, { knownPipeNames }).ok,
-    );
-  }, [existingGroups, groupAssignmentState, knownPipeNames]);
+  const selectableExistingGroups = existingGroups;
 
   // State for the "New group" dialog — stores the conversation id being moved.
   const [newGroupSessionId, setNewGroupSessionId] = useState<string | null>(null);
@@ -355,17 +322,8 @@ export function ChatHistoryView({
   const handleMoveToGroup = useCallback(async (id: string, group: string | undefined) => {
     let normalized: string | undefined;
     if (group !== undefined) {
-      if (!groupAssignmentState.ok) {
-        toast({
-          title: "Group names unavailable",
-          description: groupAssignmentState.message,
-          variant: "destructive",
-        });
-        return false;
-      }
       const validation = validateSidebarGroupName(group, {
         existingGroups,
-        knownPipeNames,
       });
       if (!validation.ok) {
         toast({
@@ -386,7 +344,7 @@ export function ChatHistoryView({
     }
     void load();
     return true;
-  }, [existingGroups, groupAssignmentState, knownPipeNames, load]);
+  }, [existingGroups, load]);
 
   const Row = ({ conv }: { conv: ConversationMeta }) => {
     const updatedAt = conv.updatedAt ? fmt.format(new Date(conv.updatedAt)) : "";
@@ -589,7 +547,6 @@ export function ChatHistoryView({
                     )}
                     <DropdownMenuItem
                       className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
-                      disabled={!groupAssignmentState.ok}
                       onSelect={() => setNewGroupSessionId(conv.id)}
                     >
                       New group...

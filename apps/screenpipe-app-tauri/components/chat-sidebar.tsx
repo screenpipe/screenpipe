@@ -48,7 +48,6 @@ import {
 } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
-import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch } from "@/lib/api";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -105,7 +104,6 @@ import {
   buildSidebarRecentsSections,
   recurringPipeGroupKeys,
   type SidebarItem,
-  validateSidebarGroupAssignmentState,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 
@@ -392,11 +390,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const runningPipes = useRunningPipes();
   const {
-    pipes: installedPipes,
-    loading: installedPipesLoading,
-    error: installedPipesError,
-  } = usePipes();
-  const {
     pipes: upcomingPipes,
     refetch: refetchUpcoming,
     dismiss: dismissUpcoming,
@@ -547,34 +540,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
     return groups;
   }, [pinned, recents]);
-  const knownPipeNames = useMemo(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
-    const add = (name: string | undefined) => {
-      const normalized = name?.trim().toLowerCase();
-      if (!normalized || seen.has(normalized)) return;
-      seen.add(normalized);
-      names.push(normalized);
-    };
-    for (const pipe of installedPipes) add(pipe.config?.name);
-    for (const pipe of runningPipes) add(pipe.pipeName);
-    for (const pipe of upcomingPipes) add(pipe.pipeName);
-    return names;
-  }, [installedPipes, runningPipes, upcomingPipes]);
-  const groupAssignmentState = useMemo(
-    () =>
-      validateSidebarGroupAssignmentState({
-        pipeNamesLoading: installedPipesLoading,
-        pipeNamesError: installedPipesError,
-      }),
-    [installedPipesError, installedPipesLoading],
-  );
-  const selectableExistingGroups = useMemo(() => {
-    if (!groupAssignmentState.ok) return [];
-    return existingGroups.filter((group) =>
-      validateSidebarGroupName(group, { knownPipeNames }).ok,
-    );
-  }, [existingGroups, groupAssignmentState, knownPipeNames]);
+  const selectableExistingGroups = existingGroups;
 
   // Resolve each running pipe to its SessionRecord so the Scheduled-row
   // kebab can offer Pin / Rename / Archive / Delete with the same
@@ -777,17 +743,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const handleMoveToGroup = async (id: string, group: string | undefined) => {
     let normalized: string | undefined;
     if (group !== undefined) {
-      if (!groupAssignmentState.ok) {
-        toast({
-          title: "Group names unavailable",
-          description: groupAssignmentState.message,
-          variant: "destructive",
-        });
-        return false;
-      }
       const validation = validateSidebarGroupName(group, {
         existingGroups,
-        knownPipeNames,
       });
       if (!validation.ok) {
         toast({
@@ -1011,7 +968,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                           onMoveToGroup={handleMoveToGroup}
                           onNewGroupRequest={setNewGroupSessionId}
                           existingGroups={selectableExistingGroups}
-                          canCreateGroup={groupAssignmentState.ok}
+                          canCreateGroup
                           openConversationMenuId={openConversationMenuId}
                           setOpenConversationMenuId={setOpenConversationMenuId}
                         />
@@ -1032,7 +989,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                           onMoveToGroup={handleMoveToGroup}
                           onNewGroupRequest={setNewGroupSessionId}
                           existingGroups={selectableExistingGroups}
-                          canCreateGroup={groupAssignmentState.ok}
+                          canCreateGroup
                           openConversationMenuId={openConversationMenuId}
                           setOpenConversationMenuId={setOpenConversationMenuId}
                         />
