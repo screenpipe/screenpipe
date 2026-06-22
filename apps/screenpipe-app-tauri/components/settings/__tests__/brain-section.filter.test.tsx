@@ -53,9 +53,16 @@ vi.mock("@/lib/api", () => ({
       ]);
     }
     if (path.startsWith("/memories")) {
+      const url = new URL(`http://x${path}`);
+      const q = url.searchParams.get("q")?.toLowerCase();
+      const data = q
+        ? MEMORIES.filter((memory) =>
+            memory.content.toLowerCase().includes(q),
+          )
+        : MEMORIES;
       return ok({
-        data: MEMORIES,
-        pagination: { limit: 20, offset: 0, total: MEMORIES.length },
+        data,
+        pagination: { limit: 20, offset: 0, total: data.length },
       });
     }
     if (path.startsWith("/artifacts")) {
@@ -217,6 +224,35 @@ describe("BrainSection type filter", () => {
       expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
         expect.stringContaining("/artifacts?limit=500&offset=0&q=artifact&source=glob-pipe"),
       );
+    });
+  });
+
+  it("shows artifact-specific empty search copy", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    fireEvent.change(screen.getByTestId("brain-search-input"), {
+      target: { value: "yoo" },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('no artifacts matching "yoo" in title or content'),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shows memory-specific empty search copy", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.change(screen.getByTestId("brain-search-input"), {
+      target: { value: "yoo" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('no memories matching "yoo"')).toBeTruthy();
     });
   });
 

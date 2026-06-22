@@ -233,6 +233,10 @@ impl DatabaseManager {
 
         if let Some((path,)) = &row {
             let mut tx = self.begin_immediate_with_retry().await?;
+            sqlx::query("DELETE FROM output_search_documents WHERE output_id = ?1")
+                .bind(id)
+                .execute(&mut **tx.conn())
+                .await?;
             sqlx::query("DELETE FROM outputs WHERE id = ?1")
                 .bind(id)
                 .execute(&mut **tx.conn())
@@ -241,5 +245,205 @@ impl DatabaseManager {
             return Ok(Some(path.clone()));
         }
         Ok(None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_output_search_document(
+        &self,
+        output_id: i64,
+        title: &str,
+        body: &str,
+        source: &str,
+        source_type: &str,
+        kind: &str,
+        content_hash: &str,
+        bytes_indexed: i64,
+    ) -> Result<(), SqlxError> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+        sqlx::query(
+            "INSERT INTO output_search_documents \
+             (output_id, title, body, source, source_type, kind, content_hash, bytes_indexed) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT(output_id) DO UPDATE SET \
+               title = excluded.title, \
+               body = excluded.body, \
+               source = excluded.source, \
+               source_type = excluded.source_type, \
+               kind = excluded.kind, \
+               content_hash = excluded.content_hash, \
+               bytes_indexed = excluded.bytes_indexed, \
+               indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        )
+        .bind(output_id)
+        .bind(title)
+        .bind(body)
+        .bind(source)
+        .bind(source_type)
+        .bind(kind)
+        .bind(content_hash)
+        .bind(bytes_indexed)
+        .execute(&mut **tx.conn())
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_output_search_document(&self, output_id: i64) -> Result<(), SqlxError> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+        sqlx::query("DELETE FROM output_search_documents WHERE output_id = ?1")
+            .bind(output_id)
+            .execute(&mut **tx.conn())
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn search_outputs(
+        &self,
+        query: &str,
+        source: Option<&str>,
+        saf_kind: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<crate::types::OutputRecord>, i64), SqlxError> {
+        let fts_query = crate::sanitize_fts5_query(query);
+        if fts_query.is_empty() {
+            return self
+                .list_outputs_for_artifacts(source, saf_kind, limit, offset)
+                .await;
+        }
+
+        let mut sql = String::from(
+            "SELECT o.id, o.source, o.source_type, o.title, o.kind, o.original_path, o.output_path, \
+             o.size_bytes, o.preview, o.metadata, o.saf_kind, o.artifact_id, o.saf_version, \
+             o.created_at, o.updated_at \
+             FROM output_search_fts f \
+             JOIN outputs o ON o.id = f.rowid \
+             WHERE output_search_fts MATCH ?1",
+        );
+        let mut binds: Vec<String> = vec![fts_query.clone()];
+        append_artifact_output_filters(&mut sql, &mut binds, source, saf_kind);
+        sql.push_str(&format!(
+            " ORDER BY bm25(output_search_fts), o.updated_at DESC LIMIT ?{} OFFSET ?{}",
+            binds.len() + 1,
+            binds.len() + 2
+        ));
+
+        let mut rows_query = sqlx::query_as::<_, crate::types::OutputRecord>(&sql);
+        for b in &binds {
+            rows_query = rows_query.bind(b);
+        }
+        let rows = rows_query
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut count_sql = String::from(
+            "SELECT COUNT(*) \
+             FROM output_search_fts f \
+             JOIN outputs o ON o.id = f.rowid \
+             WHERE output_search_fts MATCH ?1",
+        );
+        let mut count_binds: Vec<String> = vec![fts_query];
+        append_artifact_output_filters(&mut count_sql, &mut count_binds, source, saf_kind);
+        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+        for b in &count_binds {
+            count_query = count_query.bind(b);
+        }
+        let total = count_query.fetch_one(&self.pool).await?;
+
+        Ok((rows, total))
+    }
+
+    pub async fn list_outputs_for_artifacts(
+        &self,
+        source: Option<&str>,
+        saf_kind: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<crate::types::OutputRecord>, i64), SqlxError> {
+        let mut sql = String::from(
+            "SELECT id, source, source_type, title, kind, original_path, output_path, \
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
+             created_at, updated_at \
+             FROM outputs o WHERE 1=1",
+        );
+        let mut binds: Vec<String> = Vec::new();
+        append_artifact_output_filters(&mut sql, &mut binds, source, saf_kind);
+        sql.push_str(&format!(
+            " ORDER BY updated_at DESC LIMIT ?{} OFFSET ?{}",
+            binds.len() + 1,
+            binds.len() + 2
+        ));
+        let mut rows_query = sqlx::query_as::<_, crate::types::OutputRecord>(&sql);
+        for b in &binds {
+            rows_query = rows_query.bind(b);
+        }
+        let rows = rows_query
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut count_sql = String::from("SELECT COUNT(*) FROM outputs o WHERE 1=1");
+        let mut count_binds: Vec<String> = Vec::new();
+        append_artifact_output_filters(&mut count_sql, &mut count_binds, source, saf_kind);
+        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+        for b in &count_binds {
+            count_query = count_query.bind(b);
+        }
+        let total = count_query.fetch_one(&self.pool).await?;
+
+        Ok((rows, total))
+    }
+
+    pub async fn list_output_sources_for_artifacts(&self) -> Result<Vec<String>, SqlxError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT CASE WHEN source_type = 'chat' THEN 'chat' ELSE source END AS display_source \
+             FROM outputs \
+             ORDER BY display_source ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn list_outputs_missing_search_documents(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::types::OutputRecord>, SqlxError> {
+        sqlx::query_as::<_, crate::types::OutputRecord>(
+            "SELECT o.id, o.source, o.source_type, o.title, o.kind, o.original_path, o.output_path, \
+             o.size_bytes, o.preview, o.metadata, o.saf_kind, o.artifact_id, o.saf_version, \
+             o.created_at, o.updated_at \
+             FROM outputs o \
+             LEFT JOIN output_search_documents d ON d.output_id = o.id \
+             WHERE d.output_id IS NULL \
+             ORDER BY o.updated_at DESC \
+             LIMIT ?1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+}
+
+fn append_artifact_output_filters(
+    sql: &mut String,
+    binds: &mut Vec<String>,
+    source: Option<&str>,
+    saf_kind: Option<&str>,
+) {
+    if let Some(src) = source.filter(|s| !s.is_empty()) {
+        binds.push(src.to_string());
+        let idx = binds.len();
+        sql.push_str(&format!(
+            " AND (o.source = ?{idx} OR (o.source_type = 'chat' AND ?{idx} = 'chat'))"
+        ));
+    }
+    if let Some(sk) = saf_kind.filter(|s| !s.is_empty()) {
+        binds.push(sk.to_string());
+        sql.push_str(&format!(" AND o.saf_kind = ?{}", binds.len()));
     }
 }

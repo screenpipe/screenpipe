@@ -39,6 +39,8 @@ const ARTIFACT_CONTENT = [
   "## Section two",
   "",
   "markdown content for preview testing — this line is the assertion target.",
+  "",
+  "E2E_ARTIFACT_DEEP_SEARCH_TOKEN_4288",
 ].join("\n");
 
 interface LocalApiConfig {
@@ -342,6 +344,24 @@ describe("Brain section", function () {
     expect(await memItem.isExisting()).toBe(true);
 
     // Clear search
+    await searchInput.clearValue();
+    await browser.pause(600);
+  });
+
+  it("artifact search finds content beyond the preview", async () => {
+    const artFilter = await $('[data-testid="brain-filter-artifacts"]');
+    await artFilter.click();
+    await browser.pause(500);
+
+    const searchInput = await $('[data-testid="brain-search-input"]');
+    await searchInput.setValue("E2E_ARTIFACT_DEEP_SEARCH_TOKEN_4288");
+    await browser.pause(600);
+
+    const artItem = await $(
+      `[data-testid="brain-item-artifact-${seededOutputId}"]`,
+    );
+    expect(await artItem.isExisting()).toBe(true);
+
     await searchInput.clearValue();
     await browser.pause(600);
   });

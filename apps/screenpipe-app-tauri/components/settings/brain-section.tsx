@@ -272,6 +272,25 @@ function BrainSkeleton() {
   );
 }
 
+function emptyStateMessage(
+  typeFilter: TypeFilter,
+  searchQuery: string,
+  hasActiveFilters: boolean,
+): string {
+  const query = searchQuery.trim();
+  if (query) {
+    return typeFilter === "artifacts"
+      ? `no artifacts matching "${query}" in title or content`
+      : `no memories matching "${query}"`;
+  }
+  if (hasActiveFilters) {
+    return typeFilter === "artifacts"
+      ? "no artifacts match the selected filters"
+      : "no memories match the selected filters";
+  }
+  return typeFilter === "memories" ? "no memories yet" : "no artifacts yet";
+}
+
 type SortField = "created_at" | "importance";
 type SortDir = "desc" | "asc";
 
@@ -1522,13 +1541,7 @@ export function BrainSection() {
         <BrainSkeleton />
       ) : unifiedItems.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
-          <p>
-            {debouncedQuery || activeTags.length > 0
-              ? "no items match your search"
-              : typeFilter === "memories"
-                ? "no memories yet"
-                : "no artifacts yet"}
-          </p>
+          <p>{emptyStateMessage(typeFilter, debouncedQuery, activeTags.length > 0)}</p>
           {!debouncedQuery && activeTags.length === 0 && typeFilter === "memories" && (
             <>
               <p className="text-xs">
