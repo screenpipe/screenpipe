@@ -492,6 +492,15 @@ export function StandaloneChat({
     setBrowserHiddenBehindInspector(false);
   }, [conversationId]);
 
+  // Auto-show side panel when a file preview is opened externally
+  // (e.g. clicking an artifact in the brain section emits
+  // "chat-load-conversation" with filePreviewPath).
+  useEffect(() => {
+    if (filePreviewOpen) {
+      setActiveSideView("side");
+    }
+  }, [filePreviewOpen]);
+
   const toggleInspector = useCallback(() => {
     if (inspectorOpen && activeSideView === "inspector") {
       setInspectorOpen(false);
