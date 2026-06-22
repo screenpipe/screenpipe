@@ -738,6 +738,7 @@ impl ShowRewindWindow {
                             .inner_size(win_w, win_h)
                             .min_inner_size(800.0, 600.0)
                             .decorations(true)
+                            .skip_taskbar(true)
                             .visible(false)
                             .focused(false)
                             .transparent(false)
