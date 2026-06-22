@@ -40,6 +40,26 @@ fn log_webview_build_failure(label: &str, url_hint: &str, err: &(impl std::fmt::
 #[cfg(target_os = "macos")]
 static GLOBAL_APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
+#[cfg(target_os = "macos")]
+fn notification_copy_value(action: &serde_json::Value) -> Option<String> {
+    action
+        .get("value")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+#[cfg(target_os = "macos")]
+fn notification_source_url(action: &serde_json::Value) -> Option<String> {
+    action
+        .get("url")
+        .or_else(|| action.get("source_url"))
+        .or_else(|| action.get("sourceUrl"))
+        .or_else(|| action.get("deeplink_url"))
+        .or_else(|| action.get("deeplinkUrl"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
 /// Callback invoked from Swift when user clicks a notification action.
 /// Handles "manage" directly in Rust (opens home window to notifications settings).
 /// Other actions are forwarded as Tauri events to JS.
@@ -112,11 +132,7 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
     // writes to NSPasteboard for instant feedback; this Rust path keeps the
     // action functional if a non-Swift native caller emits the same event.
     if action_type == Some("copy") {
-        let text = parsed
-            .as_ref()
-            .and_then(|v| v.get("value"))
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        let text = parsed.as_ref().and_then(notification_copy_value);
         let Some(text) = text else {
             warn!("copy notification action has no value: {}", json);
             return;
@@ -133,17 +149,7 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
     // Source actions open the originating surface. Accept several field names
     // because producers have used both URL-shaped and source-shaped payloads.
     if action_type == Some("source") {
-        let url = parsed
-            .as_ref()
-            .and_then(|v| {
-                v.get("url")
-                    .or_else(|| v.get("source_url"))
-                    .or_else(|| v.get("sourceUrl"))
-                    .or_else(|| v.get("deeplink_url"))
-                    .or_else(|| v.get("deeplinkUrl"))
-            })
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        let url = parsed.as_ref().and_then(notification_source_url);
         let Some(url) = url else {
             warn!("source notification action has no url: {}", json);
             return;
@@ -367,7 +373,11 @@ fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &s
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{fallback_local_api_config, parse_meeting_deeplink};
+    use super::{
+        fallback_local_api_config, notification_copy_value, notification_source_url,
+        parse_meeting_deeplink,
+    };
+    use serde_json::json;
 
     #[test]
     fn parses_meeting_deeplink_path_id() {
@@ -392,6 +402,62 @@ mod tests {
             None
         );
         assert_eq!(parse_meeting_deeplink("screenpipe://settings"), None);
+    }
+
+    #[test]
+    fn notification_copy_action_uses_value_field() {
+        let action = json!({
+            "type": "copy",
+            "label": "copy",
+            "value": "COPY-TEST-BRAVO-67890"
+        });
+
+        assert_eq!(
+            notification_copy_value(&action),
+            Some("COPY-TEST-BRAVO-67890".to_string())
+        );
+    }
+
+    #[test]
+    fn notification_copy_action_without_value_is_ignored() {
+        let action = json!({
+            "type": "copy",
+            "label": "copy"
+        });
+
+        assert_eq!(notification_copy_value(&action), None);
+    }
+
+    #[test]
+    fn notification_source_action_uses_url_field() {
+        let action = json!({
+            "type": "source",
+            "label": "source",
+            "url": "https://screenpi.pe"
+        });
+
+        assert_eq!(
+            notification_source_url(&action),
+            Some("https://screenpi.pe".to_string())
+        );
+    }
+
+    #[test]
+    fn notification_source_action_accepts_source_and_deeplink_aliases() {
+        for (field, expected) in [
+            ("source_url", "screenpipe://chat/source-url"),
+            ("sourceUrl", "screenpipe://chat/sourceUrl"),
+            ("deeplink_url", "screenpipe://meeting/123"),
+            ("deeplinkUrl", "screenpipe://meeting/456"),
+        ] {
+            let action = json!({
+                "type": "source",
+                "label": "source",
+                field: expected
+            });
+
+            assert_eq!(notification_source_url(&action), Some(expected.to_string()));
+        }
     }
 
     // Regression for b7dc02415: `get_local_api_config` returned {key: null}
