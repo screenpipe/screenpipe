@@ -108,6 +108,80 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
         return;
     }
 
+    // Copy is a real notification action, not a dismiss. Native Swift also
+    // writes to NSPasteboard for instant feedback; this Rust path keeps the
+    // action functional if a non-Swift native caller emits the same event.
+    if action_type == Some("copy") {
+        let text = parsed
+            .as_ref()
+            .and_then(|v| v.get("value"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let Some(text) = text else {
+            warn!("copy notification action has no value: {}", json);
+            return;
+        };
+        std::thread::spawn(move || {
+            match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
+                Ok(()) => {}
+                Err(e) => error!("failed to copy notification action value: {}", e),
+            }
+        });
+        return;
+    }
+
+    // Source actions open the originating surface. Accept several field names
+    // because producers have used both URL-shaped and source-shaped payloads.
+    if action_type == Some("source") {
+        let url = parsed
+            .as_ref()
+            .and_then(|v| {
+                v.get("url")
+                    .or_else(|| v.get("source_url"))
+                    .or_else(|| v.get("sourceUrl"))
+                    .or_else(|| v.get("deeplink_url"))
+                    .or_else(|| v.get("deeplinkUrl"))
+            })
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let Some(url) = url else {
+            warn!("source notification action has no url: {}", json);
+            return;
+        };
+
+        let is_in_app = url.starts_with("screenpipe://");
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            if is_in_app {
+                let target = if is_meeting_deeplink(&url) {
+                    ShowRewindWindow::Home {
+                        page: Some("meetings".to_string()),
+                    }
+                } else {
+                    ShowRewindWindow::Main
+                };
+                let app_for_show = app_clone.clone();
+                let _ = app_clone.run_on_main_thread(move || {
+                    if let Err(e) = target.show(&app_for_show) {
+                        error!("failed to show window for source action: {}", e);
+                    }
+                });
+                if is_meeting_deeplink(&url) {
+                    emit_meeting_note_route_with_retries(&app_clone, &url);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    let _ = app_clone.emit("deep-link-received", url);
+                }
+            } else {
+                use tauri_plugin_opener::OpenerExt;
+                if let Err(e) = app_clone.opener().open_url(&url, None::<&str>) {
+                    error!("failed to open source url '{}' from notification: {}", url, e);
+                }
+            }
+        });
+        return;
+    }
+
     // Compound meeting action: open the actual call URL, then route the app to
     // the live note. This is intentionally separate from generic link/deeplink
     // handling because meeting-start notifications need both side effects.

@@ -20,15 +20,18 @@ import { localFetch } from "@/lib/api";
 import { Bell, Check, Copy, ExternalLink } from "lucide-react";
 
 interface NotificationAction {
-  label: string;
-  action: string;
+  label?: string;
+  action?: string;
   primary?: boolean;
   // Pipe notification action fields
   id?: string;
-  type?: "pipe" | "api" | "deeplink" | "meeting_join" | "dismiss";
+  type?: "pipe" | "api" | "deeplink" | "link" | "meeting_join" | "copy" | "source" | "dismiss";
   pipe?: string;
   context?: Record<string, unknown>;
   url?: string;
+  value?: string;
+  source_url?: string;
+  sourceUrl?: string;
   deeplink_url?: string;
   deeplinkUrl?: string;
   method?: string;
@@ -127,7 +130,7 @@ export default function NotificationPanelPage() {
   const handleAction = useCallback(
     async (actionOrObj: string | NotificationAction) => {
       // Support both old string-based actions and new typed action objects
-      const actionStr = typeof actionOrObj === "string" ? actionOrObj : actionOrObj.action;
+      const actionStr = typeof actionOrObj === "string" ? actionOrObj : actionOrObj.action || actionOrObj.type;
       const actionObj = typeof actionOrObj === "object" ? actionOrObj : null;
 
       posthog.capture("notification_action", {
@@ -141,6 +144,42 @@ export default function NotificationPanelPage() {
         // New typed action dispatch (pipe notifications)
         if (actionObj?.type) {
           switch (actionObj.type) {
+            case "copy": {
+              const text = actionObj.value || payload?.body || "";
+              if (text) {
+                await commands.copyTextToClipboard(text);
+                if (copyResetRef.current) clearTimeout(copyResetRef.current);
+                setCopied(true);
+                copyResetRef.current = setTimeout(() => setCopied(false), 1400);
+                posthog.capture("notification_copied", {
+                  type: payload?.type,
+                  id: payload?.id,
+                  source: "action",
+                });
+              }
+              return;
+            }
+            case "source": {
+              const sourceUrl =
+                actionObj.url ||
+                actionObj.source_url ||
+                actionObj.sourceUrl ||
+                actionObj.deeplink_url ||
+                actionObj.deeplinkUrl ||
+                payload?.source_url;
+              if (sourceUrl) {
+                if (sourceUrl.startsWith("screenpipe://")) {
+                  await commands.showWindowActivated(windowForDeeplink(sourceUrl));
+                  await new Promise((r) => setTimeout(r, 150));
+                  await emit("deep-link-received", sourceUrl);
+                } else {
+                  const { open } = await import("@tauri-apps/plugin-shell");
+                  await open(sourceUrl);
+                }
+              }
+              await hide(false);
+              return;
+            }
             case "pipe": {
               const pipeName = actionObj.pipe || payload?.pipe_name;
               if (pipeName) {
@@ -192,6 +231,7 @@ export default function NotificationPanelPage() {
               }
               break;
             }
+            case "link":
             case "deeplink": {
               if (actionObj.url) {
                 if (actionObj.url.startsWith("screenpipe://")) {
@@ -336,7 +376,7 @@ export default function NotificationPanelPage() {
 
       await hide(false);
     },
-    [payload?.type, payload?.id, payload?.pipe_name, hide]
+    [payload?.type, payload?.id, payload?.body, payload?.pipe_name, payload?.source_url, hide]
   );
 
   const openSource = useCallback(async () => {
@@ -737,10 +777,18 @@ export default function NotificationPanelPage() {
                 restart failed{restartError ? `: ${restartError}` : ""}
               </span>
             ) : (
-              payload.actions.map((action) => (
+              payload.actions.map((action, index) => {
+                const actionLabel =
+                  action.label ||
+                  (action.type === "copy" ? (copied ? "copied" : "copy") : undefined) ||
+                  (action.type === "source" ? "source" : undefined) ||
+                  action.action ||
+                  action.type ||
+                  "action";
+                return (
                 <button
-                  key={action.id || action.action}
-                  onClick={() => handleAction(action.type ? action : action.action)}
+                  key={action.id || action.action || action.type || index}
+                  onClick={() => handleAction(action.type ? action : action.action || "")}
                   style={{
                     background: action.primary
                       ? "rgba(0, 0, 0, 0.06)"
@@ -763,9 +811,10 @@ export default function NotificationPanelPage() {
                       : "none")
                   }
                 >
-                  {action.label}
+                  {actionLabel}
                 </button>
-              ))
+              );
+              })
             )}
           </div>
         )}
