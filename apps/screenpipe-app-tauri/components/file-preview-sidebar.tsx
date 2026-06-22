@@ -4,7 +4,6 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { PanelRightClose } from "lucide-react";
 import {
   ViewerFileContent,
   viewerDisplayText,
@@ -16,13 +15,11 @@ import { commands } from "@/lib/utils/tauri";
 
 interface FilePreviewSidebarProps {
   path: string;
-  onClose?: () => void;
   onReplacePath?: (path: string) => void;
 }
 
 export function FilePreviewSidebar({
   path,
-  onClose,
   onReplacePath,
 }: FilePreviewSidebarProps) {
   const [copyPathToast, setCopyPathToast] = useState(false);
@@ -111,13 +108,6 @@ export function FilePreviewSidebar({
           className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
         >
           {copyPathToast ? "copied" : "path"}
-        </button>
-        <button
-          onClick={onClose}
-          title="Close preview"
-          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-        >
-          <PanelRightClose className="h-3.5 w-3.5" />
         </button>
       </div>
       <ViewerFileContent

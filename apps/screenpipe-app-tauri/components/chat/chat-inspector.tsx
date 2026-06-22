@@ -83,7 +83,7 @@ export function ChatInspector({
             <div className="flex flex-wrap gap-2.5 px-3 pb-2.5 pt-0.5">
               {sources.map((source, i) => (
                 <SourceIcon
-                  key={source.id || `source-${i}`}
+                  key={`${source.id || "source"}:${i}`}
                   source={source}
                   onOpenFile={onOpenFile}
                 />
