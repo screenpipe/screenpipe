@@ -1137,6 +1137,16 @@ function normalizeTimeFields(
   return out;
 }
 
+// Zone label for a timestamp's HH:MM slice. The server serializes timestamps in
+// its LOCAL timezone (e.g. "...T09:03:44+05:30"), so the HH:MM is already local —
+// derive the label from the string's own offset instead of hardcoding "UTC"
+// (which mislabeled local times by the offset, e.g. "09:03 UTC" for 09:03+05:30).
+function zoneSuffix(iso: string): string {
+  const m = iso.match(/([+-]\d{2}:?\d{2})$/);
+  if (!m) return iso.endsWith("Z") ? " UTC" : "";
+  return m[1] === "+00:00" ? " UTC" : ` ${m[1]}`;
+}
+
 // Middle-truncate long strings: keep head + tail, mark the gap with how much
 // was cut. Used to cap OCR/transcription text in search-content responses
 // so a single call doesn't blow past Claude Code's per-tool output limit
@@ -1488,7 +1498,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }) => {
             const timeSpan =
               a.first_seen && a.last_seen
-                ? `, ${a.first_seen.slice(11, 16)}–${a.last_seen.slice(11, 16)} UTC`
+                ? `, ${a.first_seen.slice(11, 16)}–${a.last_seen.slice(11, 16)}${zoneSuffix(a.first_seen)}`
                 : "";
             return `  ${a.name}: ${a.minutes} min (${a.frame_count} frames${timeSpan})`;
           }
