@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join, extname, basename } from "path";
-import { randomUUID } from "crypto";
+
 
 // Plain JSON-Schema literal — registerTool only stores it for the LLM,
 // no runtime validation, so we don't need @sinclair/typebox here.
@@ -46,7 +46,7 @@ export default function (pi: ExtensionAPI) {
     name: "save_artifact",
     label: "Save Artifact",
     description:
-      "Save a final text-based deliverable (note, report, summary, todo list, export, or any user-facing document) so it appears in the user's Artifacts library. Use this instead of writeFile when the output is a finished text product the user will want to find later. Do NOT use for scratch files, temp files, or intermediate work. Supports markdown, JSON, text, CSV, and code files.",
+      "Save or update a user-facing deliverable (note, report, summary, todo list, export, or any user-facing document) so it appears in the user's Artifacts library. Always use this for finished text products the user will want to find later, even when updating an existing artifact with new content. Do NOT use for scratch files, temp files, or intermediate work. Supports markdown, JSON, text, CSV, and code files.",
     parameters: params,
 
     async execute(
@@ -70,14 +70,16 @@ export default function (pi: ExtensionAPI) {
       };
       const kind = kindMap[ext] || "text";
 
-      // Write to temp file (the API copies it to the canonical location)
-      const tmpDir = join(tmpdir(), "screenpipe-artifacts");
-      mkdirSync(tmpDir, { recursive: true });
-      const tmpPath = join(tmpDir, `${randomUUID()}-${filename}`);
-      writeFileSync(tmpPath, content, "utf-8");
-
       // Per-session source key — set by Tauri when spawning Pi
       const sessionId = process.env.SCREENPIPE_CHAT_SESSION_ID || "chat";
+
+      // Write to a session-scoped temp directory using the bare filename.
+      // This ensures repeated saves of the same file produce the same
+      // canonical path in the backend, enabling upsert instead of duplicates.
+      const tmpDir = join(tmpdir(), "screenpipe-artifacts", sessionId);
+      mkdirSync(tmpDir, { recursive: true });
+      const tmpPath = join(tmpDir, filename);
+      writeFileSync(tmpPath, content, "utf-8");
 
       try {
         const apiUrl =
