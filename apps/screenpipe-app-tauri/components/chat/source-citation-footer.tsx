@@ -43,7 +43,7 @@ export const KIND_ICON: Record<SourceCitationKind, React.ComponentType<{ classNa
   command: TerminalSquare,
 };
 
-export const KIND_LABEL: Record<SourceCitationKind, string> = {
+const KIND_LABEL: Record<SourceCitationKind, string> = {
   screenpipe: "screen",
   database: "db",
   connector: "app",
@@ -54,7 +54,7 @@ export const KIND_LABEL: Record<SourceCitationKind, string> = {
   command: "cmd",
 };
 
-export const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
+const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
   ["apple-calendar", "/images/apple.svg"],
   ["apple calendar", "/images/apple.svg"],
   ["asana", "/images/asana.svg"],
@@ -264,7 +264,7 @@ export function SourceCitationIcon({
   return <FallbackIcon className="h-3 w-3" />;
 }
 
-export function sourceIconSrc(citation: SourceCitation): string | undefined {
+function sourceIconSrc(citation: SourceCitation): string | undefined {
   if (citation.kind === "screenpipe") {
     return "/images/screenpipe.png";
   }
@@ -279,11 +279,11 @@ export function sourceIconSrc(citation: SourceCitation): string | undefined {
   return undefined;
 }
 
-export function sourceUsesObsidianIcon(citation: SourceCitation): boolean {
+function sourceUsesObsidianIcon(citation: SourceCitation): boolean {
   return citation.kind === "connector" && sourceFingerprint(citation).includes("obsidian");
 }
 
-export function sourceFingerprint(citation: SourceCitation): string {
+function sourceFingerprint(citation: SourceCitation): string {
   return `${citation.id} ${citation.title} ${citation.subtitle ?? ""}`
     .toLowerCase()
     .replace(/[_-]+/g, " ");

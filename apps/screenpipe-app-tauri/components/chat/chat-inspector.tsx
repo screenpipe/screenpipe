@@ -51,7 +51,7 @@ export function ChatInspector({
           <div className="pb-1.5 px-1">
             {outputs.map((output, i) => (
               <button
-                key={output.id || `output-${i}`}
+                key={`${output.id || "output"}:${i}`}
                 type="button"
                 onClick={() => output.path && onOpenFile(output.path)}
                 className="flex items-center gap-2 w-full px-2 py-1.5 text-[13px] text-foreground/80 hover:bg-muted/40 rounded-sm text-left"

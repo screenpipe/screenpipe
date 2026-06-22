@@ -472,7 +472,7 @@ export function StandaloneChat({
   const { filePreview, openFilePreview, closeFilePreview } =
     useChatFilePreview(conversationId);
   const { inspectorOpen, setInspectorOpen, outputs: inspectorOutputs, sources: inspectorSources } =
-    useChatInspector(conversationId, messages);
+    useChatInspector(messages);
   const [activeSideView, setActiveSideView] = useState<"inspector" | "side" | null>(null);
   const [browserHiddenBehindInspector, setBrowserHiddenBehindInspector] = useState(false);
   const [browserPanelState, setBrowserPanelState] = useState({
@@ -484,7 +484,6 @@ export function StandaloneChat({
   const sidePanelOpen = activeSideView === "side" && sidePanelHasContent;
   const inspectorHasContent =
     inspectorOpen ||
-    messages.length > 0 ||
     inspectorOutputs.length > 0 ||
     inspectorSources.length > 0;
 
