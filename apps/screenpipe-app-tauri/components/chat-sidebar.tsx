@@ -417,6 +417,39 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     [recents],
   );
 
+  // Expand/collapse state for manual recents subsections (e.g. OTHER,
+  // named sidebar groups). Stored separately from pipe auto-groups so the
+  // two hierarchy levels can collapse independently.
+  const [collapsedRecentsSections, setCollapsedRecentsSections] = useState<Set<string>>(() => {
+    const set = new Set<string>();
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:recents-subsection-collapsed:")) {
+          if (localStorage.getItem(k) === "true") {
+            set.add(k.slice("screenpipe:recents-subsection-collapsed:".length));
+          }
+        }
+      }
+    } catch { /* ignore */ }
+    return set;
+  });
+  const toggleRecentsSectionCollapsed = (key: string) => {
+    setCollapsedRecentsSections((prev) => {
+      const next = new Set(prev);
+      const collapsed = next.has(key);
+      if (collapsed) next.delete(key);
+      else next.add(key);
+      try {
+        localStorage.setItem(
+          `screenpipe:recents-subsection-collapsed:${key}`,
+          String(!collapsed),
+        );
+      } catch { /* ignore */ }
+      return next;
+    });
+  };
+
   // Expand/collapse state for pipe auto-groups, persisted in localStorage.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
     const set = new Set<string>();
@@ -468,6 +501,27 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       for (const k of toRemove) localStorage.removeItem(k);
     } catch { /* ignore */ }
   }, [recents]);
+
+  // GC stale manual subsection collapse-state keys when sidebar groups are
+  // renamed or disappear. Only titled subsections participate.
+  useEffect(() => {
+    try {
+      const validKeys = new Set(
+        groupedSections
+          .filter((section) => section.title)
+          .map((section) => section.key),
+      );
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:recents-subsection-collapsed:")) {
+          const sectionKey = k.slice("screenpipe:recents-subsection-collapsed:".length);
+          if (!validKeys.has(sectionKey)) toRemove.push(k);
+        }
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+    } catch { /* ignore */ }
+  }, [groupedSections]);
 
   // Derive existing manual group names from all visible non-hidden
   // sessions (pinned + recents) so the "Move to group" submenu
@@ -847,16 +901,39 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                groupedSections.map((section) => (
-                  <div key={section.key} data-testid={`chat-sidebar-group-${section.title || "all"}`}>
+                groupedSections.map((section, index) => (
+                  <div
+                    key={section.key}
+                    className={cn(index > 0 && "mt-1")}
+                    data-testid={`chat-sidebar-group-${section.title || "all"}`}
+                  >
                     {section.title && (
-                      <div className="px-2.5 pt-2 pb-0.5">
-                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
+                      <button
+                        type="button"
+                        onClick={() => toggleRecentsSectionCollapsed(section.key)}
+                        className={cn(
+                          "group/subsection w-full px-2.5 pt-1 pb-0.5 flex items-center gap-2 text-left rounded-sm",
+                          "hover:bg-muted/10 transition-colors"
+                        )}
+                        aria-expanded={!collapsedRecentsSections.has(section.key)}
+                      >
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
                           {section.title}
                         </span>
-                      </div>
+                        {collapsedRecentsSections.has(section.key) ? (
+                          <ChevronRight
+                            className="h-3 w-3 shrink-0 text-muted-foreground/55"
+                            aria-hidden
+                          />
+                        ) : (
+                          <ChevronDown
+                            className="h-3 w-3 shrink-0 text-muted-foreground/55"
+                            aria-hidden
+                          />
+                        )}
+                      </button>
                     )}
-                    {section.items.map((item) =>
+                    {!collapsedRecentsSections.has(section.key) && section.items.map((item) =>
                       item.kind === "single" ? (
                         <SidebarChatRow
                           key={item.session.id}
@@ -1750,23 +1827,31 @@ function PipeGroupRow({
         type="button"
         onClick={onToggleExpand}
         className={cn(
-          "w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-left select-none",
+          "group/pipe w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-left select-none",
           "text-muted-foreground hover:bg-muted/20 transition-colors"
         )}
         aria-expanded={expanded}
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
         <span className="truncate flex-1 text-xs">{item.title}</span>
-        <span className="text-[10px] tabular-nums text-muted-foreground/60 shrink-0">
-          {item.sessions.length}
+        <span className="inline-flex items-center gap-1.5 shrink-0">
+          <span className="text-[10px] tabular-nums text-muted-foreground/60">
+            {item.sessions.length}
+          </span>
+          {expanded ? (
+            <ChevronDown
+              className="h-3 w-3 text-muted-foreground/60"
+              aria-hidden
+            />
+          ) : (
+            <ChevronRight
+              className="h-3 w-3 text-muted-foreground/60"
+              aria-hidden
+            />
+          )}
         </span>
       </button>
       {expanded && (
-        <div className="pl-4">
+        <div className="pl-3">
           {item.sessions.map((s) => (
             <SidebarChatRow
               key={s.id}

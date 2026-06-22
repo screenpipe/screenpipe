@@ -231,7 +231,7 @@ describe("buildSidebarRecentsSections", () => {
     expect(result.map((section) => section.title)).toEqual([
       "product",
       "money",
-      "ungrouped",
+      "other",
     ]);
     expect(result[0].items[0]).toMatchObject({
       kind: "single",
@@ -272,7 +272,7 @@ describe("buildSidebarRecentsSections", () => {
     expect(result).toHaveLength(2);
     expect(result[0].title).toBe("product");
     expect(result[0].items[0].kind).toBe("single");
-    expect(result[1].title).toBe("ungrouped");
+    expect(result[1].title).toBe("other");
     expect(result[1].items[0].kind).toBe("single");
   });
 
@@ -293,7 +293,7 @@ describe("buildSidebarRecentsSections", () => {
     const result = buildSidebarRecentsSections([...manual, ...ungrouped], 15);
     const productSection = result.find((r) => r.title === "product");
     const ungroupedSection = result.find(
-      (r) => r.title === "ungrouped",
+      (r) => r.title === "other",
     );
     // All 10 manual items visible (cap=Infinity within manual groups)
     expect(productSection?.items).toHaveLength(10);

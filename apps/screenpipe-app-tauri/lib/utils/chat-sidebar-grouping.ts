@@ -133,7 +133,7 @@ export function buildGroupedRecents(
  * - Manual groups are rendered in insertion order (first-seen in the
  *   recents array) with `cap = Infinity` (show all members).
  * - Ungrouped sessions get the standard 15-row cap.
- * - The "ungrouped" section title is non-empty only when at least one
+ * - The "other" section title is non-empty only when at least one
  *   manual group exists — otherwise the section renders without a
  *   header (backward-compatible with the pre-grouping sidebar).
  * - Empty manual groups auto-disappear (group existence is derived
@@ -178,7 +178,7 @@ export function buildSidebarRecentsSections(
   if (ungroupedItems.length > 0 || sections.length === 0) {
     sections.push({
       key: "manual:__ungrouped__",
-      title: sections.length > 0 ? "ungrouped" : "",
+      title: sections.length > 0 ? "other" : "",
       items: ungroupedItems,
     });
   }
