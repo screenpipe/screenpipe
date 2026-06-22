@@ -39,6 +39,11 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { usePipes } from "@/lib/hooks/use-pipes";
+import {
+  validateSidebarGroupAssignmentState,
+  validateSidebarGroupName,
+} from "@/lib/utils/chat-sidebar-grouping";
 
 type HistoryTab = "active" | "archived" | "all";
 
@@ -69,6 +74,11 @@ export function ChatHistoryView({
   const migratedRef = React.useRef(false);
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const {
+    pipes: installedPipes,
+    loading: installedPipesLoading,
+    error: installedPipesError,
+  } = usePipes();
   const [bulkPending, setBulkPending] = useState<null | "archiving" | "restoring" | "deleting">(null);
   const [rowPendingIds, setRowPendingIds] = useState<Set<string>>(() => new Set());
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -312,14 +322,61 @@ export function ChatHistoryView({
     }
     return groups;
   }, [conversations]);
+  const knownPipeNames = useMemo(() => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const pipe of installedPipes) {
+      const normalized = pipe.config?.name?.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      names.push(normalized);
+    }
+    return names;
+  }, [installedPipes]);
+  const groupAssignmentState = useMemo(
+    () =>
+      validateSidebarGroupAssignmentState({
+        pipeNamesLoading: installedPipesLoading,
+        pipeNamesError: installedPipesError,
+      }),
+    [installedPipesError, installedPipesLoading],
+  );
+  const selectableExistingGroups = useMemo(() => {
+    if (!groupAssignmentState.ok) return [];
+    return existingGroups.filter((group) =>
+      validateSidebarGroupName(group, { knownPipeNames }).ok,
+    );
+  }, [existingGroups, groupAssignmentState, knownPipeNames]);
 
   // State for the "New group" dialog — stores the conversation id being moved.
   const [newGroupSessionId, setNewGroupSessionId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
 
   const handleMoveToGroup = useCallback(async (id: string, group: string | undefined) => {
-    const normalized = group?.trim().toLowerCase() || undefined;
-    if (group !== undefined && !normalized) return;
+    let normalized: string | undefined;
+    if (group !== undefined) {
+      if (!groupAssignmentState.ok) {
+        toast({
+          title: "Group names unavailable",
+          description: groupAssignmentState.message,
+          variant: "destructive",
+        });
+        return false;
+      }
+      const validation = validateSidebarGroupName(group, {
+        existingGroups,
+        knownPipeNames,
+      });
+      if (!validation.ok) {
+        toast({
+          title: "Invalid group name",
+          description: validation.message,
+          variant: "destructive",
+        });
+        return false;
+      }
+      normalized = validation.normalized;
+    }
     try {
       await updateConversationFlags(id, { sidebarGroup: normalized });
       useChatStore.getState().actions.patch(id, { sidebarGroup: normalized });
@@ -328,7 +385,8 @@ export function ChatHistoryView({
       // best-effort
     }
     void load();
-  }, [load]);
+    return true;
+  }, [existingGroups, groupAssignmentState, knownPipeNames, load]);
 
   const Row = ({ conv }: { conv: ConversationMeta }) => {
     const updatedAt = conv.updatedAt ? fmt.format(new Date(conv.updatedAt)) : "";
@@ -336,6 +394,10 @@ export function ChatHistoryView({
     const selectionMode = selectedIds.size > 0;
     const rowPending = rowPendingIds.has(conv.id);
     const showCheckbox = selectionMode || selected;
+    const currentSidebarGroup = (conv as any).sidebarGroup as string | undefined;
+    const availableMoveGroups = selectableExistingGroups.filter(
+      (group) => group !== currentSidebarGroup,
+    );
     return (
       <div
         role="button"
@@ -500,9 +562,7 @@ export function ChatHistoryView({
                     Move to group
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none">
-                    {existingGroups
-                      .filter((g) => g !== (conv as any).sidebarGroup)
-                      .map((g) => (
+                    {availableMoveGroups.map((g) => (
                         <DropdownMenuItem
                           key={g}
                           className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
@@ -511,9 +571,11 @@ export function ChatHistoryView({
                           {g}
                         </DropdownMenuItem>
                       ))}
-                    {(conv as any).sidebarGroup && (
+                    {currentSidebarGroup && (
                       <>
-                        <DropdownMenuSeparator className="my-1 bg-border/70" />
+                        {availableMoveGroups.length > 0 && (
+                          <DropdownMenuSeparator className="my-1 bg-border/70" />
+                        )}
                         <DropdownMenuItem
                           className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
                           onSelect={() => void handleMoveToGroup(conv.id, undefined)}
@@ -522,9 +584,12 @@ export function ChatHistoryView({
                         </DropdownMenuItem>
                       </>
                     )}
-                    <DropdownMenuSeparator className="my-1 bg-border/70" />
+                    {(availableMoveGroups.length > 0 || currentSidebarGroup) && (
+                      <DropdownMenuSeparator className="my-1 bg-border/70" />
+                    )}
                     <DropdownMenuItem
                       className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
+                      disabled={!groupAssignmentState.ok}
                       onSelect={() => setNewGroupSessionId(conv.id)}
                     >
                       New group...
@@ -957,9 +1022,12 @@ export function ChatHistoryView({
                 if (e.key === "Enter") {
                   const id = newGroupSessionId;
                   if (!id) return;
-                  setNewGroupSessionId(null);
-                  void handleMoveToGroup(id, newGroupName.trim().toLowerCase());
-                  setNewGroupName("");
+                  void (async () => {
+                    const ok = await handleMoveToGroup(id, newGroupName);
+                    if (!ok) return;
+                    setNewGroupSessionId(null);
+                    setNewGroupName("");
+                  })();
                 }
               }}
               autoFocus
@@ -978,12 +1046,11 @@ export function ChatHistoryView({
             <Button
               onClick={async () => {
                 const id = newGroupSessionId;
-                setNewGroupSessionId(null);
                 if (!id) return;
-                const name = newGroupName.trim().toLowerCase();
+                const ok = await handleMoveToGroup(id, newGroupName);
+                if (!ok) return;
+                setNewGroupSessionId(null);
                 setNewGroupName("");
-                if (!name) return;
-                await handleMoveToGroup(id, name);
               }}
             >
               Create

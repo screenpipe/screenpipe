@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
+import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch } from "@/lib/api";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -104,6 +105,8 @@ import {
   buildSidebarRecentsSections,
   recurringPipeGroupKeys,
   type SidebarItem,
+  validateSidebarGroupAssignmentState,
+  validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 
 interface ChatSidebarProps {
@@ -389,6 +392,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const runningPipes = useRunningPipes();
   const {
+    pipes: installedPipes,
+    loading: installedPipesLoading,
+    error: installedPipesError,
+  } = usePipes();
+  const {
     pipes: upcomingPipes,
     refetch: refetchUpcoming,
     dismiss: dismissUpcoming,
@@ -539,6 +547,34 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
     return groups;
   }, [pinned, recents]);
+  const knownPipeNames = useMemo(() => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    const add = (name: string | undefined) => {
+      const normalized = name?.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      names.push(normalized);
+    };
+    for (const pipe of installedPipes) add(pipe.config?.name);
+    for (const pipe of runningPipes) add(pipe.pipeName);
+    for (const pipe of upcomingPipes) add(pipe.pipeName);
+    return names;
+  }, [installedPipes, runningPipes, upcomingPipes]);
+  const groupAssignmentState = useMemo(
+    () =>
+      validateSidebarGroupAssignmentState({
+        pipeNamesLoading: installedPipesLoading,
+        pipeNamesError: installedPipesError,
+      }),
+    [installedPipesError, installedPipesLoading],
+  );
+  const selectableExistingGroups = useMemo(() => {
+    if (!groupAssignmentState.ok) return [];
+    return existingGroups.filter((group) =>
+      validateSidebarGroupName(group, { knownPipeNames }).ok,
+    );
+  }, [existingGroups, groupAssignmentState, knownPipeNames]);
 
   // Resolve each running pipe to its SessionRecord so the Scheduled-row
   // kebab can offer Pin / Rename / Archive / Delete with the same
@@ -739,8 +775,30 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const handleMoveToGroup = async (id: string, group: string | undefined) => {
-    const normalized = group?.trim().toLowerCase() || undefined;
-    if (group !== undefined && !normalized) return; // reject empty
+    let normalized: string | undefined;
+    if (group !== undefined) {
+      if (!groupAssignmentState.ok) {
+        toast({
+          title: "Group names unavailable",
+          description: groupAssignmentState.message,
+          variant: "destructive",
+        });
+        return false;
+      }
+      const validation = validateSidebarGroupName(group, {
+        existingGroups,
+        knownPipeNames,
+      });
+      if (!validation.ok) {
+        toast({
+          title: "Invalid group name",
+          description: validation.message,
+          variant: "destructive",
+        });
+        return false;
+      }
+      normalized = validation.normalized;
+    }
     actions.patch(id, { sidebarGroup: normalized });
     try {
       await updateConversationFlags(id, { sidebarGroup: normalized });
@@ -748,12 +806,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     } catch {
       // best-effort persistence — UI already updated
     }
+    return true;
   };
 
   const handleNewGroupConfirmed = async (id: string, nameRaw: string) => {
-    const name = nameRaw.trim().toLowerCase();
-    if (!name) return;
-    await handleMoveToGroup(id, name);
+    return handleMoveToGroup(id, nameRaw);
   };
 
   return (
@@ -953,7 +1010,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                           onRenameRequest={handleRenameRequest}
                           onMoveToGroup={handleMoveToGroup}
                           onNewGroupRequest={setNewGroupSessionId}
-                          existingGroups={existingGroups}
+                          existingGroups={selectableExistingGroups}
+                          canCreateGroup={groupAssignmentState.ok}
                           openConversationMenuId={openConversationMenuId}
                           setOpenConversationMenuId={setOpenConversationMenuId}
                         />
@@ -973,7 +1031,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                           onRenameRequest={handleRenameRequest}
                           onMoveToGroup={handleMoveToGroup}
                           onNewGroupRequest={setNewGroupSessionId}
-                          existingGroups={existingGroups}
+                          existingGroups={selectableExistingGroups}
+                          canCreateGroup={groupAssignmentState.ok}
                           openConversationMenuId={openConversationMenuId}
                           setOpenConversationMenuId={setOpenConversationMenuId}
                         />
@@ -1086,9 +1145,12 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                 if (e.key === "Enter") {
                   const id = newGroupSessionId;
                   if (!id) return;
-                  setNewGroupSessionId(null);
-                  void handleNewGroupConfirmed(id, newGroupName);
-                  setNewGroupName("");
+                  void (async () => {
+                    const ok = await handleNewGroupConfirmed(id, newGroupName);
+                    if (!ok) return;
+                    setNewGroupSessionId(null);
+                    setNewGroupName("");
+                  })();
                 }
               }}
               autoFocus
@@ -1107,9 +1169,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             <Button
               onClick={async () => {
                 const id = newGroupSessionId;
-                setNewGroupSessionId(null);
                 if (!id) return;
-                await handleNewGroupConfirmed(id, newGroupName);
+                const ok = await handleNewGroupConfirmed(id, newGroupName);
+                if (!ok) return;
+                setNewGroupSessionId(null);
                 setNewGroupName("");
               }}
             >
@@ -1806,6 +1869,7 @@ function PipeGroupRow({
   onMoveToGroup,
   onNewGroupRequest,
   existingGroups,
+  canCreateGroup,
   openConversationMenuId,
   setOpenConversationMenuId,
 }: {
@@ -1823,6 +1887,7 @@ function PipeGroupRow({
   onMoveToGroup: (id: string, group: string | undefined) => void;
   onNewGroupRequest: (id: string) => void;
   existingGroups: string[];
+  canCreateGroup: boolean;
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
@@ -1872,6 +1937,7 @@ function PipeGroupRow({
               onMoveToGroup={onMoveToGroup}
               onNewGroupRequest={onNewGroupRequest}
               existingGroups={existingGroups}
+              canCreateGroup={canCreateGroup}
               openConversationMenuId={openConversationMenuId}
               setOpenConversationMenuId={setOpenConversationMenuId}
             />
@@ -1897,6 +1963,7 @@ interface ChatRowProps {
   onMoveToGroup?: (id: string, group: string | undefined) => void;
   onNewGroupRequest?: (id: string) => void;
   existingGroups?: string[];
+  canCreateGroup?: boolean;
   showActions?: boolean;
   openConversationMenuId?: string | null;
   setOpenConversationMenuId?: (id: string | null) => void;
@@ -1935,6 +2002,7 @@ export function SidebarChatRow({
   onMoveToGroup,
   onNewGroupRequest,
   existingGroups,
+  canCreateGroup = true,
   showActions = true,
   openConversationMenuId,
   setOpenConversationMenuId,
@@ -1951,6 +2019,8 @@ export function SidebarChatRow({
   const age = formatCompactAge(activityAt, now);
   const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
   const menuOpen = openConversationMenuId === session.id;
+  const availableMoveGroups =
+    existingGroups?.filter((group) => group !== session.sidebarGroup) ?? [];
   return (
     <div
       className={cn(
@@ -2082,9 +2152,7 @@ export function SidebarChatRow({
                     className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
                     data-testid={`chat-row-move-to-group-menu-${session.id}`}
                   >
-                    {existingGroups
-                      .filter((g) => g !== session.sidebarGroup)
-                      .map((g) => (
+                    {availableMoveGroups.map((g) => (
                         <DropdownMenuItem
                           key={g}
                           className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
@@ -2098,7 +2166,9 @@ export function SidebarChatRow({
                       ))}
                     {session.sidebarGroup && (
                       <>
-                        <DropdownMenuSeparator className="my-1 bg-border/70" />
+                        {availableMoveGroups.length > 0 && (
+                          <DropdownMenuSeparator className="my-1 bg-border/70" />
+                        )}
                         <DropdownMenuItem
                           className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
                           onSelect={(e) => {
@@ -2110,9 +2180,12 @@ export function SidebarChatRow({
                         </DropdownMenuItem>
                       </>
                     )}
-                    <DropdownMenuSeparator className="my-1 bg-border/70" />
+                    {(availableMoveGroups.length > 0 || session.sidebarGroup) && (
+                      <DropdownMenuSeparator className="my-1 bg-border/70" />
+                    )}
                     <DropdownMenuItem
                       className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
+                      disabled={!canCreateGroup}
                       onSelect={(e) => {
                         e.stopPropagation();
                         onNewGroupRequest?.(session.id);
