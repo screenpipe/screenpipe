@@ -15,6 +15,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 use super::content::PaginationInfo;
@@ -26,7 +27,8 @@ use crate::server::AppState;
 
 const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 const MAX_INDEXED_TEXT_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
-const SEARCH_BACKFILL_BATCH: u32 = 500;
+const SEARCH_BACKFILL_BATCH: u32 = 100;
+const SEARCH_BACKFILL_PAUSE: Duration = Duration::from_millis(250);
 const PREVIEW_BYTES: usize = 256;
 
 /// Fallback discovery cap: pipes without explicit `artifacts:` declarations
@@ -162,7 +164,11 @@ fn is_text_searchable_kind(kind: &str) -> bool {
     )
 }
 
-async fn read_search_body(path: &std::path::Path, kind: &str) -> Option<(String, i64, String)> {
+async fn read_search_body(
+    path: &std::path::Path,
+    kind: &str,
+    title: &str,
+) -> Option<(String, i64, String)> {
     if !is_text_searchable_kind(kind) {
         return None;
     }
@@ -175,6 +181,7 @@ async fn read_search_body(path: &std::path::Path, kind: &str) -> Option<(String,
     }
     let body = String::from_utf8_lossy(&buf).to_string();
     let mut hasher = DefaultHasher::new();
+    title.hash(&mut hasher);
     body.hash(&mut hasher);
     let hash = format!("{:016x}", hasher.finish());
     Some((body, buf.len() as i64, hash))
@@ -185,7 +192,9 @@ async fn index_output_record_for_search(
     record: &OutputRecord,
 ) {
     let path = std::path::Path::new(&record.output_path);
-    if let Some((body, bytes_indexed, content_hash)) = read_search_body(path, &record.kind).await {
+    if let Some((body, bytes_indexed, content_hash)) =
+        read_search_body(path, &record.kind, &record.title).await
+    {
         if let Err(e) = db
             .upsert_output_search_document(
                 record.id,
@@ -210,17 +219,30 @@ async fn index_output_record_for_search(
     }
 }
 
-async fn backfill_missing_output_search_documents(db: &screenpipe_db::DatabaseManager, limit: u32) {
-    let rows = match db.list_outputs_missing_search_documents(limit).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("failed to list artifacts missing search index: {}", e);
-            return;
+pub fn spawn_artifact_search_backfill(db: Arc<screenpipe_db::DatabaseManager>) {
+    tokio::spawn(async move {
+        loop {
+            let rows = match db
+                .list_outputs_missing_search_documents(SEARCH_BACKFILL_BATCH)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::warn!("failed to list artifacts missing search index: {}", e);
+                    return;
+                }
+            };
+            if rows.is_empty() {
+                return;
+            }
+            let indexed = rows.len();
+            for row in rows {
+                index_output_record_for_search(&db, &row).await;
+            }
+            tracing::debug!("artifact search backfill indexed {} artifacts", indexed);
+            tokio::time::sleep(SEARCH_BACKFILL_PAUSE).await;
         }
-    };
-    for row in rows {
-        index_output_record_for_search(db, &row).await;
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +625,9 @@ pub(crate) async fn register_artifact_handler(
             JsonResponse(json!({"error": e.to_string()})),
         )
     })?;
-    if let Some((body, bytes_indexed, content_hash)) = read_search_body(&dest, kind).await {
+    if let Some((body, bytes_indexed, content_hash)) =
+        read_search_body(&dest, kind, &record.title).await
+    {
         if let Err(e) = state
             .db
             .upsert_output_search_document(
@@ -755,9 +779,6 @@ pub(crate) async fn list_artifacts_handler(
     let source_filter = params.source.as_deref().filter(|s| !s.is_empty());
     let saf_kind_filter = params.saf_kind.as_deref().filter(|s| !s.is_empty());
     let q_filter = params.q.as_deref().filter(|q| !q.trim().is_empty());
-    if q_filter.is_some() {
-        backfill_missing_output_search_documents(&state.db, SEARCH_BACKFILL_BATCH).await;
-    }
     let (rows, registered_total) = if let Some(q) = q_filter {
         state
             .db
@@ -1132,7 +1153,9 @@ pub async fn auto_register_pipe_artifacts(
         };
 
         if let Some(id) = registered_id {
-            if let Some((body, bytes_indexed, content_hash)) = read_search_body(&dest, kind).await {
+            if let Some((body, bytes_indexed, content_hash)) =
+                read_search_body(&dest, kind, title).await
+            {
                 if let Err(e) = db
                     .upsert_output_search_document(
                         id,

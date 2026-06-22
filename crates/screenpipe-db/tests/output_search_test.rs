@@ -60,6 +60,21 @@ async fn output_search_finds_text_beyond_preview() {
 }
 
 #[tokio::test]
+async fn output_search_metadata_does_not_store_artifact_body() {
+    let db = setup_test_db().await;
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('output_search_index')")
+            .fetch_all(&db.pool)
+            .await
+            .expect("table info");
+
+    assert!(columns.contains(&"output_id".to_string()));
+    assert!(columns.contains(&"content_hash".to_string()));
+    assert!(columns.contains(&"bytes_indexed".to_string()));
+    assert!(!columns.contains(&"body".to_string()));
+}
+
+#[tokio::test]
 async fn output_search_respects_chat_display_source_filter() {
     let db = setup_test_db().await;
     let token = "CHAT_ONLY_DEEP_TOKEN";

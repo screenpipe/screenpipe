@@ -17,7 +17,10 @@ use crate::{
     hot_frame_cache::HotFrameCache,
     routes::{
         activity_summary::get_activity_summary,
-        artifacts::{delete_artifact_handler, list_artifacts_handler, register_artifact_handler},
+        artifacts::{
+            delete_artifact_handler, list_artifacts_handler, register_artifact_handler,
+            spawn_artifact_search_backfill,
+        },
         audio::{
             api_list_audio_devices, audio_device_status, start_audio, start_audio_device,
             stop_audio, stop_audio_device,
@@ -650,6 +653,7 @@ impl SCServer {
                 .register(app_state.owned_browser.clone())
                 .await;
         }
+        spawn_artifact_search_backfill(self.db.clone());
 
         // Restrict CORS to localhost origins (Tauri webview + local development).
         // Remote origins are blocked to prevent malicious websites from making
