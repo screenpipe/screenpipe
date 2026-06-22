@@ -109,7 +109,6 @@ export function useHardcodedTiles(): HardcodedTile[] {
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
   const [customMcpDetected, setCustomMcpDetected] = useState(false);
-  const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
   const [calendarConnected, setCalendarConnected] = useState(false);
 
   useEffect(() => {
@@ -142,12 +141,6 @@ export function useHardcodedTiles(): HardcodedTile[] {
         setCustomMcpDetected(false);
       });
 
-    if (typeof window !== "undefined" && platform() === "macos") {
-      commands.checkInputMonitoringPermissionCmd()
-        .then(r => setInputMonitoringGranted(r === "granted"))
-        .catch(() => setInputMonitoringGranted(false));
-    }
-
     getStore()
       .then(store => store.get<boolean>("calendarUserDisconnected"))
       .then(val => setCalendarConnected(!(val ?? false)))
@@ -167,7 +160,6 @@ export function useHardcodedTiles(): HardcodedTile[] {
       { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: false },
       { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
     ] as HardcodedTile[] : []),
-    ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted } as HardcodedTile] : []),
     ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: calendarConnected } as HardcodedTile] : []),
   ];
 }

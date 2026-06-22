@@ -10,15 +10,15 @@ import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 
 /**
- * macOS-only Input Monitoring panel, rendered inside the Connections
- * dialog for the `input-monitoring` tile. Without this TCC permission
- * the UI recorder runs in reduced mode — clipboard + app/window events
- * still flow (NSPasteboard + NSWorkspace need only Accessibility), but
- * keystrokes and clicks are dropped.
+ * macOS-only Input Monitoring panel, rendered in the Privacy settings
+ * section next to the keyboard/click capture toggles it gates. Without
+ * this TCC permission the UI recorder runs in reduced mode — clipboard +
+ * app/window events still flow (NSPasteboard + NSWorkspace need only
+ * Accessibility), but keystrokes and clicks are dropped.
  *
- * Status polling lives here (not the section) because the dialog only
- * mounts when open. The parent passes `onStatusChange` so it can update
- * the tile's connected dot without duplicating the poll.
+ * Status polling lives here so the panel reflects the live grant state on
+ * its own. `onStatusChange` is optional — callers that want to mirror the
+ * granted state (e.g. a connected dot) can pass it.
  */
 export function InputMonitoringPanel({
   onStatusChange,

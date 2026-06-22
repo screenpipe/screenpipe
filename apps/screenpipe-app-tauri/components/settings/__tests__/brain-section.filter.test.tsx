@@ -4,7 +4,7 @@
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Mocks — keep the component pure: fake API, no tauri, plain-text markdown.
@@ -24,8 +24,8 @@ const MEMORIES = Array.from({ length: 8 }, (_, i) => ({
 const ARTIFACTS = Array.from({ length: 5 }, (_, i) => ({
   registered: i % 2 === 0,
   id: i % 2 === 0 ? 100 + i : null,
-  source: "glob-pipe",
-  source_type: "pipe",
+  source: i === 0 ? "chat-b" : "glob-pipe",
+  source_type: i === 0 ? "chat" : "pipe",
   title: `note-${i}.md`,
   kind: "markdown",
   path: `/tmp/pipes/glob-pipe/output/note-${i}.md`,
@@ -88,6 +88,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => undefined) }));
 
 vi.mock("@/components/settings/compact-markdown", () => ({
   CompactMarkdown: ({ children, "data-testid": testId }: { children: string; "data-testid"?: string }) => (
@@ -99,10 +100,28 @@ vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-import { BrainSection } from "../brain-section";
+import { BrainSection, resetBrainViewStateForTests } from "../brain-section";
 import { localFetch } from "@/lib/api";
+import { emit } from "@tauri-apps/api/event";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  resetBrainViewStateForTests();
+  useChatStore.getState().actions.hydrateFromDisk([
+    {
+      id: "chat-b",
+      title: "chat b",
+      preview: "",
+      status: "idle",
+      messageCount: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      kind: "chat",
+    },
+  ]);
   // jsdom has no IntersectionObserver
   (globalThis as any).IntersectionObserver = class {
     observe() {}
@@ -163,6 +182,93 @@ describe("BrainSection type filter", () => {
         expect.any(Object),
       );
     });
+  });
+
+  it("maps memory search operators to backend query params", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.change(screen.getByTestId("brain-search-input"), {
+      target: { value: "person:ansh date:2026-06-20 content:bunny" },
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("q=bunny"),
+        expect.any(Object),
+      );
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("tags=person%3Aansh%2Cdate%3A2026-06-20"),
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("maps artifact source operators to source filtering", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    fireEvent.change(screen.getByTestId("brain-search-input"), {
+      target: { value: "source:glob-pipe content:artifact" },
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(localFetch)).toHaveBeenCalledWith(
+        expect.stringContaining("/artifacts?limit=500&offset=0&q=artifact&source=glob-pipe"),
+      );
+    });
+  });
+
+  it("opens a memory in the side detail panel", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getByTestId("brain-item-memory-1"));
+
+    const panel = screen.getByTestId("brain-detail-panel");
+    expect(panel).toBeTruthy();
+    expect(memoryRows().length).toBe(8);
+    expect(within(panel).getAllByText(MEMORIES[0].content).length).toBeGreaterThan(0);
+  });
+
+  it("opens an artifact in its source chat with the preview sidebar", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
+
+    expect(screen.queryByTestId("brain-detail-panel")).toBeNull();
+    expect(emit).toHaveBeenCalledWith("chat-load-conversation", {
+      conversationId: "chat-b",
+      targetWindow: "home",
+      filePreviewPath: "/tmp/pipes/glob-pipe/output/note-0.md",
+    });
+  });
+
+  it("keeps the artifacts tab when Brain remounts", async () => {
+    const firstRender = render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+    expect(memoryRows().length).toBe(0);
+
+    const scrollContainer = screen.getByTestId("brain-scroll-container");
+    scrollContainer.scrollTop = 320;
+    fireEvent.scroll(scrollContainer);
+
+    firstRender.unmount();
+    render(<BrainSection />);
+
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+    expect(memoryRows().length).toBe(0);
+    await waitFor(() =>
+      expect(screen.getByTestId("brain-scroll-container").scrollTop).toBe(320),
+    );
   });
 
   it("edits memory tags from the edit dialog", async () => {

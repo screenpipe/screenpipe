@@ -43,18 +43,27 @@ describe("CompactMarkdown", () => {
   });
 
   it("renders generated window summaries as human memory copy", () => {
-    render(
-      <CompactMarkdown data-testid="preview">
-        {
-          "_Window checked: 2026-06-20 17:11–18:11 IST (11:41–12:41 UTC)_\n\nNo activity."
-        }
-      </CompactMarkdown>,
-    );
+    // The "last hour" label only renders when the window's date is today
+    // (formatDateForMemoryCopy compares against `new Date()`), so freeze the
+    // clock to the fixture's date — otherwise this fails on any later day.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 5, 20, 18, 30, 0));
+    try {
+      render(
+        <CompactMarkdown data-testid="preview">
+          {
+            "_Window checked: 2026-06-20 17:11–18:11 IST (11:41–12:41 UTC)_\n\nNo activity."
+          }
+        </CompactMarkdown>,
+      );
 
-    const preview = screen.getByTestId("preview");
-    expect(preview.textContent).toContain("Checked last hour (5:11 PM-6:11 PM)");
-    expect(preview.textContent).not.toContain("Window checked");
-    expect(preview.textContent).not.toContain("2026-06-20");
-    expect(preview.textContent).not.toContain("UTC");
+      const preview = screen.getByTestId("preview");
+      expect(preview.textContent).toContain("Checked last hour (5:11 PM-6:11 PM)");
+      expect(preview.textContent).not.toContain("Window checked");
+      expect(preview.textContent).not.toContain("2026-06-20");
+      expect(preview.textContent).not.toContain("UTC");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

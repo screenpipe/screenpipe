@@ -495,7 +495,7 @@ impl ServerCore {
             let screenpipe_dir_for_cb = config.data_dir.clone();
             let pm_for_cb = shared_pipe_manager.clone();
             shared_pipe_manager.lock().await.set_on_run_complete(Arc::new(
-                move |pipe_name, success, duration_secs, error_type| {
+                move |pipe_name, execution_id, success, duration_secs, error_type| {
                     let mut props = serde_json::json!({
                         "pipe": pipe_name,
                         "success": success,
@@ -528,7 +528,11 @@ impl ServerCore {
                             };
                             if !items.is_empty() {
                                 screenpipe_engine::routes::artifacts::auto_register_pipe_artifacts(
-                                    &db, items, &name, &dir,
+                                    &db,
+                                    items,
+                                    &name,
+                                    execution_id,
+                                    &dir,
                                 )
                                 .await;
                             }

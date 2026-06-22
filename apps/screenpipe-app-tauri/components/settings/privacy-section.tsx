@@ -41,11 +41,13 @@ import { Switch } from "@/components/ui/switch";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { WindowPicker } from "./window-picker";
+import { InputMonitoringPanel } from "./input-monitoring-card";
 import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { platform } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
@@ -476,6 +478,9 @@ function RedactionWherePreview({
 export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
   const isEnterprise = useIsEnterpriseBuild();
+  // Input Monitoring is a macOS-only TCC permission; the grant card only
+  // renders there (alongside the keyboard/click capture toggles it gates).
+  const isMacOS = typeof window !== "undefined" && platform() === "macos";
   const { toast } = useToast();
   // when the admin forces the PII backend (local/cloud) we lock the radios so
   // the employee can't override it (the value itself is applied to settings by
@@ -1389,6 +1394,26 @@ export function PrivacySection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Input Monitoring permission (macOS) — the OS-level TCC grant that
+          lets the keyboard/click capture toggles above actually record.
+          Lives here, next to those toggles, instead of under Connections. */}
+      {isMacOS && (
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center space-x-2.5">
+              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                Input Monitoring permission
+                <HelpTooltip text="macOS permission that lets screenpipe capture keystrokes and mouse clicks. without it, capture runs in reduced mode — clipboard and app/window switches still work, but keyboard and click recording is dropped." />
+              </h3>
+            </div>
+            <div className="mt-2 ml-[26px]">
+              <InputMonitoringPanel />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Record While Locked */}
       <Card>

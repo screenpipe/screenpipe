@@ -15,7 +15,7 @@
  * Deterministic flow:
  *   1. write a fixture .html (full doc, global dark <style>) to a temp path
  *   2. POST /artifacts/register so it shows up as a registered Brain artifact
- *   3. open Brain, filter to it, expand it
+ *   3. open Brain, filter to it, select it
  *   4. assert: a sandboxed iframe carrying our CSP renders it, and the host
  *      document has NO <style> carrying the artifact's signature color
  *   5. cleanup: DELETE the artifact + unlink the temp file
@@ -38,11 +38,29 @@ import { authHeaders, getLocalApiConfig } from "../helpers/api-utils.js";
 // Unique signature color so we can prove containment: if this hex ever appears
 // in a HOST <style>, the artifact leaked into the app DOM (the original bug).
 const SIGNATURE = "1a1a2e";
+const VIEWER_LABEL_PREFIX = "viewer-";
 const FIXTURE_HTML =
   "<!doctype html><html><head><meta charset='utf-8'><title>e2e</title><style>" +
   `*{margin:0;padding:0}body{background:linear-gradient(135deg,#${SIGNATURE} 0%,#16213e 100%);` +
   "color:#fff;min-height:100vh}h1{-webkit-text-fill-color:transparent}" +
   "</style></head><body><h1>E2E Time Usage</h1><p>rendered inside the sandbox</p></body></html>";
+
+async function viewerHandles(): Promise<string[]> {
+  return (await browser.getWindowHandles()).filter((h) =>
+    h.startsWith(VIEWER_LABEL_PREFIX),
+  );
+}
+
+async function waitForViewerCount(count: number, timeoutMs = t(10_000)): Promise<void> {
+  await browser.waitUntil(
+    async () => (await viewerHandles()).length === count,
+    {
+      timeout: timeoutMs,
+      interval: 250,
+      timeoutMsg: `Expected ${count} viewer-* window handle(s); have ${(await viewerHandles()).length}`,
+    },
+  );
+}
 
 describe("HTML artifact rendering (Brain, sandboxed)", function () {
   this.timeout(180_000);
@@ -114,14 +132,23 @@ describe("HTML artifact rendering (Brain, sandboxed)", function () {
     const rowTestId = `brain-item-artifact-${artifactId}`;
     const row = await waitForTestId(rowTestId, 20_000);
 
-    // Expand it (collapsed shows just the title + "show more").
-    const expand = await row.$('[data-testid="artifact-html-toggle"]');
-    await expand.waitForExist({ timeout: t(15_000) });
-    await expand.click();
+    // Select it so Brain opens the full artifact in the viewer window.
+    const viewerCount = (await viewerHandles()).length;
+    await row.click();
+    await waitForViewerCount(viewerCount + 1, t(12_000));
+
+    const opened = (await viewerHandles()).at(-1) as string;
+    await browser.switchToWindow(opened);
+    await browser.waitUntil(
+      async () => (await browser.getUrl()).includes("/viewer"),
+      { timeout: t(10_000), interval: 250, timeoutMsg: "viewer URL never loaded" },
+    );
+    const url = new URL(await browser.getUrl());
+    expect(url.pathname).toBe("/viewer");
 
     // A full document defaults to rendered → a sandboxed iframe mounts once the
     // file content loads.
-    const iframe = await row.$("iframe");
+    const iframe = await $("iframe");
     await iframe.waitForExist({ timeout: t(20_000) });
 
     // SECURITY: scripts only — never same-origin (which would expose Tauri IPC).
@@ -143,5 +170,6 @@ describe("HTML artifact rendering (Brain, sandboxed)", function () {
 
     const shot = await saveScreenshot("html-artifact-render-sandboxed");
     expect(existsSync(shot)).toBe(true);
+    await browser.switchToWindow("home");
   });
 });
