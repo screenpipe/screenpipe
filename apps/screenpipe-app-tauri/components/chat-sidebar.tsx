@@ -100,6 +100,7 @@ import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requestPipeStop } from "@/lib/pipe-stop";
 import {
+  applySidebarRecentsCap,
   buildSidebarRecentsSections,
   recurringPipeGroupKeys,
   type SidebarItem,
@@ -413,7 +414,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const { pinned, recents, archived } = useVisibleChatSections();
   const groupedSections = useMemo(
-    () => buildSidebarRecentsSections(recents, 15),
+    () => buildSidebarRecentsSections(recents, Number.POSITIVE_INFINITY),
     [recents],
   );
 
@@ -576,6 +577,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
   const recentsLoading = !diskHydrated && recents.length === 0;
+  const visibleGroupedSections = useMemo(
+    () => applySidebarRecentsCap(groupedSections, collapsedRecentsSections, 15),
+    [groupedSections, collapsedRecentsSections],
+  );
 
   const handleSelect = (id: string) => {
     setOpenConversationMenuId(null);
@@ -901,7 +906,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                groupedSections.map((section, index) => (
+                visibleGroupedSections.map((section, index) => (
                   <div
                     key={section.key}
                     className={cn(index > 0 && "mt-1")}

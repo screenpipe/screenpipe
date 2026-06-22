@@ -131,8 +131,10 @@ export function buildGroupedRecents(
  * pipe auto-grouping within each section.
  *
  * - Manual groups are rendered in insertion order (first-seen in the
- *   recents array) with `cap = Infinity` (show all members).
- * - Ungrouped sessions get the standard 15-row cap.
+ *   recents array).
+ * - The caller controls any top-level cap separately. The main sidebar
+ *   applies a global 15-row budget after collapsed subsection state is
+ *   known.
  * - The "other" section title is non-empty only when at least one
  *   manual group exists — otherwise the section renders without a
  *   header (backward-compatible with the pre-grouping sidebar).
@@ -141,7 +143,7 @@ export function buildGroupedRecents(
  */
 export function buildSidebarRecentsSections(
   recents: SessionRecord[],
-  cap = 15,
+  cap = Number.POSITIVE_INFINITY,
 ): SidebarRecentsSection[] {
   // Split sessions by manual sidebarGroup label.
   const manualGroups = new Map<string, SessionRecord[]>();
@@ -172,8 +174,8 @@ export function buildSidebarRecentsSections(
     });
   }
 
-  // Ungrouped section — standard cap.
-  // Manual-grouped chats do NOT count against the 15-row ungrouped cap.
+  // Ungrouped section. The main sidebar applies the global recents cap
+  // later, after subsection collapsed state is known.
   const ungroupedItems = buildGroupedRecents(ungrouped, cap);
   if (ungroupedItems.length > 0 || sections.length === 0) {
     sections.push({
@@ -184,4 +186,55 @@ export function buildSidebarRecentsSections(
   }
 
   return sections;
+}
+
+/**
+ * Applies the main sidebar's global recents budget across already-built
+ * sections.
+ *
+ * Counting rules:
+ * - titled subsection header = 1 visible row
+ * - collapsed subsection = header only
+ * - top-level item inside an expanded subsection = 1 visible row
+ * - pipe-group children do not count here; once the parent row is
+ *   visible, expansion is a free reveal handled by the render layer
+ */
+export function applySidebarRecentsCap(
+  sections: SidebarRecentsSection[],
+  collapsedSectionKeys: ReadonlySet<string>,
+  cap = 15,
+): SidebarRecentsSection[] {
+  if (cap <= 0) return [];
+
+  let remaining = cap;
+  const capped: SidebarRecentsSection[] = [];
+
+  for (const section of sections) {
+    if (remaining <= 0) break;
+
+    const hasHeader = section.title.length > 0;
+    const isCollapsed = hasHeader && collapsedSectionKeys.has(section.key);
+
+    if (hasHeader) {
+      if (remaining <= 0) break;
+      remaining -= 1;
+      if (isCollapsed) {
+        capped.push({ ...section, items: [] });
+        continue;
+      }
+    }
+
+    const visibleItems: SidebarItem[] = [];
+    for (const item of section.items) {
+      if (remaining <= 0) break;
+      visibleItems.push(item);
+      remaining -= 1;
+    }
+
+    if (hasHeader || visibleItems.length > 0) {
+      capped.push({ ...section, items: visibleItems });
+    }
+  }
+
+  return capped;
 }

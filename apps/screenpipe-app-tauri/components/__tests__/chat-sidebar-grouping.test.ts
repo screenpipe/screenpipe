@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  applySidebarRecentsCap,
   sessionGroupKey,
   sessionGroupTitle,
   buildGroupedRecents,
@@ -283,22 +284,78 @@ describe("buildSidebarRecentsSections", () => {
     expect(result[0].title).toBe("");
   });
 
-  it("manual-grouped chats do not count against ungrouped cap", () => {
+  it("returns all grouped sections before the global recents cap is applied", () => {
     const manual = Array.from({ length: 10 }, (_, i) =>
       s(`m-${i}`, `manual ${i}`, undefined, "product"),
     );
     const ungrouped = Array.from({ length: 20 }, (_, i) =>
       s(`u-${i}`, `ungrouped ${i}`),
     );
-    const result = buildSidebarRecentsSections([...manual, ...ungrouped], 15);
+    const result = buildSidebarRecentsSections([...manual, ...ungrouped]);
     const productSection = result.find((r) => r.title === "product");
     const ungroupedSection = result.find(
       (r) => r.title === "other",
     );
-    // All 10 manual items visible (cap=Infinity within manual groups)
     expect(productSection?.items).toHaveLength(10);
-    // Only 15 of the 20 ungrouped items visible
-    expect(ungroupedSection?.items).toHaveLength(15);
+    expect(ungroupedSection?.items).toHaveLength(20);
+  });
+});
+
+// ── applySidebarRecentsCap ───────────────────────────────────────────
+
+describe("applySidebarRecentsCap", () => {
+  it("caps the whole recents surface at 15 top-level visible rows", () => {
+    const sections = buildSidebarRecentsSections([
+      ...Array.from({ length: 2 }, (_, i) =>
+        s(`m-${i}`, `manual ${i}`, undefined, "product"),
+      ),
+      ...Array.from({ length: 20 }, (_, i) =>
+        s(`u-${i}`, `ungrouped ${i}`),
+      ),
+    ]);
+
+    const result = applySidebarRecentsCap(sections, new Set(), 15);
+    expect(result.map((section) => section.title)).toEqual(["product", "other"]);
+    expect(result[0].items).toHaveLength(2);
+    expect(result[1].items).toHaveLength(11);
+  });
+
+  it("counts a collapsed manual group as one visible row", () => {
+    const sections = buildSidebarRecentsSections([
+      ...Array.from({ length: 5 }, (_, i) =>
+        s(`m-${i}`, `manual ${i}`, undefined, "product"),
+      ),
+      ...Array.from({ length: 20 }, (_, i) =>
+        s(`u-${i}`, `ungrouped ${i}`),
+      ),
+    ]);
+
+    const result = applySidebarRecentsCap(
+      sections,
+      new Set(["manual:product"]),
+      15,
+    );
+
+    expect(result[0].title).toBe("product");
+    expect(result[0].items).toHaveLength(0);
+    expect(result[1].title).toBe("other");
+    expect(result[1].items).toHaveLength(13);
+  });
+
+  it("treats a pipe group row as one visible row regardless of child count", () => {
+    const sections = buildSidebarRecentsSections([
+      s("p1", "daily #1", "daily"),
+      s("p2", "daily #2", "daily"),
+      ...Array.from({ length: 20 }, (_, i) =>
+        s(`u-${i}`, `ungrouped ${i}`),
+      ),
+    ]);
+
+    const result = applySidebarRecentsCap(sections, new Set(), 15);
+    expect(result).toHaveLength(1);
+    expect(result[0].title).toBe("");
+    expect(result[0].items).toHaveLength(15);
+    expect(result[0].items[0].kind).toBe("group");
   });
 });
 
