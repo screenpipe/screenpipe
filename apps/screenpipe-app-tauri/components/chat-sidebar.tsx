@@ -540,7 +540,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
     return groups;
   }, [pinned, recents]);
-  const selectableExistingGroups = existingGroups;
 
   // Resolve each running pipe to its SessionRecord so the Scheduled-row
   // kebab can offer Pin / Rename / Archive / Delete with the same
@@ -967,8 +966,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                           onRenameRequest={handleRenameRequest}
                           onMoveToGroup={handleMoveToGroup}
                           onNewGroupRequest={setNewGroupSessionId}
-                          existingGroups={selectableExistingGroups}
-                          canCreateGroup
+                          existingGroups={existingGroups}
                           openConversationMenuId={openConversationMenuId}
                           setOpenConversationMenuId={setOpenConversationMenuId}
                         />
@@ -988,8 +986,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                           onRenameRequest={handleRenameRequest}
                           onMoveToGroup={handleMoveToGroup}
                           onNewGroupRequest={setNewGroupSessionId}
-                          existingGroups={selectableExistingGroups}
-                          canCreateGroup
+                          existingGroups={existingGroups}
                           openConversationMenuId={openConversationMenuId}
                           setOpenConversationMenuId={setOpenConversationMenuId}
                         />
@@ -1826,7 +1823,6 @@ function PipeGroupRow({
   onMoveToGroup,
   onNewGroupRequest,
   existingGroups,
-  canCreateGroup,
   openConversationMenuId,
   setOpenConversationMenuId,
 }: {
@@ -1844,7 +1840,6 @@ function PipeGroupRow({
   onMoveToGroup: (id: string, group: string | undefined) => void;
   onNewGroupRequest: (id: string) => void;
   existingGroups: string[];
-  canCreateGroup: boolean;
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
@@ -1894,7 +1889,6 @@ function PipeGroupRow({
               onMoveToGroup={onMoveToGroup}
               onNewGroupRequest={onNewGroupRequest}
               existingGroups={existingGroups}
-              canCreateGroup={canCreateGroup}
               openConversationMenuId={openConversationMenuId}
               setOpenConversationMenuId={setOpenConversationMenuId}
             />
@@ -1920,7 +1914,6 @@ interface ChatRowProps {
   onMoveToGroup?: (id: string, group: string | undefined) => void;
   onNewGroupRequest?: (id: string) => void;
   existingGroups?: string[];
-  canCreateGroup?: boolean;
   showActions?: boolean;
   openConversationMenuId?: string | null;
   setOpenConversationMenuId?: (id: string | null) => void;
@@ -1959,7 +1952,6 @@ export function SidebarChatRow({
   onMoveToGroup,
   onNewGroupRequest,
   existingGroups,
-  canCreateGroup = true,
   showActions = true,
   openConversationMenuId,
   setOpenConversationMenuId,
@@ -2142,7 +2134,6 @@ export function SidebarChatRow({
                     )}
                     <DropdownMenuItem
                       className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
-                      disabled={!canCreateGroup}
                       onSelect={(e) => {
                         e.stopPropagation();
                         onNewGroupRequest?.(session.id);

@@ -434,7 +434,7 @@ describe("Chat sidebar groups", function () {
 
       // The ungrouped section should also exist (for M2)
       const ungroupedExists = await elementExists(
-        '[data-testid="chat-sidebar-group-ungrouped"]',
+        '[data-testid="chat-sidebar-group-other"]',
       );
       expect(ungroupedExists).toBe(true);
     });
@@ -453,7 +453,7 @@ describe("Chat sidebar groups", function () {
       // M2 should be in the ungrouped section
       const m2InUngrouped = await browser.execute((chatId: string) => {
         const section = document.querySelector(
-          '[data-testid="chat-sidebar-group-ungrouped"]',
+          '[data-testid="chat-sidebar-group-other"]',
         );
         if (!section) return false;
         return !!section.querySelector(`[data-testid="chat-row-${chatId}"]`);
