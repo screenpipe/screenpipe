@@ -530,12 +530,24 @@ async fn bench_related_tags_scaling() {
     };
 
     println!("\n--- timings ---");
-    bench("person:hot (50k items, wide fan-out)", vec!["person:hot".to_string()]).await;
-    bench("person:cold (200 items, realistic)", vec!["person:cold".to_string()]).await;
+    bench(
+        "person:hot (50k items, wide fan-out)",
+        vec!["person:hot".to_string()],
+    )
+    .await;
+    bench(
+        "person:cold (200 items, realistic)",
+        vec!["person:cold".to_string()],
+    )
+    .await;
     bench(
         "person:hot+co:0 (AND, two inputs)",
         vec!["person:hot".to_string(), "co:0".to_string()],
     )
     .await;
-    bench("nonexistent:tag (no matches)", vec!["nonexistent:tag".to_string()]).await;
+    bench(
+        "nonexistent:tag (no matches)",
+        vec!["nonexistent:tag".to_string()],
+    )
+    .await;
 }

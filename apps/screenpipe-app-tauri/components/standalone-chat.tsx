@@ -710,6 +710,7 @@ export function StandaloneChat({
     tryInChatStartNewRef,
     piSessionIdRef,
     focusMessageById,
+    openFilePreview,
   });
   useChatE2EGlobals({
     setMessages,

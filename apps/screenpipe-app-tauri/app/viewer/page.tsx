@@ -61,15 +61,6 @@ export default function ViewerPage() {
     setPath(params.get("path") || "");
   }, []);
 
-  const openInDefault = useCallback(async () => {
-    if (!path) return;
-    try {
-      await commands.openNotePath(path);
-    } catch (e) {
-      console.error("open_note_path failed:", e);
-    }
-  }, [path]);
-
   const revealInFinder = useCallback(async () => {
     if (!path) return;
     try {
@@ -120,10 +111,7 @@ export default function ViewerPage() {
       }
       if (!mod) return;
       const k = e.key.toLowerCase();
-      if (k === "e") {
-        e.preventDefault();
-        void openInDefault();
-      } else if (k === "r") {
+      if (k === "r") {
         e.preventDefault();
         void revealInFinder();
       } else if (k === "l") {
@@ -136,7 +124,7 @@ export default function ViewerPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openInDefault, revealInFinder, copyPath, copyContent, closeWindow]);
+  }, [revealInFinder, copyPath, copyContent, closeWindow]);
 
   const fileName = viewerDisplayName(path, content);
   const breadcrumb = useMemo(() => viewerPathBreadcrumb(path), [path]);
@@ -174,15 +162,10 @@ export default function ViewerPage() {
           )}
         </div>
         <ToolbarButton
-          label="open"
-          shortcut="⌘E"
-          onClick={openInDefault}
-          primary
-        />
-        <ToolbarButton
           label="reveal"
           shortcut="⌘R"
           onClick={revealInFinder}
+          primary
         />
         {content?.kind === "text" && content.text !== "" && (
           <ToolbarButton

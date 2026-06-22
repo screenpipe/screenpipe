@@ -267,9 +267,7 @@ fn related_namespace_key(ns: &str) -> String {
 /// `{"people": ["louis"]}`; a namespace-less tag lands under `"tags"` with its
 /// full value. Values keep the most-frequent-first order from the query and
 /// are de-duplicated within each bucket.
-fn group_related_tags(
-    rows: Vec<(String, i64)>,
-) -> std::collections::HashMap<String, Vec<String>> {
+fn group_related_tags(rows: Vec<(String, i64)>) -> std::collections::HashMap<String, Vec<String>> {
     let mut grouped: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for (name, _count) in rows {
@@ -1292,10 +1290,7 @@ mod tests {
 
     #[test]
     fn test_group_related_tags_dedupes_within_bucket() {
-        let rows = vec![
-            ("person:ada".to_string(), 3),
-            ("person:ada".to_string(), 1),
-        ];
+        let rows = vec![("person:ada".to_string(), 3), ("person:ada".to_string(), 1)];
         let grouped = group_related_tags(rows);
         assert_eq!(grouped.get("people").unwrap(), &vec!["ada"]);
     }

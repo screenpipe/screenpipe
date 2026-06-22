@@ -4,6 +4,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { PanelRightClose } from "lucide-react";
 import {
   ViewerFileContent,
   viewerDisplayText,
@@ -15,11 +16,13 @@ import { commands } from "@/lib/utils/tauri";
 
 interface FilePreviewSidebarProps {
   path: string;
+  onClose?: () => void;
   onReplacePath?: (path: string) => void;
 }
 
 export function FilePreviewSidebar({
   path,
+  onClose,
   onReplacePath,
 }: FilePreviewSidebarProps) {
   const [copyPathToast, setCopyPathToast] = useState(false);
@@ -41,14 +44,6 @@ export function FilePreviewSidebar({
     [content, effectivePath],
   );
   const breadcrumb = useMemo(() => viewerPathBreadcrumb(effectivePath), [effectivePath]);
-
-  const openInDefault = useCallback(async () => {
-    try {
-      await commands.openNotePath(effectivePath);
-    } catch (e) {
-      console.error("open preview path failed", e);
-    }
-  }, [effectivePath]);
 
   const revealInFinder = useCallback(async () => {
     try {
@@ -81,23 +76,15 @@ export function FilePreviewSidebar({
 
   return (
     <div data-testid="file-preview-sidebar" className="flex flex-col flex-1 min-h-0">
-      <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60">
-        <button
-          onClick={copyPath}
-          title="Copy file path"
-          className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-        >
-          {copyPathToast ? "copied" : "path"}
-        </button>
-        {content?.kind === "text" && content.text !== "" && (
-          <button
-            onClick={copyContent}
-            title="Copy file content"
-            className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-          >
-            {copyContentToast ? "copied" : "copy"}
-          </button>
-        )}
+      <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
+        <div className="flex-1 min-w-0 text-muted-foreground" title={path}>
+          <div className="text-xs truncate">{fileName}</div>
+          {breadcrumb && breadcrumb !== fileName && (
+            <div className="text-[10px] leading-3 truncate opacity-70">
+              {breadcrumb}
+            </div>
+          )}
+        </div>
         {!notFound && (
           <>
             <button
@@ -107,23 +94,31 @@ export function FilePreviewSidebar({
             >
               reveal
             </button>
-            <button
-              onClick={openInDefault}
-              title="Open file"
-              className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-            >
-              open
-            </button>
           </>
         )}
-        <div className="flex-1 min-w-0 text-muted-foreground text-right" title={effectivePath}>
-          <div className="text-xs truncate">{fileName}</div>
-          {breadcrumb && breadcrumb !== fileName && (
-            <div className="text-[10px] leading-3 truncate opacity-70">
-              {breadcrumb}
-            </div>
-          )}
-        </div>
+        {content?.kind === "text" && content.text !== "" && (
+          <button
+            onClick={copyContent}
+            title="Copy file content"
+            className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          >
+            {copyContentToast ? "copied" : "copy"}
+          </button>
+        )}
+        <button
+          onClick={copyPath}
+          title="Copy file path"
+          className="px-2 py-1 rounded hover:bg-muted text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        >
+          {copyPathToast ? "copied" : "path"}
+        </button>
+        <button
+          onClick={onClose}
+          title="Close preview"
+          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+        >
+          <PanelRightClose className="h-3.5 w-3.5" />
+        </button>
       </div>
       <ViewerFileContent
         path={path}

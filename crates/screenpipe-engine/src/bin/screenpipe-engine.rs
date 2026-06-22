@@ -1374,7 +1374,7 @@ async fn main() -> anyhow::Result<()> {
         ),
     ));
     pipe_manager.set_on_run_complete(std::sync::Arc::new(
-        |pipe_name, success, duration_secs, error_type| {
+        |pipe_name, _execution_id, success, duration_secs, error_type| {
             let mut props = serde_json::json!({
                 "pipe": pipe_name,
                 "success": success,

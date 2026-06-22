@@ -565,10 +565,8 @@ mod tests {
             .related_tags(&["person:ada".to_string()], 50)
             .await
             .unwrap();
-        let counts: std::collections::HashMap<&str, i64> = related
-            .iter()
-            .map(|(n, c)| (n.as_str(), *c))
-            .collect();
+        let counts: std::collections::HashMap<&str, i64> =
+            related.iter().map(|(n, c)| (n.as_str(), *c)).collect();
         assert_eq!(related.len(), 4, "got {related:?}");
         assert_eq!(related[0], ("project:atlas".to_string(), 3));
         assert_eq!(counts.get("project:atlas"), Some(&3));
@@ -579,17 +577,17 @@ mod tests {
         assert!(!counts.contains_key("person:bob"), "unrelated tag leaked");
 
         // The `limit` truncates to the top-N by count.
-        let top1 = db.related_tags(&["person:ada".to_string()], 1).await.unwrap();
+        let top1 = db
+            .related_tags(&["person:ada".to_string()], 1)
+            .await
+            .unwrap();
         assert_eq!(top1, vec![("project:atlas".to_string(), 3)]);
 
         // Multiple inputs → AND: only items carrying BOTH person:ada AND
         // project:atlas (f_a, f_b, ac — not the memory, which lacks the
         // project). Co-occurring extras: workflow:planning and person:connor.
         let both = db
-            .related_tags(
-                &["person:ada".to_string(), "project:atlas".to_string()],
-                50,
-            )
+            .related_tags(&["person:ada".to_string(), "project:atlas".to_string()], 50)
             .await
             .unwrap();
         let both_names: std::collections::HashSet<&str> =
@@ -681,10 +679,7 @@ mod tests {
         // Duplicate input tags must behave like a single input (the DISTINCT in
         // the input CTE), NOT silently match nothing.
         let deduped = db
-            .related_tags(
-                &["person:ada".to_string(), "person:ada".to_string()],
-                50,
-            )
+            .related_tags(&["person:ada".to_string(), "person:ada".to_string()], 50)
             .await
             .unwrap();
         let deduped_names: std::collections::HashSet<&str> =
