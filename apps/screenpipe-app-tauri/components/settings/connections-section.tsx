@@ -3778,12 +3778,9 @@ export function ConnectionsSection({
     detectInstalledConnectionIds()
       .then(setDetectedConnectionIds)
       .catch(() => setDetectedConnectionIds(new Set()));
-    getInstalledMcpVersion().then(v => {
-      const installed = !!v || localStorage.getItem("screenpipe_claude_connected") === "true";
-      setClaudeInstalled(installed);
-    }).catch(() => {
-      setClaudeInstalled(localStorage.getItem("screenpipe_claude_connected") === "true");
-    });
+    getInstalledMcpVersion()
+      .then(v => setClaudeInstalled(!!v))
+      .catch(() => setClaudeInstalled(false));
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
     isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
     isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
@@ -4033,8 +4030,8 @@ export function ConnectionsSection({
     if (!selected) return null;
     switch (selected) {
       case "claude": return <ClaudePanel
-        onConnected={() => { localStorage.setItem("screenpipe_claude_connected", "true"); setClaudeInstalled(true); }}
-        onDisconnected={() => { localStorage.removeItem("screenpipe_claude_connected"); setClaudeInstalled(false); }}
+        onConnected={() => setClaudeInstalled(true)}
+        onDisconnected={() => setClaudeInstalled(false)}
       />;
       case "cursor": return <CursorPanel
         onConnected={() => setCursorInstalled(true)}

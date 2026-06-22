@@ -113,8 +113,8 @@ export function useHardcodedTiles(): HardcodedTile[] {
 
   useEffect(() => {
     getInstalledMcpVersion()
-      .then(v => setClaudeInstalled(!!v || localStorage.getItem("screenpipe_claude_connected") === "true"))
-      .catch(() => setClaudeInstalled(localStorage.getItem("screenpipe_claude_connected") === "true"));
+      .then(v => setClaudeInstalled(!!v))
+      .catch(() => setClaudeInstalled(false));
 
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
     isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
