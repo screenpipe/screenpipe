@@ -4,6 +4,7 @@
 import { AIProvider } from './base';
 import { Message, RequestBody } from '../types';
 import { VertexAIProvider, WifConfig } from './vertex';
+import { dropNamelessToolCalls } from '../utils/message-sanitize';
 
 /** Config for routing Gemini through Vertex AI (better data retention terms) */
 export interface VertexGeminiConfig {
@@ -504,6 +505,11 @@ export class GeminiProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): any[] {
+		// Drop tool calls with no function name (and their orphaned tool results)
+		// up front — a nameless call/response pair makes Gemini 400 with "Request
+		// contains an invalid argument" (SCREENPIPE-AI-PROXY-23).
+		messages = dropNamelessToolCalls(messages);
+
 		const formatted: any[] = [];
 
 		let pendingToolResponses: any[] = [];
