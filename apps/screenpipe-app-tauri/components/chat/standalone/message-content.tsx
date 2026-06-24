@@ -1263,6 +1263,11 @@ export function attachmentBadge(ext: string): { label: string; tint: string } {
 
 function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
   const [expanded, setExpanded] = useState(false);
+  const prevLabelRef = useRef(label);
+  if (prevLabelRef.current !== label) {
+    prevLabelRef.current = label;
+    setExpanded(false);
+  }
   return (
     <div>
       <div className="flex items-center gap-1.5">
