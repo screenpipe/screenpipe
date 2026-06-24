@@ -10,6 +10,7 @@ import { ChatTitleMenu } from "@/components/chat/standalone/chat-title-menu";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 interface StandaloneChatHeaderProps {
   className?: string;
@@ -49,12 +50,18 @@ export function StandaloneChatHeader({
   startNewConversation,
   onNewChat,
 }: StandaloneChatHeaderProps) {
+  const hasChatTitle = useChatStore((s) => {
+    if (!conversationId) return false;
+    const session = s.sessions[conversationId];
+    return !!(session?.streamingTitle || session?.title);
+  }) || messages.length > 0;
+
   return (
     <div
       className={cn(
         "relative flex items-center gap-3 px-4 py-3.5 border-b border-border/50 bg-gradient-to-r from-background to-muted/30",
         !className && "cursor-grab active:cursor-grabbing",
-        (!className || (conversationId && messages.length > 0)) && "py-0.5",
+        (!className || (conversationId && hasChatTitle)) && "py-0.5",
         sidebarCollapsed && conversationId && messages.length > 0 && "!pl-[58px]",
         sidebarCollapsed && isMac && !isFullscreen && "!pl-[128px]",
         !className && isMac && !isFullscreen && "!pl-[78px]"
