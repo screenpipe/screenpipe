@@ -46,7 +46,7 @@ export function usePipeWatchSession({
             "@/lib/pipe-ndjson-to-chat"
           );
           let messagesFromStdout = execution.stdout
-            ? parsePipeNdjsonToMessages(execution.stdout)
+            ? parsePipeNdjsonToMessages(execution.stdout, pipeName)
             : [];
           if (messagesFromStdout.length === 0) {
             const fallback =

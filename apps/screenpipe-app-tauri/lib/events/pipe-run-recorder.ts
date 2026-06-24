@@ -190,7 +190,7 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   }
 
   const ndjson = buf.lines.join("\n");
-  const messages: ChatMessage[] = parsePipeNdjsonToMessages(ndjson);
+  const messages: ChatMessage[] = parsePipeNdjsonToMessages(ndjson, buf.pipeName);
 
   // Skip empty conversations — pipes that emitted no parseable
   // assistant content (e.g. raw_line-only streams that the parser

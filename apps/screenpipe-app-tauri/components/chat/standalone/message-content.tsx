@@ -1071,6 +1071,81 @@ export function MessageContent({
     </div>
   ) : null;
 
+  // Attachment cards — computed early so the displayContent path below
+  // can include them when the message carries docs/images.
+  const hasDocs = isUser && (message.attachments?.length ?? 0) > 0;
+  const hasImages = isUser && (message.images?.length ?? 0) > 0;
+  const attachmentsRow = (hasDocs || hasImages) ? (
+    <div className="flex gap-2 flex-wrap items-stretch">
+      {hasDocs && message.attachments!.map((doc, i) => {
+        const badge = attachmentBadge(doc.ext);
+        return (
+          <div
+            key={`doc-${doc.name}-${i}`}
+            title={`${doc.name} — ${doc.charCount.toLocaleString()} chars${doc.truncated ? " (truncated)" : ""}`}
+            className="flex items-center gap-2.5 h-20 max-w-[260px] rounded-xl border border-border/50 bg-muted/40 px-3 shadow-sm"
+          >
+            <div className={`shrink-0 w-11 h-11 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
+              {badge.label}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
+              <div className="truncate text-[10px] text-muted-foreground">
+                {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {hasImages && message.images!.map((img, i) => (
+        <button
+          key={`img-${i}`}
+          type="button"
+          onClick={() => onImageClick?.(message.images ?? [], i)}
+          className="rounded-xl border border-border/50 shadow-sm overflow-hidden p-0 block text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={img} alt={`Attached ${i + 1}`} className="h-20 w-20 min-h-20 min-w-20 object-cover cursor-pointer" />
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  // User messages with a display label — checked before contentBlocks so
+  // pipe messages with both fields render the collapsible label, not raw
+  // prompt text. Also handles connection chip messages and doc-attached
+  // messages that carry displayContent.
+  if (isUser && message.displayContent) {
+    const chipMatch = message.displayContent.match(/^\[chip:([^|]+)\|([^\]]+)\] ([\s\S]*)/);
+    if (chipMatch) {
+      const [, chipId, chipName, chipText] = chipMatch;
+      return (
+        <div className="space-y-2">
+          {attachmentsRow}
+          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5">
+            <span className="inline-flex h-5 items-center gap-1 shrink-0 align-top">
+              <IntegrationIcon
+                icon={chipId}
+                className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0"
+                fallbackClassName="h-3 w-3 text-muted-foreground"
+              />
+              <span className="text-sm font-mono font-semibold text-foreground/80 leading-5">{chipName}</span>
+            </span>
+            <span className="text-sm leading-5 break-words min-w-0">{chipText}</span>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-2">
+        {attachmentsRow}
+        {hasDocs
+          ? <div className="text-sm font-medium">{message.displayContent}</div>
+          : <CollapsibleUserMessage label={message.displayContent} fullContent={message.content} />}
+      </div>
+    );
+  }
+
   // If we have content blocks (Pi messages with tool calls), render them in order
   // Group consecutive tool blocks into collapsible containers
   if (message.contentBlocks && message.contentBlocks.length > 0) {
@@ -1141,88 +1216,9 @@ export function MessageContent({
     );
   }
 
-  // Unified attachment row — docs (PDF/DOCX/…) + image thumbnails share
-  // ONE flex container so the strip reads as a single row regardless of
-  // attachment mix. The previous design rendered docs and images as two
-  // sibling <div>s, which produced a fragmented two-row strip whenever
-  // a user attached one of each kind. Both card types are 80px tall so
-  // the row baselines line up cleanly.
-  const hasDocs = isUser && (message.attachments?.length ?? 0) > 0;
-  const hasImages = isUser && (message.images?.length ?? 0) > 0;
-  const attachmentsRow = (hasDocs || hasImages) ? (
-    <div className="flex gap-2 flex-wrap items-stretch">
-      {hasDocs && message.attachments!.map((doc, i) => {
-        const badge = attachmentBadge(doc.ext);
-        return (
-          <div
-            key={`doc-${doc.name}-${i}`}
-            title={`${doc.name} — ${doc.charCount.toLocaleString()} chars${doc.truncated ? " (truncated)" : ""}`}
-            className="flex items-center gap-2.5 h-20 max-w-[260px] rounded-xl border border-border/50 bg-muted/40 px-3 shadow-sm"
-          >
-            <div className={`shrink-0 w-11 h-11 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
-              {badge.label}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
-              <div className="truncate text-[10px] text-muted-foreground">
-                {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
-              </div>
-            </div>
-          </div>
-        );
-      })}
-      {hasImages && message.images!.map((img, i) => (
-        <button
-          key={`img-${i}`}
-          type="button"
-          onClick={() => onImageClick?.(message.images ?? [], i)}
-          className="rounded-xl border border-border/50 shadow-sm overflow-hidden p-0 block text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={img} alt={`Attached ${i + 1}`} className="h-20 w-20 min-h-20 min-w-20 object-cover cursor-pointer" />
-        </button>
-      ))}
-    </div>
-  ) : null;
-
-  // Fallback: plain text message (user messages, non-Pi assistant messages)
-  // For user messages with a display label, show the short label with expand toggle.
-  //
-  // When the message has document attachments, the "fullContent" we'd
-  // expand to contains the raw `<attached file: ...>` payload — that's
-  // a model-input artifact, not something the user wants to read. The
-  // attachment cards above already disclose what was attached, so we
-  // suppress the expansion chevron in that case (label-only bubble).
-  if (isUser && message.displayContent) {
-    const chipMatch = message.displayContent.match(/^\[chip:([^|]+)\|([^\]]+)\] ([\s\S]*)/);
-    if (chipMatch) {
-      const [, chipId, chipName, chipText] = chipMatch;
-      return (
-        <div className="space-y-2">
-          {attachmentsRow}
-          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5">
-            <span className="inline-flex h-5 items-center gap-1 shrink-0 align-top">
-              <IntegrationIcon
-                icon={chipId}
-                className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0"
-                fallbackClassName="h-3 w-3 text-muted-foreground"
-              />
-              <span className="text-sm font-mono font-semibold text-foreground/80 leading-5">{chipName}</span>
-            </span>
-            <span className="text-sm leading-5 break-words min-w-0">{chipText}</span>
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="space-y-2">
-        {attachmentsRow}
-        {hasDocs
-          ? <div className="text-sm font-medium">{message.displayContent}</div>
-          : <CollapsibleUserMessage label={message.displayContent} fullContent={message.content} />}
-      </div>
-    );
-  }
+  // Fallback: plain text message (non-Pi assistant messages, or user messages
+  // without displayContent — the displayContent case is handled above before
+  // the contentBlocks path).
   // Strip raw "Error:" prefix that leaks from backend — show only the human part
   const displayText = !isUser && message.content.startsWith("Error: ")
     ? message.content.slice("Error: ".length)

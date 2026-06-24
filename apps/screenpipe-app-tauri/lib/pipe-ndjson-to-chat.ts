@@ -49,11 +49,28 @@ function extractToolCalls(content: any[], msgIndex: number): any[] {
  * calls into one "Worked for X min" rail instead of stacking a tower of
  * single-tool headers.
  */
-export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
+/** Build a clean display label for pipe prompt user messages. */
+function pipePromptLabel(pipeName: string, text: string): string {
+  const match = text.match(/Time range: (\S+) to (\S+)/);
+  if (match) {
+    const start = new Date(match[1]);
+    const end = new Date(match[2]);
+    const fmt = (d: Date) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    return `pipe executed: ${pipeName} (${fmt(start)} – ${fmt(end)})`;
+  }
+  return `pipe executed: ${pipeName}`;
+}
+
+export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatMessage[] {
   let agentEndMessages: any[] | null = null;
   const notificationMessages: ChatMessage[] = [];
   let messageCounter = 0;
   const ts = Date.now();
+
+  // User prompt captured from streaming events — used as a fallback when
+  // agent_end.messages omits the user message (common for single-turn,
+  // no-tool-use pipes).
+  let streamingUserPrompt: string | null = null;
 
   // First pass: find agent_end event (has the complete conversation)
   for (const line of raw.split("\n")) {
@@ -66,6 +83,15 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
       }
       if (evt.type === "notification_sent") {
         notificationMessages.push(notificationEventToMessage(evt, notificationMessages.length, ts));
+      }
+      // Capture user prompt from streaming events as fallback
+      if (
+        !streamingUserPrompt &&
+        (evt.type === "message_start" || evt.type === "message_end") &&
+        evt.message?.role === "user"
+      ) {
+        const text = extractText(evt.message.content);
+        if (text.trim()) streamingUserPrompt = text.trim();
       }
     } catch {
       continue;
@@ -126,27 +152,21 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
         continue;
       }
 
+      // Every user message in pipe NDJSON is the system-injected prompt.
+      // Show a clean label; the full prompt is available via the
+      // CollapsibleUserMessage dropdown.
       if (role === "user") {
         flushPendingAssistant();
         if (!text.trim()) continue;
-        const isPipePrompt = text.includes("Time range:") && text.includes("Execute the pipe now.");
+        const name = pipeName || "pipe";
+        const label = pipePromptLabel(name, text);
         const chatMsg: any = {
           id: `pipe-msg-${messageCounter++}`,
           role: "user",
           content: text.trim(),
           timestamp: ts,
+          displayContent: label,
         };
-        if (isPipePrompt) {
-          const match = text.match(/Time range: (\S+) to (\S+)/);
-          if (match) {
-            const start = new Date(match[1]);
-            const end = new Date(match[2]);
-            const fmt = (d: Date) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-            chatMsg.displayContent = `pipe executed (${fmt(start)} – ${fmt(end)})`;
-          } else {
-            chatMsg.displayContent = "pipe executed";
-          }
-        }
         messages.push(chatMsg);
         continue;
       }
@@ -186,6 +206,21 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
     }
 
     flushPendingAssistant();
+
+    // If agent_end.messages didn't include the user prompt (common for
+    // single-turn pipes without tool use), inject it from the streaming
+    // events we captured during the first pass.
+    if (!messages.some((m) => m.role === "user") && streamingUserPrompt) {
+      const name = pipeName || "pipe";
+      const label = pipePromptLabel(name, streamingUserPrompt);
+      messages.unshift({
+        id: `pipe-msg-${messageCounter++}`,
+        role: "user",
+        content: streamingUserPrompt,
+        timestamp: ts,
+        displayContent: label,
+      } as any);
+    }
 
     if (messages.some((m) => m.role === "assistant" && (m.content?.trim() || (m.contentBlocks?.length ?? 0) > 0))) {
       return appendUniqueNotificationMessages(messages, notificationMessages);
@@ -270,19 +305,14 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
       flushAssistant();
       const text = extractText(evt.message.content);
       if (text.trim()) {
-        const isPipePrompt = text.includes("Time range:") && text.includes("Execute the pipe now.");
-        const msg: any = { id: `pipe-msg-${messageCounter++}`, role: "user", content: text.trim(), timestamp: ts };
-        if (isPipePrompt) {
-          const match = text.match(/Time range: (\S+) to (\S+)/);
-          if (match) {
-            const start = new Date(match[1]);
-            const end = new Date(match[2]);
-            const fmt = (d: Date) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-            msg.displayContent = `pipe executed (${fmt(start)} – ${fmt(end)})`;
-          } else {
-            msg.displayContent = "pipe executed";
-          }
-        }
+        const name = pipeName || "pipe";
+        const msg: any = {
+          id: `pipe-msg-${messageCounter++}`,
+          role: "user",
+          content: text.trim(),
+          timestamp: ts,
+          displayContent: pipePromptLabel(name, text),
+        };
         messages.push(msg);
       }
       continue;
@@ -437,7 +467,7 @@ export function pipeExecutionToConversation(
   stdout: string,
   startedAt: string | null,
 ): ChatConversation {
-  const messages = parsePipeNdjsonToMessages(stdout);
+  const messages = parsePipeNdjsonToMessages(stdout, pipeName);
   const ts = startedAt ? new Date(startedAt).getTime() : Date.now();
 
   return {
