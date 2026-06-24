@@ -69,7 +69,6 @@ let unregister: Unregister | null = null;
 
 const TERMINAL_EVENT_TYPES = new Set([
   "agent_end",
-  "turn_end",
   "pipe_done",
 ]);
 
