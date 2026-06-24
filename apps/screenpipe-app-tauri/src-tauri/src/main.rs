@@ -10,7 +10,6 @@
 #![recursion_limit = "256"]
 
 use analytics::AnalyticsManager;
-use commands::show_main_window;
 use serde_json::json;
 use std::env;
 use std::str::FromStr;
@@ -57,6 +56,7 @@ mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
+mod db_recovery_notifications;
 mod meeting_export;
 mod meeting_live_notes;
 mod meeting_stall_notifications;
@@ -524,9 +524,12 @@ async fn main() {
             })
         })
     };
+    // CI / automation (GitHub Actions, etc.) always wins over the settings
+    // opt-in so the desktop-app e2e suite never reaches Sentry/PostHog.
     let telemetry_disabled = store_bool("analyticsEnabled")
         .map(|enabled| !enabled)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || screenpipe_engine::analytics::telemetry_disabled_by_env();
     let _posthog_disabled = telemetry_disabled;
 
     let app_version = env!("CARGO_PKG_VERSION");
@@ -796,6 +799,7 @@ async fn main() {
         is_starting: Arc::new(AtomicBool::new(false)),
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
+        wants_recording: Arc::new(AtomicBool::new(false)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
         cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(None))),
         db_wedge_breaker: recording::new_db_wedge_breaker(),
@@ -917,9 +921,11 @@ async fn main() {
         let app_for_closure = app.clone();
         let args_clone = args.clone();
         let _ = app.run_on_main_thread(move || {
-            // Focus the existing window
+            // A second app launch is usually the Windows taskbar/dock entry point.
+            // Open the Home app window here; `show_main_window` intentionally
+            // opens the timeline overlay for the global shortcut/tray timeline.
             if !crate::enterprise_policy::is_app_ui_hidden() {
-                show_main_window(app_for_closure.clone());
+                let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
             }
 
             // Forward deep-link URL from args
@@ -1792,6 +1798,7 @@ async fn main() {
             crate::monitor_events::start(app_handle.clone());
             crate::meeting_live_notes::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
+            crate::db_recovery_notifications::start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);

@@ -106,6 +106,19 @@ pub struct MeetingDetectionProfile {
     pub call_signals: Vec<CallSignal>,
     /// Minimum number of distinct signals required (typically 1 for leave/hangup).
     pub min_signals_required: usize,
+    /// Top-level window titles whose call signals must be IGNORED, even when they
+    /// match `call_signals`. Matched as exact, case-insensitive, trimmed equality
+    /// against each window's title.
+    ///
+    /// This is a per-window guard (not per-process): signals found in a window
+    /// whose title equals one of these are dropped, but signals in any *other*
+    /// window of the same process still count. It exists for apps that are used
+    /// for both messaging and meetings under one process — most notably Webex,
+    /// whose messaging window is titled exactly `Webex` while a real meeting
+    /// window carries the meeting/space name. Without this guard Webex's
+    /// messaging chrome (e.g. "Leave space"/"Leave team") trips the bare `leave`
+    /// signal and starts a phantom meeting. See issue #4145.
+    pub ignore_window_titles: &'static [&'static str],
 }
 
 /// Load all built-in detection profiles.
@@ -146,6 +159,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Zoom Desktop
         // Note: Zoom on macOS does NOT expose AXWindow — only AXMenuBar.
@@ -218,6 +232,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 CallSignal::KeyboardShortcut("Alt+Q"),
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Google Meet (browser)
         // NOTE: "google meet" removed from url_patterns — it's too broad and matches
@@ -246,6 +261,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 CallSignal::NameContains("leave call"),
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Slack Huddle (browser + desktop)
         MeetingDetectionProfile {
@@ -266,6 +282,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // FaceTime
         MeetingDetectionProfile {
@@ -286,6 +303,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Webex
         MeetingDetectionProfile {
@@ -296,7 +314,21 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 browser_title_patterns: &[],
             },
             call_signals: vec![
-                CallSignal::AutomationIdContains("leave"),
+                // Webex runs messaging and meetings in one process. Its in-call
+                // controls carry locale-independent `callControl_*` automation ids
+                // (live-verified: the "End meeting" button is `callControl_end`).
+                // The messaging chrome's "Leave the space"/"Leave the team"
+                // affordance is an AXMenuItem with id `appMenuLeaveSpace` /
+                // `appMenuLeaveTeam` — which the previous `AutomationIdContains
+                // ("leave")` matched ("appMenu**Leave**Space" contains "leave"),
+                // firing a phantom meeting whenever Webex sat open for chat
+                // (#4145/#4337). Match the call-control id prefix instead, so only
+                // real in-call controls count. `appMenuLeaveSpace` does not contain
+                // "callcontrol", so messaging no longer trips it.
+                CallSignal::AutomationIdContains("callControl"),
+                // English-locale fallbacks. Both are role-constrained to AXButton,
+                // so the messaging "Leave the space" AXMenuItem can never match
+                // them (a real meeting's leave/end controls are buttons).
                 CallSignal::RoleWithName {
                     role: "AXButton",
                     name_contains: "leave",
@@ -307,6 +339,11 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            // Defense-in-depth only. The signal-level discriminator above is the
+            // real fix: the phantom came from an app-menu item that has NO window
+            // title, so a window-title guard could never catch it. Kept because a
+            // window titled exactly `Webex` is unambiguously the messaging shell.
+            ignore_window_titles: &["webex"],
         },
         // Discord native — macOS.
         // Electron exposes 0 windows on macOS but the app menu bar has
@@ -339,6 +376,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 2,
+            ignore_window_titles: &[],
         },
         // Discord native — Windows.
         // UIA can't express MenuBarItem signals as PropertyConditions
@@ -369,6 +407,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 CallSignal::NameContains("Disconnect"),
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Discord in browser — require BOTH "Voice Connected" bar AND "Disconnect"
         // button. Either alone can appear without being in a call (e.g. seeing other
@@ -388,6 +427,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 2,
+            ignore_window_titles: &[],
         },
         // Signal — voice/video calls
         // macOS: "Signal" app with "End Call" / "Hang Up" button during active calls.
@@ -422,6 +462,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // WhatsApp — voice/video calls
         MeetingDetectionProfile {
@@ -447,6 +488,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Telegram — voice/video calls
         MeetingDetectionProfile {
@@ -473,6 +515,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
         // Generic fallback — catches apps like Skype, Around, Whereby, etc.
         MeetingDetectionProfile {
@@ -574,6 +617,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 },
             ],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         },
     ]
 }
@@ -706,6 +750,21 @@ impl MeetingUiScanner {
                     let window = &windows[i];
                     let _ = window.set_messaging_timeout_secs(0.3);
 
+                    // Per-window guard: drop signals from a window whose title is
+                    // on the profile's ignore list (e.g. Webex's bare `Webex`
+                    // messaging window). Scoped per-window, so a real meeting
+                    // window of the same process is still scanned. See #4145.
+                    if !profile.ignore_window_titles.is_empty() {
+                        let window_title = get_ax_string_attr(window, cidre::ax::attr::title());
+                        if window_title_is_ignored(window_title.as_deref(), profile) {
+                            debug!(
+                                "meeting scanner: skipping ignored window title {:?} for pid {}",
+                                window_title, pid
+                            );
+                            continue;
+                        }
+                    }
+
                     // Walk this window's AX tree looking for signals
                     walk_for_signals(
                         window,
@@ -771,9 +830,17 @@ impl MeetingUiScanner {
         let scan_timeout = self.scan_timeout;
         let signals = profile.call_signals.clone();
         let min_required = profile.min_signals_required;
+        let ignore_window_titles = profile.ignore_window_titles;
 
         let scan_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            windows_scan_process_uia(pid, &signals, min_required, max_depth, scan_timeout)
+            windows_scan_process_uia(
+                pid,
+                &signals,
+                min_required,
+                max_depth,
+                scan_timeout,
+                ignore_window_titles,
+            )
         }));
 
         let matched_signals = match scan_result {
@@ -1117,6 +1184,41 @@ fn check_signal_match(
     }
 }
 
+/// Per-window guard: should call signals found in a window with this title be
+/// IGNORED?
+///
+/// Returns `true` when `window_title` (trimmed, case-insensitive) is exactly
+/// equal to one of `ignore_titles`. This is the discriminator that separates an
+/// app's messaging window from its meeting window when both live under one
+/// process.
+///
+/// Matching is exact-equality on purpose, not substring: Webex's messaging
+/// window title is *exactly* `Webex`, whereas a real meeting window is titled
+/// with the meeting/space name (e.g. `Project Update Call`, `VHM Calendar
+/// Hold`). A substring check would also drop a meeting whose name happened to
+/// contain "Webex", re-introducing the phantom-vs-real ambiguity. A window with
+/// no readable title (`None`) is never blocked — absence of a title can't prove
+/// it is the messaging window.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn window_title_is_ignored_titles(window_title: Option<&str>, ignore_titles: &[&str]) -> bool {
+    let Some(title) = window_title else {
+        return false;
+    };
+    let title = title.trim();
+    if title.is_empty() {
+        return false;
+    }
+    ignore_titles
+        .iter()
+        .any(|ignored| title.eq_ignore_ascii_case(ignored.trim()))
+}
+
+/// Profile-scoped convenience over [`window_title_is_ignored_titles`].
+#[cfg(any(target_os = "macos", test))]
+fn window_title_is_ignored(window_title: Option<&str>, profile: &MeetingDetectionProfile) -> bool {
+    window_title_is_ignored_titles(window_title, profile.ignore_window_titles)
+}
+
 /// Optimized signal match using pre-lowercased signal strings and pre-lowercased node fields.
 /// Avoids per-signal and per-node `.to_lowercase()` allocations on the hot path.
 #[cfg(target_os = "macos")]
@@ -1415,6 +1517,7 @@ fn windows_scan_process_uia(
     min_required: usize,
     _max_depth: usize,
     timeout: Duration,
+    profile_ignore_window_titles: &[&str],
 ) -> Result<Vec<String>, String> {
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
@@ -1481,6 +1584,24 @@ fn windows_scan_process_uia(
                 Ok(el) => el,
                 Err(_) => continue,
             };
+
+            // Per-window guard: drop signals from a window whose title is on the
+            // profile's ignore list (e.g. Webex's bare `Webex` messaging window).
+            // Scoped per-window, so a real meeting window of the same process is
+            // still scanned. See #4145.
+            if !profile_ignore_window_titles.is_empty() {
+                let window_title = element.CurrentName().ok().map(|n| n.to_string());
+                if window_title_is_ignored_titles(
+                    window_title.as_deref(),
+                    profile_ignore_window_titles,
+                ) {
+                    debug!(
+                        "meeting scanner (windows): skipping ignored window title {:?} for pid {}",
+                        window_title, pid
+                    );
+                    continue;
+                }
+            }
 
             // Strategy 0: Check root window element name against WindowTitle signals.
             // Zoom on Windows has a window titled "Zoom Meeting" but exposes NO
@@ -1897,6 +2018,30 @@ pub fn advance_state(
                     },
                     None,
                 )
+            } else if has_output_audio {
+                // Controls vanished but output audio is still flowing — the user
+                // minimized the window, switched tabs, moved controls to a floating
+                // toolbar, or the toolbar auto-hid. This is NOT the end of the call,
+                // so stay Active instead of dropping into Ending. Without this guard
+                // an audio-sustained meeting oscillates Active -> Ending (here) ->
+                // Active (Ending's audio branch) on every single scan, producing one
+                // flap per scan interval (24+ flaps on a multi-minute minimized call).
+                // This mirrors handle_no_apps_running's audio guard, keeping the two
+                // "controls absent" paths consistent.
+                debug!(
+                    "meeting v2: Active (no controls but output audio active — staying Active, app={}, id={})",
+                    app, meeting_id
+                );
+                (
+                    MeetingState::Active {
+                        meeting_id,
+                        app,
+                        started_at,
+                        last_seen: Instant::now(),
+                        is_browser,
+                    },
+                    None,
+                )
             } else {
                 let timeout = if is_browser {
                     ENDING_TIMEOUT_BROWSER
@@ -2132,7 +2277,7 @@ fn browser_window_matches_meeting(
         return ids
             .browser_url_patterns
             .iter()
-            .any(|p| contains_case_insensitive(doc, p));
+            .any(|p| browser_url_pattern_matches(doc, p));
     }
     if let Some(t) = title {
         let t_lower = t.to_lowercase();
@@ -2158,6 +2303,64 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     }
 
     haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+/// Match a `browser_url_patterns` entry against a URL or window-title string at
+/// host-name boundaries.
+///
+/// A bare substring match leaks: `daily.co` is a substring of `thedaily.com`,
+/// so an unrelated news site became a phantom meeting candidate (the latent
+/// vector behind #4246, follow-up here). This matches a dotted host pattern
+/// only as a whole hostname or a subdomain of it, and a path-qualified pattern
+/// (`cal.com/video`, `zoom.us/j`) only when both the host segment and the path
+/// component are bounded:
+///   * `daily.co`      → matches `daily.co`, `app.daily.co/room`; NOT
+///                       `thedaily.com`, `daily.com`, `daily.co.uk`.
+///   * `cal.com/video` → matches `app.cal.com/video/uid`; NOT `cal.com/videos`,
+///                       `cal.com/pricing`.
+///
+/// Non-domain patterns (containing a space, or with no `.`) keep the previous
+/// case-insensitive substring behavior — they are free-text markers
+/// (e.g. "zoom meeting"), not hostnames.
+fn browser_url_pattern_matches(haystack: &str, pattern: &str) -> bool {
+    if pattern.contains(' ') || !pattern.contains('.') {
+        return contains_case_insensitive(haystack, pattern);
+    }
+    contains_at_domain_boundary(haystack, pattern)
+}
+
+/// True when the dotted `pattern` appears in `haystack` bounded so its leading
+/// host label is whole (or a subdomain boundary, i.e. preceded by `.`) and its
+/// trailing character does not extend the matched host/path component. ASCII
+/// case-insensitive; `pattern` is expected lowercase-or-mixed (compared
+/// case-folded).
+fn contains_at_domain_boundary(haystack: &str, pattern: &str) -> bool {
+    let hay = haystack.to_ascii_lowercase();
+    let pat = pattern.to_ascii_lowercase();
+    let (hb, pb) = (hay.as_bytes(), pat.as_bytes());
+    if pb.is_empty() || pb.len() > hb.len() {
+        return false;
+    }
+    // A char that, on the LEFT of the match, would make the host label longer
+    // (so the pattern is a tail of a bigger label, e.g. `daily` in `thedaily`).
+    // `.` is intentionally NOT in this set: it marks a subdomain boundary.
+    let extends_left = |c: u8| c.is_ascii_alphanumeric() || c == b'-';
+    // On the RIGHT, anything that continues the host or path component: alnum,
+    // `-`, or `.` (which would make `daily.co` part of `daily.com`/`daily.co.uk`).
+    let extends_right = |c: u8| c.is_ascii_alphanumeric() || c == b'-' || c == b'.';
+    let mut i = 0;
+    while i + pb.len() <= hb.len() {
+        if &hb[i..i + pb.len()] == pb {
+            let left_ok = i == 0 || !extends_left(hb[i - 1]);
+            let after = i + pb.len();
+            let right_ok = after == hb.len() || !extends_right(hb[after]);
+            if left_ok && right_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 fn ends_with_ascii_case_insensitive(haystack: &str, suffix: &str) -> bool {
@@ -2339,7 +2542,7 @@ fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
                 let doc_for_match = url_without_query_or_fragment(&doc);
                 if url_patterns
                     .iter()
-                    .any(|p| contains_case_insensitive(doc_for_match, p))
+                    .any(|p| browser_url_pattern_matches(doc_for_match, p))
                 {
                     return true;
                 }
@@ -2352,7 +2555,7 @@ fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
                 if url_patterns
                     .iter()
                     .filter(|p| p.contains('.'))
-                    .any(|p| contains_case_insensitive(&title, p))
+                    .any(|p| browser_url_pattern_matches(&title, p))
                 {
                     return true;
                 }
@@ -2536,11 +2739,15 @@ pub fn find_running_meeting_apps(
                 continue;
             }
 
+            // url_patterns are matched against the window TITLE on Windows (no
+            // per-tab URL available). Boundary matching still applies — it keeps
+            // a real meeting host in a title matching while closing the
+            // `daily.co` ⊂ `thedaily.com` substring leak.
             let url_match = profile
                 .app_identifiers
                 .browser_url_patterns
                 .iter()
-                .any(|p| contains_case_insensitive(title, p));
+                .any(|p| browser_url_pattern_matches(title, p));
             // See `browser_title_matches_pattern` for the matching rules.
             let title_match = !profile.app_identifiers.browser_title_patterns.is_empty() && {
                 let title_lower = title.to_lowercase();
@@ -3759,6 +3966,7 @@ mod tests {
             },
             call_signals: vec![],
             min_signals_required: 1,
+            ignore_window_titles: &[],
         }
     }
 
@@ -3816,6 +4024,178 @@ mod tests {
             &p,
             &terms
         ));
+    }
+
+    // ── Webex messaging-vs-meeting discrimination (#4145/#4337) ──────────
+    //
+    // Webex runs messaging and meetings under one process. The phantom meeting
+    // came from the messaging app-menu item "Leave the space"/"Leave the team"
+    // (role AXMenuItem, identifier `appMenuLeaveSpace`/`appMenuLeaveTeam`), which
+    // the over-broad `AutomationIdContains("leave")` signal matched. Real in-call
+    // controls carry locale-independent `callControl_*` ids (live-captured: the
+    // "End meeting" button is `callControl_end`). The fix narrows the automation-id
+    // signal to `callControl`, so the messaging menu item no longer matches while
+    // real meetings still do. The element attributes asserted below are the exact
+    // ones captured from a live Webex on macOS. The remaining `ignore_window_titles`
+    // guard is retained as defense-in-depth (see the profile comment).
+
+    /// The Webex profile as loaded in production.
+    fn webex_profile() -> MeetingDetectionProfile {
+        load_detection_profiles()
+            .into_iter()
+            .find(|p| p.app_identifiers.macos_app_names.contains(&"webex"))
+            .expect("webex profile present")
+    }
+
+    /// True if ANY of the profile's call signals match a single AX node. This is
+    /// the per-node decision the live tree-walk makes; combined with the window
+    /// guard it reproduces the per-window scan outcome.
+    fn any_signal_matches(
+        profile: &MeetingDetectionProfile,
+        role: &str,
+        title: Option<&str>,
+        desc: Option<&str>,
+        identifier: Option<&str>,
+    ) -> bool {
+        profile
+            .call_signals
+            .iter()
+            .any(|s| check_signal_match(s, role, title, desc, identifier))
+    }
+
+    #[test]
+    fn webex_profile_ignores_bare_webex_window_title() {
+        let p = webex_profile();
+        assert_eq!(
+            p.ignore_window_titles,
+            &["webex"],
+            "webex profile must guard the bare `Webex` messaging window"
+        );
+    }
+
+    #[test]
+    fn bare_webex_messaging_window_is_guarded() {
+        let p = webex_profile();
+        // Exact title, plus case/whitespace variants Webex/AX may report.
+        assert!(window_title_is_ignored(Some("Webex"), &p));
+        assert!(window_title_is_ignored(Some("webex"), &p));
+        assert!(window_title_is_ignored(Some("  Webex  "), &p));
+    }
+
+    #[test]
+    fn real_webex_meeting_window_is_not_guarded() {
+        let p = webex_profile();
+        // Real meeting windows carry the meeting/space name, never bare `Webex`.
+        assert!(!window_title_is_ignored(Some("Project Update Call"), &p));
+        assert!(!window_title_is_ignored(Some("VHM Calendar Hold"), &p));
+        // A title that merely *contains* "Webex" is a meeting, not the bare
+        // messaging window — exact-equality (not substring) keeps it detectable.
+        assert!(!window_title_is_ignored(Some("Webex Standup"), &p));
+        assert!(!window_title_is_ignored(Some("Cisco Webex Meeting"), &p));
+        // No readable title can't prove it's the messaging window.
+        assert!(!window_title_is_ignored(None, &p));
+        assert!(!window_title_is_ignored(Some(""), &p));
+    }
+
+    #[test]
+    fn webex_messaging_leave_menuitem_produces_no_signal() {
+        // THE FIX (live-captured): the messaging "Leave the space"/"Leave the
+        // team" affordance is an AXMenuItem with identifier `appMenuLeaveSpace`/
+        // `appMenuLeaveTeam` — NOT an AXButton. The old `AutomationIdContains
+        // ("leave")` matched its id and started a phantom meeting. With the signal
+        // narrowed to `callControl`, it produces NO signal — and note this holds
+        // at the signal level, independent of any window-title guard (the node has
+        // no window title at all, which is why the title guard alone never fixed it).
+        let p = webex_profile();
+        assert!(
+            !any_signal_matches(
+                &p,
+                "AXMenuItem",
+                Some("Leave the space"),
+                None,
+                Some("appMenuLeaveSpace"),
+            ),
+            "messaging 'Leave the space' menu item must NOT count as a call signal"
+        );
+        assert!(
+            !any_signal_matches(
+                &p,
+                "AXMenuItem",
+                Some("Leave the team"),
+                None,
+                Some("appMenuLeaveTeam"),
+            ),
+            "messaging 'Leave the team' menu item must NOT count as a call signal"
+        );
+    }
+
+    #[test]
+    fn real_webex_meeting_call_controls_are_detected() {
+        // A real meeting's in-call controls carry `callControl_*` ids. Detection
+        // must still fire — the fix must not silence real meetings.
+        let p = webex_profile();
+        // Host: "End meeting" button, identifier callControl_end (live-captured).
+        assert!(
+            any_signal_matches(
+                &p,
+                "AXButton",
+                Some("End meeting"),
+                None,
+                Some("callControl_end"),
+            ),
+            "host 'End meeting' control (callControl_end) must be detected"
+        );
+        // Participant: a leave control with a callControl_* id.
+        assert!(
+            any_signal_matches(
+                &p,
+                "AXButton",
+                Some("Leave meeting"),
+                None,
+                Some("callControl_leave"),
+            ),
+            "participant leave control (callControl_*) must be detected"
+        );
+        // Even without a callControl id, the role-constrained AXButton name
+        // fallback catches a leave/end button (English locale).
+        assert!(
+            any_signal_matches(&p, "AXButton", Some("Leave Meeting"), None, None),
+            "AXButton named 'Leave Meeting' must be detected via the name fallback"
+        );
+    }
+
+    #[test]
+    fn webex_messaging_open_during_meeting_still_detects_meeting() {
+        // Both open at once: the messaging menu item contributes no signal (it is
+        // excluded at the signal level), while the meeting's call control fires —
+        // so the process is correctly in a call.
+        let p = webex_profile();
+        let messaging_signal = any_signal_matches(
+            &p,
+            "AXMenuItem",
+            Some("Leave the space"),
+            None,
+            Some("appMenuLeaveSpace"),
+        );
+        let meeting_signal = any_signal_matches(
+            &p,
+            "AXButton",
+            Some("End meeting"),
+            None,
+            Some("callControl_end"),
+        );
+        assert!(!messaging_signal, "messaging must contribute no signal");
+        assert!(meeting_signal, "meeting call control must be detected");
+    }
+
+    #[test]
+    fn window_title_guard_is_noop_for_profiles_without_ignore_list() {
+        // Every other profile has an empty ignore list, so the guard never
+        // suppresses their windows.
+        let zoom = zoom_test_profile();
+        assert!(zoom.ignore_window_titles.is_empty());
+        assert!(!window_title_is_ignored(Some("Zoom Meeting"), &zoom));
+        assert!(!window_title_is_ignored(Some("anything"), &zoom));
     }
 
     // ── AttrNeeds tests ────────────────────────────────────────────────
@@ -4229,13 +4609,105 @@ mod tests {
             .expect("generic fallback profile present")
     }
 
-    /// Mirrors the lowercase substring match used by `has_browser_meeting_url`
-    /// and `db_find_browser_meetings`.
+    /// Exercises the production matcher used by `browser_window_matches_meeting`
+    /// / `has_browser_meeting_url` / `db_find_browser_meetings` so these tests
+    /// validate the real host-boundary logic, not a stand-in.
     fn url_matches_any_pattern(url: &str, patterns: &[&str]) -> bool {
-        let url_lower = url.to_lowercase();
-        patterns
-            .iter()
-            .any(|p| url_lower.contains(&p.to_lowercase()))
+        patterns.iter().any(|p| browser_url_pattern_matches(url, p))
+    }
+
+    #[test]
+    fn test_url_boundary_matcher_host_patterns() {
+        // A bare host pattern matches the host and its subdomains, but never a
+        // longer label that merely ends with the same letters.
+        for hit in [
+            "daily.co",
+            "https://daily.co",
+            "https://daily.co/room/abc",
+            "https://app.daily.co/room",
+            "https://my.team.daily.co/x",
+        ] {
+            assert!(
+                browser_url_pattern_matches(hit, "daily.co"),
+                "{hit:?} should match host pattern daily.co"
+            );
+        }
+        for miss in [
+            "https://www.thedaily.com",
+            "https://thedaily.com/news",
+            "https://dailywire.com",
+            "https://daily.com",   // different TLD
+            "https://daily.co.uk", // different (longer) domain
+            "https://notdaily.co.uk",
+        ] {
+            assert!(
+                !browser_url_pattern_matches(miss, "daily.co"),
+                "{miss:?} must NOT match host pattern daily.co (substring leak)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_url_boundary_matcher_path_qualified() {
+        for hit in [
+            "https://app.cal.com/video/uid",
+            "https://cal.com/video/8f3e",
+            "https://cal.com/video", // exact, no trailing segment
+        ] {
+            assert!(
+                browser_url_pattern_matches(hit, "cal.com/video"),
+                "{hit:?} should match cal.com/video"
+            );
+        }
+        for miss in [
+            "https://cal.com/videos", // /video is not a prefix component
+            "https://cal.com/pricing",
+            "https://app.cal.com/event-types",
+            "https://thecal.com/video", // host label extended on the left
+        ] {
+            assert!(
+                !browser_url_pattern_matches(miss, "cal.com/video"),
+                "{miss:?} must NOT match cal.com/video"
+            );
+        }
+    }
+
+    #[test]
+    fn test_url_boundary_matcher_keeps_freetext_markers() {
+        // Non-host patterns (space / no dot) keep substring behavior so existing
+        // free-text markers aren't silently disabled.
+        assert!(browser_url_pattern_matches(
+            "some Zoom Meeting in progress",
+            "zoom meeting"
+        ));
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_daily_co_lookalike() {
+        // The concrete vector this PR closes: daily.co (a bare host pattern) must
+        // not match thedaily.com / dailywire.com, while real daily.co calls do.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        assert!(
+            patterns.contains(&"daily.co"),
+            "fixture: daily.co host pattern present"
+        );
+        for miss in [
+            "https://www.thedaily.com",
+            "https://thedaily.com/podcast",
+            "https://dailywire.com/news",
+        ] {
+            assert!(
+                !url_matches_any_pattern(miss, patterns),
+                "{miss:?} should NOT match a meeting profile (daily.co substring leak)"
+            );
+        }
+        for hit in ["https://daily.co/standup", "https://app.daily.co/room/x"] {
+            assert!(
+                url_matches_any_pattern(hit, patterns),
+                "real Daily call {hit:?} should still match"
+            );
+        }
     }
 
     #[test]
@@ -4611,6 +5083,49 @@ mod tests {
             MeetingState::Ending { meeting_id: 42, .. }
         ));
         assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_active_no_controls_with_audio_stays_active() {
+        // Regression guard for the Active⇌Ending flap on audio-sustained
+        // meetings: when controls are absent but output audio is still flowing,
+        // advance_state must keep the meeting Active (not bounce through Ending).
+        // Mirrors handle_no_apps_running's audio guard. Without this, a minimized
+        // / tab-switched call flaps once per scan interval.
+        let state = MeetingState::Active {
+            meeting_id: 42,
+            app: "Google Chrome".to_string(),
+            started_at: Utc::now(),
+            last_seen: Instant::now(),
+            is_browser: true,
+        };
+        let results: Vec<ScanResult> = vec![];
+        let (new_state, action) = advance_state(state, &results, true);
+        assert!(
+            matches!(
+                new_state,
+                MeetingState::Active {
+                    meeting_id: 42,
+                    is_browser: true,
+                    ..
+                }
+            ),
+            "audio-sustained meeting with no controls must stay Active, got {new_state:?}"
+        );
+        assert!(action.is_none());
+
+        // And re-running many times must never leave Active or end the meeting —
+        // i.e. zero flaps across a long no-controls-but-audio window.
+        let mut state = new_state;
+        for scan in 0..20 {
+            let (next, action) = advance_state(state, &[], true);
+            assert!(
+                matches!(next, MeetingState::Active { meeting_id: 42, .. }),
+                "scan {scan}: must remain Active with audio flowing, got {next:?}"
+            );
+            assert!(action.is_none(), "scan {scan}: must not emit an action");
+            state = next;
+        }
     }
 
     #[test]

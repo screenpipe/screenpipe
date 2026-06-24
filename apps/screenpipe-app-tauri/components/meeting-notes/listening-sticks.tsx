@@ -83,9 +83,13 @@ export function ListeningSticks({
     );
   }
 
-  // Keep a visible floor so the pause between words never reads as "stopped".
+  // Keep a lively floor so silence — or a missing/zero level reading, which is
+  // the common case — still reads as "listening", matching the constant wave
+  // the other indicators use. With the old 0.35 floor the level-driven
+  // bottom-left indicator collapsed to ~35% height and looked frozen whenever
+  // audio levels weren't flowing.
   const amplitude =
-    level == null ? 0.75 : 0.35 + 0.65 * Math.max(0, Math.min(1, level));
+    level == null ? 0.75 : 0.7 + 0.3 * Math.max(0, Math.min(1, level));
 
   return (
     <span

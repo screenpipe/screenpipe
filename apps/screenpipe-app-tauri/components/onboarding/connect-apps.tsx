@@ -9,6 +9,7 @@ import { Check, Loader, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { getClaudeConfigPath } from "@/lib/hooks/use-hardcoded-tiles";
 import { localFetch } from "@/lib/api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { readTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
@@ -136,19 +137,10 @@ async function installCursorMcp(): Promise<void> {
 }
 
 // Claude Desktop
-async function getClaudeMcpConfigPath(): Promise<string> {
-  const home = await homeDir();
-  const os = platform();
-  console.log("[claude-mcp] platform:", os, "home:", home);
-  if (os === "windows") {
-    return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
-  }
-  return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
-}
-
 async function isClaudeMcpInstalled(): Promise<boolean> {
   try {
-    const configPath = await getClaudeMcpConfigPath();
+    const configPath = await getClaudeConfigPath();
+    if (!configPath) return false;
     console.log("[claude-mcp] checking install at:", configPath);
     const content = await readTextFile(configPath);
     return !!JSON.parse(content)?.mcpServers?.screenpipe;
@@ -159,7 +151,8 @@ async function isClaudeMcpInstalled(): Promise<boolean> {
 }
 
 async function installClaudeMcp(): Promise<void> {
-  const configPath = await getClaudeMcpConfigPath();
+  const configPath = await getClaudeConfigPath();
+  if (!configPath) throw new Error("unsupported platform");
   console.log("[claude-mcp] installing to:", configPath);
   const config = await readMcpConfig(configPath);
   console.log("[claude-mcp] existing config:", JSON.stringify(config));

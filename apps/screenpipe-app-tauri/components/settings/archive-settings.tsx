@@ -18,7 +18,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Lock, CloudUpload, AlertTriangle, Loader2, Play } from "lucide-react";
+import {
+  Lock,
+  CloudUpload,
+  AlertTriangle,
+  Loader2,
+  Play,
+  Download,
+  FolderOpen,
+  CheckCircle2,
+} from "lucide-react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
 import { localFetch } from "@/lib/api";
@@ -36,6 +45,22 @@ interface ArchiveStatus {
   chunks_uploaded: number;
   media_files_uploaded: number;
   media_files_pending: number;
+}
+
+interface DownloadProgress {
+  running: boolean;
+  done: boolean;
+  output_dir: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  total_blobs: number;
+  blobs_downloaded: number;
+  files_written: number;
+  media_files: number;
+  metadata_files: number;
+  bytes_written: number;
+  error: string | null;
+  warnings: string[];
 }
 
 const RETENTION_OPTIONS = [
@@ -73,6 +98,8 @@ export function ArchiveSettings() {
   const [status, setStatus] = useState<ArchiveStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [download, setDownload] = useState<DownloadProgress | null>(null);
+  const [startingDownload, setStartingDownload] = useState(false);
 
   const isProUser = settings.user?.cloud_subscribed === true;
   const isLoggedIn = !!settings.user?.token;
@@ -98,6 +125,89 @@ export function ArchiveSettings() {
     const interval = setInterval(fetchStatus, pollMs);
     return () => clearInterval(interval);
   }, [archiveEnabled, fetchStatus, status?.is_uploading]);
+
+  const fetchDownloadProgress = useCallback(async () => {
+    try {
+      const res = await localFetch("/archive/download/status");
+      if (res.ok) {
+        setDownload(await res.json());
+      }
+    } catch {
+      // server may not be running
+    }
+  }, []);
+
+  // Load any in-progress download once, then poll only while it's running.
+  useEffect(() => {
+    fetchDownloadProgress();
+  }, [fetchDownloadProgress]);
+
+  useEffect(() => {
+    if (!download?.running) return;
+    const interval = setInterval(fetchDownloadProgress, 2000);
+    return () => clearInterval(interval);
+  }, [download?.running, fetchDownloadProgress]);
+
+  const handleDownload = async () => {
+    if (!isLoggedIn) return;
+    setStartingDownload(true);
+    try {
+      const res = await localFetch("/archive/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // No output_dir — the backend dumps to <data>/archive-export.
+        body: JSON.stringify({ token: settings.user?.token }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "failed to start download");
+      }
+      toast({
+        title: "Downloading your archive",
+        description: "This can take a while for large archives.",
+      });
+      // Optimistically flip to running so polling kicks in immediately.
+      setDownload((d) => ({
+        ...(d ?? {
+          done: false,
+          output_dir: null,
+          started_at: null,
+          finished_at: null,
+          total_blobs: 0,
+          blobs_downloaded: 0,
+          files_written: 0,
+          media_files: 0,
+          metadata_files: 0,
+          bytes_written: 0,
+          error: null,
+          warnings: [],
+        }),
+        running: true,
+        done: false,
+        error: null,
+      }));
+      setTimeout(fetchDownloadProgress, 1000);
+    } catch (error) {
+      toast({
+        title: "Download error",
+        description: String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setStartingDownload(false);
+    }
+  };
+
+  const openDownloadFolder = async () => {
+    if (!download?.output_dir) return;
+    // shell `open` is scoped to http/mailto/tel — use the reveal command for
+    // a local folder path (runs `open -R` / explorer `/select`).
+    try {
+      await commands.revealInDefaultBrowser(download.output_dir);
+    } catch {
+      toast({ title: "Could not open folder", variant: "destructive" });
+    }
+  };
 
   // Persist archive settings to the Rust-readable store key so the backend
   // can auto-initialize on startup without needing the frontend.
@@ -426,13 +536,113 @@ export function ArchiveSettings() {
         </Card>
       )}
 
+      {/* Download / export — get archived data back as files */}
+      <Card>
+        <CardContent className="px-4 py-3 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-0.5">
+              <p className="text-sm text-foreground">Download my archive</p>
+              <p className="text-xs text-muted-foreground">
+                Save a copy of everything you&apos;ve archived to the cloud as
+                files on this computer.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!isLoggedIn || startingDownload || download?.running}
+              onClick={handleDownload}
+            >
+              {startingDownload || download?.running ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : (
+                <Download className="h-3 w-3 mr-1.5" />
+              )}
+              {download?.running ? "Downloading…" : "Download"}
+            </Button>
+          </div>
+
+          {/* Live progress */}
+          {download?.running && (
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Progress</span>
+              <span className="text-foreground">
+                {download.files_written.toLocaleString()} files
+                {download.total_blobs > 0 && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    / ~{download.total_blobs.toLocaleString()}
+                  </span>
+                )}{" "}
+                ({formatBytes(download.bytes_written)})
+              </span>
+            </div>
+          )}
+
+          {/* Finished — data written */}
+          {download &&
+            !download.running &&
+            download.done &&
+            !download.error &&
+            download.files_written > 0 && (
+              <>
+                <div className="flex items-center gap-1.5 text-sm text-foreground">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                  <span>
+                    Downloaded {download.files_written.toLocaleString()} files (
+                    {formatBytes(download.bytes_written)})
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={openDownloadFolder}
+                >
+                  <FolderOpen className="h-3 w-3 mr-1.5" />
+                  Open folder
+                </Button>
+              </>
+            )}
+
+          {/* Finished — nothing to download */}
+          {download &&
+            !download.running &&
+            download.done &&
+            !download.error &&
+            download.files_written === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No archived data found in the cloud yet.
+              </p>
+            )}
+
+          {/* Error */}
+          {download?.error && (
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{download.error}</span>
+            </div>
+          )}
+
+          {/* Non-fatal warnings */}
+          {download &&
+            !download.running &&
+            download.warnings.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {download.warnings.length} warning(s) — some data may be
+                incomplete.
+              </p>
+            )}
+        </CardContent>
+      </Card>
+
       {/* Warning */}
       {archiveEnabled && (
         <div className="flex items-start gap-2 text-xs text-muted-foreground">
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
           <span>
-            Local data older than {retentionDays} days is deleted after upload.
-            Download is not yet available.
+            Local data older than {retentionDays} days is deleted after upload —
+            use &quot;Download my archive&quot; above to get it back as files.
           </span>
         </div>
       )}

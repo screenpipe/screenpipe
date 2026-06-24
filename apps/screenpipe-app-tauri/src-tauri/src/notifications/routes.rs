@@ -44,6 +44,34 @@ fn pipe_notifications_enabled_from_extra(
         .unwrap_or(true)
 }
 
+/// Whether `pipe_name` sits in `notificationPrefs.mutedPipes`. Missing list /
+/// parse failure → not muted (fail-open). An empty / whitespace name never
+/// matches. This is what makes the per-pipe toggles in Settings actually
+/// suppress alerts instead of being a cosmetic list.
+fn pipe_muted(app: &AppHandle, pipe_name: &str) -> bool {
+    let settings = match SettingsStore::get(app) {
+        Ok(Some(s)) => s,
+        _ => return false,
+    };
+    pipe_muted_from_extra(&settings.extra, pipe_name)
+}
+
+/// Pure helper split out for unit testing.
+fn pipe_muted_from_extra(
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+    pipe_name: &str,
+) -> bool {
+    if pipe_name.trim().is_empty() {
+        return false;
+    }
+    extra
+        .get("notificationPrefs")
+        .and_then(|p| p.get("mutedPipes"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().any(|v| v.as_str() == Some(pipe_name)))
+        .unwrap_or(false)
+}
+
 /// `POST /notify` — show a notification panel and persist to disk.
 pub async fn send_notification(
     State(state): State<ServerState>,
@@ -89,6 +117,24 @@ pub async fn send_notification(
         .unwrap_or_else(|| "pipe".to_string());
     let source = resolve_notification_source_metadata(&payload, &headers, &panel_id);
 
+    // Delivery gate (master-off / snooze / quiet hours): drop the alert here so
+    // it never writes history either. Announcements returned above are
+    // first-party product comms and exempt; `capture_stall` is the critical
+    // recording-stopped alert and also exempt (see `gate`).
+    // `show_notification_panel` enforces the same gate for the direct callers
+    // that skip this route.
+    if super::gate::suppressed_now(
+        &state.app_handle,
+        Some(resolved_type.as_str()),
+        source.pipe_name.as_deref(),
+    ) {
+        debug!("notify: skipped (notifications paused — master/snooze/quiet)");
+        return Ok(Json(ApiResponse {
+            success: true,
+            message: "notifications paused".to_string(),
+        }));
+    }
+
     // Gate pipe-typed alerts behind the `Pipe notifications` toggle.
     // Other types (`system`, `captureStalls`, …) self-gate upstream
     // before they reach `/notify`, so we let them through here to
@@ -101,6 +147,20 @@ pub async fn send_notification(
             success: true,
             message: "pipe notifications disabled".to_string(),
         }));
+    }
+
+    // Per-pipe mute: a pipe the user silenced individually in Settings. Applies
+    // whenever the notification resolves to a pipe name (not just `type=pipe`),
+    // so muting a pipe suppresses anything it emits. Fail-open if the list is
+    // missing or malformed.
+    if let Some(name) = source.pipe_name.as_deref() {
+        if pipe_muted(&state.app_handle, name) {
+            debug!("notify: skipped (pipe '{}' muted)", name);
+            return Ok(Json(ApiResponse {
+                success: true,
+                message: "pipe muted".to_string(),
+            }));
+        }
     }
 
     // Rewrite file-path markdown links to screenpipe://view?path=… so they
@@ -434,6 +494,41 @@ mod tests {
             "pipeNotifications": true,
         }));
         assert!(pipe_notifications_enabled_from_extra(&extra));
+    }
+
+    // ── per-pipe mute ────────────────────────────────────────────────
+    #[test]
+    fn pipe_not_muted_when_list_missing() {
+        let extra = extra_with(json!({ "pipeNotifications": true }));
+        assert!(!pipe_muted_from_extra(&extra, "daily-digest"));
+    }
+
+    #[test]
+    fn pipe_muted_when_in_list() {
+        let extra = extra_with(json!({ "mutedPipes": ["daily-digest", "noisy-pipe"] }));
+        assert!(pipe_muted_from_extra(&extra, "noisy-pipe"));
+        assert!(pipe_muted_from_extra(&extra, "daily-digest"));
+    }
+
+    #[test]
+    fn pipe_not_muted_when_not_in_list() {
+        let extra = extra_with(json!({ "mutedPipes": ["noisy-pipe"] }));
+        assert!(!pipe_muted_from_extra(&extra, "daily-digest"));
+    }
+
+    #[test]
+    fn empty_pipe_name_never_muted() {
+        let extra = extra_with(json!({ "mutedPipes": ["", "  "] }));
+        assert!(!pipe_muted_from_extra(&extra, ""));
+        assert!(!pipe_muted_from_extra(&extra, "   "));
+    }
+
+    #[test]
+    fn pipe_mute_ignores_non_string_entries() {
+        // Malformed list (numbers, nulls) shouldn't panic or false-match.
+        let extra = extra_with(json!({ "mutedPipes": [1, null, "real-pipe"] }));
+        assert!(pipe_muted_from_extra(&extra, "real-pipe"));
+        assert!(!pipe_muted_from_extra(&extra, "1"));
     }
 
     fn notify_payload(surface: Option<&str>) -> NotifyPayload {

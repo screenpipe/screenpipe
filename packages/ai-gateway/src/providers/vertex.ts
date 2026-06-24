@@ -9,7 +9,7 @@
  */
 
 import { AIProvider } from './base';
-import { RequestBody } from '../types';
+import { RequestBody, Env } from '../types';
 
 // Service account credentials structure
 interface ServiceAccountCredentials {
@@ -38,6 +38,52 @@ export function resetTokenCache() {
 	tokenCache = null;
 }
 
+/**
+ * Workload Identity Federation config. When present, VertexAIProvider
+ * authenticates KEYLESSLY: the Worker self-signs a short-lived OIDC JWT, swaps
+ * it at Google STS for a federated token, then impersonates `saEmail`. This
+ * lets Vertex traffic bill a GCP project whose org policy forbids SA keys
+ * (screenpipe-prod). The legacy SA-key path stays the default fallback.
+ */
+export interface WifConfig {
+	signingKey: string; // PKCS#8 PEM private key (the OIDC signing key)
+	kid: string;
+	issuer: string; // JWT `iss` — must equal the provider's issuerUri
+	jwtAudience: string; // JWT `aud` — must be in the provider's allowedAudiences
+	subject: string; // JWT `sub` — mapped to google.subject, gated by the SA binding
+	stsAudience: string; // //iam.googleapis.com/projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+	saEmail: string; // service account to impersonate
+	projectId: string; // GCP project the Vertex calls bill to (screenpipe-prod). When
+	// WIF is active, callers use this instead of VERTEX_PROJECT_ID so a single
+	// VERTEX_AUTH_MODE flip switches auth + project + SA atomically (no split window).
+}
+
+/**
+ * Build the WIF config from env, or `undefined` when WIF is off (the default,
+ * so behavior is unchanged until `VERTEX_AUTH_MODE=wif` + a signing key are set).
+ * Fixed screenpipe-prod values are defaulted in code so cutover only needs the
+ * flag, the secret, and VERTEX_PROJECT_ID. See [[project_gateway_vertex_to_screenpipe_wif]].
+ */
+export function buildWifConfig(env: Env): WifConfig | undefined {
+	if ((env.VERTEX_AUTH_MODE || 'sakey') !== 'wif') return undefined;
+	if (!env.WIF_SIGNING_KEY) return undefined;
+	// screenpipe-prod is the WIF target (NOT VERTEX_PROJECT_ID, which stays = mediar
+	// for the sakey fallback). Baked-in default so cutover is a single flag flip.
+	const projectId = env.WIF_PROJECT_ID || 'calm-cab-490121-p6';
+	return {
+		signingKey: env.WIF_SIGNING_KEY,
+		kid: env.WIF_JWT_KID || 'sp-gateway-1',
+		issuer: env.WIF_JWT_ISSUER || 'https://api.screenpipe.com',
+		jwtAudience: env.WIF_JWT_AUDIENCE || 'screenpipe-vertex-gateway',
+		subject: env.WIF_JWT_SUBJECT || 'gateway',
+		stsAudience:
+			env.WIF_STS_AUDIENCE ||
+			'//iam.googleapis.com/projects/7048263620/locations/global/workloadIdentityPools/screenpipe/providers/cf-worker',
+		saEmail: env.WIF_SA_EMAIL || `vertex-gateway@${projectId}.iam.gserviceaccount.com`,
+		projectId,
+	};
+}
+
 export class VertexAIProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -46,11 +92,13 @@ export class VertexAIProvider implements AIProvider {
 	private credentials: ServiceAccountCredentials;
 	private projectId: string;
 	private region: string;
+	private wif?: WifConfig;
 
-	constructor(serviceAccountJson: string, projectId: string, region: string = 'us-east5') {
+	constructor(serviceAccountJson: string, projectId: string, region: string = 'us-east5', wif?: WifConfig) {
 		this.credentials = JSON.parse(serviceAccountJson);
 		this.projectId = projectId || this.credentials.project_id;
 		this.region = region;
+		this.wif = wif;
 	}
 
 	/**
@@ -131,6 +179,13 @@ export class VertexAIProvider implements AIProvider {
 			return tokenCache.accessToken;
 		}
 
+		// Keyless path: Workload Identity Federation (no SA key).
+		if (this.wif) {
+			const t = await this.getAccessTokenViaWif(this.wif);
+			tokenCache = t;
+			return t.accessToken;
+		}
+
 		// Generate new token
 		const jwt = await this.generateJWT();
 
@@ -159,6 +214,54 @@ export class VertexAIProvider implements AIProvider {
 		};
 
 		return data.access_token;
+	}
+
+	/**
+	 * Keyless token via Workload Identity Federation:
+	 *   1. self-sign a short-lived OIDC JWT (the Worker's signing key)
+	 *   2. exchange it at Google STS for a federated token
+	 *   3. impersonate the screenpipe SA to get a real access token
+	 * Verified end-to-end against screenpipe-prod 2026-06-22.
+	 */
+	private async getAccessTokenViaWif(w: WifConfig): Promise<TokenCache> {
+		const now = Math.floor(Date.now() / 1000);
+		const header = { alg: 'RS256', typ: 'JWT', kid: w.kid };
+		const payload = { iss: w.issuer, sub: w.subject, aud: w.jwtAudience, iat: now, exp: now + 600 };
+		const signatureInput = `${this.base64urlEncode(JSON.stringify(header))}.${this.base64urlEncode(JSON.stringify(payload))}`;
+		const oidcJwt = `${signatureInput}.${await this.signWithRSA(signatureInput, w.signingKey)}`;
+
+		// 1) STS token exchange (OAuth 2.0 token-exchange spec)
+		const stsResp = await fetch('https://sts.googleapis.com/v1/token', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams({
+				grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+				audience: w.stsAudience,
+				scope: 'https://www.googleapis.com/auth/cloud-platform',
+				requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+				subject_token: oidcJwt,
+				subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+			}),
+		});
+		if (!stsResp.ok) {
+			throw new Error(`WIF STS exchange failed: ${stsResp.status} ${await stsResp.text()}`);
+		}
+		const sts = (await stsResp.json()) as { access_token: string };
+
+		// 2) impersonate the service account
+		const impResp = await fetch(
+			`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${w.saEmail}:generateAccessToken`,
+			{
+				method: 'POST',
+				headers: { Authorization: `Bearer ${sts.access_token}`, 'Content-Type': 'application/json' },
+				body: JSON.stringify({ scope: ['https://www.googleapis.com/auth/cloud-platform'], lifetime: '3600s' }),
+			},
+		);
+		if (!impResp.ok) {
+			throw new Error(`WIF SA impersonation failed: ${impResp.status} ${await impResp.text()}`);
+		}
+		const imp = (await impResp.json()) as { accessToken: string; expireTime: string };
+		return { accessToken: imp.accessToken, expiresAt: Date.parse(imp.expireTime) };
 	}
 
 	/**
@@ -705,9 +808,10 @@ export async function proxyToVertex(
 	request: Request,
 	serviceAccountJson: string,
 	projectId: string,
-	region: string = 'us-east5'
+	region: string = 'us-east5',
+	wif?: WifConfig
 ): Promise<Response> {
-	const provider = new VertexAIProvider(serviceAccountJson, projectId, region);
+	const provider = new VertexAIProvider(serviceAccountJson, projectId, region, wif);
 
 	// Parse the request path to get the model
 	const url = new URL(request.url);

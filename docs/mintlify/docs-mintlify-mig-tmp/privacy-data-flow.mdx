@@ -38,7 +38,7 @@ flowchart LR
 | connected app proxy | yes | requests go to the connected third-party API |
 | cloud media analysis | yes, if enabled | media snippets can be sent to the configured enclave/provider |
 | PII filter enclave | yes, for enclave mode | text is processed in the confidential enclave |
-| cloud archive or remote sync | yes, if enabled | encrypted data is uploaded or synced to your target |
+| cloud archive (remote sync is deprecated) | yes, if enabled | encrypted data is uploaded to your archive target |
 | feedback/log bundle | only when you send it | diagnostic logs you submit for support |
 
 ## local storage
@@ -63,14 +63,16 @@ flowchart LR
 | LAN access | settings -> privacy |
 | cloud media analysis | settings -> privacy |
 | AI PII removal | settings -> privacy |
-| retention and delete range | settings -> storage or data APIs |
-| archive | cloud archive settings |
+| retention mode (media / lean / all) | settings -> storage or data APIs |
+| delete range and compact database | settings -> storage or data APIs |
+| archive / download my archive | settings -> storage |
 | team sharing | settings -> team |
 
 ## PII removal modes
 
 | mode | what happens |
 | --- | --- |
+| text redaction at rest | detected PII is redacted in stored text columns on-device, not only at AI-query time |
 | local text model | text is redacted locally before selected AI workflows use it |
 | local image model | screenshots can be redacted locally when image PII is enabled |
 | enclave mode | text is sent to a confidential enclave designed not to persist data |

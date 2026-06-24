@@ -243,10 +243,71 @@ pub async fn find_api_auth_key() -> Option<String> {
 /// `auth_token` module (`apps/screenpipe-app-tauri/src-tauri/src/auth_token.rs`).
 const CLOUD_AUTH_TOKEN_KEY: &str = "cloud.auth_token";
 
-/// Read the cloud auth token from the shared encrypted SecretStore.
-/// Returns `None` if absent or unreadable (e.g. keychain access denied).
+/// Read the cloud auth token. Priority:
+///   1. The shared encrypted SecretStore key `cloud.auth_token` — written by
+///      the desktop app (`auth_token.rs`).
+///   2. Fallback: `store.bin` `settings.user.token` — where the `screenpipe
+///      login` CLI persists the token. The desktop app is the only writer of
+///      the SecretStore key, so without this fallback a CLI-only / headless
+///      login (e.g. `screenpipe login` on a VPS, no app) leaves the engine
+///      with no cloud token and cloud features like the `/v1/chat/completions`
+///      proxy stay disabled — exactly the "screenpipe on the go" case.
+/// Returns `None` if neither source has a usable token.
 pub async fn find_cloud_token(data_dir: &Path) -> Option<String> {
-    let store = open_secret_store(data_dir).await.ok()?;
-    let bytes = store.get(CLOUD_AUTH_TOKEN_KEY).await.ok()??;
-    String::from_utf8(bytes).ok().filter(|s| !s.is_empty())
+    if let Ok(store) = open_secret_store(data_dir).await {
+        if let Ok(Some(bytes)) = store.get(CLOUD_AUTH_TOKEN_KEY).await {
+            if let Some(tok) = String::from_utf8(bytes).ok().filter(|s| !s.is_empty()) {
+                return Some(tok);
+            }
+        }
+    }
+    cloud_token_from_store_json(data_dir)
+}
+
+/// Read the cloud token from `store.bin`'s `settings.user.token` (the location
+/// the `screenpipe login` CLI writes). Skips app-managed encrypted stores
+/// (SPSTORE1 magic) — those resolve via the SecretStore path instead.
+fn cloud_token_from_store_json(data_dir: &Path) -> Option<String> {
+    let bytes = std::fs::read(data_dir.join("store.bin")).ok()?;
+    if bytes.starts_with(b"SPSTORE1") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.pointer("/settings/user/token")?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod cloud_token_tests {
+    use super::*;
+
+    #[test]
+    fn test_cloud_token_from_store_json() {
+        let dir = std::env::temp_dir().join(format!("sp-authkey-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // CLI-login style plaintext store.bin → token resolves.
+        std::fs::write(
+            dir.join("store.bin"),
+            r#"{"settings":{"user":{"token":"jwt-abc-123","email":"x@y.z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cloud_token_from_store_json(&dir).as_deref(),
+            Some("jwt-abc-123")
+        );
+
+        // App-managed encrypted store → None (SecretStore path handles it).
+        std::fs::write(dir.join("store.bin"), b"SPSTORE1\x00\x01junk").unwrap();
+        assert_eq!(cloud_token_from_store_json(&dir), None);
+
+        // Missing/empty token → None.
+        std::fs::write(dir.join("store.bin"), r#"{"settings":{"user":{}}}"#).unwrap();
+        assert_eq!(cloud_token_from_store_json(&dir), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

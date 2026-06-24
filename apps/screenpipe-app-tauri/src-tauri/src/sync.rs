@@ -397,10 +397,16 @@ pub async fn init_sync(
         if is_new_user { "new" } else { "existing" }
     );
 
-    // Save password to persistent store for auto-init on restart
+    // Persist the master password to the encrypted SecretStore (always
+    // keychain-encrypted) rather than as base64 in store.bin. CloudSyncSettings
+    // keeps only the enabled flag for auto-start; the password lives in the
+    // secret store under the same key the engine reads.
+    if let Err(e) = crate::auth_token::store_sync_password(&password).await {
+        warn!("failed to persist sync password to secret store: {}", e);
+    }
     let cloud_settings = CloudSyncSettingsStore {
         enabled: true,
-        encrypted_password: BASE64.encode(password.as_bytes()),
+        encrypted_password: String::new(),
     };
     if let Err(e) = cloud_settings.save(&app) {
         warn!("failed to save cloud sync settings: {}", e);
@@ -458,7 +464,9 @@ pub async fn lock_sync(app: AppHandle, state: State<'_, SyncState>) -> Result<()
     }
     *state.enabled.write().await = false;
 
-    // Clear saved password
+    // Clear saved password (both the encrypted secret store and any legacy
+    // base64 copy in store.bin).
+    let _ = crate::auth_token::clear_sync_password().await;
     let cloud_settings = CloudSyncSettingsStore {
         enabled: false,
         encrypted_password: String::new(),
@@ -486,26 +494,64 @@ pub async fn lock_sync(app: AppHandle, state: State<'_, SyncState>) -> Result<()
 /// Auto-start cloud sync on app launch if previously enabled.
 /// Called from main.rs during startup.
 pub async fn auto_start_sync(app: &AppHandle, state: &SyncState) {
-    // Only auto-start if user previously enabled sync and saved a password
-    let password = match CloudSyncSettingsStore::get(app) {
-        Ok(Some(s)) if s.enabled && !s.encrypted_password.is_empty() => {
-            match BASE64.decode(&s.encrypted_password) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        warn!("cloud sync: saved password is not valid UTF-8");
-                        return;
-                    }
-                },
-                Err(_) => {
-                    warn!("cloud sync: saved password is not valid base64");
+    // Only auto-start if the user previously enabled sync.
+    let settings = match CloudSyncSettingsStore::get(app) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            info!("cloud sync: no settings found, skipping auto-start");
+            return;
+        }
+        Err(e) => {
+            warn!("cloud sync: failed to read settings: {}", e);
+            return;
+        }
+    };
+    if !settings.enabled {
+        info!("cloud sync: not enabled, skipping auto-start");
+        return;
+    }
+
+    // Resolve the master password. Prefer the encrypted SecretStore; fall back
+    // to the legacy base64 copy in store.bin and migrate it (one-time) so the
+    // password is no longer kept as base64 outside the keychain-encrypted store.
+    let password = match crate::auth_token::load_sync_password().await {
+        Some(p) => p,
+        None => {
+            if settings.encrypted_password.is_empty() {
+                info!("cloud sync: enabled but no saved password, skipping auto-start");
+                return;
+            }
+            let legacy = match BASE64
+                .decode(&settings.encrypted_password)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+            {
+                Some(p) => p,
+                None => {
+                    warn!("cloud sync: saved password is not valid base64/UTF-8");
                     return;
                 }
+            };
+            // Migrate into the encrypted SecretStore and drop the base64 copy.
+            // On failure, keep the legacy copy so the next launch can retry
+            // rather than losing the password entirely.
+            match crate::auth_token::store_sync_password(&legacy).await {
+                Ok(()) => {
+                    let cleaned = CloudSyncSettingsStore {
+                        enabled: true,
+                        encrypted_password: String::new(),
+                    };
+                    let _ = cleaned.save(app);
+                    info!("cloud sync: migrated saved password from store.bin to the encrypted secret store");
+                }
+                Err(e) => {
+                    warn!(
+                        "cloud sync: failed to migrate password to secret store: {}",
+                        e
+                    );
+                }
             }
-        }
-        _ => {
-            info!("cloud sync: not enabled, skipping auto-start");
-            return;
+            legacy
         }
     };
 

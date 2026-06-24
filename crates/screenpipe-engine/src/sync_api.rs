@@ -48,6 +48,11 @@ pub struct SyncRuntimeState {
     pub last_error: Arc<RwLock<Option<String>>>,
     /// Cursor for downloads — only fetch blobs newer than this
     pub last_download_at: Arc<RwLock<Option<String>>>,
+    /// Whether the OCR/Transcripts/Accessibility upload service is active.
+    /// `false` for runtimes started by the lazy connection-sync path (no screen
+    /// data egress); flipped to `true` when an explicit `/sync/init` upgrades a
+    /// connection-only runtime to full data sync.
+    pub blob_upload_enabled: Arc<RwLock<bool>>,
 }
 
 /// Thread-safe container for optional runtime sync state
@@ -89,10 +94,60 @@ pub async fn sync_init(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SyncInitRequest>,
 ) -> Result<JsonResponse<SyncInitResponse>, (StatusCode, JsonResponse<Value>)> {
-    // Check if already initialized
+    sync_init_inner(state, request, true)
+        .await
+        .map(JsonResponse)
+}
+
+/// Build the sync runtime (manager + background upload/download/connection/
+/// memory loops) and store it in `AppState.sync_state`.
+///
+/// Shared by the `/sync/init` handler (app-driven, password from the desktop
+/// store) and the lazy [`ensure_sync_runtime`] path (engine-driven, password
+/// from the encrypted secret store) so connection/memory sync can initialize
+/// itself instead of returning "sync not initialized".
+///
+/// `blob_upload` controls whether the OCR/Transcripts/Accessibility upload
+/// service runs. The `/sync/init` path (explicit data-sync intent) passes
+/// `true`; the lazy connection-sync path passes `false`, so enabling credential
+/// sync never starts uploading screen data. A later explicit `/sync/init`
+/// upgrades a connection-only runtime in place — see the already-initialized
+/// branch below.
+async fn sync_init_inner(
+    state: Arc<AppState>,
+    request: SyncInitRequest,
+    blob_upload: bool,
+) -> Result<SyncInitResponse, (StatusCode, JsonResponse<Value>)> {
+    // Already initialized? Either no-op (409) or, when an explicit /sync/init
+    // asks for blob upload and the live runtime is connection-only (started by
+    // the lazy path with upload off), upgrade it in place instead of erroring.
     {
         let sync_state = state.sync_state.read().await;
-        if sync_state.is_some() {
+        if let Some(rt) = sync_state.as_ref() {
+            let already_uploading = *rt.blob_upload_enabled.read().await;
+            if blob_upload && !already_uploading {
+                info!("sync: upgrading connection-only runtime to full blob upload");
+                *rt.blob_upload_enabled.write().await = true;
+                let cfg = SyncServiceConfig {
+                    enabled: true,
+                    sync_interval_secs: request.sync_interval_secs.unwrap_or(300),
+                    sync_types: vec![
+                        BlobType::Ocr,
+                        BlobType::Transcripts,
+                        BlobType::Accessibility,
+                    ],
+                    max_blobs_per_cycle: 10,
+                    sync_on_startup: true,
+                };
+                let _ = rt.service_handle.update_config(cfg).await;
+                let _ = rt.service_handle.resume().await;
+                let _ = rt.service_handle.sync_now().await;
+                return Ok(SyncInitResponse {
+                    success: true,
+                    is_new_user: false,
+                    machine_id: rt.machine_id.clone(),
+                });
+            }
             return Err((
                 StatusCode::CONFLICT,
                 JsonResponse(json!({"error": "sync already initialized"})),
@@ -138,15 +193,20 @@ pub async fn sync_init(
 
     let manager = Arc::new(manager);
 
-    // Create sync data provider
-    let provider = Arc::new(ScreenpipeSyncProvider::new(
-        state.db.clone(),
-        machine_id.clone(),
-    ));
+    // Create sync data provider. Gate uploads on the user's per-type toggles so
+    // disabling OCR/transcript sync actually stops those uploads (the toggles
+    // were previously cosmetic against this loop).
+    let provider = Arc::new(
+        ScreenpipeSyncProvider::new(state.db.clone(), machine_id.clone())
+            .with_sync_gating(state.screenpipe_dir.clone()),
+    );
 
-    // Create sync service config
+    // Create sync service config. `blob_upload` gates whether screen-data
+    // (OCR/Transcripts/Accessibility) is uploaded at all — the lazy
+    // connection-sync path passes false so credential sync never starts
+    // uploading screen data.
     let service_config = SyncServiceConfig {
-        enabled: true,
+        enabled: blob_upload,
         sync_interval_secs: request.sync_interval_secs.unwrap_or(300),
         sync_types: vec![
             BlobType::Ocr,
@@ -154,7 +214,7 @@ pub async fn sync_init(
             BlobType::Accessibility,
         ],
         max_blobs_per_cycle: 10,
-        sync_on_startup: true,
+        sync_on_startup: blob_upload,
     };
 
     // Create and start service
@@ -176,6 +236,7 @@ pub async fn sync_init(
         last_sync: Arc::new(RwLock::new(None)),
         last_error: Arc::new(RwLock::new(None)),
         last_download_at: Arc::new(RwLock::new(None)),
+        blob_upload_enabled: Arc::new(RwLock::new(blob_upload)),
     };
 
     // Spawn event handler (upload events only)
@@ -398,11 +459,133 @@ pub async fn sync_init(
     // Store in app state
     *state.sync_state.write().await = Some(runtime_state);
 
-    Ok(JsonResponse(SyncInitResponse {
+    Ok(SyncInitResponse {
         success: true,
         is_new_user,
         machine_id,
-    }))
+    })
+}
+
+/// Secret-store key holding the auto-generated sync master password.
+///
+/// The password is an implementation detail — it derives the E2E master key
+/// but is never shown to or typed by the user. Persisting it here (encrypted)
+/// keeps it stable across restarts and consistent between the app-driven
+/// `/sync/init` path and the engine-driven [`ensure_sync_runtime`] path.
+const SYNC_MASTER_PASSWORD_KEY: &str = "sync.master_password";
+
+/// Generate a strong random password (256-bit, hex-encoded) used to derive the
+/// sync master key. Uses the sync crypto RNG so we add no new dependency.
+fn generate_sync_password() -> String {
+    let a = screenpipe_core::sync::generate_salt();
+    let b = screenpipe_core::sync::generate_salt();
+    a.iter()
+        .chain(b.iter())
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
+}
+
+/// Lazily initialize the sync runtime if it isn't already running.
+///
+/// Connection- and memory-sync endpoints used to hard-fail with
+/// "sync not initialized" whenever the app hadn't already POSTed `/sync/init`
+/// — e.g. when the user enabled "connection sync across devices" from the
+/// account page, which flips a setting and calls `/sync/connections/*` but
+/// never triggers init. This resolves the cloud token + an auto-managed master
+/// password from the encrypted secret store and initializes sync in-engine, so
+/// no user-facing password is ever required.
+///
+/// Returns `Ok(())` once sync is initialized, or a structured error when the
+/// user isn't signed in, has no subscription, or the stored password can't
+/// unlock pre-existing server keys.
+pub async fn ensure_sync_runtime(
+    state: &Arc<AppState>,
+) -> Result<(), (StatusCode, JsonResponse<Value>)> {
+    // Fast path: already initialized.
+    if state.sync_state.read().await.is_some() {
+        return Ok(());
+    }
+
+    // Serialize concurrent first-time inits so we don't spawn duplicate sync
+    // loops or race two `/init` posts.
+    static INIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = INIT_LOCK.lock().await;
+    if state.sync_state.read().await.is_some() {
+        return Ok(());
+    }
+
+    // Resolve the cloud auth token: freshest in-memory handle first, then the
+    // shared encrypted secret store as a fallback.
+    let token = {
+        let in_mem = (**state.cloud_token.load()).clone();
+        match in_mem.filter(|t| !t.is_empty()) {
+            Some(t) => t,
+            None => crate::auth_key::find_cloud_token(&state.screenpipe_dir)
+                .await
+                .unwrap_or_default(),
+        }
+    };
+    if token.is_empty() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            JsonResponse(
+                json!({"error": "not signed in: cloud sync requires a logged-in account"}),
+            ),
+        ));
+    }
+
+    // The encrypted secret store is the source of truth for the auto-managed
+    // master password (survives restarts; consistent across app/engine paths).
+    let secret_store = state.secret_store.as_ref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": "secret store unavailable; cannot manage sync password"})),
+        )
+    })?;
+
+    let existing = match secret_store.get(SYNC_MASTER_PASSWORD_KEY).await {
+        Ok(Some(bytes)) => String::from_utf8(bytes).unwrap_or_default(),
+        _ => String::new(),
+    };
+    let password = if existing.is_empty() {
+        let generated = generate_sync_password();
+        if let Err(e) = secret_store
+            .set(SYNC_MASTER_PASSWORD_KEY, generated.as_bytes())
+            .await
+        {
+            error!("failed to persist sync master password: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": "failed to persist sync password"})),
+            ));
+        }
+        generated
+    } else {
+        existing
+    };
+
+    let machine_id = screenpipe_core::sync::get_or_create_machine_id();
+
+    let request = SyncInitRequest {
+        token,
+        password,
+        machine_id: Some(machine_id),
+        sync_interval_secs: Some(300),
+    };
+
+    // blob_upload = false: connection/credential sync only. Enabling credential
+    // sync must never start uploading OCR/transcripts/accessibility to the
+    // cloud — that requires an explicit /sync/init (data-sync intent), which
+    // upgrades this runtime in place.
+    match sync_init_inner(state.clone(), request, false).await {
+        Ok(_) => {
+            info!("sync auto-initialized (lazy) for connection/memory sync");
+            Ok(())
+        }
+        // A concurrent caller initialized first — fine.
+        Err((StatusCode::CONFLICT, _)) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Response for sync status.
@@ -637,6 +820,11 @@ pub async fn sync_connections_push(
 ) -> Result<JsonResponse<ConnectionsSyncResponse>, (StatusCode, JsonResponse<Value>)> {
     use screenpipe_core::connections::sync::*;
 
+    // Lazily initialize sync if the app never POSTed /sync/init (e.g. the user
+    // toggled "connection sync across devices" from the account page). No
+    // user-facing password is required — the master password is auto-managed.
+    ensure_sync_runtime(&state).await?;
+
     let sync_state = state.sync_state.read().await;
     let runtime = sync_state.as_ref().ok_or_else(|| {
         (
@@ -679,6 +867,11 @@ pub async fn sync_connections_pull(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<ConnectionsSyncResponse>, (StatusCode, JsonResponse<Value>)> {
     use screenpipe_core::connections::sync::*;
+
+    // Lazily initialize sync if the app never POSTed /sync/init (e.g. the user
+    // toggled "connection sync across devices" from the account page). No
+    // user-facing password is required — the master password is auto-managed.
+    ensure_sync_runtime(&state).await?;
 
     let sync_state = state.sync_state.read().await;
     let runtime = sync_state.as_ref().ok_or_else(|| {
@@ -1127,15 +1320,23 @@ fn is_connections_sync_enabled(screenpipe_dir: &std::path::Path) -> bool {
 /// Returns false on any failure (missing file, corrupt JSON, missing key).
 /// Shared with pipe sync to keep both feature toggles consistent.
 fn is_settings_bool_enabled(screenpipe_dir: &std::path::Path, key: &str) -> bool {
-    let store_path = screenpipe_dir.join("store.bin");
-    let content = match std::fs::read_to_string(&store_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let store: serde_json::Value = match serde_json::from_str(&content) {
+    // Use the keychain-decrypting store reader: store.bin is SPSTORE1-encrypted
+    // when the user enabled store encryption, and a plaintext read_to_string +
+    // serde parse silently fails on it — returning false for EVERY toggle, which
+    // silently disabled background connection/pipe/memory sync for those users.
+    let store = match crate::cli::store_file::read_store_for(screenpipe_dir) {
         Ok(v) => v,
         Err(_) => return false,
     };
+    settings_bool(&store, key)
+}
+
+/// Pure predicate: read `settings.<key>` as a bool from a decoded store, false
+/// if the key is missing or not a bool. Split out from the (possibly
+/// encrypted) store read so tests can exercise it against a store decoded with
+/// an injected key — see `is_settings_bool_enabled` for why the read path
+/// matters (B1: encrypted stores silently disabled background sync).
+fn settings_bool(store: &serde_json::Value, key: &str) -> bool {
     store
         .get("settings")
         .and_then(|s| s.get(key))
@@ -1613,6 +1814,103 @@ mod tests {
         // Should be empty initially
         let guard = state.try_read().unwrap();
         assert!(guard.is_none());
+    }
+
+    #[test]
+    fn test_generate_sync_password() {
+        let a = generate_sync_password();
+        let b = generate_sync_password();
+        // Two SALT_SIZE (32-byte) salts hex-encoded => 128 chars, all hex.
+        assert_eq!(a.len(), 128);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        // Random: two generations must not collide.
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_is_settings_bool_enabled_reads_store() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+
+        // Missing store → false.
+        assert!(!is_settings_bool_enabled(
+            dir.path(),
+            "connectionsSyncEnabled"
+        ));
+
+        // Plaintext store via the keychain-aware reader.
+        let store = serde_json::json!({
+            "settings": { "connectionsSyncEnabled": true, "pipeSyncEnabled": false }
+        });
+        let mut f = std::fs::File::create(dir.path().join("store.bin")).unwrap();
+        f.write_all(serde_json::to_string(&store).unwrap().as_bytes())
+            .unwrap();
+
+        assert!(is_settings_bool_enabled(
+            dir.path(),
+            "connectionsSyncEnabled"
+        ));
+        assert!(!is_settings_bool_enabled(dir.path(), "pipeSyncEnabled"));
+        // Absent key → false.
+        assert!(!is_settings_bool_enabled(dir.path(), "memoriesSyncEnabled"));
+    }
+
+    /// Pure-predicate edge cases for `settings.<key>`: missing `settings`,
+    /// missing key, and a non-bool value all read as `false`.
+    #[test]
+    fn test_settings_bool_predicate_edges() {
+        // No `settings` object at all.
+        assert!(!settings_bool(
+            &serde_json::json!({}),
+            "connectionsSyncEnabled"
+        ));
+        // `settings` present, key absent.
+        assert!(!settings_bool(
+            &serde_json::json!({ "settings": { "other": true } }),
+            "connectionsSyncEnabled"
+        ));
+        // Non-bool value (e.g. a string "true") is not treated as enabled.
+        assert!(!settings_bool(
+            &serde_json::json!({ "settings": { "connectionsSyncEnabled": "true" } }),
+            "connectionsSyncEnabled"
+        ));
+        assert!(settings_bool(
+            &serde_json::json!({ "settings": { "connectionsSyncEnabled": true } }),
+            "connectionsSyncEnabled"
+        ));
+    }
+
+    /// End-to-end of the B1 fix: when store encryption is ON, `store.bin` is
+    /// SPSTORE1-encrypted and the OLD plaintext `read_to_string + serde` reader
+    /// silently failed — returning `false` for EVERY sync toggle and disabling
+    /// background connection/pipe/memory sync. This writes the encrypted form
+    /// and asserts every toggle is read correctly through the decrypting path.
+    /// Injected key → no system keychain needed (CI-safe).
+    #[test]
+    fn test_settings_toggles_read_through_encrypted_store() {
+        use crate::cli::store_file::{read_store_for_with_key, write_store_for_with_key};
+        let key = [9u8; 32];
+        let dir = tempfile::tempdir().unwrap();
+
+        let store = serde_json::json!({
+            "settings": {
+                "connectionsSyncEnabled": true,
+                "pipeSyncEnabled": true,
+                "memoriesSyncEnabled": false,
+            }
+        });
+        write_store_for_with_key(dir.path(), &store, true, || Ok(key)).unwrap();
+
+        // The encrypted layout must NOT be readable as plaintext JSON — this is
+        // exactly the condition the old reader choked on.
+        let raw = std::fs::read(dir.path().join("store.bin")).unwrap();
+        assert_eq!(&raw[..8], b"SPSTORE1");
+        assert!(serde_json::from_slice::<serde_json::Value>(&raw).is_err());
+
+        let decoded = read_store_for_with_key(dir.path(), || Ok(key)).unwrap();
+        assert!(settings_bool(&decoded, "connectionsSyncEnabled"));
+        assert!(settings_bool(&decoded, "pipeSyncEnabled"));
+        assert!(!settings_bool(&decoded, "memoriesSyncEnabled"));
     }
 
     #[test]

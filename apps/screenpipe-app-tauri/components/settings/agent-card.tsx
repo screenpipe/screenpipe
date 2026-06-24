@@ -155,7 +155,7 @@ export type AgentCardProps = {
   iconSrc: string;
   description: string;
   homepage?: string;
-  mcp: { format: "json" | "yaml"; configPath: string; snippet: string };
+  mcp: { format: "json" | "yaml" | "toml"; configPath: string; snippet: string };
   /** One or more installable screenpipe skills (e.g. API + CLI). First is shown by default. */
   skills: SkillVariant[];
   sync: {
@@ -1100,18 +1100,25 @@ export function AgentCard({
 
         <div className="px-4 pb-4">
           <Tabs defaultValue="mcp" className="w-full">
-            <TabsList className={`grid w-full h-8 ${connect ? "grid-cols-4" : "grid-cols-3"}`}>
+            <TabsList
+              className="grid w-full h-8"
+              style={{
+                gridTemplateColumns: `repeat(${2 + (skills.length > 0 ? 1 : 0) + (connect ? 1 : 0)}, minmax(0, 1fr))`,
+              }}
+            >
               <TabsTrigger value="mcp" className="text-xs">MCP</TabsTrigger>
-              <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
+              {skills.length > 0 && <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>}
               <TabsTrigger value="sync" className="text-xs">Sync (remote)</TabsTrigger>
               {connect && <TabsTrigger value="connect" className="text-xs">Connect</TabsTrigger>}
             </TabsList>
             <TabsContent value="mcp" className="mt-3">
               <McpSection name={name} mcp={mcp} />
             </TabsContent>
-            <TabsContent value="skill" className="mt-3">
-              <SkillSection name={name} skills={skills} />
-            </TabsContent>
+            {skills.length > 0 && (
+              <TabsContent value="skill" className="mt-3">
+                <SkillSection name={name} skills={skills} />
+              </TabsContent>
+            )}
             <TabsContent value="sync" className="mt-3">
               <RemoteSyncSection agentName={name} sync={sync} />
             </TabsContent>

@@ -395,13 +395,19 @@ impl DatabaseManager {
         &self,
         speaker_id: i64,
     ) -> Result<Vec<AudioChunksResponse>, sqlx::Error> {
+        // Select exactly the columns AudioChunksResponse expects. Using `ac.*`
+        // here is a bug: the chunk id column is `id`, not `audio_chunk_id`, so
+        // sqlx fails to map rows with "no column found for name: audio_chunk_id"
+        // — but ONLY when ≥1 row matches (an empty result never inspects
+        // columns). That made deleting any speaker with local audio chunks 500.
         sqlx::query_as::<_, AudioChunksResponse>(
             r#"
             SELECT
-                ac.*,
+                ac.id AS audio_chunk_id,
                 at.start_time,
                 at.end_time,
-                ac.file_path
+                ac.file_path,
+                ac.timestamp
             FROM audio_chunks ac
             JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
             WHERE at.speaker_id = ?

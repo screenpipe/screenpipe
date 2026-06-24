@@ -755,6 +755,11 @@ impl SCServer {
             .post("/archive/configure", crate::archive::archive_configure)
             .get("/archive/status", crate::archive::archive_status)
             .post("/archive/run", crate::archive::archive_run)
+            .post("/archive/download", crate::archive::archive_download)
+            .get(
+                "/archive/download/status",
+                crate::archive::archive_download_status,
+            )
             // Local data retention (auto-delete old data)
             .post(
                 "/retention/configure",

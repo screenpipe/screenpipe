@@ -48,23 +48,6 @@ once configured, Continue can access your screen history:
 > what documentation was I reading about react hooks?
 ```
 
-## context providers
-
-Continue also supports context providers. you can add screenpipe as a custom context provider for more control:
-
-```json
-{
-  "contextProviders": [
-    {
-      "name": "screenpipe",
-      "params": {
-        "apiUrl": "http://localhost:3030"
-      }
-    }
-  ]
-}
-```
-
 ## example workflows
 
 **code with context:**
@@ -89,8 +72,14 @@ Continue also supports context providers. you can add screenpipe as a custom con
 
 via MCP, Continue gets access to:
 
-- **search-content** - search accessibility-first screen text, audio transcriptions, and input events
-- **export-video** - create video exports from screen recordings
+| tool | description |
+|------|-------------|
+| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | search structured UI elements from the accessibility tree |
+| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | list detected meetings with duration, app, and attendees |
+| `export-video` | export screen recordings as MP4 for a time range |
 
 ## requirements
 

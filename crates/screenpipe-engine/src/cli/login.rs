@@ -47,7 +47,10 @@ pub async fn handle_login_command() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let poll_url = format!("{}/api/cli-auth?code={}", base, code);
 
-    let timeout = std::time::Duration::from_secs(300); // 5 min timeout
+    // 15 min. Headless device-code approval (copy the URL to your phone/another
+    // machine, sign in, approve) routinely takes longer than 5 min — the old
+    // limit timed out before a real approval landed on a fresh VPS login.
+    let timeout = std::time::Duration::from_secs(900);
     let start = std::time::Instant::now();
 
     print!("  waiting for authentication...");

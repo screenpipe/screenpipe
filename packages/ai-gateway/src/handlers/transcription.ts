@@ -69,7 +69,7 @@ function parseLanguageValues(values: Array<string | null>): string[] {
   return languages;
 }
 
-function getTranscriptionLanguages(request: Request, fallback: string[] = []): string[] {
+export function getTranscriptionLanguages(request: Request, fallback: string[] = []): string[] {
   const url = new URL(request.url);
   const queryLanguages = parseLanguageValues([
     ...url.searchParams.getAll('language'),

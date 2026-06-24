@@ -14,7 +14,7 @@ icon: "terminal"
 before setting up, make sure screenpipe is running on your machine:
 
 ```bash
-npx screenpipe@latest record
+npx -y screenpipe@latest record
 ```
 
 check that it's running:
@@ -75,12 +75,12 @@ you should see `screenpipe` listed with its tools.
 
 | tool | description |
 |------|-------------|
-| `search-content` | search accessibility-first screen text, audio transcriptions, and input events with time/app filters |
-| `export-video` | create video exports from screen recordings |
-| `activity-summary` | compressed activity overview for a time range |
+| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | search structured UI elements from the accessibility tree |
+| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
 | `list-meetings` | list detected meetings with duration, app, and attendees |
-| `search-elements` | search structured UI elements (accessibility tree nodes and OCR text blocks) |
-| `frame-context` | get accessibility text, parsed tree nodes, and extracted URLs for a specific frame |
+| `export-video` | export screen recordings as MP4 for a time range |
 
 ## usage examples
 
@@ -122,7 +122,7 @@ ask Copilot CLI to use screenpipe naturally:
 
 ## requirements
 
-- screenpipe running on localhost:3030 (start with `npx screenpipe@latest record`)
+- screenpipe running on localhost:3030 (start with `npx -y screenpipe@latest record`)
 - GitHub Copilot CLI installed
 - Node.js >= 18.0.0
 
@@ -133,13 +133,13 @@ ask Copilot CLI to use screenpipe naturally:
 always invoke screenpipe with the `@latest` npm tag — it pulls the freshest build from npm each time:
 
 ```bash
-npx screenpipe@latest record
+npx -y screenpipe@latest record
 ```
 
 check the version you're running:
 
 ```bash
-npx screenpipe@latest --version
+npx -y screenpipe@latest --version
 ```
 
 **MCP not connecting?**

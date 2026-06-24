@@ -13,6 +13,7 @@ use screenpipe_core::sync::{BlobType, PendingBlob, SyncDataProvider, SyncError, 
 use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -144,16 +145,79 @@ pub struct UiEventSyncRecord {
 /// Current schema version for sync chunks
 pub const SCHEMA_VERSION: u32 = 2;
 
+/// Whether cloud sync is enabled for `blob_type`, per the user's per-type
+/// toggles in `<dir>/store.bin` → `sync_config`. Reads the (possibly encrypted)
+/// store on each call so changes take effect on the next cycle without re-init.
+///
+/// Fail-OPEN: returns `true` when gating is off (`None`), the type has no toggle,
+/// the key is absent, or the store can't be read — so existing data-sync users
+/// are never silently regressed.
+fn sync_data_type_enabled(gate_dir: Option<&std::path::Path>, blob_type: BlobType) -> bool {
+    let dir = match gate_dir {
+        Some(d) => d,
+        None => return true,
+    };
+    let store = match crate::cli::store_file::read_store_for(dir) {
+        Ok(v) => v,
+        Err(_) => return true,
+    };
+    sync_data_type_enabled_in(&store, blob_type)
+}
+
+/// Pure predicate: whether `blob_type` is enabled per a decoded store's
+/// `sync_config`. Split out from the (possibly encrypted) store read so tests
+/// can exercise the SPSTORE1-encrypted path with an injected key. Fail-OPEN:
+/// types without a toggle, an absent key, or a missing `sync_config` default to
+/// enabled so existing data-sync users are never silently regressed.
+fn sync_data_type_enabled_in(store: &serde_json::Value, blob_type: BlobType) -> bool {
+    // Map upload blob types to the UI's sync_config toggles. The accessibility
+    // tree is screen text, so it follows the OCR toggle.
+    let key = match blob_type {
+        BlobType::Ocr | BlobType::Accessibility => "syncOcr",
+        BlobType::Transcripts => "syncTranscripts",
+        _ => return true,
+    };
+    store
+        .get("sync_config")
+        .and_then(|c| c.get(key))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
 /// Data provider implementation for screenpipe database.
 pub struct ScreenpipeSyncProvider {
     db: Arc<DatabaseManager>,
     machine_id: String,
+    /// When set, OCR/Transcripts/Accessibility uploads are gated on the user's
+    /// per-type sync toggles (`<dir>/store.bin` → `sync_config`). Only the
+    /// upload provider sets this; the download/import and CLI providers leave
+    /// it `None` (no gating).
+    sync_gate_dir: Option<PathBuf>,
 }
 
 impl ScreenpipeSyncProvider {
     /// Create a new sync provider.
     pub fn new(db: Arc<DatabaseManager>, machine_id: String) -> Self {
-        Self { db, machine_id }
+        Self {
+            db,
+            machine_id,
+            sync_gate_dir: None,
+        }
+    }
+
+    /// Enable per-type upload gating, reading `<dir>/store.bin` → `sync_config`.
+    pub fn with_sync_gating(mut self, dir: PathBuf) -> Self {
+        self.sync_gate_dir = Some(dir);
+        self
+    }
+
+    /// Whether cloud sync is enabled for this blob type. Reads the (possibly
+    /// encrypted) store on each call so toggle changes take effect on the next
+    /// cycle without a re-init. Fail-OPEN: defaults to enabled when gating is
+    /// off, the key is absent, or the store can't be read, so existing
+    /// data-sync users are never silently regressed.
+    fn data_type_enabled(&self, blob_type: BlobType) -> bool {
+        sync_data_type_enabled(self.sync_gate_dir.as_deref(), blob_type)
     }
 
     /// Get unsynced frames and their OCR data for a time window.
@@ -809,6 +873,10 @@ impl SyncDataProvider for ScreenpipeSyncProvider {
         blob_type: BlobType,
         limit: usize,
     ) -> SyncResult<Vec<PendingBlob>> {
+        // Respect the user's per-type cloud-sync toggles (default on).
+        if !self.data_type_enabled(blob_type) {
+            return Ok(Vec::new());
+        }
         let chunk_result = match blob_type {
             BlobType::Ocr => self.get_unsynced_ocr_chunk(limit).await?,
             BlobType::Transcripts => self.get_unsynced_transcriptions_chunk(limit).await?,
@@ -865,6 +933,90 @@ pub struct ImportResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sync_data_type_gating() {
+        use std::io::Write;
+        // No gate dir → always enabled (download/CLI providers).
+        assert!(sync_data_type_enabled(None, BlobType::Ocr));
+        assert!(sync_data_type_enabled(None, BlobType::Transcripts));
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // No store.bin yet → fail-open (enabled), no regression.
+        assert!(sync_data_type_enabled(Some(dir.path()), BlobType::Ocr));
+
+        // Plaintext store with OCR off, transcripts on.
+        let store = serde_json::json!({
+            "sync_config": { "syncOcr": false, "syncTranscripts": true }
+        });
+        let mut f = std::fs::File::create(dir.path().join("store.bin")).unwrap();
+        f.write_all(serde_json::to_string(&store).unwrap().as_bytes())
+            .unwrap();
+
+        assert!(!sync_data_type_enabled(Some(dir.path()), BlobType::Ocr));
+        // Accessibility follows the OCR toggle.
+        assert!(!sync_data_type_enabled(
+            Some(dir.path()),
+            BlobType::Accessibility
+        ));
+        assert!(sync_data_type_enabled(
+            Some(dir.path()),
+            BlobType::Transcripts
+        ));
+        // Types without a toggle are always enabled.
+        assert!(sync_data_type_enabled(Some(dir.path()), BlobType::Input));
+    }
+
+    /// Fail-open coverage for the predicate: a `sync_config` that exists but is
+    /// missing the relevant key, or a missing `sync_config` entirely, must
+    /// default to enabled so existing data-sync users are never regressed.
+    #[test]
+    fn test_sync_data_type_predicate_fail_open() {
+        // Empty store object → enabled.
+        assert!(sync_data_type_enabled_in(
+            &serde_json::json!({}),
+            BlobType::Ocr
+        ));
+        // sync_config present but the toggle key is absent → enabled.
+        let partial = serde_json::json!({ "sync_config": { "syncTranscripts": false } });
+        assert!(sync_data_type_enabled_in(&partial, BlobType::Ocr));
+        assert!(!sync_data_type_enabled_in(&partial, BlobType::Transcripts));
+        // Non-bool toggle value → fall back to enabled, not panic.
+        let weird = serde_json::json!({ "sync_config": { "syncOcr": "nope" } });
+        assert!(sync_data_type_enabled_in(&weird, BlobType::Ocr));
+    }
+
+    /// End-to-end of the real on-disk shape when store encryption is ON: the
+    /// SPSTORE1-encrypted `store.bin` must decrypt and the per-type toggles must
+    /// be honored. Guards the B1 regression class (a plaintext-only reader
+    /// silently returns the fail-open default for encrypted stores). Uses an
+    /// injected key so the system keychain is never touched (CI-safe).
+    #[test]
+    fn test_sync_data_type_gating_encrypted_store() {
+        use crate::cli::store_file::{read_store_for_with_key, write_store_for_with_key};
+        let key = [7u8; 32];
+        let dir = tempfile::tempdir().unwrap();
+
+        let store = serde_json::json!({
+            "sync_config": { "syncOcr": false, "syncTranscripts": true }
+        });
+        // Write the encrypted (SPSTORE1) form, then read it back via the
+        // keychain-decrypting path with the same injected key.
+        write_store_for_with_key(dir.path(), &store, true, || Ok(key)).unwrap();
+
+        // Sanity: the on-disk bytes are actually encrypted, not plaintext JSON.
+        let raw = std::fs::read(dir.path().join("store.bin")).unwrap();
+        assert_eq!(&raw[..8], b"SPSTORE1");
+
+        let decoded = read_store_for_with_key(dir.path(), || Ok(key)).unwrap();
+        assert!(!sync_data_type_enabled_in(&decoded, BlobType::Ocr));
+        assert!(!sync_data_type_enabled_in(
+            &decoded,
+            BlobType::Accessibility
+        ));
+        assert!(sync_data_type_enabled_in(&decoded, BlobType::Transcripts));
+    }
 
     #[test]
     fn test_sync_chunk_serialization() {

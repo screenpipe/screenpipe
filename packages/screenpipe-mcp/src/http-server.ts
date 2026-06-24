@@ -185,7 +185,12 @@ const TOOLS = [
 // ── Tool handlers ───────────────────────────────────────────────────────
 
 function makeFetchAPI(screenpipePort: number) {
-  const base = `http://localhost:${screenpipePort}`;
+  // Honor SCREENPIPE_API_URL so the HTTP MCP can also front a remote screenpipe
+  // (set by `screenpipe agent setup --api-url`); falls back to the local port.
+  const base = (process.env.SCREENPIPE_API_URL || `http://localhost:${screenpipePort}`).replace(
+    /\/+$/,
+    "",
+  );
   return async (endpoint: string, options: RequestInit = {}): Promise<Response> =>
     fetch(`${base}${endpoint}`, {
       ...options,

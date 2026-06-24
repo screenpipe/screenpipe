@@ -69,7 +69,9 @@ curl "http://localhost:3030/search?q=deployment&app_name=Slack&content_type=all&
 | `browser_url` | string | filter by browser URL |
 | `min_length` | int | minimum text length |
 | `max_length` | int | maximum text length |
-| `max_content_length` | int | truncate each result's text to this many chars (middle-truncation) |
+| `max_content_length` | int | truncate each result's text to this many chars (middle-truncation); `0` returns the full text untruncated |
+| `frame_id` | int | restrict results to a single captured frame |
+| `include_related` | bool | also return content carrying co-occurring tags |
 
 ## using the desktop app
 
@@ -127,7 +129,7 @@ the desktop app offers two ways to find content:
 by default, the screenpipe API only listens on `127.0.0.1` (localhost). to access it from other devices on your LAN, start screenpipe with the `--listen-on-lan` flag:
 
 ```bash
-screenpipe --listen-on-lan
+npx -y screenpipe@latest --listen-on-lan
 ```
 
 this binds the server to `0.0.0.0`, making it reachable at `http://<your-machine-ip>:3030/`. note that `--listen-on-lan` automatically enables API authentication to protect your data on the network.
@@ -154,6 +156,6 @@ questions? [join our discord](https://discord.gg/screenpipe).
 
 ## get screenpipe
 
-screenpipe includes 24/7 screen recording, AI search, cloud sync, and more.
+screenpipe includes 24/7 screen recording, AI search, and more.
 
 [download screenpipe →](https://screenpi.pe/onboarding)

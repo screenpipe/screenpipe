@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tracing::info;
+use tracing::{debug, info};
 
 pub struct DeviceManager {
     streams: Arc<DashMap<AudioDevice, Arc<AudioStream>>>,
@@ -116,12 +116,26 @@ impl DeviceManager {
         Ok(())
     }
 
+    /// Stop a device and tear down its stream. **Idempotent**: a device that is
+    /// already marked not-running STILL drives stream teardown
+    /// (`AudioStream::stop` + removal from the map).
+    ///
+    /// Previously this early-returned `Err` on the already-stopped path, which
+    /// skipped teardown entirely. For the CoreAudio process-tap path that left
+    /// `is_disconnected` unflipped, so the tap-owning blocking thread looped
+    /// forever and the tap was orphaned — wedging `coreaudiod` system-wide
+    /// (#3942). The recovery monitor and `stop_device_recording` both mark a
+    /// device not-running *before* asking it to stop, hitting exactly that path,
+    /// so teardown must not depend on the running flag still being set.
     pub async fn stop_device(&self, device: &AudioDevice) -> Result<()> {
-        if !self.is_running(device) {
-            return Err(anyhow!("Device {} already stopped", device));
+        if self.is_running(device) {
+            info!("Stopping device: {device}");
+        } else {
+            debug!(
+                "stop_device({device}): already marked stopped — running teardown idempotently \
+                 so the stream (and any CoreAudio tap) is released, not orphaned"
+            );
         }
-
-        info!("Stopping device: {device}");
 
         if let Some(is_running) = self.states.get(device) {
             is_running.store(false, Ordering::Relaxed)
@@ -138,5 +152,68 @@ impl DeviceManager {
 
     pub fn is_running_mut(&self, device: &AudioDevice) -> Option<Arc<AtomicBool>> {
         self.states.get(device).map(|s| s.value().clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::device::DeviceType;
+    use crate::core::stream::AudioStream;
+
+    /// #3942 orphan vector: `stop_device` used to early-`Err` when the device
+    /// was already marked not-running, skipping stream teardown. For a CoreAudio
+    /// process-tap stream that left `is_disconnected` unflipped, so the
+    /// tap-owning thread looped forever and the tap was orphaned. Teardown must
+    /// run regardless of the running flag.
+    #[tokio::test]
+    async fn stop_device_drives_teardown_even_when_already_marked_stopped() {
+        let dm = DeviceManager::new(true, false, false).await.unwrap();
+        let device = AudioDevice::new(
+            "ScreenpipeProcessTap (input)".to_string(),
+            DeviceType::Input,
+        );
+
+        let (stream, _tx) = AudioStream::from_sender_for_test(Arc::new(device.clone()), 48_000, 1);
+        let stream = Arc::new(stream);
+
+        // Present but ALREADY marked not-running (the recovery-monitor /
+        // stop_device_recording state that previously bypassed teardown).
+        dm.states
+            .insert(device.clone(), Arc::new(AtomicBool::new(false)));
+        dm.streams.insert(device.clone(), stream.clone());
+
+        let res = dm.stop_device(&device).await;
+
+        assert!(
+            res.is_ok(),
+            "stop_device must be Ok (idempotent), got {res:?}"
+        );
+        assert!(
+            stream.is_disconnected(),
+            "teardown must flip is_disconnected so the tap thread can exit"
+        );
+        assert!(
+            dm.streams.get(&device).is_none(),
+            "the stream must be removed from the manager"
+        );
+    }
+
+    /// Regression guard: the normal running path still tears down and clears the
+    /// running flag.
+    #[tokio::test]
+    async fn stop_device_tears_down_running_device() {
+        let dm = DeviceManager::new(true, false, false).await.unwrap();
+        let device = AudioDevice::new("Test (input)".to_string(), DeviceType::Input);
+        let (stream, _tx) = AudioStream::from_sender_for_test(Arc::new(device.clone()), 48_000, 1);
+        let stream = Arc::new(stream);
+        dm.states
+            .insert(device.clone(), Arc::new(AtomicBool::new(true)));
+        dm.streams.insert(device.clone(), stream.clone());
+
+        assert!(dm.stop_device(&device).await.is_ok());
+        assert!(stream.is_disconnected());
+        assert!(dm.streams.get(&device).is_none());
+        assert!(!dm.is_running(&device), "running flag must be cleared");
     }
 }

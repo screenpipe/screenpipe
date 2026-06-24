@@ -294,7 +294,7 @@ function DayBlock({
   const rel = relativeDayLabel(date);
 
   return (
-    <div className="grid grid-cols-[64px_1fr] gap-5">
+    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-5">
       <div className="pt-1">
         <div className="text-3xl font-medium leading-none tracking-tight">
           {day}

@@ -203,6 +203,16 @@
       "notes": "Listener-order regression for metadata-only sidebar stubs gaining dedup keys."
     },
     {
+      "spec": "chat-sidebar-groups.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat", "chat-sidebar-groups"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Pipe auto-grouping (collapse, badge, expand/collapse, localStorage persistence) and manual sidebar groups (move-to-group, section headers, remove-from-group cleanup). 8 tests."
+    },
+    {
       "spec": "chat-parallel-jobs-duplicate.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
@@ -661,6 +671,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Account 'active' plan card is gated on the session token (token AND cloud_subscribed) like the header, so a tokenless-but-subscribed stale shell (post-#3943 secret-store token desync) renders 'not logged in' with the active card gone. Mocks /api/user across all windows and clears set_cloud_token to reproduce the desync deterministically."
+    },
+    {
+      "spec": "search-request-priority.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["home-search", "local-api-search"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Verifies keyword search request fires before secondary search, facet, and speaker requests."
     }
   ]
 }

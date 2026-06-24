@@ -9,7 +9,7 @@ import SwiftUI
 // MARK: - Data types bridged from Rust JSON
 
 struct NotificationAction: Codable {
-    let label: String
+    var label: String?
     // `action` was a required legacy field; many current callers send `id` + `type`
     // instead and omit it entirely, which was failing JSON decode and forcing
     // every notification with actions to fall back to the webview panel.
@@ -23,6 +23,11 @@ struct NotificationAction: Codable {
     var pipe: String?
     var context: [String: AnyCodable]?
     var url: String?
+    var value: String?
+    var source_url: String?
+    var sourceUrl: String?
+    var deeplink_url: String?
+    var deeplinkUrl: String?
     var method: String?
     var body: [String: AnyCodable]?
     var toast: String?
@@ -290,9 +295,26 @@ struct NotificationContentView: View {
                 HStack(spacing: 8) {
                     ForEach(Array(payload.actions.enumerated()), id: \.offset) { _, action in
                         BrandButton(
-                            label: action.label,
+                            label: actionLabel(action),
                             isPrimary: action.primary == true,
-                            action: { onAction(action) }
+                            action: {
+                                if action.type == "copy" {
+                                    var copyAction = action
+                                    if copyAction.value == nil {
+                                        copyAction.value = payload.body
+                                    }
+                                    copyActionText(copyAction)
+                                    copied = true
+                                    sendAction(copyAction)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                                        copied = false
+                                    }
+                                } else if action.type == "source" {
+                                    onAction(sourceActionWithFallback(action))
+                                } else {
+                                    onAction(action)
+                                }
+                            }
                         )
                     }
                     Spacer()
@@ -312,6 +334,7 @@ struct NotificationContentView: View {
                     help: "copy notification"
                 ) {
                     copyNotificationText()
+                    sendActionPayload(["type": "copy", "value": notificationClipboardText()])
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
                         copied = false
@@ -385,11 +408,64 @@ struct NotificationContentView: View {
         }
     }
 
-    private func copyNotificationText() {
-        let text = "\(payload.title)\n\n\(payload.body)".trimmingCharacters(in: .whitespacesAndNewlines)
+    private func sendActionPayload(_ payload: [String: String]) {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return
+        }
+        sendActionJson(json)
+    }
+
+    private func sendAction(_ action: NotificationAction) {
+        if let data = try? JSONEncoder().encode(action),
+           let json = String(data: data, encoding: .utf8) {
+            sendActionJson(json)
+        }
+    }
+
+    private func actionLabel(_ action: NotificationAction) -> String {
+        if let label = action.label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return label
+        }
+        switch action.type {
+        case "copy":
+            return copied ? "copied" : "copy"
+        case "source":
+            return "source"
+        case "deeplink":
+            return "open"
+        case "dismiss":
+            return "dismiss"
+        default:
+            return action.action ?? action.type ?? "action"
+        }
+    }
+
+    private func copyActionText(_ action: NotificationAction) {
+        let text = (action.value ?? payload.body).trimmingCharacters(in: .whitespacesAndNewlines)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+
+    private func sourceActionWithFallback(_ action: NotificationAction) -> NotificationAction {
+        var next = action
+        let source = action.url ?? action.source_url ?? action.sourceUrl ?? payload.source_url
+        next.url = source
+        next.source_url = source
+        return next
+    }
+
+    private func copyNotificationText() {
+        let text = notificationClipboardText()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    private func notificationClipboardText() -> String {
+        "\(payload.title)\n\n\(payload.body)".trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -862,9 +938,7 @@ class NotificationPanelController: NSObject {
             onOpenSource: { [weak self] in
                 guard let self = self, let url = payload.source_url else { return }
                 self.hide()
-                let escaped = url.replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                self.sendAction("{\"type\":\"deeplink\",\"url\":\"\(escaped)\"}")
+                self.sendActionPayload(["type": "source", "url": url])
             }
         )
         // Fixed width, height determined by content
@@ -928,6 +1002,15 @@ class NotificationPanelController: NSObject {
         if let cb = gActionCallback {
             json.withCString { cb($0) }
         }
+    }
+
+    private func sendActionPayload(_ payload: [String: String]) {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return
+        }
+        sendAction(json)
     }
 }
 

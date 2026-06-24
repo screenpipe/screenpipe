@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
-import { Archive, CheckSquare, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Undo2, X } from "lucide-react";
+import { Archive, CheckSquare, FolderOpen, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -36,6 +39,7 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { validateSidebarGroupName } from "@/lib/utils/chat-sidebar-grouping";
 
 type HistoryTab = "active" | "archived" | "all";
 
@@ -298,12 +302,60 @@ export function ChatHistoryView({
     [patchSidebarSession, visibleById]
   );
 
+  // Derive existing manual groups from loaded conversations for the
+  // "Move to group" submenu. Insertion order preserved.
+  const existingGroups = useMemo(() => {
+    const groups: string[] = [];
+    const seen = new Set<string>();
+    for (const c of conversations) {
+      const g = (c as any).sidebarGroup?.trim() as string | undefined;
+      if (g && !seen.has(g)) { seen.add(g); groups.push(g); }
+    }
+    return groups;
+  }, [conversations]);
+  const selectableExistingGroups = existingGroups;
+
+  // State for the "New group" dialog — stores the conversation id being moved.
+  const [newGroupSessionId, setNewGroupSessionId] = useState<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState("");
+
+  const handleMoveToGroup = useCallback(async (id: string, group: string | undefined) => {
+    let normalized: string | undefined;
+    if (group !== undefined) {
+      const validation = validateSidebarGroupName(group, {
+        existingGroups,
+      });
+      if (!validation.ok) {
+        toast({
+          title: "Invalid group name",
+          description: validation.message,
+          variant: "destructive",
+        });
+        return false;
+      }
+      normalized = validation.normalized;
+    }
+    try {
+      await updateConversationFlags(id, { sidebarGroup: normalized });
+      useChatStore.getState().actions.patch(id, { sidebarGroup: normalized });
+      await emit("chat-sidebar-group-changed", { id, sidebarGroup: normalized });
+    } catch {
+      // best-effort
+    }
+    void load();
+    return true;
+  }, [existingGroups, load]);
+
   const Row = ({ conv }: { conv: ConversationMeta }) => {
     const updatedAt = conv.updatedAt ? fmt.format(new Date(conv.updatedAt)) : "";
     const selected = selectedIds.has(conv.id);
     const selectionMode = selectedIds.size > 0;
     const rowPending = rowPendingIds.has(conv.id);
     const showCheckbox = selectionMode || selected;
+    const currentSidebarGroup = (conv as any).sidebarGroup as string | undefined;
+    const availableMoveGroups = selectableExistingGroups.filter(
+      (group) => group !== currentSidebarGroup,
+    );
     return (
       <div
         role="button"
@@ -462,6 +514,45 @@ export function ChatHistoryView({
                   <Pin className="h-3 w-3 text-muted-foreground" />
                   {conv.pinned ? "Unpin" : "Pin"}
                 </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30">
+                    <FolderOpen className="h-3 w-3 text-muted-foreground" />
+                    Move to group
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none">
+                    {availableMoveGroups.map((g) => (
+                        <DropdownMenuItem
+                          key={g}
+                          className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
+                          onSelect={() => void handleMoveToGroup(conv.id, g)}
+                        >
+                          {g}
+                        </DropdownMenuItem>
+                      ))}
+                    {currentSidebarGroup && (
+                      <>
+                        {availableMoveGroups.length > 0 && (
+                          <DropdownMenuSeparator className="my-1 bg-border/70" />
+                        )}
+                        <DropdownMenuItem
+                          className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
+                          onSelect={() => void handleMoveToGroup(conv.id, undefined)}
+                        >
+                          Remove from group
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                    {(availableMoveGroups.length > 0 || currentSidebarGroup) && (
+                      <DropdownMenuSeparator className="my-1 bg-border/70" />
+                    )}
+                    <DropdownMenuItem
+                      className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
+                      onSelect={() => setNewGroupSessionId(conv.id)}
+                    >
+                      New group...
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
                 {!conv.hidden ? (
                   <DropdownMenuItem
                     className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
@@ -864,6 +955,62 @@ export function ChatHistoryView({
               }}
             >
               {bulkPending === "deleting" ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!newGroupSessionId}
+        onOpenChange={(open) => {
+          if (!open) setNewGroupSessionId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New group</DialogTitle>
+            <DialogDescription>Enter a name for the sidebar group.</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <input
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const id = newGroupSessionId;
+                  if (!id) return;
+                  void (async () => {
+                    const ok = await handleMoveToGroup(id, newGroupName);
+                    if (!ok) return;
+                    setNewGroupSessionId(null);
+                    setNewGroupName("");
+                  })();
+                }
+              }}
+              autoFocus
+              className={cn(
+                "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
+                "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+              )}
+              placeholder="Group name"
+              aria-label="Group name"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setNewGroupSessionId(null); setNewGroupName(""); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                const id = newGroupSessionId;
+                if (!id) return;
+                const ok = await handleMoveToGroup(id, newGroupName);
+                if (!ok) return;
+                setNewGroupSessionId(null);
+                setNewGroupName("");
+              }}
+            >
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>

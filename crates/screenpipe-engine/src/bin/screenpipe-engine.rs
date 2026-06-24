@@ -294,6 +294,14 @@ async fn main() -> anyhow::Result<()> {
             handle_mcp_command(subcommand, &local_data_dir).await?;
             return Ok(());
         }
+        Command::Agent { ref subcommand } => {
+            screenpipe_engine::cli::agent::handle_agent_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Service { ref subcommand } => {
+            screenpipe_engine::cli::service::handle_service_command(subcommand).await?;
+            return Ok(());
+        }
         Command::Sync { ref subcommand } => {
             handle_sync_command(subcommand).await?;
             return Ok(());
@@ -396,10 +404,18 @@ async fn main() -> anyhow::Result<()> {
     let local_data_dir_clone = local_data_dir.clone();
 
     // Build unified RecordingConfig from shared app settings plus explicit CLI args.
-    let config = record_args
+    let mut config = record_args
         .clone()
         .into_recording_config(local_data_dir.clone(), &record_arg_sources)
         .await?;
+
+    // Force telemetry off in CI / automation (GitHub Actions, etc.) so test runs
+    // never reach Sentry/PostHog. Done here, before any telemetry is initialized,
+    // so the startup banner and the logging Sentry layer also reflect it.
+    if config.analytics_enabled && screenpipe_engine::analytics::telemetry_disabled_by_env() {
+        info!("telemetry force-disabled: detected CI / automation environment");
+        config.analytics_enabled = false;
+    }
 
     // mDNS LAN discovery is opt-in (off by default) so we don't trigger the
     // macOS "Local Network" permission prompt unless the user wants it.

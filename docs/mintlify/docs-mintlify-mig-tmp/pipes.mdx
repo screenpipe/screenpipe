@@ -459,8 +459,8 @@ for a production-style debugging flow, including logs, stuck runs, provider auth
 **solution**: the pipe agent needs to know which pipe it's executing. the context header includes `Pipe name: <name>` so the agent can identify itself. make sure:
 
 1. the pipe folder name matches the expected pipe name (e.g., `~/.screenpipe/pipes/my-pipe/`)
-2. the pipe is listed in `screenpipe pipe list`
-3. check logs: `screenpipe pipe logs my-pipe`
+2. the pipe is listed in `npx -y screenpipe@latest pipe list`
+3. check logs: `npx -y screenpipe@latest pipe logs my-pipe`
 
 ### pipe runs but produces empty output
 
@@ -471,7 +471,7 @@ for a production-style debugging flow, including logs, stuck runs, provider auth
 - write output files (e.g., to `./output/<date>.md`)
 - or send notifications (e.g., `POST http://localhost:11435/notify`)
 
-test locally first: `screenpipe pipe run my-pipe` to see logs before relying on scheduled execution.
+test locally first: `npx -y screenpipe@latest pipe run my-pipe` to see logs before relying on scheduled execution.
 
 ### windows task scheduler permission denied
 

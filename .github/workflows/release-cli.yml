@@ -533,6 +533,8 @@ jobs:
             libssl-dev \
             cmake \
             build-essential \
+            clang \
+            libclang-dev \
             libx11-dev \
             libxi-dev \
             libxext-dev \

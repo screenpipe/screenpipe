@@ -19,13 +19,33 @@ import * as os from "os";
 // Parse command line arguments
 const args = process.argv.slice(2);
 let port = 3030;
+let host = "localhost";
+let baseOverride: string | undefined;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" && args[i + 1]) {
     port = parseInt(args[i + 1], 10);
+  } else if (args[i] === "--screenpipe-host" && args[i + 1]) {
+    host = args[i + 1];
+  } else if (
+    (args[i] === "--screenpipe-url" || args[i] === "--screenpipe-api-url") &&
+    args[i + 1]
+  ) {
+    baseOverride = args[i + 1];
   }
 }
 
-const SCREENPIPE_API = `http://localhost:${port}`;
+// Resolve the screenpipe API base URL so this MCP can target a REMOTE
+// screenpipe (e.g. an agent on a VPS reading a synced copy of your data),
+// not just localhost. Priority:
+//   1. --screenpipe-url / --screenpipe-api-url flag
+//   2. SCREENPIPE_API_URL env (set by `screenpipe agent setup --api-url`)
+//   3. --screenpipe-host (+ --port) → http://host:port
+//   4. default http://localhost:<port>
+const SCREENPIPE_API = (
+  baseOverride ||
+  process.env.SCREENPIPE_API_URL ||
+  `http://${host}:${port}`
+).replace(/\/+$/, "");
 
 // Discover the local API key, in priority order:
 //
@@ -1137,6 +1157,16 @@ function normalizeTimeFields(
   return out;
 }
 
+// Zone label for a timestamp's HH:MM slice. The server serializes timestamps in
+// its LOCAL timezone (e.g. "...T09:03:44+05:30"), so the HH:MM is already local —
+// derive the label from the string's own offset instead of hardcoding "UTC"
+// (which mislabeled local times by the offset, e.g. "09:03 UTC" for 09:03+05:30).
+function zoneSuffix(iso: string): string {
+  const m = iso.match(/([+-]\d{2}:?\d{2})$/);
+  if (!m) return iso.endsWith("Z") ? " UTC" : "";
+  return m[1] === "+00:00" ? " UTC" : ` ${m[1]}`;
+}
+
 // Middle-truncate long strings: keep head + tail, mark the gap with how much
 // was cut. Used to cap OCR/transcription text in search-content responses
 // so a single call doesn't blow past Claude Code's per-tool output limit
@@ -1488,7 +1518,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }) => {
             const timeSpan =
               a.first_seen && a.last_seen
-                ? `, ${a.first_seen.slice(11, 16)}–${a.last_seen.slice(11, 16)} UTC`
+                ? `, ${a.first_seen.slice(11, 16)}–${a.last_seen.slice(11, 16)}${zoneSuffix(a.first_seen)}`
                 : "";
             return `  ${a.name}: ${a.minutes} min (${a.frame_count} frames${timeSpan})`;
           }

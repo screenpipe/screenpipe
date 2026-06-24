@@ -10,6 +10,7 @@
 //! parses configs, runs the scheduler, and delegates execution to an
 //! [`AgentExecutor`].
 
+pub mod connection_triggers;
 pub mod connections;
 pub mod favorites;
 pub mod mcp_access;
@@ -68,6 +69,54 @@ pub struct TriggerConfig {
     /// Reserved for v2 — currently parsed but not evaluated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom: Vec<String>,
+    /// Per-app "watch" triggers — run the pipe when a connected app produces a
+    /// new item (e.g. a new Obsidian note). Polled by the connection-trigger
+    /// watcher (see [`connection_triggers`]), which emits a `connection_trigger`
+    /// event the scheduler consumes. See [`SourceTrigger`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceTrigger>,
+}
+
+fn is_empty_str_map(m: &std::collections::HashMap<String, String>) -> bool {
+    m.is_empty()
+}
+
+/// A per-app "watch" trigger: fire the pipe when a connected app produces a new
+/// item. The watcher diffs against a persisted per-subscription cursor, so each
+/// item only fires once, and it initialises to "now" on first sight so enabling
+/// a trigger never replays the whole backlog.
+///
+/// Example frontmatter:
+/// ```yaml
+/// trigger:
+///   sources:
+///     - app: obsidian
+///       kind: note
+///       path: /Users/me/vault/meetings
+/// ```
+///
+/// The watcher writes the new items to `<pipe-dir>/.trigger-context.json` before
+/// firing, so the pipe prompt can read exactly what changed (cwd is the pipe dir).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceTrigger {
+    /// Connected app id, e.g. "obsidian". Apps the watcher can't poll yet are
+    /// ignored (no error), so a pipe can declare future sources safely.
+    pub app: String,
+    /// Item kind that fires the trigger (e.g. "note"). Defaults to the app's
+    /// primary kind when omitted.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// Account/instance id for multi-account apps. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    /// Filesystem path to watch for file-based sources (an Obsidian vault or a
+    /// sub-folder). Prefilled from the connection in the UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Per-app filters (e.g. `{"channel": "#support"}`). Reserved for API-based
+    /// sources; unused by file watchers.
+    #[serde(default, skip_serializing_if = "is_empty_str_map")]
+    pub filter: std::collections::HashMap<String, String>,
 }
 
 /// Declares a file that a pipe produces, surfaced in the Artifacts library.
@@ -3782,6 +3831,10 @@ impl PipeManager {
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
             // pipe_completed:* uses subscribe_to_all with prefix filtering below
             let mut pipe_completed_rx = screenpipe_events::subscribe_to_all_events();
+            // Per-app connection triggers (e.g. new Obsidian note). The watcher
+            // emits these addressed to a specific pipe — see connection_triggers.
+            let mut connection_trigger_rx =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("connection_trigger");
 
             // Circular chain detection: track recently-triggered pipe→pipe chains.
             // If A→B→A would fire, suppress the second link.
@@ -3845,6 +3898,22 @@ impl PipeManager {
                     while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
                         if is_pipe_completed_event(&e.name) {
                             pending_events.push((e.name, e.data));
+                        }
+                    }
+
+                    // connection_trigger events are addressed to a specific pipe
+                    // (the watcher already matched the source and wrote
+                    // .trigger-context.json), so fire that pipe directly — no
+                    // trigger.events string matching needed.
+                    while let Some(e) = connection_trigger_rx.next().now_or_never().flatten() {
+                        if let Some(target) = e.data.get("pipe").and_then(|v| v.as_str()) {
+                            for (name, config, _body) in &pipe_snapshot {
+                                if name == target && config.enabled {
+                                    info!("scheduler: connection trigger fired pipe '{}'", name);
+                                    last_run.remove(name);
+                                    event_triggered.insert(name.clone());
+                                }
+                            }
                         }
                     }
 
@@ -4609,7 +4678,114 @@ impl PipeManager {
         });
 
         self.scheduler_handle = Some(handle);
+        self.spawn_connection_trigger_watcher();
         Ok(())
+    }
+
+    /// Spawn the connection-trigger watcher alongside the scheduler. It polls
+    /// file-based `trigger.sources` (e.g. an Obsidian vault) and emits
+    /// `connection_trigger` events the scheduler consumes. Tied to the scheduler
+    /// lifecycle: it self-terminates on shutdown or scheduler-generation change,
+    /// so `stop_scheduler` needs no extra wiring.
+    fn spawn_connection_trigger_watcher(&self) {
+        let mut shutdown_rx = match self.shutdown_tx.as_ref() {
+            Some(tx) => tx.subscribe(),
+            None => return,
+        };
+        let pipes = self.pipes.clone();
+        let pipes_dir = self.pipes_dir.clone();
+        let generation_ref = self.scheduler_generation.clone();
+        let generation = generation_ref.load(std::sync::atomic::Ordering::SeqCst);
+        let api_base = format!("http://127.0.0.1:{}", self.api_port);
+        let api_key = self.local_api_key.clone();
+
+        tokio::spawn(async move {
+            let mut state = connection_triggers::WatcherState::load(&pipes_dir);
+            // Shared client with a short timeout so a hung connection proxy call
+            // can't stall the poll loop. API-poll sources (Slack/Notion) hit the
+            // local proxy on api_base; the file source (Obsidian) ignores it.
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default();
+            // Learn when fired pipe runs finish so we can commit (or retry) the
+            // cursor — this is what makes delivery at-least-once. pipe_completed:*
+            // events are named per pipe, so subscribe to all and prefix-filter.
+            use futures::{FutureExt, StreamExt};
+            let mut completed_rx = screenpipe_events::subscribe_to_all_events();
+            info!(
+                "connection-trigger watcher started (generation {})",
+                generation
+            );
+            // Let the scheduler subscribe to `connection_trigger` before the
+            // first poll can emit — otherwise a fire-on-startup (cursors already
+            // initialised from a prior run) could be dropped by the bus because
+            // no receiver exists yet.
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                _ = shutdown_rx.changed() => {}
+            }
+            loop {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+                if generation_ref.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                    break;
+                }
+
+                let snapshot: Vec<(String, PipeConfig)> = {
+                    let p = pipes.lock().await;
+                    p.iter()
+                        .map(|(n, (c, _, _))| (n.clone(), c.clone()))
+                        .collect()
+                };
+                // Drain pipe_completed:* events since the last tick.
+                let mut completions: Vec<(String, bool)> = Vec::new();
+                while let Some(e) = completed_rx.next().now_or_never().flatten() {
+                    if e.name.starts_with("pipe_completed:") {
+                        let pipe = e
+                            .data
+                            .get("pipe_name")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let success = e
+                            .data
+                            .get("success")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if let Some(pipe) = pipe {
+                            completions.push((pipe, success));
+                        }
+                    }
+                }
+                let ctx = connection_triggers::SourceCtx {
+                    http: &http,
+                    api_base: &api_base,
+                    api_key: api_key.as_deref(),
+                };
+                connection_triggers::poll_once(
+                    &pipes_dir,
+                    &snapshot,
+                    &mut state,
+                    &ctx,
+                    &completions,
+                )
+                .await;
+
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(
+                        connection_triggers::POLL_INTERVAL_SECS,
+                    )) => {}
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() { break; }
+                    }
+                }
+            }
+            info!(
+                "connection-trigger watcher exited (generation {})",
+                generation
+            );
+        });
     }
 
     /// Stop the scheduler. Signals shutdown, aborts the task, and waits for it
@@ -6938,6 +7114,7 @@ mod tests {
         config.trigger = Some(TriggerConfig {
             events: vec!["my_event".to_string()],
             custom: vec![],
+            sources: vec![],
         });
 
         // Also sneak it into the extras HashMap (simulating the bug)

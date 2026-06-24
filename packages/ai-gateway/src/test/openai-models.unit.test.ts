@@ -86,6 +86,41 @@ describe('OpenAI API model catalog', () => {
 	});
 });
 
+describe('tier locking in /v1/models', () => {
+	async function listedFor(tier: 'anonymous' | 'logged_in' | 'subscribed') {
+		const response = await handleModelListing(env(), tier);
+		const body = await response.json() as { data: Array<{ id: string; locked?: boolean }> };
+		return body.data;
+	}
+
+	it('marks marquee models locked for non-Business but still lists them', async () => {
+		const models = await listedFor('logged_in');
+		const sonnet = models.find(m => m.id === 'claude-sonnet-4-5');
+		const opus = models.find(m => m.id === 'claude-opus-4-8');
+		// present (not hidden) and flagged so the app can grey + upsell
+		expect(sonnet?.locked).toBe(true);
+		expect(opus?.locked).toBe(true);
+	});
+
+	it('leaves allowed models unlocked for non-Business', async () => {
+		const models = await listedFor('logged_in');
+		expect(models.find(m => m.id === 'auto')?.locked).toBeFalsy();
+		expect(models.find(m => m.id === 'claude-haiku-4-5')?.locked).toBeFalsy();
+	});
+
+	it('never locks anything for Business (subscribed)', async () => {
+		const models = await listedFor('subscribed');
+		expect(models.every(m => !m.locked)).toBe(true);
+	});
+
+	it('master kill-switch off → nothing locked even for logged_in', async () => {
+		const response = await handleModelListing(env({ MODEL_GATING_ENABLED: 'false' }), 'logged_in');
+		const body = await response.json() as { data: Array<{ locked?: boolean }> };
+		expect(body.data.length).toBeGreaterThan(0);
+		expect(body.data.every(m => !m.locked)).toBe(true);
+	});
+});
+
 describe('OpenAI API accounting and routing', () => {
 	async function readStream(stream: ReadableStream): Promise<string> {
 		const reader = stream.getReader();

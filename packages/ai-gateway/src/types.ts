@@ -154,6 +154,17 @@ export interface Env {
 	VERTEX_SERVICE_ACCOUNT_JSON: string;
 	VERTEX_PROJECT_ID: string;
 	VERTEX_REGION: string;
+	// Vertex auth mode: "sakey" (default, SA-key JWT) or "wif" (keyless Workload
+	// Identity Federation → screenpipe-prod). See buildWifConfig in providers/vertex.ts.
+	VERTEX_AUTH_MODE?: string;
+	WIF_SIGNING_KEY?: string; // PKCS#8 PEM, the Worker's OIDC signing key (secret)
+	WIF_JWT_KID?: string;
+	WIF_JWT_ISSUER?: string;
+	WIF_JWT_AUDIENCE?: string;
+	WIF_JWT_SUBJECT?: string;
+	WIF_STS_AUDIENCE?: string;
+	WIF_SA_EMAIL?: string;
+	WIF_PROJECT_ID?: string; // GCP project WIF Vertex calls bill to (default screenpipe-prod)
 	// D1 database for usage tracking
 	DB: D1Database;
 	// Sentry error tracking
@@ -167,7 +178,7 @@ export interface Env {
 	// Auto-reload settings
 	WEBSITE_URL: string;
 	AUTO_RELOAD_SECRET: string;
-	// OpenRouter (DeepSeek, Llama, Qwen, Mistral via single API)
+	// OpenRouter (Llama, Qwen, Mistral via single API)
 	OPENROUTER_API_KEY: string;
 	// Tinfoil — confidential inference in secure enclaves
 	TINFOIL_API_KEY: string;
@@ -239,6 +250,11 @@ export interface UsageStatus {
 	resets_at: string;
 	model_access: string[];
 	credits_balance?: number;
+	/** Gateway-controlled signal for the app's at-the-cap upsell banner. True only
+	 *  for non-Business tiers while model gating is enabled — so the master
+	 *  kill-switch (MODEL_GATING_ENABLED) turns the banner off server-side too,
+	 *  no app release needed. */
+	upsell_banner?: boolean;
 	upgrade_options?: {
 		login?: { benefit: string };
 		subscribe?: { benefit: string };

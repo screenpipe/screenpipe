@@ -39,10 +39,18 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
     ```bash
     curl http://localhost:3030/health
     ```
+
+    <Note>the local API needs no auth by default. if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to any `localhost:3030` request.</Note>
   </Step>
 
   <Step title="connect your AI (1 min)">
-    pick your AI tool and connect screenpipe to it:
+    pick your AI tool and connect screenpipe to it.
+
+    the fastest way is one command — it installs the screenpipe skills and registers the MCP server:
+    ```bash
+    npx -y screenpipe@latest agent setup <target>
+    ```
+    where `<target>` is one of `openclaw`, `hermes`, `claude-code`, `claude-desktop`, `codex`, `cursor`, or `windsurf`. or wire it up manually:
 
     **Claude Desktop (recommended)**
     open screenpipe → go to **settings** (gear icon, bottom of sidebar) → **connections** (under Data & Privacy) → click **"install extension"** next to Claude. done.
@@ -98,13 +106,13 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
     find code snippets, conversations, documents — anything that was on your screen
   </Card>
   <Card title="browse the pipe store" icon="store" href="/pipe-store">
-    16+ automations — CRM sync, meeting intelligence, time tracking, and more
+    ready-made automations — CRM sync, meeting intelligence, time tracking, and more
   </Card>
   <Card title="connect more AI tools" icon="server" href="/mcp-server">
     add screenpipe to Codex, Cursor, Cline, Continue, Gemini CLI, and more
   </Card>
   <Card title="connect your apps" icon="plug" href="/connections">
-    45+ integrations — Slack, Notion, Gmail, Obsidian, Toggl, HubSpot, and more
+    dozens of integrations — Slack, Notion, Gmail, Obsidian, Toggl, HubSpot, and more
   </Card>
 </CardGroup>
 

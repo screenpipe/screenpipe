@@ -40,6 +40,32 @@ fn read_store_from(path: &Path) -> Result<Value> {
     read_store_from_with_key(path, store_encryption_key)
 }
 
+/// Test-only: read `<data_dir>/store.bin` with an injected decryption key.
+///
+/// Lets other modules' tests exercise the SPSTORE1-encrypted read path (the
+/// real on-disk shape when the user enabled store encryption) without the
+/// system keychain, which is unavailable in CI. Mirrors [`read_store_for`].
+#[cfg(test)]
+pub(crate) fn read_store_for_with_key(
+    data_dir: &Path,
+    key_provider: impl FnOnce() -> Result<[u8; 32]>,
+) -> Result<Value> {
+    read_store_from_with_key(&store_path_for(data_dir), key_provider)
+}
+
+/// Test-only: write `<data_dir>/store.bin` with an injected encryption key.
+/// Pair with [`read_store_for_with_key`] to round-trip an encrypted store in
+/// tests. `encrypt = true` produces the SPSTORE1 layout.
+#[cfg(test)]
+pub(crate) fn write_store_for_with_key(
+    data_dir: &Path,
+    store: &Value,
+    encrypt: bool,
+    key_provider: impl FnOnce() -> Result<[u8; 32]>,
+) -> Result<()> {
+    write_store_to_with_key(&store_path_for(data_dir), store, encrypt, key_provider)
+}
+
 fn read_store_from_with_key(
     path: &Path,
     key_provider: impl FnOnce() -> Result<[u8; 32]>,

@@ -41,8 +41,6 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'glm-4.7': { input: 0, output: 0 },
   'glm-5': { input: 0, output: 0 },
   'kimi-k2.5': { input: 0, output: 0 },
-  'deepseek-v3.2': { input: 0, output: 0 },
-  'deepseek-r1': { input: 0, output: 0 },
   'qwen3-next': { input: 0, output: 0 },
   'qwen3-next-thinking': { input: 0, output: 0 },
   // Tinfoil — confidential inference (secure enclaves)
@@ -62,8 +60,6 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenRouter models
   'qwen3.5-flash': { input: 0.065, output: 0.26 },
   'qwen3.5-397b': { input: 0.39, output: 2.34 },
-  'deepseek-chat': { input: 0.26, output: 0.38 },
-  'deepseek-v3.2-speciale': { input: 0.40, output: 1.20 },
   'llama-4-maverick': { input: 0.20, output: 0.60 },
   'llama-4-scout': { input: 0.11, output: 0.34 },
   'qwen3-coder:free': { input: 0.00, output: 0.00 },
@@ -324,7 +320,7 @@ export function inferProvider(model: string | null | undefined): string {
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('gemma4')) return 'tinfoil';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';
-  if (lower.includes('deepseek') || lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
+  if (lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
   if (lower.includes('screenpipe-event')) return 'screenpipe-vllm';
   return 'unknown';
 }

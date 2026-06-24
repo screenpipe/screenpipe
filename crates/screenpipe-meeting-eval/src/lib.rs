@@ -665,8 +665,12 @@ mod tests {
     }
 
     /// Output audio keeps the meeting Active when controls disappear —
-    /// regression for be6a6f148 (browser) + 4e784f620 (native). Flaps
-    /// are expected here and counted under the audio bucket.
+    /// regression for be6a6f148 (browser) + 4e784f620 (native). With the
+    /// advance_state audio guard the meeting now stays Active *without*
+    /// flapping through Ending, so the keep-alive is flap-free: the meeting
+    /// starts once, ends once (only after audio stops), and records zero flaps.
+    /// (Previously this path bounced Active⇌Ending once per scan and asserted
+    /// flap_count_audio > 0 — that was the bug this guard removes.)
     #[test]
     fn audio_extension_keeps_meeting_alive() {
         let s = Scenario {
@@ -703,8 +707,14 @@ mod tests {
             m.meeting_ends, 1,
             "single meeting must end exactly once: {m:?}"
         );
-        assert!(m.flap_count_audio > 0, "expected audio flaps: {m:?}");
+        // Audio guard keeps the meeting Active without any Active⇌Ending bounce.
+        assert_eq!(
+            m.flap_count_audio, 0,
+            "audio keep-alive must be flap-free: {m:?}"
+        );
         assert_eq!(m.flap_count_controls, 0, "{m:?}");
+        assert_eq!(m.flap_count, 0, "no flaps of any kind: {m:?}");
+        assert_eq!(m.final_state, "Idle", "meeting must end cleanly: {m:?}");
     }
 
     /// Transient single in_call=true scan must not produce a meeting.

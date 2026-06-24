@@ -44,9 +44,11 @@ import {
   MoreVertical,
   Pencil,
   Square,
+  FolderOpen,
 } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { localFetch } from "@/lib/api";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -80,8 +82,23 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -95,6 +112,13 @@ import { toast } from "@/components/ui/use-toast";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requestPipeStop } from "@/lib/pipe-stop";
+import {
+  applySidebarRecentsCap,
+  buildSidebarRecentsSections,
+  recurringPipeGroupKeys,
+  type SidebarItem,
+  validateSidebarGroupName,
+} from "@/lib/utils/chat-sidebar-grouping";
 
 interface ChatSidebarProps {
   className?: string;
@@ -212,6 +236,13 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const actions = useChatActions();
   const queueDepths = useQueueDepths();
   const [openConversationMenuId, setOpenConversationMenuId] = useState<string | null>(null);
+  // macOS (WKWebView) auto-hides styled overlay scrollbars, so the minimal
+  // scrollbar only flashes while actually scrolling. Windows/Linux (WebView2
+  // / Chromium) render styled scrollbars as persistent, space-reserving
+  // classic scrollbars — so expanding a pipe section (which grows the sidebar
+  // past the viewport) makes a scrollbar pop in. Hide it off macOS to match,
+  // mirroring the html/body `scrollbar-hide` convention in globals.css.
+  const { isMac } = usePlatform();
 
   // Sync currentId from standalone-chat. Whenever the chat panel switches
   // its piSessionIdRef (new chat, prefill auto-send, history click in the
@@ -352,6 +383,21 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         }
       );
       unlistenFns.push(unlistenRenamed);
+
+      const unlistenGroupChanged = await listen<{ id: string; sidebarGroup?: string }>(
+        "chat-sidebar-group-changed",
+        (event) => {
+          const { id, sidebarGroup } = event.payload ?? {};
+          if (!id) return;
+          const existing = useChatStore.getState().sessions[id];
+          if (existing) {
+            useChatStore.getState().actions.patch(id, { sidebarGroup });
+          } else {
+            void syncConversationFromDisk(id);
+          }
+        }
+      );
+      unlistenFns.push(unlistenGroupChanged);
     })().catch(() => {
       // ignore: sidebar still works without cross-window sync listeners
     });
@@ -388,7 +434,133 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const { pinned, recents, archived } = useVisibleChatSections();
-  const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
+  const groupedSections = useMemo(
+    () => buildSidebarRecentsSections(recents, Number.POSITIVE_INFINITY),
+    [recents],
+  );
+
+  // Expand/collapse state for manual recents subsections (e.g. OTHER,
+  // named sidebar groups). Stored separately from pipe auto-groups so the
+  // two hierarchy levels can collapse independently.
+  const [collapsedRecentsSections, setCollapsedRecentsSections] = useState<Set<string>>(() => {
+    const set = new Set<string>();
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:recents-subsection-collapsed:")) {
+          if (localStorage.getItem(k) === "true") {
+            set.add(k.slice("screenpipe:recents-subsection-collapsed:".length));
+          }
+        }
+      }
+    } catch { /* ignore */ }
+    return set;
+  });
+  const toggleRecentsSectionCollapsed = (key: string) => {
+    setCollapsedRecentsSections((prev) => {
+      const next = new Set(prev);
+      const collapsed = next.has(key);
+      if (collapsed) next.delete(key);
+      else next.add(key);
+      try {
+        localStorage.setItem(
+          `screenpipe:recents-subsection-collapsed:${key}`,
+          String(!collapsed),
+        );
+      } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  // Expand/collapse state for pipe auto-groups, persisted in localStorage.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
+    const set = new Set<string>();
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:group-expanded:")) {
+          if (localStorage.getItem(k) === "true") {
+            set.add(k.slice("screenpipe:group-expanded:".length));
+          }
+        }
+      }
+    } catch { /* ignore */ }
+    return set;
+  });
+  const toggleGroupExpanded = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      const expanded = next.has(key);
+      if (expanded) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      try {
+        localStorage.setItem(
+          `screenpipe:group-expanded:${key}`,
+          String(!expanded),
+        );
+      } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  // GC stale expand-state keys on mount — compare against the full
+  // (pre-cap) recents list so we don't accidentally prune keys for
+  // real groups that are past the 15-row cap.
+  useEffect(() => {
+    try {
+      const validKeys = recurringPipeGroupKeys(recents);
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:group-expanded:")) {
+          const groupKey = k.slice("screenpipe:group-expanded:".length);
+          if (!validKeys.has(groupKey)) toRemove.push(k);
+        }
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+    } catch { /* ignore */ }
+  }, [recents]);
+
+  // GC stale manual subsection collapse-state keys when sidebar groups are
+  // renamed or disappear. Only titled subsections participate.
+  useEffect(() => {
+    try {
+      const validKeys = new Set(
+        groupedSections
+          .filter((section) => section.title)
+          .map((section) => section.key),
+      );
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:recents-subsection-collapsed:")) {
+          const sectionKey = k.slice("screenpipe:recents-subsection-collapsed:".length);
+          if (!validKeys.has(sectionKey)) toRemove.push(k);
+        }
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+    } catch { /* ignore */ }
+  }, [groupedSections]);
+
+  // Derive existing manual group names from all visible non-hidden
+  // sessions (pinned + recents) so the "Move to group" submenu
+  // includes groups that currently only contain pinned chats.
+  const existingGroups = useMemo(() => {
+    const groups: string[] = [];
+    const seen = new Set<string>();
+    for (const s of [...pinned, ...recents]) {
+      const g = s.sidebarGroup?.trim();
+      if (g && !seen.has(g)) {
+        seen.add(g);
+        groups.push(g);
+      }
+    }
+    return groups;
+  }, [pinned, recents]);
+
   // Resolve each running pipe to its SessionRecord so the Scheduled-row
   // kebab can offer Pin / Rename / Archive / Delete with the same
   // semantics as Recents. Subscribes to the raw sessions map (not
@@ -407,6 +579,9 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
+  // "New group" dialog state — stores the session id being moved.
+  const [newGroupSessionId, setNewGroupSessionId] = useState<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState("");
 
   const hasScheduledSlice = upcomingPipes.length > 0 || runningPipes.length > 0;
   const [pinnedCollapsed, setPinnedCollapsed] = useCollapsedPref(
@@ -423,6 +598,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
   const recentsLoading = !diskHydrated && recents.length === 0;
+  const visibleGroupedSections = useMemo(
+    () => applySidebarRecentsCap(groupedSections, collapsedRecentsSections, 15),
+    [groupedSections, collapsedRecentsSections],
+  );
 
   const handleSelect = (id: string) => {
     setOpenConversationMenuId(null);
@@ -580,6 +759,36 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   };
 
+  const handleMoveToGroup = async (id: string, group: string | undefined) => {
+    let normalized: string | undefined;
+    if (group !== undefined) {
+      const validation = validateSidebarGroupName(group, {
+        existingGroups,
+      });
+      if (!validation.ok) {
+        toast({
+          title: "Invalid group name",
+          description: validation.message,
+          variant: "destructive",
+        });
+        return false;
+      }
+      normalized = validation.normalized;
+    }
+    actions.patch(id, { sidebarGroup: normalized });
+    try {
+      await updateConversationFlags(id, { sidebarGroup: normalized });
+      await emit("chat-sidebar-group-changed", { id, sidebarGroup: normalized });
+    } catch {
+      // best-effort persistence — UI already updated
+    }
+    return true;
+  };
+
+  const handleNewGroupConfirmed = async (id: string, nameRaw: string) => {
+    return handleMoveToGroup(id, nameRaw);
+  };
+
   return (
     // px-2 cancels the parent wrapper's -mx-2 (used to make the
     // border-t span the full sidebar width). Without this the chat
@@ -587,7 +796,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     // (Timeline / Memories / ...) and look misaligned.
     <div
       className={cn(
-        "flex flex-col min-h-0 text-sm px-2 overflow-y-auto overflow-x-hidden scrollbar-minimal",
+        "flex flex-col min-h-0 text-sm px-2 overflow-y-auto overflow-x-hidden",
+        isMac ? "scrollbar-minimal" : "scrollbar-hide",
         className
       )}
       data-testid="chat-sidebar"
@@ -596,7 +806,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         if (openConversationMenuId) setOpenConversationMenuId(null);
       }}
     >
-      <div className="flex-1 min-h-0 flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         {hasScheduledSlice && (
           <div
             className="flex flex-col shrink-0"
@@ -725,26 +935,85 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : recentsLimited.length === 0 ? (
+              ) : recents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                recentsLimited.map((s) => (
-                  <SidebarChatRow
-                    key={s.id}
-                    session={s}
-                    isCurrent={s.id === currentId}
-                    queuedCount={queueDepths.get(s.id) ?? 0}
-                    onSelect={handleSelect}
-                    onArchive={handleArchive}
-                    onUnarchive={handleUnarchive}
-                    onDeleteRequest={setDeletingSessionId}
-                    onTogglePin={handleTogglePin}
-                    onRenameRequest={handleRenameRequest}
-                    openConversationMenuId={openConversationMenuId}
-                    setOpenConversationMenuId={setOpenConversationMenuId}
-                  />
+                visibleGroupedSections.map((section, index) => (
+                  <div
+                    key={section.key}
+                    className={cn(index > 0 && "mt-1")}
+                    data-testid={`chat-sidebar-group-${section.title || "all"}`}
+                  >
+                    {section.title && (
+                      <button
+                        type="button"
+                        onClick={() => toggleRecentsSectionCollapsed(section.key)}
+                        className={cn(
+                          "group/subsection w-full px-2.5 pt-1 pb-0.5 flex items-center gap-2 text-left rounded-sm",
+                          "hover:bg-muted/10 transition-colors"
+                        )}
+                        aria-expanded={!collapsedRecentsSections.has(section.key)}
+                      >
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
+                          {section.title}
+                        </span>
+                        {collapsedRecentsSections.has(section.key) ? (
+                          <ChevronRight
+                            className="h-3 w-3 shrink-0 text-muted-foreground/55"
+                            aria-hidden
+                          />
+                        ) : (
+                          <ChevronDown
+                            className="h-3 w-3 shrink-0 text-muted-foreground/55"
+                            aria-hidden
+                          />
+                        )}
+                      </button>
+                    )}
+                    {!collapsedRecentsSections.has(section.key) && section.items.map((item) =>
+                      item.kind === "single" ? (
+                        <SidebarChatRow
+                          key={item.session.id}
+                          session={item.session}
+                          isCurrent={item.session.id === currentId}
+                          queuedCount={queueDepths.get(item.session.id) ?? 0}
+                          onSelect={handleSelect}
+                          onArchive={handleArchive}
+                          onUnarchive={handleUnarchive}
+                          onDeleteRequest={setDeletingSessionId}
+                          onTogglePin={handleTogglePin}
+                          onRenameRequest={handleRenameRequest}
+                          onMoveToGroup={handleMoveToGroup}
+                          onNewGroupRequest={setNewGroupSessionId}
+                          existingGroups={existingGroups}
+                          openConversationMenuId={openConversationMenuId}
+                          setOpenConversationMenuId={setOpenConversationMenuId}
+                        />
+                      ) : (
+                        <PipeGroupRow
+                          key={item.key}
+                          item={item}
+                          expanded={expandedGroups.has(item.key)}
+                          onToggleExpand={() => toggleGroupExpanded(item.key)}
+                          currentId={currentId}
+                          queueDepths={queueDepths}
+                          onSelect={handleSelect}
+                          onArchive={handleArchive}
+                          onUnarchive={handleUnarchive}
+                          onDeleteRequest={setDeletingSessionId}
+                          onTogglePin={handleTogglePin}
+                          onRenameRequest={handleRenameRequest}
+                          onMoveToGroup={handleMoveToGroup}
+                          onNewGroupRequest={setNewGroupSessionId}
+                          existingGroups={existingGroups}
+                          openConversationMenuId={openConversationMenuId}
+                          setOpenConversationMenuId={setOpenConversationMenuId}
+                        />
+                      ),
+                    )}
+                  </div>
                 ))
               )}
             </Section>
@@ -827,6 +1096,62 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
               }}
             >
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!newGroupSessionId}
+        onOpenChange={(open) => {
+          if (!open) setNewGroupSessionId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New group</DialogTitle>
+            <DialogDescription>Enter a name for the sidebar group.</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <input
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const id = newGroupSessionId;
+                  if (!id) return;
+                  void (async () => {
+                    const ok = await handleNewGroupConfirmed(id, newGroupName);
+                    if (!ok) return;
+                    setNewGroupSessionId(null);
+                    setNewGroupName("");
+                  })();
+                }
+              }}
+              autoFocus
+              className={cn(
+                "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
+                "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+              )}
+              placeholder="Group name"
+              aria-label="Group name"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setNewGroupSessionId(null); setNewGroupName(""); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                const id = newGroupSessionId;
+                if (!id) return;
+                const ok = await handleNewGroupConfirmed(id, newGroupName);
+                if (!ok) return;
+                setNewGroupSessionId(null);
+                setNewGroupName("");
+              }}
+            >
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1499,6 +1824,102 @@ function Section({
   );
 }
 
+/**
+ * Expandable row for a pipe auto-group. Shows the pipe name, a count
+ * badge, and a chevron. Clicking toggles expansion to reveal individual
+ * child sessions indented below.
+ */
+function PipeGroupRow({
+  item,
+  expanded,
+  onToggleExpand,
+  currentId,
+  queueDepths,
+  onSelect,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
+  onTogglePin,
+  onRenameRequest,
+  onMoveToGroup,
+  onNewGroupRequest,
+  existingGroups,
+  openConversationMenuId,
+  setOpenConversationMenuId,
+}: {
+  item: Extract<SidebarItem, { kind: "group" }>;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  currentId: string | null;
+  queueDepths: Map<string, number>;
+  onSelect: (id: string) => void;
+  onArchive: (id: string) => Promise<void> | void;
+  onUnarchive: (id: string) => Promise<void> | void;
+  onDeleteRequest: (id: string | null) => void;
+  onTogglePin: (id: string) => Promise<void> | void;
+  onRenameRequest: (id: string) => void;
+  onMoveToGroup: (id: string, group: string | undefined) => void;
+  onNewGroupRequest: (id: string) => void;
+  existingGroups: string[];
+  openConversationMenuId: string | null;
+  setOpenConversationMenuId: (id: string | null) => void;
+}) {
+  return (
+    <div data-testid={`pipe-group-${item.key}`}>
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className={cn(
+          "group/pipe w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-left select-none",
+          "text-muted-foreground hover:bg-muted/20 transition-colors"
+        )}
+        aria-expanded={expanded}
+      >
+        <span className="truncate flex-1 text-xs">{item.title}</span>
+        <span className="inline-flex items-center gap-1.5 shrink-0">
+          <span className="text-[10px] tabular-nums text-muted-foreground/60">
+            {item.sessions.length}
+          </span>
+          {expanded ? (
+            <ChevronDown
+              className="h-3 w-3 text-muted-foreground/60"
+              aria-hidden
+            />
+          ) : (
+            <ChevronRight
+              className="h-3 w-3 text-muted-foreground/60"
+              aria-hidden
+            />
+          )}
+        </span>
+      </button>
+      {expanded && (
+        <div className="pl-3">
+          {item.sessions.map((s) => (
+            <SidebarChatRow
+              key={s.id}
+              session={s}
+              isCurrent={s.id === currentId}
+              queuedCount={queueDepths.get(s.id) ?? 0}
+              onSelect={onSelect}
+              onArchive={onArchive}
+              onUnarchive={onUnarchive}
+              onDeleteRequest={onDeleteRequest}
+              onTogglePin={onTogglePin}
+              onRenameRequest={onRenameRequest}
+              onMoveToGroup={onMoveToGroup}
+              onNewGroupRequest={onNewGroupRequest}
+              existingGroups={existingGroups}
+              openConversationMenuId={openConversationMenuId}
+              setOpenConversationMenuId={setOpenConversationMenuId}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ChatRowProps {
   session: SessionRecord;
   isCurrent: boolean;
@@ -1511,9 +1932,229 @@ interface ChatRowProps {
   onDeleteRequest: (id: string | null) => void;
   onTogglePin: (id: string) => Promise<void> | void;
   onRenameRequest: (id: string) => void;
+  onMoveToGroup?: (id: string, group: string | undefined) => void;
+  onNewGroupRequest?: (id: string) => void;
+  existingGroups?: string[];
   showActions?: boolean;
   openConversationMenuId?: string | null;
   setOpenConversationMenuId?: (id: string | null) => void;
+}
+
+/**
+ * Single-letter shortcuts shown on the right of each menu row (anthropic-style).
+ * Each maps to an item carrying `data-shortcut={key}`; pressing the key while a
+ * row menu is open selects that item. Keep in sync with `RowMenuItems`.
+ */
+const ROW_MENU_SHORTCUT_KEYS = ["p", "r", "a", "d"] as const;
+
+/**
+ * Press a shortcut letter while a chat-row menu (right-click or kebab) is open
+ * to fire the matching action. We forward an Enter keydown to the item so radix
+ * runs its own onSelect + close — no second code path to keep in sync.
+ */
+function handleRowMenuShortcut(e: React.KeyboardEvent<HTMLElement>) {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+  if (e.key.length !== 1) return;
+  const key = e.key.toLowerCase();
+  if (!ROW_MENU_SHORTCUT_KEYS.includes(key as (typeof ROW_MENU_SHORTCUT_KEYS)[number])) {
+    return;
+  }
+  const target = e.currentTarget.querySelector<HTMLElement>(`[data-shortcut="${key}"]`);
+  if (!target) return;
+  e.preventDefault();
+  e.stopPropagation();
+  target.focus();
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+  );
+}
+
+/**
+ * The actions inside a chat row's menu, shared by the kebab dropdown and the
+ * right-click context menu so both stay identical. `variant` swaps the radix
+ * primitive set; the item list, shortcuts and handlers are written once.
+ */
+interface RowMenuParts {
+  Item: React.ComponentType<any>;
+  Sub: React.ComponentType<any>;
+  SubTrigger: React.ComponentType<any>;
+  SubContent: React.ComponentType<any>;
+  Separator: React.ComponentType<any>;
+  Shortcut: React.ComponentType<any>;
+}
+
+const ROW_MENU_PARTS: Record<"dropdown" | "context", RowMenuParts> = {
+  dropdown: {
+    Item: DropdownMenuItem,
+    Sub: DropdownMenuSub,
+    SubTrigger: DropdownMenuSubTrigger,
+    SubContent: DropdownMenuSubContent,
+    Separator: DropdownMenuSeparator,
+    Shortcut: DropdownMenuShortcut,
+  },
+  context: {
+    Item: ContextMenuItem,
+    Sub: ContextMenuSub,
+    SubTrigger: ContextMenuSubTrigger,
+    SubContent: ContextMenuSubContent,
+    Separator: ContextMenuSeparator,
+    Shortcut: ContextMenuShortcut,
+  },
+};
+
+function RowMenuItems({
+  variant,
+  session,
+  availableMoveGroups,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
+  onTogglePin,
+  onRenameRequest,
+  onMoveToGroup,
+  onNewGroupRequest,
+  existingGroups,
+}: {
+  variant: "dropdown" | "context";
+  session: SessionRecord;
+  availableMoveGroups: string[];
+  onArchive: (id: string) => Promise<void> | void;
+  onUnarchive: (id: string) => Promise<void> | void;
+  onDeleteRequest: (id: string | null) => void;
+  onTogglePin: (id: string) => Promise<void> | void;
+  onRenameRequest: (id: string) => void;
+  onMoveToGroup?: (id: string, group: string | undefined) => void;
+  onNewGroupRequest?: (id: string) => void;
+  existingGroups?: string[];
+}) {
+  const P = ROW_MENU_PARTS[variant];
+  const itemCls = "text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30";
+  const groupItemCls = "text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30";
+  const shortcutCls = "text-[10px] tracking-normal text-muted-foreground/55";
+  return (
+    <>
+      <P.Item
+        data-shortcut="p"
+        className={itemCls}
+        onSelect={(e: Event) => {
+          e.stopPropagation();
+          void onTogglePin(session.id);
+        }}
+      >
+        <Pin className="h-3 w-3 text-muted-foreground" />
+        {session.pinned ? "Unpin" : "Pin"}
+        <P.Shortcut className={shortcutCls}>P</P.Shortcut>
+      </P.Item>
+      <P.Item
+        data-shortcut="r"
+        className={itemCls}
+        onSelect={(e: Event) => {
+          e.stopPropagation();
+          onRenameRequest(session.id);
+        }}
+      >
+        <Pencil className="h-3 w-3 text-muted-foreground" />
+        Rename
+        <P.Shortcut className={shortcutCls}>R</P.Shortcut>
+      </P.Item>
+      {onMoveToGroup && existingGroups && (
+        <P.Sub>
+          <P.SubTrigger
+            className={itemCls}
+            data-testid={`chat-row-move-to-group-${session.id}`}
+          >
+            <FolderOpen className="h-3 w-3 text-muted-foreground" />
+            Move to group
+          </P.SubTrigger>
+          <P.SubContent
+            className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+            data-testid={`chat-row-move-to-group-menu-${session.id}`}
+          >
+            {availableMoveGroups.map((g) => (
+              <P.Item
+                key={g}
+                className={groupItemCls}
+                onSelect={(e: Event) => {
+                  e.stopPropagation();
+                  onMoveToGroup(session.id, g);
+                }}
+              >
+                {g}
+              </P.Item>
+            ))}
+            {session.sidebarGroup && (
+              <>
+                {availableMoveGroups.length > 0 && (
+                  <P.Separator className="my-1 bg-border/70" />
+                )}
+                <P.Item
+                  className={groupItemCls}
+                  onSelect={(e: Event) => {
+                    e.stopPropagation();
+                    onMoveToGroup(session.id, undefined);
+                  }}
+                >
+                  Remove from group
+                </P.Item>
+              </>
+            )}
+            {(availableMoveGroups.length > 0 || session.sidebarGroup) && (
+              <P.Separator className="my-1 bg-border/70" />
+            )}
+            <P.Item
+              className={groupItemCls}
+              onSelect={(e: Event) => {
+                e.stopPropagation();
+                onNewGroupRequest?.(session.id);
+              }}
+            >
+              New group...
+            </P.Item>
+          </P.SubContent>
+        </P.Sub>
+      )}
+      {!session.hidden ? (
+        <P.Item
+          data-shortcut="a"
+          className={itemCls}
+          onSelect={(e: Event) => {
+            e.stopPropagation();
+            void onArchive(session.id);
+          }}
+        >
+          <Archive className="h-3 w-3 text-muted-foreground" />
+          Archive
+          <P.Shortcut className={shortcutCls}>A</P.Shortcut>
+        </P.Item>
+      ) : (
+        <P.Item
+          data-shortcut="a"
+          className={itemCls}
+          onSelect={(e: Event) => {
+            e.stopPropagation();
+            void onUnarchive(session.id);
+          }}
+        >
+          <Undo2 className="h-3 w-3 text-muted-foreground" />
+          Unarchive
+          <P.Shortcut className={shortcutCls}>A</P.Shortcut>
+        </P.Item>
+      )}
+      <P.Separator className="my-1 bg-border/70" />
+      <P.Item
+        data-shortcut="d"
+        className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
+        onSelect={(e: Event) => {
+          e.stopPropagation();
+          onDeleteRequest(session.id);
+        }}
+      >
+        <Trash2 className="h-3 w-3 text-destructive" />
+        Delete
+        <P.Shortcut className={cn(shortcutCls, "text-destructive/60")}>D</P.Shortcut>
+      </P.Item>
+    </>
+  );
 }
 
 /**
@@ -1546,6 +2187,9 @@ export function SidebarChatRow({
   onDeleteRequest,
   onTogglePin,
   onRenameRequest,
+  onMoveToGroup,
+  onNewGroupRequest,
+  existingGroups,
   showActions = true,
   openConversationMenuId,
   setOpenConversationMenuId,
@@ -1562,7 +2206,29 @@ export function SidebarChatRow({
   const age = formatCompactAge(activityAt, now);
   const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
   const menuOpen = openConversationMenuId === session.id;
+  const availableMoveGroups =
+    existingGroups?.filter((group) => group !== session.sidebarGroup) ?? [];
+  const rowMenuActions = {
+    onArchive,
+    onUnarchive,
+    onDeleteRequest,
+    onTogglePin,
+    onRenameRequest,
+    onMoveToGroup,
+    onNewGroupRequest,
+    existingGroups,
+    availableMoveGroups,
+  };
+  // The row is both the click target and the right-click (context menu)
+  // anchor. The kebab below stays as a discoverable, mouse-only entry point;
+  // both menus render the same `RowMenuItems`.
   return (
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) setOpenConversationMenuId?.(null);
+      }}
+    >
+      <ContextMenuTrigger asChild disabled={!canShowActions}>
     <div
       className={cn(
         "group relative flex items-center gap-2 px-2.5 py-1 rounded-md select-none",
@@ -1659,66 +2325,24 @@ export function SidebarChatRow({
               className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={handleRowMenuShortcut}
             >
-              <DropdownMenuItem
-                className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                onSelect={(e) => {
-                  e.stopPropagation();
-                  void onTogglePin(session.id);
-                }}
-              >
-                <Pin className="h-3 w-3 text-muted-foreground" />
-                {session.pinned ? "Unpin" : "Pin"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                onSelect={(e) => {
-                  e.stopPropagation();
-                  onRenameRequest(session.id);
-                }}
-              >
-                <Pencil className="h-3 w-3 text-muted-foreground" />
-                Rename
-              </DropdownMenuItem>
-              {!session.hidden ? (
-                <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                  onSelect={(e) => {
-                    e.stopPropagation();
-                    void onArchive(session.id);
-                  }}
-                >
-                  <Archive className="h-3 w-3 text-muted-foreground" />
-                  Archive
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                  onSelect={(e) => {
-                    e.stopPropagation();
-                    void onUnarchive(session.id);
-                  }}
-                >
-                  <Undo2 className="h-3 w-3 text-muted-foreground" />
-                  Unarchive
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator className="my-1 bg-border/70" />
-              <DropdownMenuItem
-                className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
-                onSelect={(e) => {
-                  e.stopPropagation();
-                  onDeleteRequest(session.id);
-                }}
-              >
-                <Trash2 className="h-3 w-3 text-destructive" />
-                Delete
-              </DropdownMenuItem>
+              <RowMenuItems variant="dropdown" session={session} {...rowMenuActions} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       )}
     </div>
+      </ContextMenuTrigger>
+      {canShowActions && (
+        <ContextMenuContent
+          className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+          onKeyDown={handleRowMenuShortcut}
+        >
+          <RowMenuItems variant="context" session={session} {...rowMenuActions} />
+        </ContextMenuContent>
+      )}
+    </ContextMenu>
   );
 }
 

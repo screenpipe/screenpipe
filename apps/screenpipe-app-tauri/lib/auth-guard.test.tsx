@@ -35,7 +35,7 @@ vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 vi.mock("@/components/ui/toast", () => ({ ToastAction: () => null }));
 vi.mock("@/lib/web-url", () => ({ screenpipeWebUrl: () => "https://screenpipe.com/login" }));
 
-import { AuthGuard, shouldReverifyOnFocus } from "./auth-guard";
+import { AuthGuard, isScreenpipeApi, shouldReverifyOnFocus } from "./auth-guard";
 
 const LOGGED_IN = { token: "tok-123", cloud_subscribed: false };
 
@@ -65,6 +65,39 @@ afterEach(() => {
   vi.clearAllMocks();
   mocks.loadUser.mockResolvedValue(undefined);
   mocks.state.user = null;
+});
+
+describe("isScreenpipeApi", () => {
+  it("matches the cloud API host and its subdomains", () => {
+    expect(isScreenpipeApi("https://screenpipe.com/api/user")).toBe(true);
+    expect(isScreenpipeApi("https://screenpi.pe/api/oauth/exchange")).toBe(true);
+    expect(isScreenpipeApi("https://api.screenpipe.com/v1/chat/completions")).toBe(true);
+    expect(isScreenpipeApi("https://clerk.screenpipe.com/")).toBe(true);
+  });
+
+  it("does NOT match the local engine when a screenpipe-domain email rides in the query", () => {
+    // regression: a connected account on the screenpi.pe domain made the local
+    // engine's 401 look like a cloud session expiry and signed the user out.
+    expect(
+      isScreenpipeApi(
+        "http://localhost:3030/connections/google-calendar/events?hours_back=0&instance=member%40screenpi.pe"
+      )
+    ).toBe(false);
+    expect(
+      isScreenpipeApi("http://127.0.0.1:3030/connections/gmail?instance=x@screenpipe.com")
+    ).toBe(false);
+  });
+
+  it("does NOT match a third-party host that merely mentions the domain in path/query", () => {
+    expect(isScreenpipeApi("https://evil.example.com/?ref=screenpi.pe")).toBe(false);
+    // not a subdomain — must not match on a bare suffix
+    expect(isScreenpipeApi("https://notscreenpipe.com/api")).toBe(false);
+    expect(isScreenpipeApi("https://screenpipe.com.evil.com/api")).toBe(false);
+  });
+
+  it("returns false for an unparseable url", () => {
+    expect(isScreenpipeApi("::::")).toBe(false);
+  });
 });
 
 describe("shouldReverifyOnFocus", () => {

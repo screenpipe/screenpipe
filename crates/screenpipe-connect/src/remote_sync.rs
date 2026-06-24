@@ -76,10 +76,31 @@ fn should_skip(name: &str) -> bool {
     name.ends_with(".sqlite")
         || name.ends_with(".sqlite-wal")
         || name.ends_with(".sqlite-shm")
+        // The main DB and ALL of its on-disk variants. The live `db.sqlite`
+        // ships via the `VACUUM INTO` snapshot (uploaded separately as
+        // db.sqlite), so every other `db.sqlite*` file here — `-wal`/`-shm`
+        // plus manual `.bak-*` / `.corrupt-*` / `.recovered` recovery copies —
+        // is dead weight, often multiple GB. (Verified 2026-06-20: stale
+        // `db.sqlite.corrupt-*` and `db.sqlite.bak-*` copies were being pushed
+        // to a remote host for nothing.)
+        || name.starts_with("db.sqlite")
+        // Secret store. The live `store.bin` may be needed for auth on the
+        // remote, but its `.bak-*` / `.encrypted-before-*` copies are stale
+        // secret material and must NEVER leave the machine.
+        || (name.starts_with("store.bin") && name != "store.bin")
         || name.ends_with(".lock")
         // Our own snapshot tempfiles (in case a previous run was killed
         // before cleanup).
         || name.starts_with(".openclaw-snapshot-")
+        // Generic backup / corruption / recovery artifacts (any file family).
+        || name.ends_with(".bak")
+        || name.contains(".bak-")
+        || name.contains(".bak.")
+        || name.ends_with(".backup")
+        || name.contains(".corrupt")
+        || name.contains(".recovered")
+        || name.ends_with(".old")
+        || name.ends_with(".orig")
         // Package manager / build artifacts
         || name == "node_modules"
         || name == ".git"
@@ -97,6 +118,70 @@ fn should_skip(name: &str) -> bool {
         // Temp / log files
         || name.ends_with(".tmp")
         || name.ends_with(".log")
+}
+
+/// Options controlling WHAT gets synced (selectivity). Kept separate from
+/// [`SyncConfig`] (which is serialized + exported to the desktop app via
+/// specta) so these CLI-only knobs don't churn the TypeScript bindings.
+#[derive(Debug, Clone, Default)]
+pub struct SyncOptions {
+    /// Skip recordings: the `data/` and `exports/` dirs plus any media file
+    /// (mp4/wav/jpg/...). Ships the searchable db + config only — turns a
+    /// multi-hundred-GB `~/.screenpipe` into roughly the db size.
+    pub no_media: bool,
+    /// Extra exclude globs, matched against the path relative to the data dir
+    /// AND the bare file name. Sourced from `--exclude` and
+    /// `<data-dir>/.screenpipeignore`. Supports `*` wildcards.
+    pub exclude: Vec<String>,
+}
+
+/// Compiled view of [`SyncOptions`] used during the directory walk.
+struct SyncFilter<'a> {
+    no_media: bool,
+    patterns: &'a [String],
+}
+
+impl SyncFilter<'_> {
+    /// Whether an entry should be excluded by user selectivity. This is ON TOP
+    /// of the always-on [`should_skip`] cruft filter.
+    fn excluded(&self, name: &str, rel: &str) -> bool {
+        if self.no_media && is_media_path(name, rel) {
+            return true;
+        }
+        self.patterns
+            .iter()
+            .any(|p| wildcard_match(p, rel) || wildcard_match(p, name))
+    }
+}
+
+/// Recordings / heavy media dropped under `--no-media`. Screen+audio chunks
+/// live under `data/`, user-exported clips under `exports/`; we also match by
+/// extension as belt-and-suspenders for media written elsewhere.
+fn is_media_path(name: &str, rel: &str) -> bool {
+    let top = rel.split('/').next().unwrap_or("");
+    if top == "data" || top == "exports" {
+        return true;
+    }
+    let lower = name.to_ascii_lowercase();
+    [
+        ".mp4", ".wav", ".jpg", ".jpeg", ".png", ".mkv", ".webm", ".m4a", ".aac",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
+}
+
+/// Minimal glob matcher: `*` matches any run of characters (including `/`);
+/// everything else is literal. Enough for `.screenpipeignore` entries like
+/// `*.mp4`, `exports/*`, `models`, `*secret*`. Zero-dependency on purpose.
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    fn go(p: &[u8], t: &[u8]) -> bool {
+        match p.split_first() {
+            None => t.is_empty(),
+            Some((b'*', rest)) => go(rest, t) || (!t.is_empty() && go(p, &t[1..])),
+            Some((&c, rest)) => !t.is_empty() && t[0] == c && go(rest, &t[1..]),
+        }
+    }
+    go(pattern.as_bytes(), text.as_bytes())
 }
 
 /// Screenpipe skill file dropped on the remote so AI agents know how to query the data.
@@ -189,7 +274,8 @@ async fn load_private_key(key_path: &str) -> Result<Arc<russh::keys::PrivateKey>
     Ok(Arc::new(key))
 }
 
-async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>, SftpSession)> {
+/// Open + authenticate an SSH session (shared by SFTP sync and remote exec).
+async fn ssh_session(config: &SyncConfig) -> Result<client::Handle<SshHandler>> {
     let key = load_private_key(&config.key_path).await?;
     let mut session = client::connect(
         Arc::new(client::Config::default()),
@@ -214,7 +300,11 @@ async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>
             config.port
         );
     }
+    Ok(session)
+}
 
+async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>, SftpSession)> {
+    let session = ssh_session(config).await?;
     let channel = session
         .channel_open_session()
         .await
@@ -228,6 +318,59 @@ async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>
         .map_err(|e| anyhow::anyhow!("SFTP init failed: {}", e))?;
 
     Ok((session, sftp))
+}
+
+/// Result of a remote command run over SSH.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[cfg_attr(feature = "specta", specta(rename = "RemoteExecResult"))]
+pub struct ExecResult {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+const EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Run a command on the remote host over SSH and capture stdout/stderr/exit.
+/// Used to wire an agent (e.g. `screenpipe agent setup <target>`) on a VPS
+/// without the user touching a terminal — reuses the same SSH creds as sync.
+pub async fn exec_remote(config: &SyncConfig, command: &str) -> Result<ExecResult> {
+    tokio::time::timeout(EXEC_TIMEOUT, exec_remote_inner(config, command))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("remote command timed out after {}s", EXEC_TIMEOUT.as_secs())
+        })?
+}
+
+async fn exec_remote_inner(config: &SyncConfig, command: &str) -> Result<ExecResult> {
+    let session = ssh_session(config).await?;
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .context("failed to open SSH channel")?;
+    channel
+        .exec(true, command)
+        .await
+        .context("failed to start remote command")?;
+
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let mut code: i32 = -1;
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+            russh::ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+            russh::ChannelMsg::ExitStatus { exit_status } => code = exit_status as i32,
+            _ => {}
+        }
+    }
+
+    Ok(ExecResult {
+        code,
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
 }
 
 // ── File transfer helpers ───────────────────────────────────────────────
@@ -345,6 +488,7 @@ async fn sync_dir(
     remote_base: &str,
     prefix: &str,
     remote_files: &HashSet<String>,
+    filter: &SyncFilter<'_>,
     files_transferred: &mut u64,
     bytes_transferred: &mut u64,
 ) {
@@ -369,6 +513,13 @@ async fn sync_dir(
         } else {
             format!("{}/{}", prefix, name)
         };
+
+        // User selectivity (--no-media / --exclude / .screenpipeignore), on top
+        // of the always-on cruft filter above.
+        if filter.excluded(&name, &relative) {
+            continue;
+        }
+
         let remote_path = format!("{}/{}", remote_base, relative);
 
         let ft = match entry.file_type().await {
@@ -384,6 +535,7 @@ async fn sync_dir(
                 remote_base,
                 &relative,
                 remote_files,
+                filter,
                 files_transferred,
                 bytes_transferred,
             ))
@@ -441,8 +593,19 @@ async fn sync_dir(
 
 /// Sync the entire ~/.screenpipe directory to the remote server.
 pub async fn sync_to_remote(config: &SyncConfig, data_dir: &Path) -> SyncResult {
+    sync_to_remote_with_opts(config, data_dir, &SyncOptions::default()).await
+}
+
+/// Like [`sync_to_remote`] but with explicit selectivity options
+/// (`--no-media`, `--exclude`, `.screenpipeignore`). The plain
+/// [`sync_to_remote`] used by the desktop scheduler keeps full-sync behavior.
+pub async fn sync_to_remote_with_opts(
+    config: &SyncConfig,
+    data_dir: &Path,
+    opts: &SyncOptions,
+) -> SyncResult {
     // Wrap the entire sync in a timeout
-    match tokio::time::timeout(SYNC_TIMEOUT, sync_to_remote_inner(config, data_dir)).await {
+    match tokio::time::timeout(SYNC_TIMEOUT, sync_to_remote_inner(config, data_dir, opts)).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => SyncResult {
             ok: false,
@@ -497,7 +660,11 @@ async fn snapshot_db(live_db: &Path, dest: &Path) -> Result<()> {
         .with_context(|| format!("VACUUM INTO '{}' failed", dest_str))
 }
 
-async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<SyncResult> {
+async fn sync_to_remote_inner(
+    config: &SyncConfig,
+    data_dir: &Path,
+    opts: &SyncOptions,
+) -> Result<SyncResult> {
     info!(
         "sync starting → {}@{}:{}",
         config.user, config.host, config.port
@@ -589,6 +756,17 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
     let mut files_transferred: u64 = 0;
     let mut bytes_transferred: u64 = 0;
 
+    let filter = SyncFilter {
+        no_media: opts.no_media,
+        patterns: &opts.exclude,
+    };
+    if opts.no_media || !opts.exclude.is_empty() {
+        info!(
+            "selective sync: no_media={} exclude={:?}",
+            opts.no_media, opts.exclude
+        );
+    }
+
     // Recursively copy everything (db.sqlite is excluded by `should_skip`
     // — uploaded separately below from the snapshot).
     sync_dir(
@@ -597,6 +775,7 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
         &remote_base,
         "",
         &remote_files,
+        &filter,
         &mut files_transferred,
         &mut bytes_transferred,
     )
@@ -970,7 +1149,58 @@ mod tests {
         assert!(should_skip("target"));
         assert!(should_skip("something.tmp"));
         assert!(should_skip("app.log"));
+        // Recovery / backup cruft must be skipped (verified leaking to a
+        // remote host on 2026-06-20 — multi-GB db copies + secret backups).
+        assert!(should_skip("db.sqlite.corrupt-20260619-180618"));
+        assert!(should_skip("db.sqlite.bak-before-speaker-fix-20260609"));
+        assert!(should_skip("db.sqlite-wal.bak-before-speaker-fix-20260609"));
+        assert!(should_skip("db.sqlite-shm.corrupt-20260619-180618"));
+        assert!(should_skip("notes.db.recovered"));
+        assert!(should_skip("config.old"));
+        assert!(should_skip("thing.bak"));
+        // Stale secret-store copies must NEVER leave the machine.
+        assert!(should_skip("store.bin.bak-20260423-150300"));
+        assert!(should_skip(
+            "store.bin.encrypted-before-recovery-20260514-155057"
+        ));
+        // ...but the live secret store and real media are kept.
+        assert!(!should_skip("store.bin"));
         assert!(!should_skip("data"));
         assert!(!should_skip("some_audio.mp4"));
+        assert!(!should_skip("2026-06-20.mp4"));
+    }
+
+    #[test]
+    fn test_wildcard_match() {
+        assert!(wildcard_match("*.mp4", "data/x.mp4"));
+        assert!(wildcard_match("exports/*", "exports/clip.mp4"));
+        assert!(wildcard_match("models", "models"));
+        assert!(wildcard_match("*secret*", "my.secret.key"));
+        assert!(!wildcard_match("*.mp4", "notes.txt"));
+        assert!(!wildcard_match("exports/*", "data/x.mp4"));
+    }
+
+    #[test]
+    fn test_sync_filter() {
+        let none: Vec<String> = vec![];
+        let f = SyncFilter {
+            no_media: true,
+            patterns: &none,
+        };
+        assert!(f.excluded("data", "data"));
+        assert!(f.excluded("input_2026.mp4", "data/input_2026.mp4"));
+        assert!(f.excluded("clip.mp4", "exports/clip.mp4"));
+        assert!(!f.excluded("pipes", "pipes"));
+        assert!(!f.excluded("store.bin", "store.bin"));
+
+        // Patterns still apply; media kept when no_media is off.
+        let pats = vec!["*.secret".to_string()];
+        let f2 = SyncFilter {
+            no_media: false,
+            patterns: &pats,
+        };
+        assert!(f2.excluded("a.secret", "x/a.secret"));
+        assert!(!f2.excluded("a.txt", "x/a.txt"));
+        assert!(!f2.excluded("input.mp4", "data/input.mp4"));
     }
 }

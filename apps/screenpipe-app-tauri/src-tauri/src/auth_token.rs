@@ -36,6 +36,11 @@ use screenpipe_secrets::SecretStore;
 
 /// SecretStore row key for the cloud auth token.
 const AUTH_TOKEN_KEY: &str = "cloud.auth_token";
+/// SecretStore row key for the cloud-sync master password. MUST match the
+/// engine's `SYNC_MASTER_PASSWORD_KEY` in
+/// `crates/screenpipe-engine/src/sync_api.rs` so the lazy engine init and the
+/// app auto-start read the same value.
+const SYNC_PASSWORD_KEY: &str = "sync.master_password";
 /// Magic header that marks an *encrypted* store.bin (so we never try to JSON
 /// parse / scrub it as plaintext).
 const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
@@ -150,6 +155,37 @@ pub async fn store_cloud_token(token: Option<&str>) -> anyhow::Result<()> {
 pub async fn load_cloud_token() -> Option<String> {
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     load_token_at(&dir, read_encryption_key()).await
+}
+
+/// Persist the cloud-sync master password to the encrypted SecretStore.
+///
+/// The SecretStore (`db.sqlite`) is ALWAYS keychain-encrypted, unlike
+/// `store.bin` (only encrypted when the user enabled store encryption), so this
+/// avoids keeping the password as a merely-base64 blob in `store.bin`.
+pub async fn store_sync_password(password: &str) -> anyhow::Result<()> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let store = secret_store_at(&dir, write_encryption_key()?)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("could not open secret store at {}", dir.display()))?;
+    store.set(SYNC_PASSWORD_KEY, password.as_bytes()).await
+}
+
+/// Load the cloud-sync master password from the encrypted SecretStore.
+pub async fn load_sync_password() -> Option<String> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let store = secret_store_at(&dir, read_encryption_key()).await?;
+    let bytes = store.get(SYNC_PASSWORD_KEY).await.ok()??;
+    String::from_utf8(bytes).ok().filter(|s| !s.is_empty())
+}
+
+/// Clear the cloud-sync master password from the SecretStore (on disable/lock).
+/// Deleting a row needs no encryption key.
+pub async fn clear_sync_password() -> anyhow::Result<()> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let store = secret_store_at(&dir, None)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("could not open secret store at {}", dir.display()))?;
+    store.delete(SYNC_PASSWORD_KEY).await
 }
 
 /// One-time migration (#3943): move the cloud token out of the plaintext files

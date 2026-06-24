@@ -37,6 +37,17 @@ Use `#` for Python, `//` for Rust/TS/JS/Swift. Keep it as the first comment in t
 - **Regression checklist**: `TESTING.md` — must-read before changing window management, tray/dock, monitors, or audio. Lists every edge case that has caused regressions with commit references.
 - regularly check ci/cd which runs automated tests to verify if we broke something or not
 
+## Github issues and Pull Requests
+
+Always add visuals to issues or PR bodies using either:
+- screen recording + computer use + running the app and showing the before and after experience clearly (clicking, typing etc)
+- taking screenshots of the UI and adding, or adding as video/gif
+- generating mockups of the UI in html + screenshot
+- ascii mockups
+- or generating videos using https://github.com/heygen-com/hyperframes + if you have access to eleven labs / veo / grok to present the video or generate images / video
+
+This will help maintainers review and ultimately resolve and merge contributions faster
+
 ## macOS Dev Builds
 - Dev builds are signed with a developer certificate for consistent permissions
 - Config: `apps/screenpipe-app-tauri/src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity`

@@ -100,7 +100,7 @@ if the one-click install doesn't appear or you prefer manual config, edit `~/.co
 ```toml
 [mcp_servers.screenpipe]
 command = "npx"
-args = ["-y", "screenpipe-mcp@latest"]
+args = ["-y", "screenpipe-mcp"]
 enabled = true
 ```
 
@@ -125,7 +125,7 @@ Warp's Agent Mode supports MCP. Open **Settings** → **AI** → **Manage MCP se
 {
   "screenpipe": {
     "command": "npx",
-    "args": ["-y", "screenpipe-mcp@latest"],
+    "args": ["-y", "screenpipe-mcp"],
     "start_on_launch": true
   }
 }
@@ -158,7 +158,7 @@ if you need remote MCP access or prefer HTTP over stdio, the `screenpipe-mcp` np
 ### localhost only (default)
 
 ```bash
-npx screenpipe-mcp-http --port 3031
+npx -y screenpipe-mcp-http --port 3031
 ```
 
 this starts an HTTP MCP server on `http://127.0.0.1:3031`. useful for tools like [Msty](https://msty.studio) that support HTTP MCP transport.
@@ -168,7 +168,7 @@ this starts an HTTP MCP server on `http://127.0.0.1:3031`. useful for tools like
 to access the server from other machines on your network, use `--listen-on-lan`. **this requires an API key for security:**
 
 ```bash
-npx screenpipe-mcp-http --port 3031 --listen-on-lan --api-key your-secret-key
+npx -y screenpipe-mcp-http --port 3031 --listen-on-lan --api-key your-secret-key
 ```
 
 then from a remote machine, call the server with the bearer token:
@@ -234,11 +234,12 @@ test your setup with MCP Inspector:
 npx @modelcontextprotocol/inspector npx screenpipe-mcp
 ```
 
-## troubleshooting matrix
+## troubleshooting
 
 | symptom | likely fix |
 | --- | --- |
 | no MCP tools appear | restart the client and verify the config path |
+| mcp not connecting | ensure screenpipe is running and reachable at `http://localhost:3030/health`, then restart the client after config changes |
 | `npx` not found | install Node.js 18+ or use the one-click in-app setup |
 | `403` or unauthorized | set `SCREENPIPE_LOCAL_API_KEY` or refresh API auth in settings |
 | empty results | wait for capture, broaden the query, or verify `/search?limit=1` |
@@ -246,6 +247,9 @@ npx @modelcontextprotocol/inspector npx screenpipe-mcp
 | Claude Desktop on Windows cannot see config | check whether you use the normal or Microsoft Store/MSIX install |
 | Codex does not see screenpipe | open a new Codex session after the app writes `~/.codex/config.toml` |
 | HTTP transport not reachable | confirm `screenpipe-mcp-http` port and firewall/LAN rules |
+| macOS automation not working | grant accessibility permissions in System Settings → Privacy & Security → Accessibility |
+
+still stuck? [ask in our discord](https://discord.gg/screenpipe) — the community can help debug MCP issues.
 
 ## requirements
 
@@ -260,24 +264,11 @@ npx @modelcontextprotocol/inspector npx screenpipe-mcp
 
 ## manual config (advanced)
 
+the per-client manual setups above (Claude Desktop, Codex) cover most cases. these extra targets are for editors not listed above:
+
 <Expandable title="manual JSON configuration">
 
-if the one-click methods above don't work, you can manually edit config files.
-
-**claude desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%AppData%\Claude\claude_desktop_config.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "screenpipe": {
-      "command": "npx",
-      "args": ["-y", "screenpipe-mcp"]
-    }
-  }
-}
-```
-
-**cursor** — create `.cursor/mcp.json` in your project root:
+**cursor (project-scoped)** — create `.cursor/mcp.json` in your project root:
 
 ```json
 {
@@ -301,15 +292,3 @@ npm install && npm run build
 then point your editor to `node /path/to/screenpipe-mcp/dist/index.js`.
 
 </Expandable>
-
-## troubleshooting
-
-**mcp not connecting?**
-- ensure screenpipe is running (`screenpipe` in terminal)
-- check it's accessible at http://localhost:3030/health
-- restart Claude Desktop / Cursor after config changes
-
-**macos automation not working?**
-- grant accessibility permissions in System Settings > Privacy & Security > Accessibility
-
-still stuck? [ask in our discord](https://discord.gg/screenpipe) — the community can help debug MCP issues.

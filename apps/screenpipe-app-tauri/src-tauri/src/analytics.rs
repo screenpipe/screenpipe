@@ -492,8 +492,13 @@ pub fn start_analytics(
 ) -> Result<Arc<AnalyticsManager>, Box<dyn std::error::Error>> {
     let is_debug = std::env::var("TAURI_ENV_DEBUG").unwrap_or("false".to_string()) == "true";
 
-    // Skip analytics in debug mode or when debug assertions are enabled
-    let should_enable_analytics = analytics_enabled && !is_debug && !cfg!(debug_assertions);
+    // Skip analytics in debug mode, when debug assertions are enabled, or in
+    // CI / automation (GitHub Actions, etc. — see
+    // screenpipe_engine::analytics::telemetry_disabled_by_env).
+    let should_enable_analytics = analytics_enabled
+        && !is_debug
+        && !cfg!(debug_assertions)
+        && !screenpipe_engine::analytics::telemetry_disabled_by_env();
 
     let analytics_manager = Arc::new(AnalyticsManager::new(
         posthog_api_key,
