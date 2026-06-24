@@ -530,8 +530,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Opt-out: when the user disables auto title generation (to save tokens),
     // skip the extra LLM call entirely — chats keep the fallback title.
     const autoTitleEnabled = settings?.autoGenerateChatTitles !== false;
+    // Skip AI titling for pipe executions — their title is always
+    // `pipeName #executionId`, set by the recorder / watch session.
+    // Only allow AI titles when the user manually renames (titleSource
+    // would be "user" at that point, so this gate is a no-op for renames).
+    const isPipeChat = existing?.kind === "pipe-run" || existing?.kind === "pipe-watch";
     if (
       autoTitleEnabled &&
+      !isPipeChat &&
       titleSource === "fallback" &&
       rawContent &&
       hasValidPreset &&

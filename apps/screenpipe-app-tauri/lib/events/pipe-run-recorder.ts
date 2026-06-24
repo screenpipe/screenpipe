@@ -204,6 +204,7 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   const conv: ChatConversation = {
     id: sid,
     title: `${buf.pipeName} #${buf.executionId}`,
+    titleSource: "user",
     messages,
     createdAt: buf.firstEventAt,
     updatedAt: buf.lastEventAt,
