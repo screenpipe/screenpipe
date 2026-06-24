@@ -207,6 +207,14 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         config.is_disabled("start_recording"),
         |app| {
             let _ = app.emit("shortcut-start-recording", ());
+            // The frontend listener only shows an in-app toast, which is
+            // invisible when the main window is hidden — i.e. exactly when a
+            // global hotkey is used. Fire a notification panel so the user gets
+            // glance-level confirmation regardless of window visibility.
+            crate::notifications::client::send(
+                "recording started",
+                "screen recording has been initiated",
+            );
         },
     )
     .await?;
@@ -217,6 +225,10 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         config.is_disabled("stop_recording"),
         |app| {
             let _ = app.emit("shortcut-stop-recording", ());
+            crate::notifications::client::send(
+                "recording paused",
+                "capture paused — pipes and search still available",
+            );
         },
     )
     .await?;

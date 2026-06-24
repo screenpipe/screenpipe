@@ -44,7 +44,7 @@ describe('isVertexMaasModel', () => {
 		expect(isVertexMaasModel('claude-haiku-4-5')).toBe(false);
 		expect(isVertexMaasModel('gemini-3-flash')).toBe(false);
 		// OpenRouter-style names with publisher prefix shouldn't be treated as Vertex MaaS.
-		expect(isVertexMaasModel('deepseek/deepseek-chat')).toBe(false);
+		expect(isVertexMaasModel('mistralai/mistral-small')).toBe(false);
 		expect(isVertexMaasModel('meta-llama/llama-4-scout')).toBe(false);
 	});
 

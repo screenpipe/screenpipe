@@ -51,10 +51,15 @@ export const config: TestrunnerConfig = {
   waitforTimeout: isCi ? 20000 : 10000,
   connectionRetryTimeout: isWindowsCi ? 180000 : 60000,
   connectionRetryCount: isWindowsCi ? 12 : 3,
-  // CI-only: retry a whole spec file once on transient WebDriver glitches
-  // (e.g. "Session not found" on WebKit) before failing the run. Local runs
-  // skip retries so flakes surface immediately during development.
-  specFileRetries: isCi ? 1 : 0,
+  // CI-only: retry a whole spec file on transient WebDriver glitches
+  // (e.g. "Session not found" on WebKit) before failing the run. The suite has
+  // a distributed ~1-flaky-failure-per-run rate spread across different specs
+  // (focus-server, owned-browser, timeline, etc.), so a single retry wasn't
+  // enough and a different spec reddened E2E almost every run. Three retries
+  // make a genuine flake (which passes most of the time) very unlikely to
+  // survive, while a truly broken spec still fails every attempt.
+  // Local runs skip retries so flakes surface immediately during development.
+  specFileRetries: isCi ? 3 : 0,
   specFileRetriesDelay: 5,
   framework: 'mocha',
   reporters: getReporters() as Options.Testrunner['reporters'],

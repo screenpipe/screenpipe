@@ -65,8 +65,45 @@ function showSignedOutToast() {
   });
 }
 
-function isScreenpipeApi(url: string): boolean {
-  return url.includes("screenpi.pe") || url.includes("screenpipe.com");
+// Only the screenpipe CLOUD API (screenpi.pe / screenpipe.com and their
+// subdomains) carries the login session whose 401/403 means "signed out".
+//
+// Match on the URL *host* — never a substring of the whole URL. The local
+// engine at localhost:3030 routinely carries a screenpipe-domain value in the
+// query string (e.g. `?instance=member@screenpi.pe` for a connected account),
+// and a substring match treats that local URL as the cloud API. The local
+// engine's 401s are connection-level (an OAuth token that failed to refresh —
+// e.g. during a transient DNS/network blip), NOT session expiry, so misreading
+// them signed the user out and paused recording. This bit anyone whose
+// connected-account email is @screenpi.pe / @screenpipe.com.
+export function isScreenpipeApi(url: string): boolean {
+  let host: string;
+  try {
+    const base =
+      typeof window !== "undefined" && window.location?.href
+        ? window.location.href
+        : "http://localhost";
+    host = new URL(url, base).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  // The local engine is never the cloud auth surface.
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  ) {
+    return false;
+  }
+
+  return (
+    host === "screenpi.pe" ||
+    host === "screenpipe.com" ||
+    host.endsWith(".screenpi.pe") ||
+    host.endsWith(".screenpipe.com")
+  );
 }
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {

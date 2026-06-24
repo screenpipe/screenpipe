@@ -13,6 +13,16 @@ the privacy filter removes personal info from your screen data before the AI you
 
 for the full local/cloud data-flow model, see [privacy data flow](/privacy-data-flow).
 
+## redaction is on by default
+
+you don't have to switch anything on: screenpipe redacts the values you type into form fields — passwords, card numbers, secrets — locally, before they're ever stored or sent. each redaction is labeled in plain language so you can see what was scrubbed.
+
+<Frame caption="form-field values are scrubbed on-device, by default">
+  <img src="/public/app-screenshots/np21-privacy.gif" alt="before and after on-device redaction of a form" />
+</Frame>
+
+want to see exactly what screenpipe reads? hover a capture setting and it highlights the regions of the screen it looks at.
+
 ## choose a privacy mode
 
 | mode | best for | what happens |
@@ -132,8 +142,8 @@ in local mode, the enclave is not in the path: redaction happens on your machine
 
 - **latency.** adds ~1-2 seconds per search on first hit. responses are cached by content hash for 1 hour so repeated data (same email thread, same IDE file) is nearly free.
 - **model imperfection.** >99% on common categories in our tests, but not perfect. don't rely on it as your only line of defense for critical secrets — combine with the "ignored windows" filter and don't record password managers.
-- **text only.** the filter operates on text already extracted from the accessibility tree or OCR fallback. raw image frames aren't uploaded. if you enable cloud archive that uploads frames, those are separate and encrypted end-to-end by your own key.
-- **pro tier.** the shield icon is a Pro feature. compute inside a confidential enclave isn't free. non-pro users see the shield with an upgrade link.
+- **text and images.** the enclave filter operates on text already extracted from the accessibility tree or OCR fallback. separately, a local image-redaction model can redact screenshots on-device when image PII removal is enabled. raw image frames aren't uploaded to the enclave. if you enable cloud archive that uploads frames, those are separate and encrypted end-to-end by your own key.
+- **available on paid plans.** the shield icon is available on paid plans. compute inside a confidential enclave isn't free. users on the free plan see the shield with an upgrade link.
 - **fail closed.** if the enclave is unreachable, your search call fails with a clear error rather than silently returning unredacted text. you never get redaction that didn't happen.
 
 ## open source

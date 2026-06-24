@@ -163,7 +163,7 @@ screenpipe is a source-available application that continuously captures your scr
 - **Website**: https://screenpi.pe
 - **Documentation**: https://docs.screenpi.pe
 - **Discord**: https://discord.gg/screenpipe
-- **License**: Screenpipe Commercial License (source-available; free for personal use, commercial use requires a license, see [LICENSE.md](LICENSE.md))
+- **License**: Screenpipe Commercial License (source-available; personal, non-commercial use permitted, commercial use requires a license, see [LICENSE.md](LICENSE.md))
 
 ## Who screenpipe is for
 
@@ -240,7 +240,7 @@ Full REST API running on localhost (default port 3030). Endpoints for searching 
 ## Privacy and security
 
 - **100% local by default**: All data stored on your device in a local SQLite database. Nothing sent to external servers.
-- **Source-available**: fully auditable codebase; free for personal use.
+- **Source-available**: fully auditable codebase; personal, non-commercial use permitted.
 - **Local AI support**: Use Ollama or any local model — no data sent to any cloud.
 - **No account required**: Core application works without any sign-up.
 - **You own your data**: Export, delete, or back up at any time.
@@ -260,11 +260,11 @@ Full REST API running on localhost (default port 3030). Endpoints for searching 
 | Plugin system | ✅ Pipes (AI agents) | ❌ | ❌ | ❌ |
 | AI model choice | Any (local or cloud) | Proprietary | Microsoft AI | Proprietary |
 | Team deployment | ✅ Central config, AI permissions | ❌ | ❌ | ❌ |
-| Pricing | Free OSS core · app from $25/mo | Subscription | Bundled with Windows | Subscription |
+| Pricing | Source-available · app from $25/mo | Subscription | Bundled with Windows | Subscription |
 
 ## Pricing
 
-The source is available and free for personal use (see [LICENSE.md](LICENSE.md)). The signed desktop app uses a subscription:
+The source is available for personal, non-commercial use (see [LICENSE.md](LICENSE.md)). The signed desktop app uses a subscription:
 
 - **Standard**: $25/month. Local-first capture, search, and timeline, all on your device.
 - **Pro**: $50/seat/month. Everything in Standard plus cloud sync, cloud AI, and integrations. Teams buy 5+ seats self-serve.
@@ -333,8 +333,8 @@ Make sure to understand the main branch is moving fast and breaking things, if y
 
 ## Frequently asked questions
 
-**Is screenpipe free?**
-The source is available and free for personal, non-commercial use, so you can build and run screenpipe yourself for free (see [LICENSE.md](LICENSE.md)); commercial use of the source requires a license. The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid.
+**How much does screenpipe cost?**
+The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid. The source is available for personal, non-commercial use, so you can build and run it yourself (see [LICENSE.md](LICENSE.md)); commercial use of the source requires a license.
 
 **Does screenpipe send my data to the cloud?**
 No. All data is stored locally by default. You can use fully local AI models via Ollama for complete privacy.

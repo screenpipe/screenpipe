@@ -127,6 +127,26 @@ export function pickProvider(env: Env): {
 
 // ─── Provider calls ─────────────────────────────────────────────────────────
 
+/**
+ * Map the requested languages to Deepgram nova-3's `language` query param.
+ *
+ * nova-3 multilingual transcription uses `language=multi` (runtime code-switching).
+ * The old `detect_language=<code>` form is a nova-2-era parameter that nova-3
+ * silently ignores — it then defaults to English, which is the root cause of #4402
+ * (cloud transcription only ever returned English). A single explicit language is
+ * forced for best accuracy; "none" (auto) or "several" both map to multilingual.
+ */
+export function deepgramLanguageQuery(languages: string[]): string {
+  const langs = (languages || [])
+    .map((l) => l.trim().toLowerCase())
+    .filter((l) => l && l !== 'true' && l !== 'false');
+  if (langs.length === 1 && langs[0] !== 'multi') {
+    return `&language=${encodeURIComponent(langs[0])}`;
+  }
+  // none selected (auto-detect) or several selected → multilingual detection
+  return '&language=multi';
+}
+
 export async function callDeepgram(
   req: TranscriptionRequest,
   env: Env,
@@ -135,9 +155,7 @@ export async function callDeepgram(
   const url =
     'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&diarize=true&utterances=true&sample_rate=' +
     req.sampleRate +
-    (req.languages.length > 0
-      ? '&' + req.languages.map((l) => `detect_language=${l}`).join('&')
-      : '');
+    deepgramLanguageQuery(req.languages);
 
   const MAX_ATTEMPTS = 2;
   let lastError = '';

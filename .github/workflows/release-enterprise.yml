@@ -434,7 +434,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CI: false
+          # Keep CI=true while allowing Tauri's DMG bundler to render the
+          # background image and icon layout.
+          # See: https://github.com/tauri-apps/tauri-action/issues/740
+          TAURI_BUNDLER_DMG_IGNORE_CI: true
           SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
           MACOSX_DEPLOYMENT_TARGET: "14.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"

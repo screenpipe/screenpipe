@@ -30,6 +30,7 @@ pub mod google_calendar;
 pub mod google_docs;
 pub mod google_sheets;
 pub mod granola;
+pub mod hermes;
 pub mod hubspot;
 pub mod intercom;
 pub mod jira;
@@ -50,6 +51,7 @@ pub mod obsidian_memories;
 pub mod odoo;
 pub mod openclaw;
 pub mod otter;
+pub mod outlook_email;
 pub mod perplexity;
 pub mod pipedrive;
 pub mod pocket;
@@ -303,6 +305,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(confluence::Confluence),
         Box::new(salesforce::Salesforce),
         Box::new(microsoft365::Microsoft365),
+        Box::new(outlook_email::OutlookEmail),
         Box::new(trello::Trello),
         Box::new(zendesk::Zendesk),
         Box::new(stripe::Stripe),
@@ -335,6 +338,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(codex::Codex),
         Box::new(workflowy::Workflowy),
         Box::new(openclaw::OpenClaw),
+        Box::new(hermes::Hermes),
     ]
 }
 
@@ -960,6 +964,20 @@ mod tests {
             Value::String("https://example.com/webhook".to_string()),
         );
         creds
+    }
+
+    #[test]
+    fn agent_integrations_are_registered() {
+        let ids: Vec<&str> = all_integrations().iter().map(|i| i.def().id).collect();
+        // The two embeddable-agent gateways pipes can call back into.
+        assert!(
+            ids.contains(&"hermes"),
+            "hermes integration must be registered"
+        );
+        assert!(
+            ids.contains(&"openclaw"),
+            "openclaw integration must be registered"
+        );
     }
 
     #[tokio::test]

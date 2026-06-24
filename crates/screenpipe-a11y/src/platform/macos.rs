@@ -16,7 +16,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicI8, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
@@ -56,6 +56,8 @@ fn record_input_monitoring_truth(granted: bool) {
 const KEY_C: u16 = 8;
 const KEY_X: u16 = 7;
 const KEY_V: u16 = 9;
+// cidre 0.13.1 does not expose kCGEventTargetUnixProcessID yet.
+const CG_EVENT_TARGET_UNIX_PROCESS_ID: cg::EventField = cg::EventField(40);
 
 #[repr(C)]
 struct UCKeyboardLayout {
@@ -261,6 +263,7 @@ impl UiRecorder {
         // Shared state for current app/window between threads (lock-free)
         let current_app = Arc::new(ArcSwap::from_pointee(None::<String>));
         let current_window = Arc::new(ArcSwap::from_pointee(None::<String>));
+        let current_pid = Arc::new(AtomicI32::new(0));
 
         // Thread 1: CGEventTap for input events. Requires Input Monitoring.
         // When not granted we skip it and fall back to the clipboard poller
@@ -272,9 +275,10 @@ impl UiRecorder {
             let config1 = self.config.clone();
             let app1 = current_app.clone();
             let window1 = current_window.clone();
+            let pid1 = current_pid.clone();
             let feed1 = activity_feed.clone();
             threads.push(thread::spawn(move || {
-                run_event_tap(tx1, stop1, start_time, config1, app1, window1, feed1);
+                run_event_tap(tx1, stop1, start_time, config1, app1, window1, pid1, feed1);
             }));
         } else {
             tracing::warn!(
@@ -304,8 +308,9 @@ impl UiRecorder {
         let config2 = self.config.clone();
         let app2 = current_app.clone();
         let window2 = current_window.clone();
+        let pid2 = current_pid.clone();
         threads.push(thread::spawn(move || {
-            run_app_observer(tx2, stop2, start_time, config2, app2, window2);
+            run_app_observer(tx2, stop2, start_time, config2, app2, window2, pid2);
         }));
 
         Ok((
@@ -565,6 +570,7 @@ struct ContextCaptureRequest {
     x: f64,
     y: f64,
     config: UiCaptureConfig,
+    app_pid: i32,
     app_name: Option<String>,
     window_title: Option<String>,
     start: Instant,
@@ -605,6 +611,7 @@ struct TapState {
     /// event tap callback (the hot path for every input event).
     current_app: Arc<ArcSwap<Option<String>>>,
     current_window: Arc<ArcSwap<Option<String>>>,
+    current_pid: Arc<AtomicI32>,
     activity_feed: Option<ActivityFeed>,
     /// Bounded channel for context capture requests — a single worker thread
     /// processes these instead of spawning a thread per click.
@@ -737,6 +744,7 @@ fn run_event_tap(
     config: UiCaptureConfig,
     current_app: Arc<ArcSwap<Option<String>>>,
     current_window: Arc<ArcSwap<Option<String>>>,
+    current_pid: Arc<AtomicI32>,
     activity_feed: Option<ActivityFeed>,
 ) {
     // Build event mask - always include KEY_UP for activity tracking
@@ -760,7 +768,9 @@ fn run_event_tap(
         .name("ctx-capture".into())
         .spawn(move || {
             while let Ok(req) = context_rx.recv() {
-                if let Some(element) = get_element_at_position(req.x, req.y, &req.config) {
+                if let Some(element) =
+                    get_element_at_position(req.x, req.y, &req.config, req.app_pid)
+                {
                     let ctx_event = UiEvent {
                         id: None,
                         timestamp: Utc::now(),
@@ -818,6 +828,7 @@ fn run_event_tap(
         text_buf: Mutex::new(TextBuffer::new(config.text_timeout_ms)),
         current_app,
         current_window,
+        current_pid,
         activity_feed,
         context_tx,
         clipboard_tx,
@@ -971,6 +982,12 @@ extern "C" fn tap_callback(
     // Lock-free reads — no mutex contention in the input event path
     let app_name = (**state.current_app.load()).clone();
     let window_title = (**state.current_window.load()).clone();
+    let event_target_pid = event.field_i64(CG_EVENT_TARGET_UNIX_PROCESS_ID) as i32;
+    let app_pid = if event_target_pid > 0 {
+        event_target_pid
+    } else {
+        state.current_pid.load(Ordering::Acquire)
+    };
 
     // Check if we should capture based on app/window exclusions
     if let Some(ref app) = app_name {
@@ -1022,6 +1039,7 @@ extern "C" fn tap_callback(
                     x: loc.x,
                     y: loc.y,
                     config: state.config.clone(),
+                    app_pid,
                     app_name: app_name.clone(),
                     window_title: window_title.clone(),
                     start: state.start,
@@ -1221,6 +1239,7 @@ struct ObserverCallbackState {
     config: UiCaptureConfig,
     current_app: Arc<ArcSwap<Option<String>>>,
     current_window: Arc<ArcSwap<Option<String>>>,
+    current_pid: Arc<AtomicI32>,
     focus: Mutex<FocusState>,
     refresh_requested: Arc<AtomicBool>,
 }
@@ -1229,6 +1248,8 @@ fn emit_focus_state(state: &ObserverCallbackState) {
     let Some((pid, name)) = get_focused_app_info() else {
         return;
     };
+
+    state.current_pid.store(pid, Ordering::Release);
 
     if !state.config.should_capture_app(&name) {
         return;
@@ -1318,6 +1339,7 @@ fn run_app_observer(
     config: UiCaptureConfig,
     current_app: Arc<ArcSwap<Option<String>>>,
     current_window: Arc<ArcSwap<Option<String>>>,
+    current_pid: Arc<AtomicI32>,
 ) {
     let workspace = ns::Workspace::shared();
     let mut notification_center = workspace.notification_center();
@@ -1328,6 +1350,7 @@ fn run_app_observer(
         config,
         current_app,
         current_window,
+        current_pid,
         focus: Mutex::new(FocusState {
             last_app: None,
             last_pid: 0,
@@ -1531,10 +1554,19 @@ fn get_focused_app_info() -> Option<(i32, String)> {
 // Accessibility Helpers
 // ============================================================================
 
-fn get_element_at_position(x: f64, y: f64, config: &UiCaptureConfig) -> Option<ElementContext> {
+fn get_element_at_position(
+    x: f64,
+    y: f64,
+    config: &UiCaptureConfig,
+    app_pid: i32,
+) -> Option<ElementContext> {
     // Skip menu bar area (top ~30 pixels) to avoid conflicts with tray icon accessibility
     // This prevents crashes when clicking tray icons while accessibility capture is active
     if y < 30.0 {
+        return None;
+    }
+
+    if is_own_process(app_pid) {
         return None;
     }
 
@@ -1618,6 +1650,10 @@ fn get_element_at_position(x: f64, y: f64, config: &UiCaptureConfig) -> Option<E
         automation_id: None,
         bounds,
     })
+}
+
+fn is_own_process(pid: i32) -> bool {
+    pid > 0 && pid == std::process::id() as i32
 }
 
 fn get_element_bounds(elem: &ax::UiElement) -> Option<ElementBounds> {
@@ -2255,6 +2291,14 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_own_process_detection() {
+        assert!(is_own_process(std::process::id() as i32));
+        assert!(!is_own_process(0));
+        assert!(!is_own_process(-1));
+        assert!(!is_own_process((std::process::id() as i32) + 1));
     }
 
     #[test]

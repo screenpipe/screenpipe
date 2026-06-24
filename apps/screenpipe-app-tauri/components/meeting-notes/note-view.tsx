@@ -1286,6 +1286,21 @@ export function NoteView({
               >
                 <FileText className="h-3.5 w-3.5" />
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSummarize}
+                disabled={summarizing}
+                title="summarize meeting"
+                aria-label="summarize meeting"
+                className="h-9 w-9 rounded-none p-0"
+              >
+                {summarizing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+              </Button>
               {!isLive && (
                 <Button
                   variant="default"

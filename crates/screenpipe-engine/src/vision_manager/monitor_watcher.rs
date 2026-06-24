@@ -56,6 +56,35 @@ const WEDGE_MIN_UPTIME_SECS: f64 = 120.0;
 /// (e.g. a disk still stalled) can't turn into a restart storm.
 const WEDGE_RESTART_COOLDOWN: Duration = Duration::from_secs(300);
 
+// ── Gone-silent / dead-loop watchdog ────────────────────────────────────────
+//
+// The wedge watchdog above only fires while the loop is STILL ATTEMPTING
+// (`last_capture_attempt_ts` fresh). It deliberately misses the case this
+// report surfaced: status stays `Running` but the capture loop has stopped
+// even attempting — the macOS ScreenCaptureKit stream froze and the loop is
+// parked, or the loop/task exited without flipping status. `StreamLivenessWatch`
+// (event_driven_capture) catches the frozen-but-latched stream by frame-seq, and
+// `status != Running` catches a clean stop, but a status-stuck-Running dead loop
+// falls through all of them — the app would show "recording" for hours with no
+// frames (only an OS display reconfigure on lock/unlock unwedged it).
+//
+// Same heartbeat, same low-FP reasoning: a healthy pipeline ticks
+// `last_db_write_ts` on every write AND every dedup-skip, even on a fully static
+// screen — so a long-frozen heartbeat past warm-up is broken capture regardless
+// of whether attempts are still fresh. Restarting is safe here because
+// `VisionManager::stop` aborts with a bounded timeout (it can't hang on a wedged
+// loop). Shares `WEDGE_RESTART_COOLDOWN` with the still-attempting path.
+
+/// No frame persisted for at least this long (loop no longer attempting) →
+/// gone-silent. Higher than `WEDGE_DB_STALE_SECS` because we can't lean on a
+/// fresh attempt heartbeat to confirm the rest of the pipeline is alive, so we
+/// want extra confirmation before the disruptive restart.
+const SILENT_DB_STALE_SECS: u64 = 240;
+/// Up this long with the loop having attempted at least once but never
+/// persisting a single frame → started-but-never-produced. Generous so a slow
+/// first model load / device probe is never mistaken for a stall.
+const SILENT_NEVER_PRODUCED_UPTIME_SECS: f64 = 240.0;
+
 fn now_epoch_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -79,6 +108,43 @@ fn vision_capture_wedged(
         // last_db_write_ts == 0 means "never written yet" (warming up), not a stall.
         && last_db_write_ts > 0
         && now_ts.saturating_sub(last_db_write_ts) > WEDGE_DB_STALE_SECS
+}
+
+/// Pure decision: has vision capture gone fully silent — status would be
+/// `Running` (checked by the caller) but no frame has persisted for a long time
+/// while the loop is no longer even attempting, so [`vision_capture_wedged`]
+/// won't fire? Covers two shapes the other recovery paths miss:
+/// - **went-silent**: wrote frames once, then both writes and attempts stopped
+///   (frozen SCK stream + parked loop, or an exited capture task).
+/// - **never-produced**: attempted but never persisted a single frame well past
+///   warm-up.
+///
+/// Clock-free for unit testing, mirroring [`vision_capture_wedged`].
+fn vision_capture_silent(
+    uptime_secs: f64,
+    last_capture_attempt_ts: u64,
+    last_db_write_ts: u64,
+    now_ts: u64,
+) -> bool {
+    if uptime_secs <= WEDGE_MIN_UPTIME_SECS {
+        return false;
+    }
+    // Loop must have attempted at least once: if it never even attempted, a
+    // restart of the same config is unlikely to help (permission/monitor issue,
+    // handled elsewhere) and we'd risk a restart loop.
+    if last_capture_attempt_ts == 0 {
+        return false;
+    }
+    let attempts_stopped =
+        now_ts.saturating_sub(last_capture_attempt_ts) >= WEDGE_ATTEMPT_FRESH_SECS;
+
+    let went_silent = last_db_write_ts > 0
+        && now_ts.saturating_sub(last_db_write_ts) > SILENT_DB_STALE_SECS
+        && attempts_stopped;
+
+    let never_produced = last_db_write_ts == 0 && uptime_secs > SILENT_NEVER_PRODUCED_UPTIME_SECS;
+
+    went_silent || never_produced
 }
 
 /// Start the monitor watcher that polls for monitor changes.
@@ -286,13 +352,17 @@ pub async fn start_monitor_watcher(
                 continue;
             }
 
-            // ── Silent-wedge watchdog (#3939) ───────────────────────────────
-            // status == Running, but is the loop actually persisting frames? If
-            // it has been attempting while writing nothing for a sustained
-            // window, the write path is wedged — restart capture to recover
-            // (cooldown-gated so a still-stalled disk can't cause a restart
-            // storm). See the module-level comment for why this won't fire on a
-            // healthy static screen.
+            // ── Capture stall watchdog (#3939) ──────────────────────────────
+            // status == Running, but is the loop actually persisting frames?
+            // Two restartable shapes (see the module-level comments):
+            //   - still-attempting wedge: attempts fresh, write path stalled
+            //     (DB pool saturated) — `vision_capture_wedged`.
+            //   - gone-silent / never-produced: heartbeat frozen and the loop
+            //     stopped even attempting (frozen SCK stream + parked loop, an
+            //     exited task, or a pipeline that never produced) —
+            //     `vision_capture_silent`.
+            // Both are cooldown-gated so a stall a restart can't fix can't cause
+            // a restart storm, and neither fires on a healthy static screen.
             {
                 let now_ts = now_epoch_secs();
                 let snap = vision_manager.vision_metrics().snapshot();
@@ -302,20 +372,32 @@ pub async fn start_monitor_watcher(
                     snap.last_db_write_ts,
                     now_ts,
                 );
+                let silent = vision_capture_silent(
+                    snap.uptime_secs,
+                    snap.last_capture_attempt_ts,
+                    snap.last_db_write_ts,
+                    now_ts,
+                );
                 let cooldown_ok = last_vision_restart
                     .map(|t| t.elapsed() >= WEDGE_RESTART_COOLDOWN)
                     .unwrap_or(true);
-                if wedged && cooldown_ok {
+                if (wedged || silent) && cooldown_ok {
                     let db_stale = now_ts.saturating_sub(snap.last_db_write_ts);
                     let attempt_age = now_ts.saturating_sub(snap.last_capture_attempt_ts);
+                    let reason = if wedged {
+                        "still-attempting wedge"
+                    } else {
+                        "gone-silent stall"
+                    };
                     warn!(
-                        "vision capture wedged: status=Running, attempts fresh ({}s ago) but \
+                        "vision capture stalled ({}): status=Running, last attempt {}s ago, \
                          no frame persisted for {}s — restarting VisionManager (#3939)",
-                        attempt_age, db_stale
+                        reason, attempt_age, db_stale
                     );
                     let _ = screenpipe_events::send_event(
                         "vision_capture_wedge_restart",
                         serde_json::json!({
+                            "reason": reason,
                             "db_stale_secs": db_stale,
                             "attempt_age_secs": attempt_age,
                             "uptime_secs": snap.uptime_secs,
@@ -572,5 +654,57 @@ mod tests {
         assert!(vision_capture_wedged(600.0, NOW - 3, NOW - 121, NOW));
         // attempt 60s ago is not "< 60s fresh" → treat as not actively attempting.
         assert!(!vision_capture_wedged(600.0, NOW - 60, NOW - 200, NOW));
+    }
+
+    // ── vision_capture_silent (gone-silent / never-produced) ────────────────
+
+    #[test]
+    fn healthy_or_static_screen_is_not_silent() {
+        // Wrote + attempted 1s ago → healthy.
+        assert!(!vision_capture_silent(600.0, NOW - 1, NOW - 1, NOW));
+        // Static screen: dedup-skip keeps last_db_write_ts fresh → not silent
+        // even after an hour.
+        assert!(!vision_capture_silent(3600.0, NOW - 2, NOW - 3, NOW));
+    }
+
+    #[test]
+    fn still_attempting_wedge_is_not_silent() {
+        // Attempts fresh but writes stalled is the OTHER path's job
+        // (vision_capture_wedged); the silent path must not double-fire on it.
+        assert!(!vision_capture_silent(600.0, NOW - 3, NOW - 200, NOW));
+    }
+
+    #[test]
+    fn gone_silent_loop_is_detected() {
+        // Wrote frames once, then BOTH writes and attempts stopped for ~5min:
+        // frozen SCK stream + parked loop, or an exited capture task. This is the
+        // case the still-attempting wedge deliberately skips.
+        assert!(vision_capture_silent(600.0, NOW - 300, NOW - 300, NOW));
+    }
+
+    #[test]
+    fn never_produced_loop_is_detected() {
+        // Loop attempted but never persisted a single frame, well past warm-up.
+        assert!(vision_capture_silent(600.0, NOW - 5, 0, NOW));
+    }
+
+    #[test]
+    fn silent_respects_warmup_and_thresholds() {
+        // Below the warm-up uptime floor → never silent.
+        assert!(!vision_capture_silent(30.0, NOW - 100, NOW - 300, NOW));
+        // Wrote once; gone 239s (< 240s) with attempts stopped → hold off.
+        assert!(!vision_capture_silent(600.0, NOW - 100, NOW - 239, NOW));
+        // 241s (> 240s) → trip.
+        assert!(vision_capture_silent(600.0, NOW - 100, NOW - 241, NOW));
+        // never-produced but only 200s uptime (< 240s) → still warming up.
+        assert!(!vision_capture_silent(200.0, NOW - 5, 0, NOW));
+    }
+
+    #[test]
+    fn silent_requires_the_loop_to_have_attempted() {
+        // Never attempted at all (last_capture_attempt_ts == 0): a restart of the
+        // same config won't help (permission/monitor issue handled elsewhere) and
+        // could restart-loop → not silent.
+        assert!(!vision_capture_silent(600.0, 0, 0, NOW));
     }
 }

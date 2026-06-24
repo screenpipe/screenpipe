@@ -12,6 +12,7 @@ import type { ChatComposerProps } from "@/components/chat/standalone/composer-ty
 import { DropOverlay } from "@/components/chat/standalone/drop-overlay";
 import { PrefillContextBanner } from "@/components/chat/standalone/prefill-context-banner";
 import { QueuedPromptsList } from "@/components/chat/standalone/queued-prompts-list";
+import { UpgradeQuotaBanner } from "@/components/chat/standalone/upgrade-quota-banner";
 import { getComposerPrimaryAction } from "@/lib/chat-queue-controls";
 
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
@@ -50,6 +51,7 @@ export function ChatComposer({
     >
       <div className={CHAT_RAIL_CLASS}>
         <PrefillContextBanner prefill={prefill} />
+        <UpgradeQuotaBanner />
         <ComposerSuggestions suggestions={suggestions} />
 
         <AttachmentTray

@@ -41,8 +41,7 @@ import { GoogleDocsCard } from "./google-docs-card";
 import { GoogleSheetsCard } from "./google-sheets-card";
 import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
-import { OpenClawCard } from "./openclaw-card";
-import { HermesCard } from "./hermes-card";
+import { RemoteAgentCard } from "./remote-agent-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
@@ -635,8 +634,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
-    openclaw: <img src="/openclaw-icon.svg" alt="OpenClaw" className="w-5 h-5" />,
-    hermes: <img src="/images/hermes.png" alt="Hermes" className="w-5 h-5 rounded" />,
+    "remote-agent": <img src="/openclaw-icon.svg" alt="Remote agent" className="w-5 h-5" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
     email: <Send className="h-5 w-5 text-muted-foreground" />,
     todoist: (
@@ -724,6 +722,11 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
         <path fill="#7FBA00" d="M13 1h10v10H13z"/>
         <path fill="#00A4EF" d="M1 13h10v10H1z"/>
         <path fill="#FFB900" d="M13 13h10v10H13z"/>
+      </svg>
+    ),
+    "outlook-email": (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#0078D4" aria-hidden>
+        <path d="M7.88 12.04q0 .45-.11.87-.1.41-.33.74-.22.33-.58.52-.37.2-.87.2t-.85-.2q-.35-.21-.57-.55-.22-.33-.33-.75-.1-.42-.1-.86t.1-.87q.1-.43.34-.76.22-.34.59-.54.36-.2.87-.2t.86.2q.35.21.57.55.22.34.31.77.1.43.1.88zM24 12v9.38q0 .46-.33.8-.33.32-.8.32H7.13q-.46 0-.8-.33-.32-.33-.32-.8V18H1q-.41 0-.7-.3-.3-.29-.3-.7V7q0-.41.3-.7Q.58 6 1 6h6.5V2.55q0-.44.3-.75.3-.3.75-.3h12.9q.44 0 .75.3.3.3.3.75V10.85l1.24.72h.01q.1.07.18.18.07.12.07.25zm-6-8.25v3h3v-3zm0 4.5v3h3v-3zm0 4.5v1.83l3.05-1.83zm-5.25-9v3h3.75v-3zm0 4.5v3h3.75v-3zm0 4.5v2.03l2.41 1.5 1.34-.8v-2.73zM9 3.75V6h2l.13.01.12.04v-2.3zM5.98 15.98q.9 0 1.6-.3.7-.32 1.19-.86.48-.55.73-1.28.25-.74.25-1.61 0-.83-.25-1.55-.24-.71-.71-1.24t-1.15-.83q-.68-.3-1.55-.3-.92 0-1.64.3-.71.3-1.2.85-.5.54-.75 1.3-.25.74-.25 1.63 0 .85.26 1.56.26.72.74 1.23.48.52 1.17.81.69.3 1.56.3zM7.5 21h12.39L12 16.08V17q0 .41-.3.7-.29.3-.7.3H7.5z"/>
       </svg>
     ),
     trello: (
@@ -3778,12 +3781,9 @@ export function ConnectionsSection({
     detectInstalledConnectionIds()
       .then(setDetectedConnectionIds)
       .catch(() => setDetectedConnectionIds(new Set()));
-    getInstalledMcpVersion().then(v => {
-      const installed = !!v || localStorage.getItem("screenpipe_claude_connected") === "true";
-      setClaudeInstalled(installed);
-    }).catch(() => {
-      setClaudeInstalled(localStorage.getItem("screenpipe_claude_connected") === "true");
-    });
+    getInstalledMcpVersion()
+      .then(v => setClaudeInstalled(!!v))
+      .catch(() => setClaudeInstalled(false));
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
     isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
     isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
@@ -3916,8 +3916,7 @@ export function ConnectionsSection({
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
-      { id: "openclaw", name: "OpenClaw", icon: "openclaw", connected: false },
-      { id: "hermes", name: "Hermes", icon: "hermes", connected: false },
+      { id: "remote-agent", name: "Remote agent", icon: "remote-agent", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false, detected: detectedConnectionIds.has("whatsapp") },
       { id: "anythingllm", name: "AnythingLLM", icon: "anythingllm", connected: false, detected: detectedConnectionIds.has("anythingllm") },
       { id: "ollama", name: "Ollama", icon: "ollama", connected: false, detected: detectedConnectionIds.has("ollama") },
@@ -4033,8 +4032,8 @@ export function ConnectionsSection({
     if (!selected) return null;
     switch (selected) {
       case "claude": return <ClaudePanel
-        onConnected={() => { localStorage.setItem("screenpipe_claude_connected", "true"); setClaudeInstalled(true); }}
-        onDisconnected={() => { localStorage.removeItem("screenpipe_claude_connected"); setClaudeInstalled(false); }}
+        onConnected={() => setClaudeInstalled(true)}
+        onDisconnected={() => setClaudeInstalled(false)}
       />;
       case "cursor": return <CursorPanel
         onConnected={() => setCursorInstalled(true)}
@@ -4062,10 +4061,9 @@ export function ConnectionsSection({
       case "google-sheets": return <GoogleSheetsCard onConnectionChange={fetchIntegrations} />;
       case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
-      case "openclaw": return <OpenClawCard />;
+      case "remote-agent": return <RemoteAgentCard />;
       case "whatsapp": return <WhatsAppPanel />;
       case "anythingllm": return <AnythingLLMPanel />;
-      case "hermes": return <HermesCard />;
       case "custom-mcp": return <CustomMcpCard />;
       case "skills": return <SkillsCard onChanged={loadSkillsCount} />;
       case "krisp": return <OAuthMcpPanel

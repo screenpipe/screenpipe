@@ -191,6 +191,8 @@ export interface ConversationMeta {
   kind: ConversationKind;
   /** Pipe metadata for `pipe-*` kinds. Undefined for plain chats. */
   pipeContext?: PipeContext;
+  /** Optional user-assigned sidebar group label (lowercase, trimmed). */
+  sidebarGroup?: string;
   /** Title source priority: user > ai > fallback. */
   titleSource?: "user" | "ai" | "fallback";
   /** Normalized first user message — the cross-window duplicate key. Carried
@@ -325,6 +327,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     lastViewedAt,
     kind: conv.kind ?? "chat",
     pipeContext: conv.pipeContext,
+    sidebarGroup: typeof conv.sidebarGroup === "string" ? conv.sidebarGroup : undefined,
     titleSource: conv.titleSource,
     dedupKey: conversationDedupKey(conv) ?? undefined,
     presetId: typeof conv.presetId === "string" ? conv.presetId : undefined,
@@ -550,7 +553,7 @@ export async function searchConversations(
  */
 export async function updateConversationFlags(
   id: string,
-  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState" | "lastViewedAt">>
+  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState" | "lastViewedAt" | "sidebarGroup">>
 ): Promise<void> {
   const conv = await loadConversationFile(id);
   if (!conv) return;

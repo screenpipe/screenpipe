@@ -195,6 +195,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       lastViewedAt: conversation.lastViewedAt,
       kind: conversation.kind ?? "chat",
       pipeContext: conversation.pipeContext,
+      sidebarGroup: conversation.sidebarGroup,
       titleSource: conversation.titleSource,
       dedupKey: conversationDedupKey(conversation) ?? undefined,
     };
@@ -423,6 +424,18 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         },
       );
       unlistenFns.push(unlistenRenamed);
+
+      const unlistenGroupChanged = await listen<{ id: string; sidebarGroup?: string }>(
+        "chat-sidebar-group-changed",
+        (event) => {
+          if (cancelled) return;
+          const { id } = event.payload ?? {};
+          if (!id) return;
+          invalidateConversationListCache();
+          scheduleHistoryRefresh();
+        },
+      );
+      unlistenFns.push(unlistenGroupChanged);
     })().catch(() => {
       // ignore: chat still works without cross-window sync listeners
     });
@@ -686,6 +699,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // plain chat (kind/pipeContext dropped on disk).
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
+      ...(existing?.sidebarGroup ? { sidebarGroup: existing.sidebarGroup } : {}),
       ...(browserState ? { browserState } : {}),
       ...(existing?.pinned ? { pinned: existing.pinned } : {}),
       ...(existing?.hidden ? { hidden: existing.hidden } : {}),
@@ -1088,6 +1102,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             ...(persisted.hidden === true ? { hidden: true } : {}),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(persisted.sidebarGroup ? { sidebarGroup: persisted.sidebarGroup } : {}),
             ...(persisted.lastContentAt ? { lastContentAt: persisted.lastContentAt } : {}),
             ...(typeof persisted.lastViewedAt === "number"
               ? { lastViewedAt: persisted.lastViewedAt }
@@ -1102,6 +1117,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             updatedAt: Math.max(existing?.updatedAt ?? 0, persisted.updatedAt ?? 0),
             ...(persisted.kind ? { kind: persisted.kind } : {}),
             ...(persisted.pipeContext ? { pipeContext: persisted.pipeContext } : {}),
+            ...(persisted.sidebarGroup ? { sidebarGroup: persisted.sidebarGroup } : {}),
             ...(typeof persisted.lastViewedAt === "number"
               ? { lastViewedAt: persisted.lastViewedAt }
               : {}),
@@ -1190,12 +1206,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // foreground/background swaps.
           ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
+          ...(conv.sidebarGroup ? { sidebarGroup: conv.sidebarGroup } : full.sidebarGroup ? { sidebarGroup: full.sidebarGroup } : {}),
           ...(full.lastContentAt ? { lastContentAt: full.lastContentAt } : {}),
           ...(typeof full.lastViewedAt === "number"
             ? { lastViewedAt: full.lastViewedAt }
             : {}),
         });
-      } else if (conv.kind || conv.pipeContext) {
+      } else if (conv.kind || conv.pipeContext || conv.sidebarGroup || full.sidebarGroup) {
         store.actions.patch(conv.id, {
           title: full.title || store.sessions[conv.id]?.title || "untitled",
           ...(full.titleSource ? { titleSource: full.titleSource } : {}),
@@ -1204,6 +1221,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           updatedAt: Math.max(store.sessions[conv.id]?.updatedAt ?? 0, full.updatedAt ?? 0),
           ...(conv.kind ? { kind: conv.kind } : {}),
           ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : {}),
+          ...(conv.sidebarGroup ? { sidebarGroup: conv.sidebarGroup } : full.sidebarGroup ? { sidebarGroup: full.sidebarGroup } : {}),
         });
       }
       store.actions.setMessages(conv.id, messagesForPanel as any);

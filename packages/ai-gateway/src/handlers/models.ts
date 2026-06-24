@@ -4,9 +4,10 @@
 
 import { Env, UserTier } from '../types';
 import { createSuccessResponse, createErrorResponse, addCorsHeaders } from '../utils/cors';
-import { getTierConfig, getModelWeight } from '../services/usage-tracker';
+import { getTierConfig, getModelWeight, isModelGatingEnabled } from '../services/usage-tracker';
 import { listAnthropicModels } from '../providers/anthropic-proxy';
 import { getModelHealth, ModelHealthStatus } from '../services/model-health';
+import { isGooglePolicyBlockedModel } from '../utils/model-policy';
 
 /** Enriched model metadata — OpenAI-compatible (extra fields ignored by standard clients) */
 interface ModelEntry {
@@ -31,6 +32,13 @@ interface ModelEntry {
   requires_env?: keyof Env;
   /** Live health status from rolling 5-minute error rate */
   health?: ModelHealthStatus;
+  /**
+   * True when this model is above the caller's tier (e.g. a marquee model for a
+   * non-Business user). The app shows it greyed with a "Business" badge + a
+   * one-click upgrade instead of hiding it. Usage is still blocked request-side
+   * (index.ts -> 403 model_not_allowed), so this is presentation-only.
+   */
+  locked?: boolean;
   /**
    * How many "daily query" units one message on this model consumes.
    * 0 = doesn't count against the user's daily cap (free-tier Vertex,
@@ -148,36 +156,6 @@ const CURATED_MODELS: ModelEntry[] = [
     recommended_for: ['pipes', 'chat'],
   },
   // glm-5.1 still pending — released 2026-04-07 on HuggingFace, not yet on Vertex MaaS.
-  {
-    id: 'deepseek-r1',
-    object: 'model',
-    owned_by: 'vertex-maas',
-    name: 'DeepSeek R1',
-    description: 'deep reasoning, 671B MoE',
-    tags: ['free', 'reasoning'],
-    free: true,
-    context_window: 128000,
-    best_for: ['complex reasoning', 'math', 'analysis'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'free',
-    recommended_for: ['chat', 'analysis'],
-  },
-  {
-    id: 'deepseek-v3.2',
-    object: 'model',
-    owned_by: 'vertex-maas',
-    name: 'DeepSeek V3.2',
-    description: 'fast general-purpose, 671B MoE',
-    tags: ['free', 'general'],
-    free: true,
-    context_window: 128000,
-    best_for: ['general', 'coding', 'chat'],
-    speed: 'fast',
-    intelligence: 'high',
-    cost_tier: 'free',
-    recommended_for: ['pipes', 'chat', 'coding'],
-  },
   {
     id: 'qwen3-coder',
     object: 'model',
@@ -532,22 +510,6 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'low',
     recommended_for: ['pipes', 'chat'],
   },
-  // deepseek/deepseek-chat removed — use deepseek-v3.2 on Vertex MaaS (GCP infra, free, no China data risk)
-  {
-    id: 'deepseek/deepseek-v3.2-speciale',
-    object: 'model',
-    owned_by: 'openrouter',
-    name: 'DeepSeek V3.2 Speciale',
-    description: 'deep reasoning specialist',
-    tags: ['reasoning'],
-    free: false,
-    context_window: 128000,
-    best_for: ['complex reasoning'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'medium',
-    recommended_for: ['chat', 'analysis'],
-  },
   {
     id: 'qwen/qwen3.5-397b-a17b',
     object: 'model',
@@ -593,17 +555,18 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
     // Avoid advertising models that would immediately fail because their
     // provider secret is not configured in the Worker environment yet.
     models = models.filter(model => !model.requires_env || hasConfiguredSecret(env[model.requires_env]));
+    models = models.filter(model => !isGooglePolicyBlockedModel(model.id));
 
-    // Filter models based on tier allowlist
-    if (tier !== 'subscribed') {
-      const allowedModels = getTierConfig(env)[tier].allowedModels;
-      models = models.filter(model =>
-        allowedModels.some(allowed =>
-          model.id.toLowerCase().includes(allowed.toLowerCase()) ||
-          allowed.toLowerCase().includes(model.id.toLowerCase())
-        )
-      );
-    }
+    // Non-Business tiers used to have above-tier models filtered OUT of the
+    // list entirely. Instead we now keep them and tag `locked` on the response
+    // copy below, so the app can show them greyed with a one-click upgrade.
+    // (Computed per-request in the map() so we never mutate shared catalog
+    // objects across requests — a subscribed request must not inherit a lock.)
+    // No locks for Business, or when the master kill-switch is off (so a single
+    // env flip clears the greyed picker everywhere with no app release).
+    const lockAllowlist = (tier === 'subscribed' || !isModelGatingEnabled(env))
+      ? null
+      : getTierConfig(env)[tier].allowedModels;
 
     // Attach live health status from rolling 5-minute error rates
     const health = await getModelHealth(env);
@@ -618,7 +581,14 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
       model.query_weight = getModelWeight(model.id);
     }
 
-    const responseModels = models.map(({ requires_env, ...model }) => model);
+    const responseModels = models.map(({ requires_env, ...model }) => {
+      if (!lockAllowlist) return model;
+      const allowed = lockAllowlist.some(allowed =>
+        model.id.toLowerCase().includes(allowed.toLowerCase()) ||
+        allowed.toLowerCase().includes(model.id.toLowerCase())
+      );
+      return allowed ? model : { ...model, locked: true };
+    });
 
     return addCorsHeaders(createSuccessResponse({
       object: 'list',

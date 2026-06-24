@@ -21,7 +21,6 @@ import { captureException } from '@sentry/cloudflare';
 export const AUTO_WATERFALL = [
   'glm-5',            // fast (~1.2s) + AA 50, free Vertex MaaS — best fast/smart for latency-bound chat
   'kimi-k2.5',
-  'deepseek-v3.2',
   'glm-4.7',
   'gemini-3-flash',
 ];
@@ -64,14 +63,12 @@ function isGeminiModel(model: string): boolean {
 // failed user-visible. With cascade most recover transparently.
 export const MODEL_FALLBACKS: Record<string, string[]> = {
   // Vertex MaaS text models
-  'kimi-k2.5': ['deepseek-v3.2', 'glm-4.7', 'gemini-3-flash'],
-  'glm-5': ['glm-4.7', 'deepseek-v3.2', 'gemini-3-flash'],
-  'glm-4.7': ['deepseek-v3.2', 'glm-5', 'gemini-3-flash'],
-  'deepseek-r1': ['glm-5', 'qwen3-next-thinking', 'gemini-3-flash'],
-  'deepseek-v3.2': ['glm-4.7', 'kimi-k2.5', 'gemini-3-flash'],
-  'qwen3-coder': ['glm-4.7', 'deepseek-v3.2', 'gemini-3-flash'],
-  'qwen3-next': ['deepseek-v3.2', 'glm-4.7', 'gemini-3-flash'],
-  'qwen3-next-thinking': ['deepseek-r1', 'glm-5', 'gemini-3-flash'],
+  'kimi-k2.5': ['glm-4.7', 'qwen3-next', 'gemini-3-flash'],
+  'glm-5': ['glm-4.7', 'qwen3-next-thinking', 'gemini-3-flash'],
+  'glm-4.7': ['glm-5', 'qwen3-coder', 'gemini-3-flash'],
+  'qwen3-coder': ['glm-4.7', 'qwen3-next', 'gemini-3-flash'],
+  'qwen3-next': ['glm-4.7', 'kimi-k2.5', 'gemini-3-flash'],
+  'qwen3-next-thinking': ['glm-5', 'qwen3-next', 'gemini-3-flash'],
   // Vertex MaaS vision models
   'llama-4-maverick': ['llama-4-scout', 'gemini-3-flash'],
   'llama-4-scout': ['llama-4-maverick', 'gemini-3-flash'],
@@ -209,10 +206,9 @@ async function tryModel(
   flexEligible: boolean = false,
 ): Promise<Response> {
   try {
-    // Resolve legacy aliases (e.g. "deepseek/deepseek-chat" → "deepseek-v3.2")
-    // up front so both provider selection AND the upstream request body see
-    // the canonical name. Otherwise the provider receives a body.model that
-    // its registry rejects.
+    // Resolve legacy aliases up front so both provider selection AND the
+    // upstream request body see the canonical name. Otherwise the provider
+    // receives a body.model that its registry rejects.
     model = resolveModelAlias(model);
     const provider = createProvider(model, env);
     const reqBody = { ...body, model };

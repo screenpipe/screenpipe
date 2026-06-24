@@ -195,6 +195,20 @@ pub async fn handle_sync_command(command: &SyncCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Load extra exclude globs from `<data-dir>/.screenpipeignore`
+/// (one glob per line; blank lines and `#` comments ignored).
+fn load_screenpipeignore(dir: &std::path::Path) -> Vec<String> {
+    match std::fs::read_to_string(dir.join(".screenpipeignore")) {
+        Ok(content) => content
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| l.to_string())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 fn build_sync_config(cfg: &RemoteSyncArgs) -> remote_sync::SyncConfig {
     // Expand leading "~" in the key path so the user can pass `~/.ssh/id_ed25519`.
     let key_path = if let Some(rest) = cfg.key_path.strip_prefix("~/") {
@@ -253,7 +267,24 @@ async fn handle_remote_sync_command(command: &RemoteSyncCommand) -> anyhow::Resu
                 },
                 config.remote_path,
             );
-            let result = remote_sync::sync_to_remote(&config, &dir).await;
+            let mut excludes = cfg.exclude.clone();
+            excludes.extend(load_screenpipeignore(&dir));
+            let opts = remote_sync::SyncOptions {
+                no_media: cfg.no_media,
+                exclude: excludes,
+            };
+            if opts.no_media || !opts.exclude.is_empty() {
+                println!(
+                    "  selective: no_media={}{}",
+                    opts.no_media,
+                    if opts.exclude.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" exclude={:?}", opts.exclude)
+                    }
+                );
+            }
+            let result = remote_sync::sync_to_remote_with_opts(&config, &dir, &opts).await;
             if result.ok {
                 println!(
                     "  ✓ synced {} files ({:.2} MB)",

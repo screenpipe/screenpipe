@@ -173,6 +173,42 @@ parakeet-mlx = ["dep:audiopipe", "audiopipe?/parakeet-mlx", "dep:mlx-rs"]
 name = "screenpipe-audio"
 path = "examples/screenpipe-audio.rs"
 
+# These benchmark/eval examples use the optional `audiopipe` crate (linked only
+# by the `parakeet` / `qwen3-asr` features). Without a `required-features` guard,
+# `cargo {build,clippy} --all-targets` on default features tries to compile them,
+# fails to resolve the unlinked `audiopipe` crate (E0433), and breaks the
+# lefthook clippy hook for ANY change in this crate. Gating each on `parakeet`
+# (which pulls in `audiopipe`) makes --all-targets skip them unless it's enabled.
+[[example]]
+name = "bench_quality"
+path = "examples/bench_quality.rs"
+required-features = ["parakeet"]
+
+[[example]]
+name = "bench_quality2"
+path = "examples/bench_quality2.rs"
+required-features = ["parakeet"]
+
+[[example]]
+name = "bench_parakeet"
+path = "examples/bench_parakeet.rs"
+required-features = ["parakeet"]
+
+[[example]]
+name = "bench_engines"
+path = "examples/bench_engines.rs"
+required-features = ["parakeet"]
+
+[[example]]
+name = "parakeet_bench"
+path = "examples/parakeet_bench.rs"
+required-features = ["parakeet"]
+
+[[example]]
+name = "wer_battle_test"
+path = "examples/wer_battle_test.rs"
+required-features = ["parakeet"]
+
 [[test]]
 name = "audio_pipeline_benchmark"
 path = "tests/audio_pipeline_benchmark/main.rs"

@@ -22,6 +22,10 @@ export interface UsageStatus {
   limit_today: number;
   remaining: number;
   resets_at: string;
+  /** Gateway-controlled visibility for the at-the-cap upsell banner. Lets the
+   *  server (via MODEL_GATING_ENABLED) turn the banner off without an app
+   *  release. Absent on older gateways → treated as false. */
+  upsell_banner?: boolean;
 }
 
 const USAGE_URL = "https://api.screenpipe.com/v1/usage";
@@ -56,6 +60,7 @@ export function useUsageStatus(): UsageStatus | null {
             limit_today: json.limit_today,
             remaining: json.remaining,
             resets_at: json.resets_at ?? "",
+            upsell_banner: json.upsell_banner === true,
           });
         }
       } catch {

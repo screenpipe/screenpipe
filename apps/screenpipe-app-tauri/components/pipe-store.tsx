@@ -52,6 +52,7 @@ import {
   Upload,
   AlertTriangle,
   ArrowLeft,
+  ArrowUpCircle,
   ExternalLink,
   GitFork,
   Star,
@@ -464,6 +465,14 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   // Available updates from store
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
 
+  // Confirm dialog before overwriting a locally-modified pipe on update.
+  const [updateConfirm, setUpdateConfirm] = useState<{
+    slug: string;
+    pipeName: string;
+    installedVersion: number;
+    latestVersion: number;
+  } | null>(null);
+
   // First-visit banner — show once, dismiss permanently
   // Initialize false to match server render, set true after mount if not dismissed
   const [showWelcome, setShowWelcome] = useState(false);
@@ -593,13 +602,65 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   };
 
   const requestInstall = (pipe: StorePipe | PipeDetail) => {
+    // Already installed with an update available → run the in-place UPDATE flow
+    // (preserves schedule/model/enabled, keeps a pipe.md.bak, never switches
+    // tabs) instead of a fresh install. A locally-edited pipe asks first.
+    const upd = availableUpdates[pipe.slug];
+    if (upd) {
+      const pipeName = ("title" in pipe && pipe.title) || pipe.slug;
+      if (upd.locally_modified) {
+        setUpdateConfirm({
+          slug: pipe.slug,
+          pipeName,
+          installedVersion: upd.installed_version,
+          latestVersion: upd.latest_version,
+        });
+      } else {
+        void handleStoreUpdate(pipe.slug, pipeName);
+      }
+      return;
+    }
     const risk = getPipeInstallRisk(pipe);
-    if (risk === "safe" || availableUpdates[pipe.slug]) {
+    if (risk === "safe") {
       void handleInstall(pipe.slug);
       return;
     }
     setPendingInstall(pipe);
     setInstallRiskAcknowledged(false);
+  };
+
+  // Update an already-installed store pipe in place. Unlike install, this
+  // preserves the user's schedule/model/enabled/connections, keeps a backup,
+  // and — crucially — only clears THIS card's update badge instead of yanking
+  // the user to the My Pipes tab.
+  const handleStoreUpdate = async (slug: string, pipeName: string) => {
+    setInstalling(slug);
+    try {
+      const res = await localFetch("/pipes/store/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      posthog.capture("pipe_updated_from_store", { slug });
+      // Clear just this card's update state → re-renders one card, no reload.
+      setAvailableUpdates((prev) => {
+        const next = { ...prev };
+        delete next[slug];
+        return next;
+      });
+      apiCache.invalidate("pipes/installed");
+      toast({ title: `"${pipeName}" updated` });
+    } catch (err: any) {
+      toast({
+        title: "failed to update pipe",
+        description: err.message,
+        variant: "destructive",
+      });
+    } finally {
+      setInstalling(null);
+    }
   };
 
   const closeInstallGate = () => {
@@ -989,6 +1050,45 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
       {installGateDialog}
 
+      {/* Confirm overwrite when updating a locally-edited pipe */}
+      <Dialog open={!!updateConfirm} onOpenChange={(open) => !open && setUpdateConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>update {updateConfirm?.pipeName}?</DialogTitle>
+            <DialogDescription>
+              <span className="inline-flex items-center gap-2 mt-2">
+                <Badge variant="outline">v{updateConfirm?.installedVersion}</Badge>
+                <span>→</span>
+                <Badge variant="outline">v{updateConfirm?.latestVersion}</Badge>
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-start gap-2 p-3 rounded-none bg-muted border border-border">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <p className="text-sm text-muted-foreground">
+              you have local edits to this pipe. updating overwrites your prompt changes.
+              a backup is saved as <code className="text-xs">pipe.md.bak</code>, and your
+              schedule, model, and enabled state are preserved.
+            </p>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setUpdateConfirm(null)}>
+              skip
+            </Button>
+            <Button
+              onClick={() => {
+                if (updateConfirm) {
+                  void handleStoreUpdate(updateConfirm.slug, updateConfirm.pipeName);
+                  setUpdateConfirm(null);
+                }
+              }}
+            >
+              update &amp; discard my edits
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
@@ -1032,8 +1132,7 @@ function PipeCard({
           variant={isInstalled && !hasUpdate ? "outline" : "default"}
           className={cn(
             "h-7 px-3 text-xs font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
-            isInstalled && !hasUpdate && "pointer-events-none",
-            hasUpdate && "bg-amber-500 hover:bg-amber-600 text-white"
+            isInstalled && !hasUpdate && "pointer-events-none"
           )}
           disabled={installing || (isInstalled && !hasUpdate)}
           onClick={(e) => {
@@ -1044,7 +1143,10 @@ function PipeCard({
           {installing ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : hasUpdate ? (
-            "UPDATE"
+            <>
+              <ArrowUpCircle className="h-3 w-3 mr-1" />
+              UPDATE
+            </>
           ) : isInstalled ? (
             "INSTALLED"
           ) : (
@@ -1347,8 +1449,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 variant={isInstalled && !hasUpdate ? "outline" : "default"}
                 className={cn(
                   "h-9 px-5 text-sm font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
-                  isInstalled && !hasUpdate && "pointer-events-none",
-                  hasUpdate && "bg-amber-500 hover:bg-amber-600 text-white"
+                  isInstalled && !hasUpdate && "pointer-events-none"
                 )}
                 disabled={
                   installing === pipe.slug || (isInstalled && !hasUpdate)
@@ -1361,7 +1462,10 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                     {hasUpdate ? "UPDATING..." : "INSTALLING..."}
                   </>
                 ) : hasUpdate ? (
-                  "UPDATE"
+                  <>
+                    <ArrowUpCircle className="h-4 w-4 mr-1.5" />
+                    UPDATE
+                  </>
                 ) : isInstalled ? (
                   "INSTALLED"
                 ) : (

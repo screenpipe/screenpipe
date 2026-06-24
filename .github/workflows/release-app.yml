@@ -943,11 +943,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # https://tauri.app/v1/guides/distribution/sign-macos
-          # CI=false so tauri's DMG bundler renders the background image correctly
-          # (CI=true causes hdiutil to skip the background/icon layout stage)
+          # Keep CI=true while allowing Tauri's DMG bundler to render the
+          # background image and icon layout.
           # See: https://github.com/tauri-apps/tauri-action/issues/740
-          CI: false
+          TAURI_BUNDLER_DMG_IGNORE_CI: true
           SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
           # Fix std::filesystem availability - requires macOS 10.15+
           # whisper.cpp ggml uses std::filesystem::path which needs 10.15

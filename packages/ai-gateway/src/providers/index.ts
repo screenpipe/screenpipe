@@ -1,6 +1,6 @@
 import { OpenAIProvider } from './openai';
 import { AnthropicProvider } from './anthropic';
-import { VertexAIProvider } from './vertex';
+import { VertexAIProvider, buildWifConfig } from './vertex';
 import { GeminiProvider } from './gemini';
 import { OpenRouterProvider } from './openrouter';
 import { VertexMaasProvider, isVertexMaasModel } from './vertex-maas';
@@ -8,6 +8,7 @@ import { TinfoilProvider, isTinfoilModel } from './tinfoil';
 import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpipe-enclave';
 import { AIProvider } from './base';
 import { Env } from '../types';
+import { GOOGLE_POLICY_BLOCKED_MODEL_MESSAGE, isGooglePolicyBlockedModel } from '../utils/model-policy';
 
 // Remap legacy model IDs → canonical equivalents. Most route OpenRouter ids
 // to Vertex MaaS (GCP infra, no China data risk); the qwen3.5 entries pin
@@ -15,7 +16,6 @@ import { Env } from '../types';
 // ids 400 with "not a valid model ID" (SCREENPIPE-AI-PROXY-1P) but still sit
 // in tier allow-lists and older client presets.
 const MODEL_REMAPS: Record<string, string> = {
-	'deepseek/deepseek-chat': 'deepseek-v3.2',
 	'meta-llama/llama-4-scout': 'llama-4-scout',
 	'meta-llama/llama-4-maverick': 'llama-4-maverick',
 	'qwen/qwen3-coder:free': 'qwen3-coder',
@@ -39,7 +39,7 @@ export function resolveModelAlias(model: string): string {
 }
 
 // Models routed through OpenRouter (only those NOT available on Vertex MaaS)
-const OPENROUTER_PREFIXES = ['deepseek/', 'qwen/', 'mistralai/', 'stepfun/'];
+const OPENROUTER_PREFIXES = ['qwen/', 'mistralai/', 'stepfun/'];
 const OPENROUTER_MODELS = ['step-3.5', ':free'];
 
 function isOpenRouterModel(model: string): boolean {
@@ -53,6 +53,14 @@ class ProviderConfigurationError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = 'ProviderConfigurationError';
+	}
+}
+
+class ProviderPolicyError extends Error {
+	status = 400;
+	constructor(message: string) {
+		super(message);
+		this.name = 'ProviderPolicyError';
 	}
 }
 
@@ -78,6 +86,9 @@ export function createProvider(model: string, env: Env): AIProvider {
 	if (typeof model !== 'string' || model.length === 0) {
 		throw new Error('createProvider: a non-empty model string is required');
 	}
+	if (isGooglePolicyBlockedModel(model)) {
+		throw new ProviderPolicyError(GOOGLE_POLICY_BLOCKED_MODEL_MESSAGE);
+	}
 	model = resolveModelAlias(model);
 
 	// Screenpipe event classifier — routes to self-hosted vLLM
@@ -91,20 +102,23 @@ export function createProvider(model: string, env: Env): AIProvider {
 	if (model.toLowerCase().includes('gemini')) {
 		// Prefer Vertex AI for Gemini (shorter data retention, enterprise ToS)
 		if (env.VERTEX_SERVICE_ACCOUNT_JSON && env.VERTEX_PROJECT_ID) {
+			const wif = buildWifConfig(env);
 			return new GeminiProvider({
 				serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
-				projectId: env.VERTEX_PROJECT_ID,
+				projectId: wif?.projectId || env.VERTEX_PROJECT_ID,
 				region: 'us-central1',
+				wif,
 			});
 		}
 		// Fallback to API key if Vertex credentials unavailable
 		return new GeminiProvider(requireSecret(env.GEMINI_API_KEY, 'Gemini API key not configured'));
 	}
-	// Vertex AI MaaS — GLM-4.7, GLM-5, Kimi K2.5, DeepSeek, Llama, Qwen (burns GCP credits, free for users)
+	// Vertex AI MaaS — GLM-4.7, GLM-5, Kimi K2.5, Llama, Qwen (burns GCP credits, free for users)
 	if (isVertexMaasModel(model)) {
 		const serviceAccountJson = requireSecret(env.VERTEX_SERVICE_ACCOUNT_JSON, 'Vertex AI credentials not configured');
 		const projectId = requireSecret(env.VERTEX_PROJECT_ID, 'Vertex AI credentials not configured');
-		return new VertexMaasProvider(serviceAccountJson, projectId);
+		const wif = buildWifConfig(env);
+		return new VertexMaasProvider(serviceAccountJson, wif?.projectId || projectId, wif);
 	}
 	// Tinfoil — confidential inference in secure enclaves (TEE)
 	if (isTinfoilModel(model)) {

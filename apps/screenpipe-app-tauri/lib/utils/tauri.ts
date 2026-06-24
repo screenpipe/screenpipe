@@ -1489,6 +1489,19 @@ async remoteSyncDiscoverHosts() : Promise<Result<DiscoveredHost[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * One-click remote agent setup: SSH into the host (same creds as sync) and run
+ * `screenpipe agent setup <target>` there, wiring the screenpipe MCP + skill
+ * into the agent — no terminal needed.
+ */
+async remoteSyncExecSetup(config: RemoteSyncConfig, target: string) : Promise<Result<RemoteExecResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remote_sync_exec_setup", { config, target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async remoteSyncNow(config: RemoteSyncConfig, dataDir: string | null) : Promise<Result<RemoteSyncResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remote_sync_now", { config, dataDir }) };
@@ -2482,6 +2495,10 @@ featured?: boolean;
  * True when a skill of the same normalized name is already in the store.
  */
 imported?: boolean }
+/**
+ * Result of a remote command run over SSH.
+ */
+export type RemoteExecResult = { code: number; stdout: string; stderr: string }
 /**
  * Configuration for remote sync.
  */

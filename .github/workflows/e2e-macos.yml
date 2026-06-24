@@ -57,9 +57,12 @@ jobs:
         run: |
           # Start without screen/audio recording — just the server + API
           # --disable-vision and --disable-audio to skip permission-gated features
+          # --disable-telemetry so CI runs never reach Sentry/PostHog (the engine
+          # also auto-detects GITHUB_ACTIONS/CI, but be explicit here too)
           ./target/release/screenpipe \
             --disable-vision \
             --disable-audio \
+            --disable-telemetry \
             --port 3030 &
           SERVER_PID=$!
           echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV

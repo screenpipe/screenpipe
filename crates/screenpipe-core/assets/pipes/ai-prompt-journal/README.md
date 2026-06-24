@@ -8,7 +8,7 @@ AI Prompt Journal watches your screen and captures every prompt you type into AI
 
 ## What it does
 
-- **Monitors 15+ AI tools** — ChatGPT, Claude, Gemini, Perplexity, Grok, DeepSeek, Copilot, Mistral, Poe, HuggingChat, OpenRouter, LM Studio, Ollama, Jan, GPT4All, and more
+- **Monitors 15+ AI tools** — ChatGPT, Claude, Gemini, Perplexity, Grok, Copilot, Mistral, Poe, HuggingChat, OpenRouter, LM Studio, Ollama, Jan, GPT4All, and more
 - **Extracts only YOUR prompts** — smart heuristics separate what you typed from AI responses
 - **Auto-classifies** each prompt by tool, category (coding, writing, research, brainstorming...), topic, and length
 - **Saves to Obsidian** — daily notes with YAML frontmatter and tags, ready for search and backlinks
@@ -79,7 +79,6 @@ Everything runs locally. Your prompts never leave your machine.
 | Gemini | URL pattern |
 | Perplexity | App name or URL |
 | Grok | URL pattern |
-| DeepSeek | URL pattern |
 | Copilot | URL pattern |
 | Mistral | URL pattern |
 | Poe | URL pattern |

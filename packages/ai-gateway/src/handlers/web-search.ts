@@ -1,5 +1,6 @@
 import { Env } from '../types';
 import { GeminiProvider } from '../providers/gemini';
+import { buildWifConfig } from '../providers/vertex';
 import { addCorsHeaders, createErrorResponse } from '../utils/cors';
 
 interface WebSearchRequest {
@@ -24,10 +25,12 @@ export async function handleWebSearch(request: Request, env: Env): Promise<Respo
 		// Prefer Vertex AI for Gemini (shorter data retention, enterprise ToS)
 		let provider: GeminiProvider;
 		if (env.VERTEX_SERVICE_ACCOUNT_JSON && env.VERTEX_PROJECT_ID) {
+			const wif = buildWifConfig(env);
 			provider = new GeminiProvider({
 				serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
-				projectId: env.VERTEX_PROJECT_ID,
+				projectId: wif?.projectId || env.VERTEX_PROJECT_ID,
 				region: 'us-central1',
+				wif,
 			});
 		} else if (env.GEMINI_API_KEY) {
 			provider = new GeminiProvider(env.GEMINI_API_KEY);

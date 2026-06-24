@@ -27,12 +27,12 @@ the app manages recording, settings, search, pipes, and AI connections — no te
 ## CLI
 
 ```bash
-npx screenpipe@latest record
+npx -y screenpipe@latest record
 ```
 
 this starts the screenpipe daemon in the background and continuously records your screen. data is stored in `~/.screenpipe/` on your local machine.
 
-### troubleshooting: "npx screenpipe record" not working
+### troubleshooting: "npx -y screenpipe@latest record" not working
 
 if the command fails, try these fixes in order:
 
@@ -44,11 +44,9 @@ if the output is not `darwin-arm64`, `darwin-x64`, `linux-x64`, or `win32-x64`, 
 
 **missing platform package (macOS/Windows/Linux):**
 ```bash
-npm install screenpipe
-# or
-bun install screenpipe
+npx -y screenpipe@latest --version
 ```
-the CLI needs the platform-specific binary. try a fresh install.
+the CLI needs the platform-specific binary. re-running with `npx -y screenpipe@latest` pulls a fresh copy.
 
 **macOS: binary blocked by Gatekeeper:**
 if you see "app is damaged" or "permission denied", run:
@@ -77,16 +75,16 @@ still stuck? [ask in Discord](https://discord.gg/screenpipe).
 
 ### suppress CLI reminders (optional)
 
-when running `npx screenpipe record`, the CLI prints a friendly reminder every 5 minutes to download the desktop app. if you prefer to run the CLI silently, disable the reminders:
+when running `npx -y screenpipe@latest record`, the CLI prints a friendly reminder every 5 minutes to download the desktop app. if you prefer to run the CLI silently, disable the reminders:
 
 ```bash
-SCREENPIPE_NO_REMINDERS=1 npx screenpipe@latest record
+SCREENPIPE_NO_REMINDERS=1 npx -y screenpipe@latest record
 ```
 
 or set it once in your shell:
 ```bash
 export SCREENPIPE_NO_REMINDERS=1
-npx screenpipe@latest record
+npx -y screenpipe@latest record
 ```
 
 ### access your recorded timeline
@@ -109,33 +107,31 @@ curl http://localhost:3030/health
 curl "http://localhost:3030/search"
 ```
 
+<Note>if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to these requests. by default the local API needs no auth.</Note>
+
 ## check and update your version
 
 to ensure you're running the latest version:
 
 ```bash
 # check your current version
-screenpipe --version
+npx -y screenpipe@latest --version
 ```
 
-to update to the latest version:
+to update to the latest version, just run with `@latest` — it always pulls the newest release:
 
 ```bash
-# update via npm
-npx screenpipe@latest --version
-
-# or update the global installation
-npm install -g screenpipe@latest
+npx -y screenpipe@latest record
 ```
 
-the latest version is always available at npm. if you're on an older version, you'll see a warning when you run `npx screenpipe record`.
+the latest version is always available at npm. if you're on an older version, you'll see a warning when you run `npx -y screenpipe@latest record`.
 
-### API authentication (required)
+### API authentication (if enabled)
 
-the search endpoint requires an API key. get your key by running:
+by default the local API on `localhost:3030` needs no auth. if you've turned on API auth in settings, get your key by running:
 
 ```bash
-screenpipe auth token
+npx -y screenpipe@latest auth token
 ```
 
 then use it in curl:
@@ -148,14 +144,24 @@ curl "http://localhost:3030/search?q=example" \
 or set it as an environment variable:
 
 ```bash
-export SCREENPIPE_API_KEY=$(screenpipe auth token)
+export SCREENPIPE_API_KEY=$(npx -y screenpipe@latest auth token)
 curl "http://localhost:3030/search?q=example" \
   -H "Authorization: Bearer $SCREENPIPE_API_KEY"
 ```
 
 ## connect to AI
 
-screenpipe works with any AI that supports MCP or HTTP APIs:
+screenpipe works with any AI that supports MCP or HTTP APIs.
+
+the fastest path is one command — it installs the screenpipe skills and registers the MCP server for your agent:
+
+```bash
+npx -y screenpipe@latest agent setup <target>
+```
+
+where `<target>` is one of `openclaw`, `hermes`, `claude-code`, `claude-desktop`, `codex`, `cursor`, or `windsurf`. add `--api-url <URL>` if screenpipe runs on another machine.
+
+prefer to wire it up manually? here's where each tool plugs in:
 
 | integration | how |
 | --- | --- |

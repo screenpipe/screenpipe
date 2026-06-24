@@ -657,8 +657,9 @@ describe('isModelAllowed with Anthropic model IDs', () => {
 		expect(isModelAllowed('claude-opus-4-6', 'subscribed')).toBe(true);
 	});
 
-	it('should allow sonnet for logged_in users', () => {
-		expect(isModelAllowed('claude-sonnet-4-5-20250929', 'logged_in')).toBe(true);
+	it('should deny sonnet for logged_in users (Business-only)', () => {
+		expect(isModelAllowed('claude-sonnet-4-5-20250929', 'logged_in')).toBe(false);
+		expect(isModelAllowed('claude-sonnet-4-5-20250929', 'subscribed')).toBe(true);
 	});
 
 	it('should allow any model for subscribed (wildcard)', () => {

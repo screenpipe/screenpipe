@@ -28,11 +28,11 @@ export const searchIndex: SettingsField[] = [
   { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
   { label: "Screen recording", keywords: ["screen", "video"] },
   { label: "Use all monitors", keywords: ["monitor", "display"] },
+  // conditional: monitor picker only renders when "Use all monitors" is off — paired right under that toggle.
+  { label: "Monitors", conditional: true },
   { label: "Recording quality", keywords: ["fps", "quality"] },
   // conditional: hidden when screen recording is off (same gate as Recording quality).
   { label: "Capture frequency", keywords: ["screenshot", "interval", "idle", "cadence", "every", "minimum"], conditional: true },
-  // conditional: monitor picker only renders when "Use all monitors" is off.
-  { label: "Monitors", conditional: true },
   { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
   { label: "Chinese mirror", keywords: ["china", "mirror"] },
 ];
@@ -3687,6 +3687,78 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
+        {/* Monitor Selection — paired directly under "Use all monitors" so
+            the picker it reveals sits next to the toggle that controls it,
+            not buried below the quality/frequency/HD cards. */}
+        {!settings.disableVision && !settings.useAllMonitors && (
+          <Card className="border-border bg-card overflow-hidden">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center space-x-2.5 mb-3">
+                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground">Monitors</h3>
+              </div>
+
+              <div className="flex items-end justify-center gap-6 py-2">
+                {/* Default option as a monitor */}
+                <button
+                  className="flex flex-col items-center gap-1.5 group"
+                  onClick={() => {
+                    const isDefaultSelected = settings.monitorIds.includes("default");
+                    if (isDefaultSelected) { handleSettingsChange({ monitorIds: settings.monitorIds.filter(id => id !== "default") }, true); }
+                    else { handleSettingsChange({ monitorIds: ["default"] }, true); }
+                  }}
+                >
+                  {/* Monitor SVG */}
+                  <svg width="80" height="56" viewBox="0 0 80 56" fill="none" className={cn("transition-opacity", settings.monitorIds.includes("default") ? "opacity-100" : "opacity-40 group-hover:opacity-60")}>
+                    <rect x="4" y="2" width="72" height="42" rx="3" className="fill-muted stroke-border" strokeWidth="1.5" />
+                    <rect x="8" y="6" width="64" height="34" rx="1" className={cn(settings.monitorIds.includes("default") ? "fill-foreground/10" : "fill-background")} />
+                    <path d="M30 44 L30 50 L50 50 L50 44" className="stroke-border" strokeWidth="1.5" fill="none" />
+                    <line x1="24" y1="50" x2="56" y2="50" className="stroke-border" strokeWidth="1.5" strokeLinecap="round" />
+                    {settings.monitorIds.includes("default") && (
+                      <path d="M32 20 L37 25 L48 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground" />
+                    )}
+                  </svg>
+                  <span className={cn("text-[11px] font-medium", settings.monitorIds.includes("default") ? "text-foreground" : "text-muted-foreground")}>
+                    Default
+                  </span>
+                </button>
+
+                {availableMonitors.map((monitor) => {
+                  const isSelected = settings.monitorIds.includes(monitor.stableId);
+                  return (
+                    <button
+                      key={monitor.stableId}
+                      className="flex flex-col items-center gap-1.5 group"
+                      onClick={() => {
+                        const newIds = isSelected
+                          ? settings.monitorIds.filter(id => id !== monitor.stableId)
+                          : [...settings.monitorIds.filter(id => id !== "default"), monitor.stableId];
+                        handleSettingsChange({ monitorIds: newIds }, true);
+                      }}
+                    >
+                      <svg width="80" height="56" viewBox="0 0 80 56" fill="none" className={cn("transition-opacity", isSelected ? "opacity-100" : "opacity-40 group-hover:opacity-60")}>
+                        <rect x="4" y="2" width="72" height="42" rx="3" className="fill-muted stroke-border" strokeWidth="1.5" />
+                        <rect x="8" y="6" width="64" height="34" rx="1" className={cn(isSelected ? "fill-foreground/10" : "fill-background")} />
+                        <path d="M30 44 L30 50 L50 50 L50 44" className="stroke-border" strokeWidth="1.5" fill="none" />
+                        <line x1="24" y1="50" x2="56" y2="50" className="stroke-border" strokeWidth="1.5" strokeLinecap="round" />
+                        {isSelected && (
+                          <path d="M32 20 L37 25 L48 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground" />
+                        )}
+                      </svg>
+                      <div className="text-center">
+                        <span className={cn("text-[11px] font-medium block", isSelected ? "text-foreground" : "text-muted-foreground")}>
+                          {monitor.name || `Monitor ${monitor.id}`}
+                        </span>
+                        <p className="text-[10px] text-muted-foreground">{monitor.width}x{monitor.height}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Recording quality — single knob for crispness + disk cost */}
         {!settings.disableVision && (
           <Card className="border-border bg-card">
@@ -3786,76 +3858,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             settings={settings}
             onSettingsChange={(patch) => handleSettingsChange(patch, true)}
           />
-        )}
-
-        {/* Monitor Selection */}
-        {!settings.disableVision && !settings.useAllMonitors && (
-          <Card className="border-border bg-card overflow-hidden">
-            <CardContent className="px-3 py-2.5">
-              <div className="flex items-center space-x-2.5 mb-3">
-                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                <h3 className="text-sm font-medium text-foreground">Monitors</h3>
-              </div>
-
-              <div className="flex items-end justify-center gap-6 py-2">
-                {/* Default option as a monitor */}
-                <button
-                  className="flex flex-col items-center gap-1.5 group"
-                  onClick={() => {
-                    const isDefaultSelected = settings.monitorIds.includes("default");
-                    if (isDefaultSelected) { handleSettingsChange({ monitorIds: settings.monitorIds.filter(id => id !== "default") }, true); }
-                    else { handleSettingsChange({ monitorIds: ["default"] }, true); }
-                  }}
-                >
-                  {/* Monitor SVG */}
-                  <svg width="80" height="56" viewBox="0 0 80 56" fill="none" className={cn("transition-opacity", settings.monitorIds.includes("default") ? "opacity-100" : "opacity-40 group-hover:opacity-60")}>
-                    <rect x="4" y="2" width="72" height="42" rx="3" className="fill-muted stroke-border" strokeWidth="1.5" />
-                    <rect x="8" y="6" width="64" height="34" rx="1" className={cn(settings.monitorIds.includes("default") ? "fill-foreground/10" : "fill-background")} />
-                    <path d="M30 44 L30 50 L50 50 L50 44" className="stroke-border" strokeWidth="1.5" fill="none" />
-                    <line x1="24" y1="50" x2="56" y2="50" className="stroke-border" strokeWidth="1.5" strokeLinecap="round" />
-                    {settings.monitorIds.includes("default") && (
-                      <path d="M32 20 L37 25 L48 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground" />
-                    )}
-                  </svg>
-                  <span className={cn("text-[11px] font-medium", settings.monitorIds.includes("default") ? "text-foreground" : "text-muted-foreground")}>
-                    Default
-                  </span>
-                </button>
-
-                {availableMonitors.map((monitor) => {
-                  const isSelected = settings.monitorIds.includes(monitor.stableId);
-                  return (
-                    <button
-                      key={monitor.stableId}
-                      className="flex flex-col items-center gap-1.5 group"
-                      onClick={() => {
-                        const newIds = isSelected
-                          ? settings.monitorIds.filter(id => id !== monitor.stableId)
-                          : [...settings.monitorIds.filter(id => id !== "default"), monitor.stableId];
-                        handleSettingsChange({ monitorIds: newIds }, true);
-                      }}
-                    >
-                      <svg width="80" height="56" viewBox="0 0 80 56" fill="none" className={cn("transition-opacity", isSelected ? "opacity-100" : "opacity-40 group-hover:opacity-60")}>
-                        <rect x="4" y="2" width="72" height="42" rx="3" className="fill-muted stroke-border" strokeWidth="1.5" />
-                        <rect x="8" y="6" width="64" height="34" rx="1" className={cn(isSelected ? "fill-foreground/10" : "fill-background")} />
-                        <path d="M30 44 L30 50 L50 50 L50 44" className="stroke-border" strokeWidth="1.5" fill="none" />
-                        <line x1="24" y1="50" x2="56" y2="50" className="stroke-border" strokeWidth="1.5" strokeLinecap="round" />
-                        {isSelected && (
-                          <path d="M32 20 L37 25 L48 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground" />
-                        )}
-                      </svg>
-                      <div className="text-center">
-                        <span className={cn("text-[11px] font-medium block", isSelected ? "text-foreground" : "text-muted-foreground")}>
-                          {monitor.name || `Monitor ${monitor.id}`}
-                        </span>
-                        <p className="text-[10px] text-muted-foreground">{monitor.width}x{monitor.height}</p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
         )}
 
       </div>

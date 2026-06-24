@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useSidebarWidth } from "@/lib/hooks/use-sidebar-width";
+import { usePlatform } from "@/lib/hooks/use-platform";
 
 // ─── Context ─────────────────────────────────────────────────────────────────
 // Provides `isTranslucent` to any descendant without prop-drilling.
@@ -83,6 +84,13 @@ export function AppSidebar({ children, className }: AppSidebarProps) {
   // fullscreen — content shifts to where the traffic lights used to be.
   const fullscreen = useIsFullscreen();
   const { width, isResizing, beginResize } = useSidebarWidth();
+  // macOS (WKWebView) renders an unstyled overflow-auto scrollbar as an
+  // auto-hiding overlay, so it stays invisible when idle. Windows/Linux
+  // (WebView2 / Chromium) render it as a persistent, space-reserving classic
+  // scrollbar — so expanding a pipe section in the embedded list pops a bar
+  // into the left sidebar. Hide it off macOS (scrolling still works via
+  // wheel/trackpad); leave macOS untouched.
+  const { isMac } = usePlatform();
 
   return (
     <div
@@ -104,7 +112,7 @@ export function AppSidebar({ children, className }: AppSidebarProps) {
       {/* Inner scroll container keeps the resize handle pinned to the
        *  viewport edge — putting overflow on the outer would let the
        *  absolute-positioned handle scroll with the content. */}
-      <div className="flex flex-col min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+      <div className={cn("flex flex-col min-h-0 flex-1 overflow-x-hidden overflow-y-auto", !isMac && "scrollbar-hide")}>
         {children}
       </div>
       <div

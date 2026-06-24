@@ -178,6 +178,8 @@ export interface SessionRecord {
   kind?: ConversationKind;
   /** Pipe metadata — only meaningful when `kind !== "chat"`. */
   pipeContext?: PipeContext;
+  /** Optional user-assigned sidebar group label (lowercase, trimmed). */
+  sidebarGroup?: string;
 }
 
 interface ChatStoreState {
@@ -372,6 +374,7 @@ export const useChatStore = create<ChatStore>((set) => ({
                 : undefined,
             kind: existing.kind ?? r.kind,
             pipeContext: existing.pipeContext ?? r.pipeContext,
+            sidebarGroup: existing.sidebarGroup ?? r.sidebarGroup,
             dedupKey: existing.dedupKey ?? r.dedupKey,
           };
           merged.unread = restoreUnread(existing, merged);
@@ -698,6 +701,7 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     lastViewedAt: m.lastViewedAt,
     kind: m.kind,
     pipeContext: m.pipeContext,
+    sidebarGroup: m.sidebarGroup,
     dedupKey: m.dedupKey,
     presetId: m.presetId,
   };

@@ -32,6 +32,34 @@ pub async fn remote_sync_now(
     Ok(remote_sync::sync_to_remote(&config, &dir).await)
 }
 
+/// One-click remote agent setup: SSH into the host (same creds as sync) and run
+/// `screenpipe agent setup <target>` there, wiring the screenpipe MCP + skill
+/// into the agent — no terminal needed.
+#[specta::specta]
+#[tauri::command]
+pub async fn remote_sync_exec_setup(
+    config: SyncConfig,
+    target: String,
+) -> Result<remote_sync::ExecResult, String> {
+    // target is from a fixed UI set — validate to avoid any shell injection.
+    const ALLOWED: &[&str] = &[
+        "openclaw",
+        "hermes",
+        "claude-code",
+        "claude-desktop",
+        "codex",
+        "cursor",
+        "windsurf",
+    ];
+    if !ALLOWED.contains(&target.as_str()) {
+        return Err(format!("unknown agent target: {target}"));
+    }
+    let cmd = format!("npx -y screenpipe@latest agent setup {target}");
+    remote_sync::exec_remote(&config, &cmd)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[specta::specta]
 #[tauri::command]
 pub async fn remote_sync_discover_hosts() -> Result<Vec<DiscoveredHost>, String> {

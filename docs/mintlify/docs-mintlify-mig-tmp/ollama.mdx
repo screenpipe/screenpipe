@@ -13,10 +13,10 @@ icon: "ollama-icon.svg"
 
 ```bash
 # install from https://ollama.com then:
-ollama run ministral-3
+ollama run llama3.2
 ```
 
-this downloads the model and starts Ollama. you can use any model — `ministral-3` is a good starting point (fast, works on most machines).
+this downloads the model and starts Ollama. you can use any model — `llama3.2` is a good starting point (fast, works on most machines).
 
 ### 2. select Ollama in screenpipe
 
@@ -32,10 +32,9 @@ that's it. screenpipe talks to Ollama on `localhost:11434` automatically.
 
 | model | size | best for |
 |-------|------|----------|
-| `ministral-3` | ~2 GB | fast, general use, recommended starting point |
+| `llama3.2` | ~2 GB | fast, general use, recommended starting point |
 | `gemma3:4b` | ~3 GB | strong quality for size, good for summaries |
 | `qwen3:4b` | ~3 GB | multilingual, good reasoning |
-| `deepseek-r1:8b` | ~5 GB | strong reasoning, needs 16 GB+ RAM |
 
 pull any model with:
 
@@ -71,11 +70,11 @@ example: a Qwen server on `http://localhost:5000` with OpenAI-compatible API sho
 - check it's responding: `curl http://localhost:11434/api/tags`
 
 **model not showing in dropdown?**
-- pull it first: `ollama pull ministral-3`
+- pull it first: `ollama pull llama3.2`
 - you can also type the model name manually in the input field
 
 **slow responses?**
-- try a smaller model (`ministral-3`)
+- try a smaller model (`llama3.2`)
 - close other GPU-heavy apps
 - ensure you have enough free RAM (model size + ~2 GB overhead)
 
@@ -86,7 +85,7 @@ example: a Qwen server on `http://localhost:5000` with OpenAI-compatible API sho
 screenpipe sends multiple tool calls to the LLM for agentic features. some models (especially older Azure-hosted models like Phi-4, older Llama versions) don't support this.
 
 **fixes:**
-- use a model that supports tool use: `gpt-4`, `gpt-4-turbo`, `claude-3-5-sonnet`, `gpt-oss-120b`
+- use a model that supports tool use — most current frontier and mid-size open models do; check the model's documentation for tool/function-calling support
 - or disable agentic features in your pipe prompts (remove tool calls, just ask for text summaries)
 - on Azure, try switching to the latest model version available
 

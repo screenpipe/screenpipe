@@ -161,6 +161,34 @@ const NotificationHandler: React.FC = () => {
           return;
         }
 
+        if (action.type === "copy") {
+          const text = typeof action.value === "string" ? action.value : "";
+          if (text) {
+            await commands.copyTextToClipboard(text);
+          }
+          return;
+        }
+
+        if (action.type === "source") {
+          const url =
+            action.url ||
+            action.source_url ||
+            action.sourceUrl ||
+            action.deeplink_url ||
+            action.deeplinkUrl;
+          if (!url) return;
+          if (typeof url === "string" && url.startsWith("screenpipe://")) {
+            await commands.showWindowActivated(windowForDeeplink(url));
+            await new Promise((r) => setTimeout(r, 150));
+            const { emit } = await import("@tauri-apps/api/event");
+            await emit("deep-link-received", url);
+          } else {
+            const { open } = await import("@tauri-apps/plugin-shell");
+            await open(url);
+          }
+          return;
+        }
+
         // Forward pipe/api/deeplink actions
         if (action.type === "pipe" && action.pipe) {
           if (action.open_in_chat) {

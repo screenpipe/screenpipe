@@ -84,6 +84,30 @@ pub async fn shared_secret_pool(db_path: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
+/// Close every cached secret-store pool and clear the cache; pools recreate
+/// lazily on the next [`shared_secret_pool`] call.
+///
+/// This is the other half of DB-wedge recovery. A `code 522`
+/// (`SQLITE_IOERR_SHORT_READ`) / "disk image is malformed" wedge — typically a
+/// WAL-index (`-shm`) desync after macOS sleep/wake — is only cleared by
+/// rebuilding `-shm`, and SQLite rebuilds it only once the LAST connection to
+/// the db file closes. When recording restarts, the engine's `DatabaseManager`
+/// read/write pools are rebuilt — but this process-wide secret pool keeps a warm
+/// connection alive (`min_connections=1`, no idle/lifetime reaping), and with it
+/// the `-shm` mapping. So an in-process restart alone can't clear the wedge: the
+/// recovery must close these pools too, or recording stays down until a full
+/// process exit (quit + relaunch).
+pub async fn close_all_secret_pools() {
+    let mut cache = secret_pools().lock().await;
+    let count = cache.len();
+    for (_path, pool) in cache.drain() {
+        pool.close().await;
+    }
+    if count > 0 {
+        tracing::info!("closed {count} cached secret-store pool(s) for db-wedge recovery");
+    }
+}
+
 pub struct SecretStore {
     pool: SqlitePool,
     key: Option<[u8; 32]>, // None = encryption disabled (keychain unavailable)
@@ -342,6 +366,9 @@ impl SecretStore {
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
+    // Tests that touch the process-wide `SECRET_POOLS` cache run serially so the
+    // `close_all_secret_pools` drain test can't close another test's live pool.
+    use serial_test::serial;
 
     async fn make_store(key: Option<[u8; 32]>) -> SecretStore {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
@@ -545,6 +572,7 @@ mod tests {
     /// `open()` returns a working store backed by the shared pool and creates
     /// the db file on open — preserving the old `?mode=rwc` behavior exactly.
     #[tokio::test]
+    #[serial]
     async fn shared_pool_open_roundtrips_and_creates_db() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("db.sqlite");
@@ -559,11 +587,41 @@ mod tests {
         );
     }
 
+    /// `close_all_secret_pools` closes every cached pool — releasing its handle
+    /// on the db file and the shared `-shm` WAL-index so a wedge recovery can
+    /// rebuild it — and the cache re-populates lazily on the next open.
+    #[tokio::test]
+    #[serial]
+    async fn close_all_secret_pools_closes_and_allows_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_str = dir.path().join("db.sqlite").to_string_lossy().into_owned();
+
+        let pool = shared_secret_pool(&db_str).await.unwrap();
+        assert!(!pool.is_closed());
+        // a second open returns the same cached, still-open pool
+        let cached = shared_secret_pool(&db_str).await.unwrap();
+        assert!(!cached.is_closed());
+
+        close_all_secret_pools().await;
+
+        // the previously-cached pool is now closed — its handle on the db file
+        // (and with it the shared `-shm` mapping) is released
+        assert!(pool.is_closed(), "cached pool must be closed after drain");
+
+        // a fresh, working pool is created lazily on the next open
+        let reopened = shared_secret_pool(&db_str).await.unwrap();
+        assert!(!reopened.is_closed());
+        let store = SecretStore::new(reopened, None).await.unwrap();
+        store.set("k", b"v").await.unwrap();
+        assert_eq!(store.get("k").await.unwrap().as_deref(), Some(&b"v"[..]));
+    }
+
     /// Repeated opens for the same path reuse ONE pool: total connections stay
     /// bounded by `max_connections` instead of growing per call. The old ad-hoc
     /// `SqlitePool::connect`-per-op pattern was unbounded churn — the WAL-index
     /// thrash this fixes.
     #[tokio::test]
+    #[serial]
     async fn shared_pool_is_reused_not_recreated() {
         let dir = tempfile::tempdir().unwrap();
         let db_str = dir.path().join("db.sqlite").to_string_lossy().into_owned();
@@ -587,6 +645,7 @@ mod tests {
     /// the exact concurrency (engine pool + checkpoints + secret writes) that
     /// corrupted db.sqlite when secrets used ad-hoc pools (#4263).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[serial]
     async fn shared_pool_survives_concurrent_writes_and_checkpoints() {
         let dir = tempfile::tempdir().unwrap();
         let db_str = dir.path().join("db.sqlite").to_string_lossy().into_owned();
@@ -669,6 +728,7 @@ mod tests {
     /// regression the fix removes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "timing-dependent reproduction; run manually with --ignored"]
+    #[serial]
     async fn repro_adhoc_pool_churn_contends() {
         let dir = tempfile::tempdir().unwrap();
         let db_str = dir.path().join("db.sqlite").to_string_lossy().into_owned();
