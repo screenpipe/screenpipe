@@ -116,6 +116,7 @@ import {
   applySidebarRecentsCap,
   buildSidebarRecentsSections,
   recurringPipeGroupKeys,
+  sessionGroupKey,
   type SidebarItem,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
@@ -232,6 +233,15 @@ function useQueueDepths(): Map<string, number> {
  */
 export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const currentId = useChatStore((s) => s.currentId);
+  // Reactive group key for the current session — re-evaluates when the
+  // session appears in the store (handles the race where currentId is set
+  // before the session record lands).
+  const currentSessionGroupKey = useChatStore((s) => {
+    if (!s.currentId) return null;
+    const session = s.sessions[s.currentId];
+    if (!session || (session.kind === "pipe-watch" && session.isLoading)) return null;
+    return sessionGroupKey(session);
+  });
   const diskHydrated = useChatStore((s) => s.diskHydrated);
   const actions = useChatActions();
   const queueDepths = useQueueDepths();
@@ -505,6 +515,22 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       return next;
     });
   };
+
+  // Auto-expand the pipe group containing the current session so the
+  // highlighted row is visible (e.g. after "open in chat" from Pipes).
+  // Uses a reactive store selector so it also fires when the session
+  // record lands after currentId was set (race on new conversations).
+  // In-memory only — doesn't persist to localStorage since this is a
+  // transient convenience, not a user preference.
+  useEffect(() => {
+    if (!currentSessionGroupKey) return;
+    setExpandedGroups((prev) => {
+      if (prev.has(currentSessionGroupKey)) return prev;
+      const next = new Set(prev);
+      next.add(currentSessionGroupKey);
+      return next;
+    });
+  }, [currentSessionGroupKey, setExpandedGroups]);
 
   // GC stale expand-state keys on mount — compare against the full
   // (pre-cap) recents list so we don't accidentally prune keys for
