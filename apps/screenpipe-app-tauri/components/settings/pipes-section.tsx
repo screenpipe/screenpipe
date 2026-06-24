@@ -47,6 +47,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { PipeTriggerPicker } from "./pipe-trigger-picker";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
@@ -68,6 +69,7 @@ import {
   formatPipeElapsed,
 } from "@/components/pipe-activity-indicator";
 import { getApiBaseUrl, localFetch } from "@/lib/api";
+import { parsePipeError } from "@/lib/pipe-errors";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { CloudPipesTab } from "./cloud-pipes-tab";
@@ -323,52 +325,8 @@ function buildRemixPrompt(pipeName: string): string {
 4. install and enable the new pipe, then tell me what it does.`;
 }
 
-function parsePipeError(stderr: string): {
-  type: "daily_limit" | "credits_exhausted" | "rate_limit" | "unknown";
-  message: string;
-  used?: number;
-  limit?: number;
-  resets_at?: string;
-  credits_remaining?: number;
-} {
-  // stderr format: '429 "{\"error\":...}"\n' — inner quotes are backslash-escaped
-  const jsonMatch = stderr.match(/\d{3}\s+"(.+)"/s);
-  if (jsonMatch) {
-    try {
-      const raw = jsonMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-      const parsed = JSON.parse(raw);
-      if (parsed.error === "daily_limit_exceeded") {
-        return {
-          type: "daily_limit",
-          message: `daily limit reached (${parsed.used_today}/${parsed.limit_today})`,
-          used: parsed.used_today,
-          limit: parsed.limit_today,
-          resets_at: parsed.resets_at,
-        };
-      }
-      if (parsed.error === "daily_cost_limit_exceeded") {
-        return {
-          type: "daily_limit",
-          message: `daily ai usage limit reached — try a lighter model or wait until tomorrow`,
-        };
-      }
-      if (parsed.error === "rate limit exceeded") {
-        return {
-          type: "rate_limit",
-          message: `rate limited — retrying automatically`,
-        };
-      }
-      if (parsed.error === "credits_exhausted") {
-        return {
-          type: "credits_exhausted",
-          message: parsed.message || "daily ai limit reached — upgrade or wait until tomorrow",
-          credits_remaining: parsed.credits_remaining ?? 0,
-        };
-      }
-    } catch {}
-  }
-  return { type: "unknown", message: stderr.slice(0, 150) };
-}
+// parsePipeError moved to @/lib/pipe-errors (shared with the global pipe-advisory
+// watcher so both surface the same friendly message). Imported at the top.
 
 interface PipeConfig {
   name: string;
@@ -383,6 +341,13 @@ interface PipeConfig {
   trigger?: {
     events?: string[];
     custom?: string[];
+    sources?: {
+      app: string;
+      kind?: string;
+      instance?: string;
+      path?: string;
+      filter?: Record<string, string>;
+    }[];
   };
   // serde(flatten) merges extra YAML fields into this level at runtime
   [key: string]: unknown;
@@ -1002,7 +967,7 @@ export function PipesSection() {
   const [sharingPublic, setSharingPublic] = useState<string | null>(null);
   const [publishPipeName, setPublishPipeName] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual" | "cloud">("scheduled");
+  const [pipeTypeFilter, setPipeTypeFilter] = useState<"automated" | "manual" | "cloud">("automated");
   // "cloud" (the org's cloud runner) is an enterprise-build-only surface
   const isEnterpriseBuild = useIsEnterpriseBuild();
   // Favorites — per-machine preference persisted via /pipes/favorites.
@@ -1023,11 +988,16 @@ export function PipesSection() {
   const liveOutputRef = useRef<Record<string, string[]>>({});
   const isTriggeredPipe = (p: PipeStatus) =>
     !!(p.config.trigger?.events?.length) ||
-    !!(p.config.trigger?.custom?.length);
+    !!(p.config.trigger?.custom?.length) ||
+    !!(p.config.trigger?.sources?.length);
   const isScheduledPipe = (p: PipeStatus) =>
     !!p.config.schedule && p.config.schedule !== "manual" && !isTriggeredPipe(p);
   const isManualPipe = (p: PipeStatus) =>
     (!p.config.schedule || p.config.schedule === "manual") && !isTriggeredPipe(p);
+  // "Automated" groups scheduled + event/connection-triggered pipes — anything
+  // that runs on its own. Manual (run-on-demand) stands apart.
+  const isAutomatedPipe = (p: PipeStatus) =>
+    isScheduledPipe(p) || isTriggeredPipe(p);
 
   // Single create-pipe entry point shared by the create box and the example
   // chips. Marks the generation attempt (so standalone-chat can fire
@@ -1079,8 +1049,7 @@ export function PipesSection() {
             if (!p.config.name.toLowerCase().includes(q)) return false;
           }
 
-          if (pipeTypeFilter === "scheduled" && !isScheduledPipe(p)) return false;
-          if (pipeTypeFilter === "triggered" && !isTriggeredPipe(p)) return false;
+          if (pipeTypeFilter === "automated" && !isAutomatedPipe(p)) return false;
           if (pipeTypeFilter === "manual" && !isManualPipe(p)) return false;
 
           // Favorites filter — only applied when the user has toggled the star chip on.
@@ -1112,8 +1081,7 @@ export function PipesSection() {
   // Counts for sub-tab badges — memoized so the filter doesn't re-run on every render
   const tabCounts = React.useMemo(() => {
     return {
-      scheduled: pipes.filter(isScheduledPipe).length,
-      triggered: pipes.filter(isTriggeredPipe).length,
+      automated: pipes.filter(isAutomatedPipe).length,
       manual: pipes.filter(isManualPipe).length,
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1122,9 +1090,8 @@ export function PipesSection() {
   const starredEmptyTitle = React.useMemo(() => {
     if (!pipeFavorites.showOnly) return null;
 
-    if (pipeTypeFilter === "triggered") return "no starred triggered pipes";
     if (pipeTypeFilter === "manual") return "no starred manual pipes";
-    return "no starred scheduled pipes";
+    return "no starred automated pipes";
   }, [pipeFavorites.showOnly, pipeTypeFilter]);
 
   const sharePipePublic = async (pipe: PipeStatus) => {
@@ -1948,8 +1915,7 @@ export function PipesSection() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {([
-              "scheduled",
-              "triggered",
+              "automated",
               "manual",
               ...(isEnterpriseBuild ? (["cloud"] as const) : []),
             ] as const).map((tab) => (
@@ -2053,17 +2019,6 @@ export function PipesSection() {
                   </Button>
                 </div>
               </div>
-            ) : pipeTypeFilter === "triggered" ? (
-              <>
-                <p>no triggered pipes installed</p>
-                <p className="text-sm mt-2">
-                  triggered pipes use{" "}
-                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                    trigger.events
-                  </code>
-                  {" "}in their frontmatter (e.g. meeting_started, meeting_ended)
-                </p>
-              </>
             ) : pipeTypeFilter === "manual" ? (
               <>
                 <p>no manual pipes installed</p>
@@ -2922,64 +2877,45 @@ export function PipesSection() {
                           </div>
                         </div>
 
-                        {/* Triggers — run pipe on local events */}
-                        <div>
-                          <Label className="text-xs flex items-center gap-1.5 mb-2 cursor-help" title="run this pipe when specific events happen (meeting starts, another pipe finishes, etc.)">
-                            triggers
-                          </Label>
-                          <div className="space-y-1.5">
-                            {(pipe.config.trigger?.events || []).map((event: string, i: number) => (
-                              <div key={`ev-${i}`} className="flex items-center gap-1.5 group/item">
-                                <span className="text-xs bg-muted/50 border px-3 py-1.5 flex-1 font-mono">› {event.replace(/_/g, " ")}</span>
-                                <button className="text-xs text-muted-foreground/0 group-hover/item:text-muted-foreground hover:!text-destructive transition-all duration-150" onClick={() => {
-                                  const updated = (pipe.config.trigger?.events || []).filter((_: string, j: number) => j !== i);
-                                  const newTrigger = { ...pipe.config.trigger, events: updated };
-                                  if (!newTrigger.events?.length && !newTrigger.custom?.length) {
-                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: undefined } } : p));
-                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: null }) }).then(() => fetchPipes());
-                                  } else {
-                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
-                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
-                                  }
-                                }}>×</button>
-                              </div>
-                            ))}
-                            {(pipe.config.trigger?.custom || []).map((trigger: string, i: number) => (
-                              <div key={`custom-${i}`} className="flex items-center gap-1.5 group/item">
-                                <span className="text-xs bg-muted/50 px-2 py-1 rounded flex-1 font-mono">› {trigger}</span>
-                                <button className="text-xs text-muted-foreground/0 group-hover/item:text-muted-foreground hover:!text-destructive transition-all duration-150" onClick={() => {
-                                  const updated = (pipe.config.trigger?.custom || []).filter((_: string, j: number) => j !== i);
-                                  const newTrigger = { ...pipe.config.trigger, custom: updated };
-                                  setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
-                                  fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
-                                }}>×</button>
-                              </div>
-                            ))}
-                            {/* Dropdown to add predefined triggers */}
-                            <select
-                              className="w-full h-7 text-xs font-mono bg-background border rounded px-2 text-muted-foreground"
-                              value=""
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                if (!value) return;
-                                const existing = pipe.config.trigger?.events || [];
-                                if (existing.includes(value)) return;
-                                const newTrigger = { ...pipe.config.trigger, events: [...existing, value] };
-                                setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
-                                fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
-                              }}
-                            >
-                              <option value="">+ add trigger...</option>
-                              <option value="meeting_started">meeting started</option>
-                              <option value="meeting_ended">meeting ended</option>
-                              {pipes.filter((p) => p.config.name !== pipe.config.name && p.config.enabled).map((p) => (
-                                <option key={p.config.name} value={`pipe_completed:${p.config.name}`}>
-                                  after {p.config.name} finishes
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
+                        {/* Triggers — Notion-style picker (events + per-app connection sources) */}
+                        <PipeTriggerPicker
+                          pipeName={pipe.config.name}
+                          trigger={pipe.config.trigger}
+                          schedule={pipe.config.schedule}
+                          otherPipes={pipes
+                            .filter((p) => p.config.name !== pipe.config.name && p.config.enabled)
+                            .map((p) => ({ name: p.config.name }))}
+                          availableConnections={availableConnections}
+                          refreshConnections={async () => {
+                            const next = await fetchAvailablePipeConnections(apiBase, availableConnections);
+                            setAvailableConnections(next);
+                            return next;
+                          }}
+                          fetchPipes={fetchPipes}
+                          applyOptimistic={(t) =>
+                            setPipes((prev) =>
+                              prev.map((p) =>
+                                p.config.name === pipe.config.name
+                                  ? { ...p, config: { ...p.config, trigger: t } }
+                                  : p
+                              )
+                            )
+                          }
+                          applySchedule={(s) => {
+                            setPipes((prev) =>
+                              prev.map((p) =>
+                                p.config.name === pipe.config.name
+                                  ? { ...p, config: { ...p.config, schedule: s } }
+                                  : p
+                              )
+                            );
+                            localFetch(`/pipes/${pipe.config.name}/config`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ schedule: s }),
+                            }).then(() => fetchPipes());
+                          }}
+                        />
 
                         {/* Notifications toggle */}
                         <div className="flex items-center justify-between border px-3 py-2.5">

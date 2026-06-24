@@ -511,8 +511,6 @@ const AISection = ({
     // Google models
     if (m.includes("gemini-3") || m.includes("gemini-2.5-pro")) return 65536;
     if (m.includes("gemini")) return 8192;
-    // DeepSeek
-    if (m.includes("deepseek")) return 8192;
     // Qwen
     if (m.includes("qwen")) return 8192;
     // Mistral
@@ -1126,7 +1124,6 @@ const AISection = ({
             { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite (cheapest)", provider: "screenpipe" },
             { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro (balanced)", provider: "screenpipe" },
             { id: "qwen/qwen3.5-flash-02-23", name: "Qwen3.5 Flash (cheapest, 1M ctx)", provider: "screenpipe" },
-            { id: "deepseek/deepseek-chat", name: "DeepSeek V3.2 (fast)", provider: "screenpipe" },
             { id: "meta-llama/llama-4-scout", name: "Llama 4 Scout", provider: "screenpipe" },
           ]);
           break;
@@ -1685,7 +1682,7 @@ const AISection = ({
           />
           <div className="flex flex-wrap gap-1.5 mt-2">
             {[
-              { label: "8k", value: 8192, hint: "haiku / qwen / deepseek" },
+              { label: "8k", value: 8192, hint: "haiku / qwen" },
               { label: "32k", value: 32768, hint: "gpt-4.1" },
               { label: "64k", value: 64000, hint: "opus / sonnet" },
               { label: "65k", value: 65536, hint: "gemini 3 pro" },

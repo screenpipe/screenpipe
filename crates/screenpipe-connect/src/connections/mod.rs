@@ -51,6 +51,7 @@ pub mod obsidian_memories;
 pub mod odoo;
 pub mod openclaw;
 pub mod otter;
+pub mod outlook_email;
 pub mod perplexity;
 pub mod pipedrive;
 pub mod pocket;
@@ -304,6 +305,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(confluence::Confluence),
         Box::new(salesforce::Salesforce),
         Box::new(microsoft365::Microsoft365),
+        Box::new(outlook_email::OutlookEmail),
         Box::new(trello::Trello),
         Box::new(zendesk::Zendesk),
         Box::new(stripe::Stripe),

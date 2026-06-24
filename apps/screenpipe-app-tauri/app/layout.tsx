@@ -15,6 +15,8 @@ import { BrowserPairingDialog } from "@/components/browser-pairing-dialog";
 import { RecentChatSwitcherController } from "@/components/chat/recent-chat-switcher-controller";
 import { FeedbackDialog } from "@/components/feedback-dialog";
 import { AnnouncementHost } from "@/components/announcement-host";
+import { AdvisoryOverlay } from "@/components/advisory-overlay";
+import { PipeAdvisoryWatcher } from "@/components/pipe-advisory-watcher";
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -303,6 +305,8 @@ export default function RootLayout({
           {/* {!isOverlay && <VaultLockDialog />} */}
           {children}
           {!isOverlay && <Toaster />}
+          {!isOverlay && <AdvisoryOverlay />}
+          {!isOverlay && <PipeAdvisoryWatcher />}
           {!isOverlay && <FeedbackDialog />}
           {!isOverlay && <AnnouncementHost />}
         </Providers>

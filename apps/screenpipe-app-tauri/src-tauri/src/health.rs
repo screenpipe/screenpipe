@@ -30,6 +30,16 @@ const CONSECUTIVE_FAILURES_THRESHOLD: u32 = 30;
 /// dedicated `permission_monitor` + capture-module events, not through this debounce.
 const CONSECUTIVE_UNHEALTHY_THRESHOLD: u32 = 120;
 
+/// Connection-failure checks before the watchdog treats the embedded engine as
+/// crashed and respawns it. Reuses the Stopped threshold (30 ≈ 30s at 1Hz),
+/// which already clears the ~20s sleep/wake timeout window.
+const SERVER_DOWN_THRESHOLD: u32 = CONSECUTIVE_FAILURES_THRESHOLD;
+/// Cap auto-respawns within the window so an engine that can't come back up
+/// (bad config, revoked permission, corrupt DB) can't restart-storm — it falls
+/// back to the existing Stopped tray state instead.
+const SERVER_RESPAWN_MAX_ATTEMPTS: u32 = 3;
+const SERVER_RESPAWN_WINDOW: Duration = Duration::from_secs(600);
+
 // ─────────────────────────────────────────────────────────────────────────
 // Boot phase — tracks where we are inside ServerCore::start.
 //
@@ -425,6 +435,134 @@ fn decide_status(
     }
 }
 
+/// Snapshot of everything the engine-respawn decision needs, taken once per
+/// health tick. A struct (not 11 positional args) so call sites and tests read
+/// as named guards.
+struct EngineRespawnCheck {
+    /// Capture is supposed to be running (vs a deliberate stop).
+    wants_recording: bool,
+    /// Active subscription / dev build — don't respawn a lapsed install.
+    entitled: bool,
+    /// The server was up at some point → this is a crash, not a boot failure.
+    ever_connected: bool,
+    past_startup_grace: bool,
+    /// Already mid-restart (ours, a manual one, or a settings-applied one).
+    in_restart_grace: bool,
+    /// Sleep/wake transiently kills the HTTP server; let it recover on its own.
+    recently_woke: bool,
+    /// A start/respawn is already in flight.
+    start_in_progress: bool,
+    /// Consecutive connection failures, vs `down_threshold`.
+    consecutive_failures: u32,
+    down_threshold: u32,
+    /// Respawns already used this window, vs `max_respawns` (storm guard).
+    respawns_in_window: u32,
+    max_respawns: u32,
+}
+
+impl EngineRespawnCheck {
+    /// Pure decision: should the health watchdog respawn the embedded engine?
+    ///
+    /// The desktop app embeds and supervises the engine in-process; unlike the
+    /// CLI daemon (launchd `KeepAlive` / systemd `Restart=always`), nothing
+    /// brought a crashed embedded engine back — recording just sat `Stopped`.
+    /// This restores parity. True only when recording is supposed to be ON but
+    /// the server has been unreachable long enough to be a genuine crash — not a
+    /// sleep/wake blip, a deliberate stop, a still-booting or merely-degraded
+    /// server — and the per-window respawn budget isn't spent.
+    fn should_respawn(&self) -> bool {
+        self.wants_recording
+            && self.entitled
+            && self.ever_connected
+            && self.past_startup_grace
+            && !self.in_restart_grace
+            && !self.recently_woke
+            && !self.start_in_progress
+            && self.consecutive_failures >= self.down_threshold
+            && self.respawns_in_window < self.max_respawns
+    }
+}
+
+/// Respawn the embedded engine if it has crashed while capture should be on.
+/// Ages out the respawn-attempt window, resets the budget once the server is
+/// reachable again, applies every guard via [`EngineRespawnCheck`], and on a
+/// decision records the attempt, opens the shared restart grace, and spawns the
+/// restart. Extracted from the health loop body to keep that loop readable.
+fn respawn_engine_if_crashed(
+    app: &tauri::AppHandle,
+    health_ok: bool,
+    ever_connected: bool,
+    consecutive_failures: u32,
+    start_in_progress: bool,
+    start_elapsed: Duration,
+    server_respawns: &mut std::collections::VecDeque<Instant>,
+    last_restart_triggered: &mut Option<Instant>,
+) {
+    let now = Instant::now();
+    while server_respawns
+        .front()
+        .is_some_and(|t| now.duration_since(*t) > SERVER_RESPAWN_WINDOW)
+    {
+        server_respawns.pop_front();
+    }
+    // Server reachable again → reset the budget so a later, unrelated crash gets
+    // fresh respawn attempts. (Nothing to respawn while it's up.)
+    if health_ok {
+        server_respawns.clear();
+        return;
+    }
+
+    let check = EngineRespawnCheck {
+        wants_recording: app
+            .try_state::<crate::recording::RecordingState>()
+            .map(|s| s.capture_intended())
+            .unwrap_or(false),
+        entitled: crate::store::SettingsStore::get(app)
+            .ok()
+            .flatten()
+            .map(|s| s.app_entitled_or_dev())
+            .unwrap_or(false),
+        ever_connected,
+        past_startup_grace: start_elapsed > STARTUP_GRACE_PERIOD,
+        in_restart_grace: last_restart_triggered
+            .map(|t| t.elapsed() < NOTIFICATION_COOLDOWN)
+            .unwrap_or(false),
+        recently_woke: screenpipe_engine::sleep_monitor::recently_woke_from_sleep(),
+        start_in_progress,
+        consecutive_failures,
+        down_threshold: SERVER_DOWN_THRESHOLD,
+        respawns_in_window: server_respawns.len() as u32,
+        max_respawns: SERVER_RESPAWN_MAX_ATTEMPTS,
+    };
+    if !check.should_respawn() {
+        return;
+    }
+
+    warn!(
+        "embedded engine unreachable for {} checks while recording should be ON \
+         — auto-respawning (attempt {}/{})",
+        consecutive_failures,
+        server_respawns.len() + 1,
+        SERVER_RESPAWN_MAX_ATTEMPTS
+    );
+    server_respawns.push_back(now);
+    // Share the post-restart grace so stall detection and a second respawn both
+    // hold off while the new engine boots.
+    *last_restart_triggered = Some(now);
+    let app_for_respawn = app.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::recording::spawn_screenpipe(
+            app_for_respawn.state::<crate::recording::RecordingState>(),
+            app_for_respawn.clone(),
+            None,
+        )
+        .await
+        {
+            warn!("engine auto-respawn failed: {}", e);
+        }
+    });
+}
+
 /// Cap how long the `is_starting*` session flags may pin the tray on
 /// "Starting…" while the server is RESPONDING. The flags are AtomicBools
 /// cleared across many exit paths in recording.rs, and `capture_running`
@@ -616,6 +754,10 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // can't pin the tray on "Starting…" forever (see START_PIN_CEILING).
     let mut start_in_progress_since: Option<Instant> = None;
     let mut start_pin_warned = false;
+    // Timestamps of recent engine auto-respawns (crash recovery), aged by
+    // SERVER_RESPAWN_WINDOW so a server that can't come back up can't storm.
+    let mut server_respawns: std::collections::VecDeque<Instant> =
+        std::collections::VecDeque::new();
 
     tokio::spawn(async move {
         loop {
@@ -706,6 +848,21 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 capture_running,
                 start_in_progress,
                 schedule_paused,
+            );
+
+            // Bring the embedded engine back if it has crashed while capture
+            // should be on (parity with the CLI daemon's launchd/systemd
+            // KeepAlive). All the crash-vs-deliberate-stop and storm guards live
+            // in respawn_engine_if_crashed / EngineRespawnCheck.
+            respawn_engine_if_crashed(
+                &app,
+                health_result.is_ok(),
+                ever_connected,
+                consecutive_failures,
+                start_in_progress,
+                start_time.elapsed(),
+                &mut server_respawns,
+                &mut last_restart_triggered,
             );
 
             // NOTE: Runtime permission-loss detection has moved to
@@ -1851,5 +2008,94 @@ mod tests {
         assert!(!clamp_start_in_progress(true, &mut since, Duration::ZERO));
         // Timer must NOT reset while raw stays true — the episode is one pin.
         assert!(since.is_some());
+    }
+
+    // ==================== EngineRespawnCheck tests ====================
+
+    // The "crash while capture should be on" baseline that SHOULD respawn.
+    // Each test flips exactly one field to prove its guard blocks the respawn.
+    fn crash_baseline() -> EngineRespawnCheck {
+        EngineRespawnCheck {
+            wants_recording: true,
+            entitled: true,
+            ever_connected: true,
+            past_startup_grace: true,
+            in_restart_grace: false,
+            recently_woke: false,
+            start_in_progress: false,
+            consecutive_failures: SERVER_DOWN_THRESHOLD,
+            down_threshold: SERVER_DOWN_THRESHOLD,
+            respawns_in_window: 0,
+            max_respawns: SERVER_RESPAWN_MAX_ATTEMPTS,
+        }
+    }
+
+    #[test]
+    fn respawns_on_crash_while_recording_intended() {
+        assert!(crash_baseline().should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_when_user_stopped() {
+        // wants_recording = false → deliberate stop (incl. the tray "stop").
+        assert!(!EngineRespawnCheck { wants_recording: false, ..crash_baseline() }.should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_when_not_entitled() {
+        assert!(!EngineRespawnCheck { entitled: false, ..crash_baseline() }.should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_a_never_started_server() {
+        // ever_connected = false → boot failure, not a crash; don't fight it.
+        assert!(!EngineRespawnCheck { ever_connected: false, ..crash_baseline() }.should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_during_startup_grace_or_restart_grace() {
+        assert!(!EngineRespawnCheck { past_startup_grace: false, ..crash_baseline() }.should_respawn());
+        assert!(!EngineRespawnCheck { in_restart_grace: true, ..crash_baseline() }.should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_right_after_wake() {
+        // Sleep/wake transiently kills the HTTP server — let it recover itself.
+        assert!(!EngineRespawnCheck { recently_woke: true, ..crash_baseline() }.should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_while_a_start_is_in_flight() {
+        assert!(!EngineRespawnCheck { start_in_progress: true, ..crash_baseline() }.should_respawn());
+    }
+
+    #[test]
+    fn respects_the_down_threshold() {
+        // not down long enough yet
+        assert!(!EngineRespawnCheck {
+            consecutive_failures: SERVER_DOWN_THRESHOLD - 1,
+            ..crash_baseline()
+        }
+        .should_respawn());
+        // exactly at the bar → respawn
+        assert!(EngineRespawnCheck {
+            consecutive_failures: SERVER_DOWN_THRESHOLD,
+            ..crash_baseline()
+        }
+        .should_respawn());
+    }
+
+    #[test]
+    fn stops_respawning_once_budget_is_spent() {
+        assert!(!EngineRespawnCheck {
+            respawns_in_window: SERVER_RESPAWN_MAX_ATTEMPTS,
+            ..crash_baseline()
+        }
+        .should_respawn());
+        assert!(EngineRespawnCheck {
+            respawns_in_window: SERVER_RESPAWN_MAX_ATTEMPTS - 1,
+            ..crash_baseline()
+        }
+        .should_respawn());
     }
 }

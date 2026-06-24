@@ -7,6 +7,7 @@ import { createSuccessResponse, createErrorResponse, addCorsHeaders } from '../u
 import { getTierConfig, getModelWeight, isModelGatingEnabled } from '../services/usage-tracker';
 import { listAnthropicModels } from '../providers/anthropic-proxy';
 import { getModelHealth, ModelHealthStatus } from '../services/model-health';
+import { isGooglePolicyBlockedModel } from '../utils/model-policy';
 
 /** Enriched model metadata — OpenAI-compatible (extra fields ignored by standard clients) */
 interface ModelEntry {
@@ -155,36 +156,6 @@ const CURATED_MODELS: ModelEntry[] = [
     recommended_for: ['pipes', 'chat'],
   },
   // glm-5.1 still pending — released 2026-04-07 on HuggingFace, not yet on Vertex MaaS.
-  {
-    id: 'deepseek-r1',
-    object: 'model',
-    owned_by: 'vertex-maas',
-    name: 'DeepSeek R1',
-    description: 'deep reasoning, 671B MoE',
-    tags: ['free', 'reasoning'],
-    free: true,
-    context_window: 128000,
-    best_for: ['complex reasoning', 'math', 'analysis'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'free',
-    recommended_for: ['chat', 'analysis'],
-  },
-  {
-    id: 'deepseek-v3.2',
-    object: 'model',
-    owned_by: 'vertex-maas',
-    name: 'DeepSeek V3.2',
-    description: 'fast general-purpose, 671B MoE',
-    tags: ['free', 'general'],
-    free: true,
-    context_window: 128000,
-    best_for: ['general', 'coding', 'chat'],
-    speed: 'fast',
-    intelligence: 'high',
-    cost_tier: 'free',
-    recommended_for: ['pipes', 'chat', 'coding'],
-  },
   {
     id: 'qwen3-coder',
     object: 'model',
@@ -539,22 +510,6 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'low',
     recommended_for: ['pipes', 'chat'],
   },
-  // deepseek/deepseek-chat removed — use deepseek-v3.2 on Vertex MaaS (GCP infra, free, no China data risk)
-  {
-    id: 'deepseek/deepseek-v3.2-speciale',
-    object: 'model',
-    owned_by: 'openrouter',
-    name: 'DeepSeek V3.2 Speciale',
-    description: 'deep reasoning specialist',
-    tags: ['reasoning'],
-    free: false,
-    context_window: 128000,
-    best_for: ['complex reasoning'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'medium',
-    recommended_for: ['chat', 'analysis'],
-  },
   {
     id: 'qwen/qwen3.5-397b-a17b',
     object: 'model',
@@ -600,6 +555,7 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
     // Avoid advertising models that would immediately fail because their
     // provider secret is not configured in the Worker environment yet.
     models = models.filter(model => !model.requires_env || hasConfiguredSecret(env[model.requires_env]));
+    models = models.filter(model => !isGooglePolicyBlockedModel(model.id));
 
     // Non-Business tiers used to have above-tier models filtered OUT of the
     // list entirely. Instead we now keep them and tag `locked` on the response

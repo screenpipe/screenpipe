@@ -32,6 +32,8 @@ screenpipe has a built-in MCP server that works with Claude Desktop, Cursor, and
 }
 ```
 
+<Tip>or run `npx -y screenpipe@latest agent setup <target>` (`claude-desktop`, `cursor`, `claude-code`, `codex`, `openclaw`, `hermes`, `windsurf`) to install the screenpipe skills and register the MCP server in one command.</Tip>
+
 see [MCP server setup](/mcp-server) for details.
 
 ### pipes (scheduled agents)
@@ -50,6 +52,8 @@ curl "http://localhost:3030/search?content_type=all&limit=20"
 curl "http://localhost:3030/search?q=meeting+notes&app_name=Slack&limit=10"
 ```
 
+<Note>the local API needs no auth by default. if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to these requests.</Note>
+
 ## use cases
 
 | use case | how |
@@ -64,14 +68,15 @@ curl "http://localhost:3030/search?q=meeting+notes&app_name=Slack&limit=10"
 
 - all data stays on your device
 - use local LLMs (Ollama, LMStudio) for complete privacy
-- filter what gets captured with `--ignored-windows` and `--included-windows`
+- filter what gets captured in **settings → privacy** — ignore or include specific apps, windows, and URLs ([privacy filters](/privacy-filter))
 - no data sent to cloud unless you explicitly choose cloud providers
 
 ## next steps
 
+- [build a second brain](/second-brain) — let your agent watch your activity and remember your workflows in the background
 - [set up MCP server](/mcp-server) — connect to Claude, Cursor
 - [set up pipes](/pipes) — scheduled AI agents
-- [API reference](/cli-reference) — search parameters and API endpoints
+- [API reference](/cli-reference) — REST API search parameters and endpoints
 - [join our discord](https://discord.gg/screenpipe) — get help from the community
 
 ## get screenpipe

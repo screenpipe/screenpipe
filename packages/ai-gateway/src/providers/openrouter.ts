@@ -9,10 +9,9 @@ import type { ChatCompletionMessage, ChatCompletionCreateParams } from 'openai/r
 import type { ResponseFormatJSONSchema } from 'openai/resources';
 
 // Models we expose through OpenRouter — only models NOT available on Vertex MaaS.
-// DeepSeek, Llama, Qwen3 Coder are routed via Vertex MaaS (GCP infra, no China data risk).
+// Llama and Qwen3 Coder are routed via Vertex MaaS (GCP infra, free for users).
 const OPENROUTER_MODELS = [
 	{ id: 'qwen/qwen3.5-flash-02-23', name: 'Qwen3.5 Flash (1M ctx, cheapest)', provider: 'openrouter' },
-	{ id: 'deepseek/deepseek-v3.2-speciale', name: 'DeepSeek V3.2 Speciale (reasoning)', provider: 'openrouter' },
 	{ id: 'qwen/qwen3.5-397b-a17b', name: 'Qwen3.5 397B (vision, SOTA)', provider: 'openrouter' },
 	{ id: 'stepfun/step-3.5-flash:free', name: 'Step 3.5 Flash (free, 256K)', provider: 'openrouter' },
 ];

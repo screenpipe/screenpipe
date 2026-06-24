@@ -326,8 +326,23 @@ export type Settings = SettingsStore & {
 	 *  Costs one extra inference per new chat. Disable to save tokens —
 	 *  chats fall back to a title derived from the first message (default: true) */
 	autoGenerateChatTitles?: boolean;
-	/** Notification preferences — which notification sources are enabled */
+	/** Notification preferences — which notification sources are enabled.
+	 *  The set of per-category keys is declared in
+	 *  `components/settings/notification-registry.ts` (single source of truth);
+	 *  this type lists the stable ones the Rust side reads by name. */
 	notificationPrefs?: {
+		/** Master switch. When false the `/notify` handler drops every panel
+		 *  (pipe, system, power, transcript-stall, …). Default true. */
+		notificationsEnabled?: boolean;
+		/** Snooze expiry as epoch ms. While `> Date.now()` all non-critical
+		 *  notifications are paused. 0 / unset = not snoozed. */
+		snoozeUntil?: number;
+		/** Recurring daily quiet window (local wall-clock). When `enabled`,
+		 *  non-critical notifications are paused inside the window. */
+		quietHours?: { enabled: boolean; start: string; end: string };
+		/** Pipe names that still notify while snoozed / in quiet hours (Slack-VIP
+		 *  pattern). A hard master-off still silences them. */
+		allowDuringPause?: string[];
 		captureStalls: boolean;
 		appUpdates: boolean;
 		pipeSuggestions: boolean;

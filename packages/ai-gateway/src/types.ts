@@ -178,7 +178,7 @@ export interface Env {
 	// Auto-reload settings
 	WEBSITE_URL: string;
 	AUTO_RELOAD_SECRET: string;
-	// OpenRouter (DeepSeek, Llama, Qwen, Mistral via single API)
+	// OpenRouter (Llama, Qwen, Mistral via single API)
 	OPENROUTER_API_KEY: string;
 	// Tinfoil — confidential inference in secure enclaves
 	TINFOIL_API_KEY: string;

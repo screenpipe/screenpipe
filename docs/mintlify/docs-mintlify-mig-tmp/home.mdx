@@ -35,6 +35,9 @@ screenpipe records your screen and audio 24/7, runs locally, and makes everythin
   <Card title="connect your AI" icon="server" href="/mcp-server">
     add screenpipe to Claude, Cursor, ChatGPT, or any MCP-compatible tool
   </Card>
+  <Card title="build a second brain" icon="clone" href="/second-brain">
+    let your agent watch your activity and remember your workflows in the background
+  </Card>
   <Card title="API recipes" icon="terminal" href="/api-recipes">
     copy-paste search, meetings, speakers, frames, and retention workflows
   </Card>
@@ -54,6 +57,8 @@ screenpipe records your screen and audio 24/7, runs locally, and makes everythin
 | **give Claude memory of my screen** | [connect via MCP](/mcp-server) — one click in settings |
 | **sync activity to Obsidian** | [connect Obsidian](/obsidian) and enable the sync pipe |
 | **close my loops** | ask your AI "what was I working on before lunch?" — [learn more](/use-cases) |
+
+<Note>run the CLI with `npx -y screenpipe@latest <command>` (and the MCP server with `npx -y screenpipe-mcp`). the local API on `localhost:3030` needs no auth by default — if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to any curl.</Note>
 
 ## community
 

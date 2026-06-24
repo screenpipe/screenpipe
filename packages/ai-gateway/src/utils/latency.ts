@@ -7,6 +7,18 @@ import { Env, RequestBody } from '../types';
 export type LatencyClass = 'interactive' | 'background';
 
 /**
+ * Is this latency-tolerant background/automation traffic (pipes, summaries)?
+ * Header-only and independent of FLEX_TIER_ENABLED — used to decide whether a
+ * disallowed model should be downgraded (don't break automations) vs rejected
+ * (interactive, show the upgrade UI). Must NOT be coupled to the flex cost
+ * switch, or killing flex would also strip pipe gate-protection.
+ */
+export function isBackgroundRequest(request: Request): boolean {
+	const hint = request.headers.get('x-screenpipe-latency')?.toLowerCase();
+	return hint === 'background' || hint === 'flex';
+}
+
+/**
  * Classify a chat request as interactive (user waiting) or background
  * (latency-tolerant: pipes, daily summary, suggestions). Background traffic is
  * routed to the cheaper Vertex flex tier (see handlers/chat tryModel).

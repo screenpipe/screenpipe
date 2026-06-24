@@ -89,6 +89,16 @@ this FAQ is organized around the questions people ask support most often: what t
   you can self-host the CLI, audit the capture and storage code, and run screenpipe fully offline. enterprise customers can request source access for compliance review.
 </Expandable>
 
+<Expandable title="can I use screenpipe for free?">
+  yes, three ways:
+
+  1. **CLI (free, open source)**: `npx -y screenpipe@latest record` — full recording, search, and API. runs in your terminal. completely free and open source.
+  2. **Tauri desktop app (free, open source)**: clone [github.com/screenpipe/screenpipe](https://github.com/screenpipe/screenpipe) and build the app from source (`pnpm build` in `apps/screenpipe-app-tauri`). adds a visual timeline and UI on top of the CLI.
+  3. **Paid desktop app (commercial)**: download from [screenpi.pe/onboarding](https://screenpi.pe/onboarding). includes support, auto-updates, and pre-built distribution ($60-300/year depending on features).
+
+  most users start with the CLI and upgrade to the paid app later for the visual timeline and features. the codebase is shared across all three, so open-source security audits apply to all versions.
+</Expandable>
+
 <Expandable title="does screenpipe work offline?">
   yes. screen capture, audio capture, OCR fallback, accessibility text extraction, local transcription, search, and the local API at `localhost:3030` all work without internet.
 
@@ -136,7 +146,7 @@ this FAQ is organized around the questions people ask support most often: what t
 <Expandable title="how do I update screenpipe?">
   the desktop app checks for updates automatically and prompts you when one is available. you can also click **settings → updates → check for updates**.
 
-  for the CLI: `npx screenpipe@latest record` always pulls the latest published version. enterprise customers receive signed installers via their account manager.
+  for the CLI: `npx -y screenpipe@latest record` always pulls the latest published version. enterprise customers receive signed installers via their account manager.
 </Expandable>
 
 <Expandable title="how do I uninstall screenpipe and remove all local data?">
@@ -163,7 +173,7 @@ this FAQ is organized around the questions people ask support most often: what t
 <Expandable title="can I try screenpipe before buying?">
   yes. screenpipe has two common trial paths:
 
-  1. **CLI**: `npx screenpipe@latest record` gives you local recording, search, and API access from the terminal.
+  1. **CLI**: `npx -y screenpipe@latest record` gives you local recording, search, and API access from the terminal.
   2. **desktop app**: download from [screenpi.pe/onboarding](https://screenpi.pe/onboarding) for timeline, pipes, settings, chat, and connections.
 
   current plan details can change, so use the [pricing/download page](https://screenpi.pe/onboarding) as the source of truth before purchasing.
@@ -322,7 +332,7 @@ this FAQ is organized around the questions people ask support most often: what t
 <Expandable title="how do I start screenpipe automatically at login?">
   the desktop app adds itself as a login item the first time you launch it. you can confirm or remove it in **System Settings → General → Login Items** on macOS, or **Task Manager → Startup apps** on Windows.
 
-  for the CLI, set up a launchd plist on macOS, a systemd user service on Linux, or a Task Scheduler job on Windows that runs `npx screenpipe@latest record` at login.
+  for the CLI, set up a launchd plist on macOS, a systemd user service on Linux, or a Task Scheduler job on Windows that runs `npx -y screenpipe@latest record` at login.
 </Expandable>
 
 ## pipes and custom automations
@@ -396,7 +406,7 @@ this FAQ is organized around the questions people ask support most often: what t
 <Expandable title="can I use Ollama or local LLMs with screenpipe?">
   yes. screenpipe works with any OpenAI-compatible local server, including [Ollama](/ollama), llama.cpp, LM Studio, and vLLM.
 
-  configure it in **settings → AI models → custom endpoint**. point to `http://localhost:11434/v1` for Ollama. you can then run chat, pipes, and MCP queries fully offline with models like Llama, Qwen, Mistral, or DeepSeek.
+  configure it in **settings → AI models → custom endpoint**. point to `http://localhost:11434/v1` for Ollama. you can then run chat, pipes, and MCP queries fully offline with models like Llama, Qwen, or Mistral.
 </Expandable>
 
 <Expandable title='Anthropic API key error: "credit balance is too low" or "insufficient credits".'>
@@ -424,7 +434,7 @@ this FAQ is organized around the questions people ask support most often: what t
 
   1. update to the latest screenpipe.
   2. if it still fails, reinstall the app. on macOS that re-bundles pi-agent into `screenpipe.app/Contents/Resources/`.
-  3. on the CLI: `npx screenpipe@latest pipe install pi-agent`.
+  3. on the CLI: `npx -y screenpipe@latest pipe install pi-agent`.
 
   if a pipe errors with `Failed to extract accountId`, set `preset: screenpipe-cloud` on the pipe — pi-agent is reading the wrong auth preset for ChatGPT tokens.
 </Expandable>
@@ -573,7 +583,7 @@ this FAQ is organized around the questions people ask support most often: what t
 <Expandable title="does screenpipe record my passwords when I type them?">
   passwords typed into password fields are masked by the OS at the accessibility layer, so most apps and browsers do not expose them to screen readers — or to screenpipe. OCR sees what is on screen, which is usually dots.
 
-  to be extra safe, add your password manager (1Password, Bitwarden, etc.), banking site, or any sensitive window to **settings → recording → ignored windows**. enabling **AI PII removal** also redacts credentials, API keys, and tokens before they reach AI providers.
+  on top of that, screenpipe redacts the values you type into form fields — passwords, card numbers, secrets — on-device by default, before data is stored or sent. to be extra safe, also add your password manager (1Password, Bitwarden, etc.), banking site, or any sensitive window to **settings → recording → ignored windows**.
 </Expandable>
 
 <Expandable title="does screenpipe record incognito or private browsing windows?">
@@ -607,15 +617,23 @@ this FAQ is organized around the questions people ask support most often: what t
 </Expandable>
 
 <Expandable title="how do I delete a specific recording or time range?">
-  for a full wipe: quit screenpipe and delete `~/.screenpipe/data/` (media) and `~/.screenpipe/db.sqlite` (metadata). screenpipe will rebuild from empty on next start.
+  delete is supported in-app now. you can:
 
-  for partial cleanup, the simplest path is to delete media files from `~/.screenpipe/data/` for the dates you want gone. an in-app cleanup UI is on the roadmap — until then, file-level deletion is the supported approach.
+  - **range-delete** from the timeline — select a time range and delete it
+  - **compact database** (`/data/compact`) to reclaim disk after deleting
+  - **download my archive** to export your data before removing it
+
+  for a full wipe: quit screenpipe and delete `~/.screenpipe/data/` (media) and `~/.screenpipe/db.sqlite` (metadata). screenpipe will rebuild from empty on next start.
 </Expandable>
 
 <Expandable title="how long is my data retained by default?">
-  indefinitely, locally, until you delete it. screenpipe does not auto-prune by default — your `~/.screenpipe/` directory grows until you remove files or run out of disk.
+  retention has modes — **media**, **lean**, and **all** — with a cutoff, and screenpipe automatically cleans up data past that cutoff. data is not kept indefinitely by default.
 
-  to keep storage in check: lower capture FPS, exclude apps you do not need, periodically delete old media in `~/.screenpipe/data/`, or use [cloud archive](/cloud-archive) to offload older months. enterprise deployments can set retention policies as part of their config.
+  - **media**: evicts old screen/audio media past the cutoff, keeps text and memories
+  - **lean**: also strips heavier text (elements, accessibility json, ui events), keeps searchable text and memories
+  - **all**: keeps everything until the cutoff
+
+  to keep storage in check: pick a tighter retention mode in **settings → storage**, lower capture FPS, exclude apps you do not need, run **compact database** to reclaim space, or use [cloud archive](/cloud-archive) to offload older months. enterprise deployments can set retention policies as part of their config.
 </Expandable>
 
 <Expandable title="does screenpipe phone home or send telemetry?">

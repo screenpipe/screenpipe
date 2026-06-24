@@ -34,7 +34,7 @@ your agent needs to be able to read your activity. the fastest way is the screen
 
 this gives your agent the `search-content`, `activity-summary`, `list-meetings`, and `update-memory` tools.
 
-- running your agent on a **VPS or a different machine** than screenpipe (common with OpenClaw / Hermes)? see [OpenClaw → different machines](/openclaw#different-machines) for querying over Tailscale or pushing your `~/.screenpipe` data with `screenpipe sync remote`. the same steps work for Hermes and any other agent.
+- running your agent on a **VPS or a different machine** than screenpipe (common with OpenClaw / Hermes)? see [OpenClaw → different machines](/openclaw#different-machines) for querying over Tailscale or pushing your `~/.screenpipe` data with `npx -y screenpipe@latest sync remote`. the same steps work for Hermes and any other agent.
 - not using MCP? your agent can hit the local REST API directly at `http://localhost:3030` — see [MCP server setup](/mcp-server) and [api recipes](/api-recipes).
 
 it also helps to load the [screenpipe skills](https://github.com/screenpipe/screenpipe/tree/main/.claude/skills) (or the equivalent for your agent) so it navigates the data efficiently.

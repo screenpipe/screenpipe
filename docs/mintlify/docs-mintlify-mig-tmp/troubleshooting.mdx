@@ -31,7 +31,7 @@ icon: "wrench"
 
 ### installed the CLI but cannot find the timeline
 
-`npx screenpipe@latest record` starts local recording and the API. it does not give you the desktop timeline UI by itself.
+`npx -y screenpipe@latest record` starts local recording and the API. it does not give you the desktop timeline UI by itself.
 
 if you want the visual timeline, pipe store, settings, chat, and guided permissions, install the desktop app from [screenpi.pe/onboarding](https://screenpi.pe/onboarding).
 
@@ -204,11 +204,11 @@ if your chat window freezes, try these fixes in order:
 2. **check health:** `curl http://localhost:3030/health` — if it fails, backend is stuck
 3. **verify you have data** — screenpipe needs screen/audio history; wait 1-2 minutes after startup
 4. **verify AI provider connection** — settings → model selector. for ChatGPT/Claude, sign out/back in
-5. **reduce load** — disable unused pipes (settings → pipes), switch to faster model (gpt-4o mini), check logs for "timeout" errors
+5. **reduce load** — disable unused pipes (settings → pipes), switch to a faster, lighter model in your configured provider, check logs for "timeout" errors
 
 ### chat messages disappear
 
-if assistant replies vanish when navigating away, **update to v0.4+** — this message persistence bug was fixed. on older versions, reinstall screenpipe.
+if assistant replies vanish when navigating away, **update to the latest version** — this message persistence bug was fixed. if you are behind, reinstall screenpipe to get the latest version.
 
 ### AI model connection fails
 
@@ -282,7 +282,7 @@ debug the pipeline in pieces:
 
 1. verify screenpipe is running: `curl http://localhost:3030/health`
 2. restart Claude Desktop / Cursor after adding the MCP config
-3. test the MCP server directly: `npx @modelcontextprotocol/inspector npx screenpipe-mcp`
+3. test the MCP server directly: `npx @modelcontextprotocol/inspector npx -y screenpipe-mcp`
 4. check that Node.js >= 18 is installed: `node --version`
 
 ### Claude/Cursor says "no results" when asking about screen
@@ -350,15 +350,16 @@ then retry sync, pipe run, search, or MCP setup.
 
 ### how is personal data protected?
 
-screenpipe does not automatically redact personal information from storage by default. instead, you have these options:
+screenpipe redacts the values you type into form fields — passwords, card numbers, secrets — on-device by default, before data is stored or sent. detected PII is also redacted in stored text columns at rest, not only at AI-query time. on top of that default, you have these options:
 
 | feature | what it does | where |
 | --- | --- | --- |
+| form-field redaction (default) | masks passwords, card numbers, and secrets on-device before storing or sending | on by default |
 | local AI PII removal | redacts sensitive data before selected AI workflows see it | settings → privacy → AI PII removal |
 | privacy filter (enclave mode) | uses a confidential enclave to redact text for cloud AI | settings → privacy → privacy filter mode |
 | ignored windows | prevents screenpipe from recording specific apps (password managers, banking) | settings → recording → ignored windows |
 
-the safest setup: enable **AI PII removal**, ignore your password manager window, and use local Ollama or disabled cloud media.
+the safest setup: keep the defaults on, enable **AI PII removal**, ignore your password manager window, and use local Ollama or disabled cloud media.
 
 ### enable local PII redaction
 
@@ -380,11 +381,11 @@ it does NOT redact:
 - partial matches (e.g., an email-like pattern without valid formatting)
 - structured data in code or config files that isn't in a recognized credential format
 
-### PII redaction is optional, not automatic
+### what redaction is automatic vs. optional
 
-PII stays in your local `~/.screenpipe/` database and timeline by default. PII redaction only affects what you send to AI models when you enable it.
+form-field values (passwords, card numbers, secrets) are redacted on-device by default, before data is stored or sent, and detected PII is redacted in stored text columns at rest.
 
-if you are syncing data to the cloud, archive, or a team, PII removal does not automatically apply — you must toggle it in settings, and it only affects AI workflows, not storage.
+the broader **AI PII removal** and **privacy filter (enclave mode)** options are toggles you enable in settings — turn these on for extra coverage of names, emails, phone numbers, and other categories across AI workflows. image PII removal for screenshots is also a separate toggle.
 
 ---
 

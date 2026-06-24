@@ -15,6 +15,14 @@ screenpipe automatically transcribes all audio from your meetings, calls, and co
 for the full botless meeting workflow - live transcript, speaker cleanup, calendar enrichment, summaries, copy transcript, and APIs - see [meeting intelligence](/meeting-intelligence).
 </Tip>
 
+## languages
+
+cloud transcription is multilingual. pick one language in **settings → recording → transcription** to force it, or leave the selection empty (or pick several) for automatic detection — non-English audio is detected and transcribed in its own language, not forced to English.
+
+<Frame caption="auto-detects and transcribes non-English audio">
+  <img src="/public/app-screenshots/np21-transcription.gif" alt="multilingual transcription detecting the spoken language" />
+</Frame>
+
 ## setup
 
 audio recording is enabled by default in the desktop app. configure audio devices and transcription engine in **settings**.
@@ -76,20 +84,18 @@ curl "http://localhost:3030/speakers/similar?speaker_id=1"
 
 - use a good microphone
 - reduce background noise
-- `whisper-large-v3-turbo` gives best accuracy
+- `whisper-large-v3-turbo` is faster with a small accuracy tradeoff; `whisper-large-v3` is the most accurate
 - set language to English in settings if you only speak English (faster)
 
 ## long meetings and batch sizing
 
-by default, screenpipe batches audio for transcription in chunks:
-- **Whisper/OpenAI**: 600 seconds (10 minutes)
-- **Deepgram**: up to 5000 seconds (83 minutes)
+by default, screenpipe batches audio for transcription in chunks. each engine (Whisper, OpenAI, Deepgram) has its own configurable batch-duration limit.
 
 if you notice meetings longer than one hour losing context between batches, you can customize the batch size in settings > advanced > `batch_max_duration_secs`. set to your meeting's typical duration to preserve context across the entire recording.
 
 in smart/batch transcription mode, large meetings may be split across multiple transcription jobs. if you need full meeting context in a single batch, consider:
 - switching to **realtime** transcription (transcription happens immediately as audio is captured, trading cost/latency for guaranteed continuity)
-- increasing `batch_max_duration_secs` to match your meeting length (supported up to engine limits: 5000s for Deepgram, 3000s for OpenAI)
+- increasing `batch_max_duration_secs` to match your meeting length (capped at each engine's configurable limit)
 - using [retranscription API](/api/retranscribe-data) to re-process a full meeting with custom settings
 
 ## privacy

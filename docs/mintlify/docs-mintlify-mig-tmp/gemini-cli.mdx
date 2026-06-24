@@ -9,14 +9,7 @@ icon: "wand-magic-sparkles"
 
 ## setup
 
-Gemini CLI uses MCP for external tools. add screenpipe to your config:
-
-```bash
-# add screenpipe MCP server
-gemini config mcp add screenpipe "npx -y screenpipe-mcp"
-```
-
-or edit your config file directly:
+Gemini CLI uses MCP for external tools. add screenpipe to your settings file (`~/.gemini/settings.json`):
 
 ```json
 {
@@ -49,8 +42,14 @@ gemini
 
 screenpipe provides these MCP tools to Gemini:
 
-- **search-content** - search accessibility-first screen text, audio transcriptions, and input events
-- **export-video** - create video exports from screen recordings
+| tool | description |
+|------|-------------|
+| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | search structured UI elements from the accessibility tree |
+| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | list detected meetings with duration, app, and attendees |
+| `export-video` | export screen recordings as MP4 for a time range |
 
 ## example workflows
 
