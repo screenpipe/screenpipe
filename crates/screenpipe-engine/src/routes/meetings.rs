@@ -101,10 +101,7 @@ where
 {
     type Rejection = (StatusCode, JsonResponse<Value>);
 
-    async fn from_request(
-        req: axum::extract::Request,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
         let bytes = axum::body::Bytes::from_request(req, state)
             .await
             .map_err(|_| {
