@@ -2257,7 +2257,47 @@ impl PipeManager {
     }
 
     /// Get recent logs for a pipe.
+    ///
+    /// Prefers the persistent `pipe_executions` DB table so logs survive
+    /// process restarts. Falls back to the in-memory ring buffer when no
+    /// DB store is configured (CLI mode) or on DB errors.
     pub async fn get_logs(&self, name: &str) -> Vec<PipeRunLog> {
+        // Prefer database — it is the persistent source of truth and
+        // survives process restarts (the in-memory HashMap does not).
+        if let Some(ref store) = self.store {
+            if let Ok(executions) = store.get_executions(name, 50).await {
+                let db_logs: Vec<PipeRunLog> = executions
+                    .into_iter()
+                    .filter(|e| e.status != "queued" && e.status != "running")
+                    .filter_map(|e| {
+                        let started = e
+                            .started_at
+                            .as_deref()
+                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&Utc))?;
+                        let finished = e
+                            .finished_at
+                            .as_deref()
+                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(Utc::now);
+                        Some(PipeRunLog {
+                            pipe_name: e.pipe_name,
+                            started_at: started,
+                            finished_at: finished,
+                            success: e.status == "completed",
+                            stdout: e.stdout,
+                            stderr: e.stderr,
+                        })
+                    })
+                    .collect();
+                if !db_logs.is_empty() {
+                    return db_logs;
+                }
+            }
+        }
+
+        // Fallback: in-memory ring buffer (CLI mode or DB error).
         let logs = self.logs.lock().await;
         logs.get(name)
             .map(|l| l.iter().cloned().collect())
