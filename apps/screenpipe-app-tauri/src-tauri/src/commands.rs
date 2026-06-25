@@ -1892,7 +1892,7 @@ pub async fn open_login_window(
             .build()
             .map(crate::window::finalize_webview_window)
             .map_err(|e| {
-                log_webview_build_failure(label, &login_url, &e);
+                log_webview_build_failure(&label, &login_url, &e);
                 e.to_string()
             })?;
 
