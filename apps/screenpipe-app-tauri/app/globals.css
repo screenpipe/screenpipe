@@ -781,9 +781,9 @@
   opacity: 1;
 }
 
-/* TipTap — show the placeholder on the current empty block.
+/* TipTap — show placeholder only on the first empty paragraph of an empty doc.
    Mirrors the muted-foreground/40 styling we use on native textareas. */
-.ProseMirror .is-empty::before {
+.ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: hsl(var(--muted-foreground) / 0.4);
   float: left;

@@ -126,15 +126,6 @@ const PROSE_CLASSES = [
   "prose-hr:my-6 prose-hr:border-border",
 ].join(" ");
 
-export function createMeetingNotePlaceholderExtension(placeholder: string) {
-  return Placeholder.configure({
-    placeholder,
-    // Keep the hint on the empty block that owns the caret, Notion-style.
-    showOnlyWhenEditable: true,
-    showOnlyCurrent: true,
-  });
-}
-
 /**
  * Markdown-first note editor — Obsidian-style live editing with TipTap.
  *
@@ -230,7 +221,13 @@ function NoteEditor(
           HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
         },
       }),
-      createMeetingNotePlaceholderExtension(placeholder ?? ""),
+      Placeholder.configure({
+        placeholder: placeholder ?? "",
+        // Show placeholder only when the whole doc is empty, not on every
+        // empty paragraph mid-document.
+        showOnlyWhenEditable: true,
+        showOnlyCurrent: false,
+      }),
       ResizableImage.configure({
         allowBase64: true,
         inline: false,
