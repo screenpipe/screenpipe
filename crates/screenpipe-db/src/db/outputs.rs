@@ -233,6 +233,10 @@ impl DatabaseManager {
 
         if let Some((path,)) = &row {
             let mut tx = self.begin_immediate_with_retry().await?;
+            sqlx::query("DELETE FROM output_search_fts WHERE rowid = ?1")
+                .bind(id)
+                .execute(&mut **tx.conn())
+                .await?;
             sqlx::query("DELETE FROM output_search_index WHERE output_id = ?1")
                 .bind(id)
                 .execute(&mut **tx.conn())
@@ -266,49 +270,41 @@ impl DatabaseManager {
                 .fetch_optional(&mut **tx.conn())
                 .await?;
         if existing_hash.as_deref() != Some(content_hash) {
-            if existing_hash.is_some() {
-                sqlx::query(
-                    "INSERT INTO output_search_fts(output_search_fts) VALUES ('delete-all')",
-                )
+            sqlx::query("DELETE FROM output_search_fts WHERE rowid = ?1")
+                .bind(output_id)
                 .execute(&mut **tx.conn())
                 .await?;
-                sqlx::query("DELETE FROM output_search_index")
-                    .execute(&mut **tx.conn())
-                    .await?;
-            }
+            sqlx::query("DELETE FROM output_search_index WHERE output_id = ?1")
+                .bind(output_id)
+                .execute(&mut **tx.conn())
+                .await?;
             sqlx::query("INSERT INTO output_search_fts(rowid, title, body) VALUES (?1, ?2, ?3)")
                 .bind(output_id)
                 .bind(title)
                 .bind(body)
                 .execute(&mut **tx.conn())
                 .await?;
-        }
-        sqlx::query("INSERT INTO output_search_fts(rowid, title, body) VALUES (?1, ?2, ?3)")
+            sqlx::query(
+                "INSERT INTO output_search_index \
+                 (output_id, content_hash, bytes_indexed) \
+                 VALUES (?1, ?2, ?3)",
+            )
             .bind(output_id)
-            .bind(title)
-            .bind(body)
+            .bind(content_hash)
+            .bind(bytes_indexed)
             .execute(&mut **tx.conn())
             .await?;
-        sqlx::query(
-            "INSERT INTO output_search_index \
-             (output_id, content_hash, bytes_indexed) \
-             VALUES (?1, ?2, ?3) \
-             ON CONFLICT(output_id) DO UPDATE SET \
-               content_hash = excluded.content_hash, \
-               bytes_indexed = excluded.bytes_indexed, \
-               indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-        )
-        .bind(output_id)
-        .bind(content_hash)
-        .bind(bytes_indexed)
-        .execute(&mut **tx.conn())
-        .await?;
+        }
         tx.commit().await?;
         Ok(())
     }
 
     pub async fn delete_output_search_document(&self, output_id: i64) -> Result<(), SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
+        sqlx::query("DELETE FROM output_search_fts WHERE rowid = ?1")
+            .bind(output_id)
+            .execute(&mut **tx.conn())
+            .await?;
         sqlx::query("DELETE FROM output_search_index WHERE output_id = ?1")
             .bind(output_id)
             .execute(&mut **tx.conn())

@@ -11,8 +11,7 @@ use oasgen::{oasgen, OaSchema};
 use screenpipe_db::OutputRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -164,6 +163,14 @@ fn is_text_searchable_kind(kind: &str) -> bool {
     )
 }
 
+fn output_search_hash(title: &str, body: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(title.as_bytes());
+    hasher.update([0]);
+    hasher.update(body);
+    format!("{:x}", hasher.finalize())
+}
+
 async fn read_search_body(
     path: &std::path::Path,
     kind: &str,
@@ -180,11 +187,53 @@ async fn read_search_body(
         return None;
     }
     let body = String::from_utf8_lossy(&buf).to_string();
-    let mut hasher = DefaultHasher::new();
-    title.hash(&mut hasher);
-    body.hash(&mut hasher);
-    let hash = format!("{:016x}", hasher.finish());
+    let hash = output_search_hash(title, &buf);
     Some((body, buf.len() as i64, hash))
+}
+
+async fn mark_output_search_processed(
+    db: &screenpipe_db::DatabaseManager,
+    output_id: i64,
+    title: &str,
+    source: &str,
+    source_type: &str,
+    kind: &str,
+) {
+    let content_hash = output_search_hash(title, b"");
+    if let Err(e) = db
+        .upsert_output_search_document(
+            output_id,
+            title,
+            "",
+            source,
+            source_type,
+            kind,
+            &content_hash,
+            0,
+        )
+        .await
+    {
+        tracing::warn!(
+            "failed to mark artifact {} search indexing complete: {}",
+            output_id,
+            e
+        );
+    }
+}
+
+async fn mark_output_record_search_processed(
+    db: &screenpipe_db::DatabaseManager,
+    record: &OutputRecord,
+) {
+    mark_output_search_processed(
+        db,
+        record.id,
+        &record.title,
+        &record.source,
+        &record.source_type,
+        &record.kind,
+    )
+    .await;
 }
 
 async fn index_output_record_for_search(
@@ -210,12 +259,8 @@ async fn index_output_record_for_search(
         {
             tracing::warn!("failed to index artifact {} for search: {}", record.id, e);
         }
-    } else if let Err(e) = db.delete_output_search_document(record.id).await {
-        tracing::warn!(
-            "failed to clear artifact {} search document: {}",
-            record.id,
-            e
-        );
+    } else {
+        mark_output_record_search_processed(db, record).await;
     }
 }
 
@@ -644,8 +689,8 @@ pub(crate) async fn register_artifact_handler(
         {
             tracing::warn!("failed to index artifact {} for search: {}", id, e);
         }
-    } else if let Err(e) = state.db.delete_output_search_document(id).await {
-        tracing::warn!("failed to clear artifact {} search document: {}", id, e);
+    } else {
+        mark_output_record_search_processed(&state.db, &record).await;
     }
     Ok(JsonResponse(record_to_response(record)))
 }
@@ -1176,13 +1221,16 @@ pub async fn auto_register_pipe_artifacts(
                         e
                     );
                 }
-            } else if let Err(e) = db.delete_output_search_document(id).await {
-                tracing::warn!(
-                    "auto-register: failed to clear output {} search document for pipe '{}': {}",
+            } else {
+                mark_output_search_processed(
+                    db,
                     id,
-                    pipe_name,
-                    e
-                );
+                    title,
+                    &artifact_source,
+                    artifact_source_type,
+                    kind,
+                )
+                .await;
             }
         }
     }

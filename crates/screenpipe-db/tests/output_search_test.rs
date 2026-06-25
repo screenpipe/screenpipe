@@ -193,6 +193,15 @@ async fn deleting_output_removes_search_document() {
         .expect("search outputs");
     assert_eq!(total, 0);
     assert!(rows.is_empty());
+
+    let direct_fts_hits: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM output_search_fts WHERE output_search_fts MATCH ?1",
+    )
+    .bind(token)
+    .fetch_one(&db.pool)
+    .await
+    .expect("direct fts count");
+    assert_eq!(direct_fts_hits, 0);
 }
 
 #[tokio::test]
@@ -264,4 +273,193 @@ async fn output_search_paginates_across_many_indexed_artifacts() {
     assert_eq!(rare_total, 1);
     assert_eq!(rare_rows.len(), 1);
     assert_eq!(rare_rows[0].title, "Scale Artifact 1199");
+}
+
+#[tokio::test]
+async fn reindexing_one_output_preserves_other_search_documents() {
+    let db = setup_test_db().await;
+
+    let first_id = db
+        .insert_output(
+            "chat-session-4",
+            "chat",
+            "First Artifact",
+            "markdown",
+            None,
+            "/tmp/screenpipe/outputs/chat/session/first-artifact.md",
+            128,
+            Some("preview"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("insert first output");
+    db.upsert_output_search_document(
+        first_id,
+        "First Artifact",
+        "body with FIRST_ONLY_TOKEN",
+        "chat-session-4",
+        "chat",
+        "markdown",
+        "hash-first-v1",
+        64,
+    )
+    .await
+    .expect("index first output");
+
+    let second_id = db
+        .insert_output(
+            "chat-session-4",
+            "chat",
+            "Second Artifact",
+            "markdown",
+            None,
+            "/tmp/screenpipe/outputs/chat/session/second-artifact.md",
+            128,
+            Some("preview"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("insert second output");
+    db.upsert_output_search_document(
+        second_id,
+        "Second Artifact",
+        "body with SECOND_ONLY_TOKEN",
+        "chat-session-4",
+        "chat",
+        "markdown",
+        "hash-second-v1",
+        64,
+    )
+    .await
+    .expect("index second output");
+
+    db.upsert_output_search_document(
+        first_id,
+        "First Artifact",
+        "updated body with FIRST_UPDATED_TOKEN",
+        "chat-session-4",
+        "chat",
+        "markdown",
+        "hash-first-v2",
+        64,
+    )
+    .await
+    .expect("reindex first output");
+
+    let (second_rows, second_total) = db
+        .search_outputs("SECOND_ONLY_TOKEN", Some("chat"), None, 20, 0)
+        .await
+        .expect("search second output");
+    assert_eq!(second_total, 1);
+    assert_eq!(second_rows.len(), 1);
+    assert_eq!(second_rows[0].id, second_id);
+
+    let metadata_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM output_search_index")
+        .fetch_one(&db.pool)
+        .await
+        .expect("metadata count");
+    assert_eq!(metadata_count, 2);
+}
+
+#[tokio::test]
+async fn deleting_search_document_removes_direct_fts_row() {
+    let db = setup_test_db().await;
+    let token = "CLEAR_DIRECT_FTS_TOKEN";
+    let id = db
+        .insert_output(
+            "chat-session-5",
+            "chat",
+            "Clear Artifact",
+            "markdown",
+            None,
+            "/tmp/screenpipe/outputs/chat/session/clear-artifact.md",
+            128,
+            Some("preview"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("insert output");
+
+    db.upsert_output_search_document(
+        id,
+        "Clear Artifact",
+        &format!("body with {}", token),
+        "chat-session-5",
+        "chat",
+        "markdown",
+        "hash-clear",
+        64,
+    )
+    .await
+    .expect("index output");
+
+    db.delete_output_search_document(id)
+        .await
+        .expect("delete search document");
+
+    let direct_fts_hits: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM output_search_fts WHERE output_search_fts MATCH ?1",
+    )
+    .bind(token)
+    .fetch_one(&db.pool)
+    .await
+    .expect("direct fts count");
+    assert_eq!(direct_fts_hits, 0);
+}
+
+#[tokio::test]
+async fn sentinel_search_document_marks_non_searchable_output_processed() {
+    let db = setup_test_db().await;
+    let id = db
+        .insert_output(
+            "pipe-image",
+            "pipe",
+            "Image Artifact",
+            "png",
+            None,
+            "/tmp/screenpipe/outputs/pipe/image/artifact.png",
+            128,
+            Some("preview"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("insert output");
+
+    let missing_before = db
+        .list_outputs_missing_search_documents(20)
+        .await
+        .expect("missing before");
+    assert_eq!(missing_before.len(), 1);
+    assert_eq!(missing_before[0].id, id);
+
+    db.upsert_output_search_document(
+        id,
+        "Image Artifact",
+        "",
+        "pipe-image",
+        "pipe",
+        "png",
+        "sentinel-hash",
+        0,
+    )
+    .await
+    .expect("write sentinel search document");
+
+    let missing_after = db
+        .list_outputs_missing_search_documents(20)
+        .await
+        .expect("missing after");
+    assert!(missing_after.is_empty());
 }
