@@ -458,6 +458,32 @@ describe("AppEntitlementGate", () => {
     expect(downloadUrl).toContain("platform=windows");
   });
 
+  it("does not route enterprise members away when they also have a consumer app subscription", () => {
+    mocks.state.user = baseUser({
+      app_entitled: true,
+      cloud_subscribed: true,
+      subscription_plan: "pro",
+      enterprise_account: {
+        org_name: "Bungalow",
+        role: "member",
+        requires_enterprise_app: true,
+      },
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "subscription",
+        checked_at: minsAgo(1),
+        features: { app: true, cloud: true },
+      },
+    });
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.queryByText(/enterprise app required/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+  });
+
   it("does not show the consumer-app warning inside the enterprise build", () => {
     mocks.enterprise.isEnterprise = true;
     mocks.state.user = baseUser({

@@ -16,6 +16,7 @@ import {
   ENTERPRISE_DOWNLOAD_URL,
   getEnterpriseAccount,
   hasAppEntitlement,
+  hasConsumerAppSubscription,
   hasPersistedEntitlementEvidence,
   isDevBillingBypassEnabled,
   isDevLoginEnabled,
@@ -120,6 +121,7 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   const user = settings.user as AppUser | null | undefined;
   const devBypass = isDevBillingBypassEnabled();
   const isEntitled = hasAppEntitlement(user);
+  const hasConsumerSubscription = hasConsumerAppSubscription(user);
   const needsRefresh = needsAppEntitlementRefresh(user);
   const enterpriseAccount = getEnterpriseAccount(user);
 
@@ -166,6 +168,7 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     !devBypass &&
     !isEnterprise &&
     Boolean(user?.token) &&
+    !hasConsumerSubscription &&
     enterpriseAccount?.requires_enterprise_app === true;
   const shouldGateForEntitlement =
     !devBypass && !isEntitled && !failOpenForTransientAccessLoss;

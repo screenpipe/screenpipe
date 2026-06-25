@@ -186,6 +186,26 @@ export function hasAppEntitlement(user: AppUser | null | undefined) {
   return isEntitlementFresh(entitlement) && entitlement.active === true;
 }
 
+export function hasConsumerAppSubscription(user: AppUser | null | undefined) {
+  if (!user) return false;
+
+  const entitlement = asEntitlement(user.entitlement);
+  const source = typeof entitlement?.source === "string"
+    ? entitlement.source.toLowerCase()
+    : null;
+
+  if (source === "enterprise") return false;
+  if (source === "subscription" || source === "manual" || source === "lifetime") {
+    return hasAppEntitlement(user);
+  }
+
+  // Legacy users may only have cloud_subscribed/app_entitled persisted locally.
+  // If the account also carries an enterprise-app requirement, that boolean may
+  // be the enterprise org grant, so do not treat it as a separate consumer sub.
+  const enterpriseAccount = getEnterpriseAccount(user);
+  return hasLegacyPaidAccess(user) && enterpriseAccount?.requires_enterprise_app !== true;
+}
+
 export function hasCloudEntitlement(user: AppUser | null | undefined) {
   return user?.cloud_subscribed === true || hasEntitlementFeature(user, "cloud");
 }

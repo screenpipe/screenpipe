@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasAppEntitlement,
   hasCloudEntitlement,
+  hasConsumerAppSubscription,
   hasPersistedEntitlementEvidence,
   isSignedInCloudSubscriber,
   isTokenHydrationPending,
@@ -85,6 +86,46 @@ describe("app entitlement", () => {
 
   it("keeps legacy cloud subscribers working during rollout", () => {
     expect(hasAppEntitlement(user({ cloud_subscribed: true, entitlement: null }))).toBe(true);
+  });
+
+  it("separates consumer subscriptions from enterprise-only app grants", () => {
+    expect(
+      hasConsumerAppSubscription(
+        user({
+          cloud_subscribed: true,
+          app_entitled: true,
+          entitlement: {
+            active: true,
+            checked_at: "2026-06-05T11:00:00.000Z",
+            source: "subscription",
+            features: { app: true },
+          },
+          enterprise_account: {
+            org_name: "Bungalow",
+            requires_enterprise_app: true,
+          },
+        }),
+      ),
+    ).toBe(true);
+
+    expect(
+      hasConsumerAppSubscription(
+        user({
+          cloud_subscribed: true,
+          app_entitled: true,
+          entitlement: {
+            active: true,
+            checked_at: "2026-06-05T11:00:00.000Z",
+            source: "enterprise",
+            features: { app: true },
+          },
+          enterprise_account: {
+            org_name: "Bungalow",
+            requires_enterprise_app: true,
+          },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("does not unlock new cloud features from stale entitlement data", () => {
