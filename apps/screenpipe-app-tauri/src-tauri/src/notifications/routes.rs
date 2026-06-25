@@ -72,6 +72,60 @@ fn pipe_muted_from_extra(
         .unwrap_or(false)
 }
 
+/// Whether the pipe's own `permissions` frontmatter denies `POST /notify`.
+/// This backs the per-pipe "notifications" toggle in pipe config. Some
+/// installed pipes hardcode a `curl localhost:11435/notify` instruction in the
+/// prompt body; the toggle must still be enforced at the `/notify` boundary.
+fn pipe_config_denies_notify(pipe_name: &str) -> bool {
+    let Some(pipe_name) = safe_pipe_dir_name(pipe_name) else {
+        debug!("notify: cannot check pipe notify permission for invalid pipe name");
+        return false;
+    };
+    let pipe_md = screenpipe_core::paths::default_screenpipe_data_dir()
+        .join("pipes")
+        .join(pipe_name)
+        .join("pipe.md");
+    let raw = match std::fs::read_to_string(&pipe_md) {
+        Ok(raw) => raw,
+        Err(e) => {
+            debug!(
+                path = %pipe_md.display(),
+                "notify: cannot read pipe config for notify permission check: {}",
+                e
+            );
+            return false;
+        }
+    };
+    pipe_config_denies_notify_from_content(&raw).unwrap_or_else(|e| {
+        debug!(
+            path = %pipe_md.display(),
+            "notify: cannot parse pipe config for notify permission check: {}",
+            e
+        );
+        false
+    })
+}
+
+fn safe_pipe_dir_name(pipe_name: &str) -> Option<&str> {
+    let trimmed = pipe_name.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed == "."
+        || trimmed == ".."
+    {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn pipe_config_denies_notify_from_content(raw: &str) -> anyhow::Result<bool> {
+    let (config, _) = screenpipe_core::pipes::parse_frontmatter(raw)?;
+    let perms = screenpipe_core::pipes::permissions::PipePermissions::from_config(&config);
+    Ok(!perms.is_endpoint_allowed("POST", "/notify"))
+}
+
 /// `POST /notify` — show a notification panel and persist to disk.
 pub async fn send_notification(
     State(state): State<ServerState>,
@@ -154,6 +208,14 @@ pub async fn send_notification(
     // so muting a pipe suppresses anything it emits. Fail-open if the list is
     // missing or malformed.
     if let Some(name) = source.pipe_name.as_deref() {
+        if pipe_config_denies_notify(name) {
+            debug!("notify: skipped (pipe '{}' denies POST /notify)", name);
+            return Ok(Json(ApiResponse {
+                success: true,
+                message: "pipe notifications disabled".to_string(),
+            }));
+        }
+
         if pipe_muted(&state.app_handle, name) {
             debug!("notify: skipped (pipe '{}' muted)", name);
             return Ok(Json(ApiResponse {
@@ -555,6 +617,34 @@ mod tests {
         let extra = extra_with(json!({ "mutedPipes": [1, null, "real-pipe"] }));
         assert!(pipe_muted_from_extra(&extra, "real-pipe"));
         assert!(!pipe_muted_from_extra(&extra, "1"));
+    }
+
+    #[test]
+    fn pipe_config_deny_notify_suppresses_hardcoded_notify_calls() {
+        let raw = "---\nschedule: every 30m\npermissions:\n  deny:\n    - Api(POST /notify)\n---\n\n# noisy pipe";
+        assert!(pipe_config_denies_notify_from_content(raw).unwrap());
+    }
+
+    #[test]
+    fn pipe_config_reader_preset_still_allows_notify() {
+        let raw = "---\nschedule: every 30m\npermissions: reader\n---\n\n# useful pipe";
+        assert!(!pipe_config_denies_notify_from_content(raw).unwrap());
+    }
+
+    #[test]
+    fn pipe_config_without_api_rules_allows_notify() {
+        let raw = "---\nschedule: every 30m\nenabled: true\n---\n\n# useful pipe";
+        assert!(!pipe_config_denies_notify_from_content(raw).unwrap());
+    }
+
+    #[test]
+    fn safe_pipe_dir_name_rejects_path_traversal() {
+        assert_eq!(safe_pipe_dir_name("daily-summary"), Some("daily-summary"));
+        assert_eq!(safe_pipe_dir_name(" daily-summary "), Some("daily-summary"));
+        assert_eq!(safe_pipe_dir_name("../daily-summary"), None);
+        assert_eq!(safe_pipe_dir_name("nested/pipe"), None);
+        assert_eq!(safe_pipe_dir_name("nested\\pipe"), None);
+        assert_eq!(safe_pipe_dir_name(""), None);
     }
 
     fn notify_payload(surface: Option<&str>) -> NotifyPayload {

@@ -2813,9 +2813,14 @@ export function PipesSection() {
 
                       {/* ═══ ADVANCED TAB ═══ */}
                       <TabsContent value="advanced" className="mt-3 space-y-3">
-                      {/* Notifications toggle */}
-                      <div className="flex items-center justify-between border px-3 py-2.5">
-                        <span className="text-xs font-medium cursor-help" title="allow this pipe to send notifications">notifications</span>
+                      {/* Notification API permission */}
+                      <div className="flex items-center justify-between gap-3 border px-3 py-2.5">
+                        <div className="min-w-0">
+                          <span className="text-xs font-medium cursor-help" title="allows this pipe to call POST /notify">Allow notification API</span>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            Blocks hardcoded POST /notify calls when turned off.
+                          </p>
+                        </div>
                         <Switch
                           checked={!isNotificationsDenied(promptDrafts[pipe.config.name] ?? pipe.raw_content)}
                           onCheckedChange={(checked) => toggleNotifications(pipe.config.name, checked)}
