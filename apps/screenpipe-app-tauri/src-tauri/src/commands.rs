@@ -1794,9 +1794,17 @@ fn is_login_callback_scheme(scheme: &str) -> bool {
 /// Open the screenpipe.com login page.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Windows/Linux: in-app WebView that intercepts the screenpipe:// redirect.
+///
+/// `fresh_session` is used by "use different account": macOS asks
+/// ASWebAuthenticationSession for an ephemeral browser session instead of
+/// reusing Safari cookies, and Windows/Linux use a throwaway webview profile.
 #[tauri::command]
 #[specta::specta]
-pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_login_window(
+    app_handle: tauri::AppHandle,
+    fresh_session: Option<bool>,
+) -> Result<(), String> {
+    let fresh_session = fresh_session.unwrap_or(false);
     #[cfg(target_os = "macos")]
     {
         // ASWebAuthenticationSession intercepts the redirect itself (no OS
@@ -1806,7 +1814,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         let callback_url = match crate::auth_session::start_session(
             LOGIN_URL.to_string(),
             "screenpipe".to_string(),
-            false,
+            fresh_session,
         )
         .await
         {
@@ -1830,32 +1838,49 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-        let label = "login-browser";
+        let label = if fresh_session {
+            let id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            format!("login-browser-fresh-{id}")
+        } else {
+            "login-browser".to_string()
+        };
 
-        // If already open, just focus it
-        if let Some(w) = app_handle.get_webview_window(label) {
+        if fresh_session {
+            if let Some(w) = app_handle.get_webview_window("login-browser") {
+                let _ = w.close();
+            }
+        } else if let Some(w) = app_handle.get_webview_window(&label) {
             let _ = w.show();
             let _ = w.set_focus();
             return Ok(());
         }
 
         let app_for_nav = app_handle.clone();
+        let label_for_nav = label.clone();
 
         let login_url = format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
-            label,
+            label.clone(),
             WebviewUrl::External(login_url.parse().unwrap()),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
         .focused(true);
 
+        if fresh_session {
+            let profile_dir = std::env::temp_dir().join(&label);
+            builder = builder.data_directory(profile_dir);
+        }
+
         builder = builder.on_navigation(move |url| {
             if is_login_callback_scheme(url.scheme()) {
                 info!("login window intercepted deep link callback");
                 let _ = app_for_nav.emit("deep-link-received", url.to_string());
-                if let Some(w) = app_for_nav.get_webview_window("login-browser") {
+                if let Some(w) = app_for_nav.get_webview_window(&label_for_nav) {
                     let _ = w.close();
                 }
                 false // block navigation to custom scheme

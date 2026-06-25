@@ -283,8 +283,15 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     await updateSettings({ user: null as any });
     try {
       await commands.setCloudToken(null);
-    } catch {}
-    commands.openLoginWindow();
+    } catch (e) {
+      console.warn("failed to clear cloud token before switching accounts:", e);
+    }
+    try {
+      await commands.piUpdateConfig(null, null);
+    } catch (e) {
+      console.warn("failed to clear pi config before switching accounts:", e);
+    }
+    commands.openLoginWindow(true);
   }, [updateSettings]);
 
   const downloadEnterpriseApp = useCallback(() => {

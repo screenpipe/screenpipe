@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   openLoginWindow: vi.fn().mockResolvedValue(undefined),
   setCloudToken: vi.fn().mockResolvedValue(undefined),
   getCloudToken: vi.fn().mockResolvedValue(null),
+  piUpdateConfig: vi.fn().mockResolvedValue(undefined),
   platform: vi.fn(() => "windows"),
   arch: vi.fn(() => "x86_64"),
   loadUser: vi.fn().mockResolvedValue(undefined),
@@ -45,6 +46,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     openLoginWindow: mocks.openLoginWindow,
     setCloudToken: mocks.setCloudToken,
     getCloudToken: mocks.getCloudToken,
+    piUpdateConfig: mocks.piUpdateConfig,
   },
 }));
 
@@ -456,6 +458,35 @@ describe("AppEntitlementGate", () => {
     expect(downloadUrl).toContain("token=verified");
     expect(downloadUrl).toContain("channel=enterprise");
     expect(downloadUrl).toContain("platform=windows");
+  });
+
+  it("clears app auth and opens a fresh browser session when switching accounts", async () => {
+    mocks.state.user = baseUser({
+      app_entitled: true,
+      cloud_subscribed: true,
+      subscription_plan: "pro",
+      enterprise_account: {
+        org_name: "Bungalow",
+        role: "member",
+        requires_enterprise_app: true,
+      },
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "enterprise",
+        checked_at: minsAgo(1),
+        features: { app: true, cloud: true },
+      },
+    });
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    fireEvent.click(screen.getByRole("button", { name: /use different account/i }));
+
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({ user: null }));
+    expect(mocks.setCloudToken).toHaveBeenCalledWith(null);
+    expect(mocks.piUpdateConfig).toHaveBeenCalledWith(null, null);
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true);
   });
 
   it("does not route enterprise members away when they also have a consumer app subscription", () => {
