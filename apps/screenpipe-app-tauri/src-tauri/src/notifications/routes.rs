@@ -206,22 +206,48 @@ pub async fn send_notification(
 
     let panel_json = panel_payload.to_string();
 
-    match crate::commands::show_notification_panel(state.app_handle.clone(), panel_json).await {
-        Ok(()) => {
-            info!("Notification panel shown");
-            Ok(Json(ApiResponse {
-                success: true,
-                message: "Notification sent successfully".to_string(),
-            }))
+    let app = state.app_handle.clone();
+    let delivery_id = panel_id.clone();
+    let delivery_title = payload.title.clone();
+    let delivery_type = panel_payload["type"].as_str().unwrap_or("pipe").to_string();
+    tokio::spawn(async move {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::commands::show_notification_panel(app, panel_json),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                info!(
+                    id = %delivery_id,
+                    notification_type = %delivery_type,
+                    "Notification panel shown"
+                );
+            }
+            Ok(Err(e)) => {
+                error!(
+                    id = %delivery_id,
+                    title = %delivery_title,
+                    notification_type = %delivery_type,
+                    "Failed to show notification panel: {}",
+                    e
+                );
+            }
+            Err(_) => {
+                error!(
+                    id = %delivery_id,
+                    title = %delivery_title,
+                    notification_type = %delivery_type,
+                    "Timed out showing notification panel"
+                );
+            }
         }
-        Err(e) => {
-            error!("Failed to show notification panel: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to show notification: {}", e),
-            ))
-        }
-    }
+    });
+
+    Ok(Json(ApiResponse {
+        success: true,
+        message: "Notification sent successfully".to_string(),
+    }))
 }
 
 fn notification_source_session_from_headers(headers: &HeaderMap) -> Option<String> {

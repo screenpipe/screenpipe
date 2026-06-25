@@ -15,6 +15,11 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import {
+  buildNotificationBody,
+  NOTIFICATION_DAEMON_TIMEOUT_MS,
+  NOTIFICATION_DAEMON_URL,
+} from "./notification-request";
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -1746,27 +1751,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "send-notification": {
-        const notifBody: Record<string, unknown> = {
-          title: args.title,
-          body: args.body || "",
-          type: "pipe",
-        };
-        if (args.timeout_secs) notifBody.timeout = Number(args.timeout_secs) * 1000;
-        if (args.actions) notifBody.actions = args.actions;
+        const notifBody = buildNotificationBody(args);
         // send-notification hits the desktop notify daemon on a separate port
-        // (11435), not the screenpipe API. Keep direct fetch with friendlier
-        // error so the model sees an actionable message if the daemon's down.
+        // (11435), not the screenpipe API. Use 127.0.0.1 because the daemon is
+        // IPv4-only, then cap the wait so a wedged UI panel cannot hang MCP.
         let notifResponse: Response;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), NOTIFICATION_DAEMON_TIMEOUT_MS);
         try {
-          notifResponse = await fetch("http://localhost:11435/notify", {
+          notifResponse = await fetch(NOTIFICATION_DAEMON_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(notifBody),
+            signal: controller.signal,
           });
         } catch (e) {
+          if (e instanceof Error && e.name === "AbortError") {
+            throw new Error(
+              "notification daemon accepted the request but did not respond within 3s — the desktop notification UI may be stuck",
+            );
+          }
           throw new Error(
-            "notification daemon not reachable on localhost:11435 — is the screenpipe desktop app running?",
+            "notification daemon not reachable on 127.0.0.1:11435 — is the screenpipe desktop app running?",
           );
+        } finally {
+          clearTimeout(timeout);
         }
         if (!notifResponse.ok) {
           let body = "";
