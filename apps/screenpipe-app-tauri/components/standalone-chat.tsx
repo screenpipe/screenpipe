@@ -483,14 +483,14 @@ export function StandaloneChat({
   const sidePanelHasContent = filePreviewOpen || browserPanelState.hasUrl;
   const sidePanelOpen = activeSideView === "side" && sidePanelHasContent;
   const inspectorHasContent =
-    inspectorOpen ||
     inspectorOutputs.length > 0 ||
     inspectorSources.length > 0;
 
   useEffect(() => {
+    setInspectorOpen(false);
     setActiveSideView(null);
     setBrowserHiddenBehindInspector(false);
-  }, [conversationId]);
+  }, [conversationId, setInspectorOpen]);
 
   // Auto-show side panel when a file preview is opened externally
   // (e.g. clicking an artifact in the brain section emits
