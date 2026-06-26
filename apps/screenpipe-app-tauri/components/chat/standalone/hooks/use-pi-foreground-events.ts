@@ -366,12 +366,15 @@ export function usePiForegroundEvents({
         } else if (data.type === "auto_retry_end" && data.success === false) {
           // Pi exhausted retries on a transient error (rate limit, overloaded, etc.)
           const errorStr = stringValue(data.finalError, "Request failed after retries");
-          console.error("[Pi] Auto-retry failed:", errorStr);
+          const quotaErrorType = classifyQuotaError(errorStr);
+          const logAutoRetryFailure = quotaErrorType === "daily" || quotaErrorType === "rate" || errorStr.includes("model_not_allowed")
+            ? console.warn
+            : console.error;
+          logAutoRetryFailure("[Pi] Auto-retry failed:", errorStr);
           piLastErrorRef.current = errorStr;
           emitSessionActivity({ status: "error", lastError: errorStr });
 
           // Detect rate limit or daily limit from the error
-          const quotaErrorType = classifyQuotaError(errorStr);
           if (quotaErrorType === "daily" || quotaErrorType === "rate") {
             if (quotaErrorType === "daily") {
               posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
@@ -596,7 +599,11 @@ export function usePiForegroundEvents({
                    data.message?.role === "assistant" && data.message?.stopReason === "error") {
           // LLM returned an error (credits_exhausted, rate limit, provider error, etc.)
           const errMsg = stringValue(data.message.errorMessage, stringValue(data.message.error, "Unknown error"));
-          console.error("[Pi] LLM error via", data.type, ":", errMsg);
+          const quotaErrorType = classifyQuotaError(errMsg);
+          const logLlmError = quotaErrorType === "daily" || quotaErrorType === "rate" || errMsg.includes("model_not_allowed")
+            ? console.warn
+            : console.error;
+          logLlmError("[Pi] LLM error via", data.type, ":", errMsg);
           piLastErrorRef.current = errMsg;
           emitSessionActivity({ status: "error", lastError: errMsg });
           const authTokenInvalidated = isInvalidatedAuthTokenError(errMsg);
@@ -607,7 +614,6 @@ export function usePiForegroundEvents({
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
-            const quotaErrorType = classifyQuotaError(errMsg);
             const providerError = buildProviderErrorMessage(errMsg, activePreset);
             if (authTokenInvalidated) {
               setMessages((prev) =>

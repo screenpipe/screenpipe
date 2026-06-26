@@ -21,8 +21,41 @@ describe("parsePipeError", () => {
     expect(parsePipeError(stderr(429, { error: "daily_cost_limit_exceeded" })).type).toBe("daily_limit");
   });
 
+  it("classifies compact daily limit code from Pi", () => {
+    expect(parsePipeError(`429 "daily_cost_limit_exceeded"`).type).toBe("daily_limit");
+  });
+
+  it("classifies unescaped gateway JSON and preserves its message", () => {
+    const r = parsePipeError(
+      `429 ${JSON.stringify({
+        error: "daily_cost_limit_exceeded",
+        message: "You've hit today's AI usage limit.",
+      })}`,
+    );
+    expect(r.type).toBe("daily_limit");
+    expect(r.message).toBe("You've hit today's AI usage limit.");
+  });
+
   it("classifies credits_exhausted", () => {
     expect(parsePipeError(stderr(429, { error: "credits_exhausted", credits_remaining: 0 })).type).toBe("credits_exhausted");
+  });
+
+  it("classifies compact credits code from Pi", () => {
+    expect(parsePipeError(`429 "credits_exhausted"`).type).toBe("credits_exhausted");
+  });
+
+  it("classifies provider quota exhaustion", () => {
+    const r = parsePipeError(
+      `429 ${JSON.stringify({
+        error: {
+          type: "insufficient_quota",
+          code: "insufficient_quota",
+          message: "You exceeded your current quota, please check your plan and billing details.",
+        },
+      })}`,
+    );
+    expect(r.type).toBe("quota_exhausted");
+    expect(r.message).toContain("current quota");
   });
 
   it("classifies model_not_allowed (new) with a friendly upgrade message", () => {
@@ -44,6 +77,7 @@ describe("isActionablePipeError — what's worth a proactive advisory", () => {
   it("true for the cases a user can act on (budget / plan)", () => {
     expect(isActionablePipeError("daily_limit")).toBe(true);
     expect(isActionablePipeError("credits_exhausted")).toBe(true);
+    expect(isActionablePipeError("quota_exhausted")).toBe(true);
     expect(isActionablePipeError("model_not_allowed")).toBe(true);
   });
 

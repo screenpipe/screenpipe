@@ -57,6 +57,15 @@ fn parse_rate_limit_reset_secs(text: &str) -> Option<u64> {
 /// Whether a pi failure was caused by provider rate limiting (HTTP 429).
 fn is_rate_limit_error(text: &str) -> bool {
     let lower = text.to_lowercase();
+    if lower.contains("daily_cost_limit_exceeded")
+        || lower.contains("daily_limit_exceeded")
+        || lower.contains("credits_exhausted")
+        || lower.contains("insufficient_quota")
+        || lower.contains("quota_exhausted")
+        || lower.contains("model_not_allowed")
+    {
+        return false;
+    }
     lower.contains("429")
         || lower.contains("rate limit")
         || lower.contains("rate_limit")
@@ -3294,6 +3303,11 @@ mod tests {
         assert!(is_rate_limit_error(r#"{"reset_in":12}"#));
         assert!(!is_rate_limit_error("model not found"));
         assert!(!is_rate_limit_error("credits_exhausted"));
+        assert!(!is_rate_limit_error(r#"429 "daily_cost_limit_exceeded""#));
+        assert!(!is_rate_limit_error(r#"429 "credits_exhausted""#));
+        assert!(!is_rate_limit_error(
+            r#"429 {"error":{"type":"insufficient_quota"}}"#
+        ));
     }
 
     #[tokio::test]
