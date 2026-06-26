@@ -257,7 +257,7 @@ impl OAuthRefreshScheduler {
         let running = self.running.clone();
         let metrics = self.metrics.clone();
         let failures = self.failures.clone();
-        let policies = build_policy_table();
+        let refreshable = build_refreshable_table();
 
         let handle = tokio::spawn(async move {
             info!(
@@ -266,7 +266,7 @@ impl OAuthRefreshScheduler {
             );
             sleep_cancellable(&running, STARTUP_DELAY).await;
             while running.load(Ordering::SeqCst) {
-                tick(&store, &runner, &metrics, &failures, &policies).await;
+                tick(&store, &runner, &metrics, &failures, &refreshable).await;
                 sleep_cancellable(&running, SCAN_INTERVAL).await;
             }
             info!("oauth refresh scheduler: stopped");
@@ -306,7 +306,7 @@ async fn tick(
     runner: &Arc<dyn RefreshRunner>,
     metrics: &Arc<MetricsInner>,
     failures: &Arc<Mutex<HashMap<String, FailureState>>>,
-    policies: &HashMap<String, RefreshPolicy>,
+    refreshable: &HashMap<String, RefreshPolicy>,
 ) {
     let keys = match store.list(STORE_KEY_PREFIX).await {
         Ok(k) => k,
@@ -325,6 +325,15 @@ async fn tick(
         let (integration_id, instance) = match parse_oauth_key(&key) {
             Some(parts) => parts,
             None => continue,
+        };
+
+        let Some(policy) = refreshable.get(integration_id).copied() else {
+            debug!(
+                integration_id = %integration_id,
+                instance = ?instance,
+                "oauth refresh scheduler: skipping non-connector oauth secret"
+            );
+            continue;
         };
 
         // Honour backoff for this key.
@@ -346,7 +355,6 @@ async fn tick(
             }
         };
 
-        let policy = policies.get(integration_id).copied().unwrap_or_default();
         if !needs_refresh_now(&value, policy, now) {
             continue;
         }
@@ -412,12 +420,13 @@ async fn tick(
 }
 
 // ---------------------------------------------------------------------------
-// Policy table — built once from the integration registry
+// Refreshable table — built once from the integration registry
 // ---------------------------------------------------------------------------
 
-fn build_policy_table() -> HashMap<String, RefreshPolicy> {
+fn build_refreshable_table() -> HashMap<String, RefreshPolicy> {
     all_integrations()
         .into_iter()
+        .filter(|integ| integ.oauth_config().is_some())
         .map(|integ| (integ.def().id.to_string(), integ.refresh_policy()))
         .collect()
 }
@@ -577,7 +586,13 @@ mod tests {
         Arc::new(SecretStore::new(pool, None).await.unwrap())
     }
 
-    fn empty_policies() -> HashMap<String, RefreshPolicy> {
+    fn refreshable_with(ids: &[(&str, RefreshPolicy)]) -> HashMap<String, RefreshPolicy> {
+        ids.iter()
+            .map(|(id, policy)| ((*id).to_string(), *policy))
+            .collect()
+    }
+
+    fn no_refreshable_integrations() -> HashMap<String, RefreshPolicy> {
         HashMap::new()
     }
 
@@ -597,7 +612,8 @@ mod tests {
         let runner: Arc<dyn RefreshRunner> = Arc::new(RecorderRunner::default());
         let metrics = Arc::new(MetricsInner::default());
         let failures = Arc::new(Mutex::new(HashMap::new()));
-        tick(&store, &runner, &metrics, &failures, &empty_policies()).await;
+        let refreshable = refreshable_with(&[("google-calendar", RefreshPolicy::default())]);
+        tick(&store, &runner, &metrics, &failures, &refreshable).await;
 
         // Down-cast via Arc::clone to peek at the recorder.
         let snap = metrics.snapshot();
@@ -622,7 +638,8 @@ mod tests {
         let runner: Arc<dyn RefreshRunner> = Arc::new(RecorderRunner::default());
         let metrics = Arc::new(MetricsInner::default());
         let failures = Arc::new(Mutex::new(HashMap::new()));
-        tick(&store, &runner, &metrics, &failures, &empty_policies()).await;
+        let refreshable = refreshable_with(&[("google-calendar", RefreshPolicy::default())]);
+        tick(&store, &runner, &metrics, &failures, &refreshable).await;
 
         assert_eq!(metrics.snapshot().refreshes_attempted, 0);
     }
@@ -708,7 +725,32 @@ mod tests {
         let runner: Arc<dyn RefreshRunner> = Arc::new(RecorderRunner::default());
         let metrics = Arc::new(MetricsInner::default());
         let failures = Arc::new(Mutex::new(HashMap::new()));
-        tick(&store, &runner, &metrics, &failures, &empty_policies()).await;
+        tick(
+            &store,
+            &runner,
+            &metrics,
+            &failures,
+            &no_refreshable_integrations(),
+        )
+        .await;
+
+        assert_eq!(metrics.snapshot().refreshes_attempted, 0);
+    }
+
+    #[tokio::test]
+    async fn tick_skips_oauth_secret_for_unregistered_provider() {
+        let store = mem_store().await;
+        let now = unix_now();
+        store
+            .set_json("oauth:chatgpt", &token(true, Some(now - 60), None))
+            .await
+            .unwrap();
+
+        let runner: Arc<dyn RefreshRunner> = Arc::new(RecorderRunner::default());
+        let metrics = Arc::new(MetricsInner::default());
+        let failures = Arc::new(Mutex::new(HashMap::new()));
+        let refreshable = refreshable_with(&[("google-calendar", RefreshPolicy::default())]);
+        tick(&store, &runner, &metrics, &failures, &refreshable).await;
 
         assert_eq!(metrics.snapshot().refreshes_attempted, 0);
     }
