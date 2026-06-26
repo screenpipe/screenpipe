@@ -15,7 +15,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Trash2,
   Pencil,
@@ -38,11 +37,18 @@ import {
   Users,
   AlertCircle,
 } from "lucide-react";
-import { localFetch } from "@/lib/api";
+import {
+  appendAuthToken,
+  ensureApiReady,
+  getApiBaseUrl,
+  localFetch,
+  redactApiUrlForLogs,
+} from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 
 interface AudioSample {
   path: string;
+  audio_chunk_id?: number;
   transcript: string;
   start_time: number;
   end_time: number;
@@ -97,12 +103,12 @@ function buildOrganizeSpeakersDisplayLabel(): string {
 }
 
 function AudioClip({
-  path,
+  audioChunkId,
   startTime,
   duration,
   large,
 }: {
-  path: string;
+  audioChunkId?: number;
   startTime: number;
   duration: number;
   large?: boolean;
@@ -110,42 +116,106 @@ function AudioClip({
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { toast } = useToast();
+
+  const stop = useCallback(() => {
+    const el = audioRef.current;
+    el?.pause();
+    setPlaying(false);
+    setProgress(0);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!audioChunkId) {
+      setAudioSrc(null);
+      return;
+    }
+
+    ensureApiReady()
+      .then(() => {
+        if (cancelled) return;
+        const params = new URLSearchParams({
+          start: String(startTime),
+          end: String(startTime + duration),
+        });
+        setAudioSrc(
+          appendAuthToken(
+            `${getApiBaseUrl()}/speakers/sample/${audioChunkId}?${params.toString()}`,
+          ),
+        );
+      })
+      .catch((error) => {
+        console.error("failed to prepare speaker sample url", error);
+        if (!cancelled) setAudioSrc(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [audioChunkId, duration, startTime]);
 
   const toggle = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     const el = audioRef.current;
     if (!el) return;
     if (playing) {
-      el.pause();
-      setPlaying(false);
-      setProgress(0);
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      stop();
     } else {
-      el.currentTime = startTime;
+      if (!audioSrc) {
+        toast({
+          title: "couldn't play sample",
+          description: audioChunkId
+            ? "this voice sample is not ready yet"
+            : "this voice sample is missing its audio chunk id",
+          variant: "destructive",
+        });
+        return;
+      }
+      el.currentTime = 0;
       el.play()
         .then(() => {
           setPlaying(true);
           intervalRef.current = setInterval(() => {
-            const elapsed = el.currentTime - startTime;
+            const elapsed = el.currentTime;
             setProgress(Math.min((elapsed / duration) * 100, 100));
           }, 50);
         })
-        .catch(() => setPlaying(false));
-      setTimeout(() => {
-        el.pause();
-        setPlaying(false);
-        setProgress(0);
-        if (intervalRef.current) clearInterval(intervalRef.current);
+        .catch((error) => {
+          console.error("speaker sample playback failed", {
+            error,
+            mediaError: el.error,
+            src: redactApiUrlForLogs(audioSrc),
+          });
+          setPlaying(false);
+          toast({
+            title: "couldn't play sample",
+            description: "screenpipe couldn't load this voice clip",
+            variant: "destructive",
+          });
+        });
+      timeoutRef.current = setTimeout(() => {
+        stop();
       }, duration * 1000);
     }
   };
 
   useEffect(() => {
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      stop();
     };
-  }, []);
+  }, [stop]);
 
   const iconSize = large ? "h-4 w-4" : "h-3 w-3";
   const btnSize = large ? "h-8 w-8" : "h-6 w-6";
@@ -154,18 +224,28 @@ function AudioClip({
     <div className="flex items-center gap-1.5">
       <audio
         ref={audioRef}
-        src={convertFileSrc(path)}
+        src={audioSrc ?? undefined}
         preload="none"
-        onEnded={() => {
-          setPlaying(false);
-          setProgress(0);
-          if (intervalRef.current) clearInterval(intervalRef.current);
+        onError={() => {
+          const el = audioRef.current;
+          console.error("speaker sample failed to load", {
+            mediaError: el?.error,
+            src: audioSrc ? redactApiUrlForLogs(audioSrc) : null,
+          });
+          stop();
+          toast({
+            title: "couldn't play sample",
+            description: "screenpipe couldn't load this voice clip",
+            variant: "destructive",
+          });
         }}
+        onEnded={stop}
       />
       <Button
         variant={playing ? "default" : "ghost"}
         size="icon"
         className={`${btnSize} shrink-0 ${playing ? "bg-primary text-primary-foreground" : ""}`}
+        disabled={!audioChunkId || !audioSrc}
         onClick={toggle}
       >
         {playing ? (
@@ -212,7 +292,10 @@ function QuickNameInput({
   };
 
   return (
-    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="flex items-center gap-1.5"
+      onClick={(e) => e.stopPropagation()}
+    >
       <Input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -333,7 +416,7 @@ function ClusterCard({
                 }
               >
                 <AudioClip
-                  path={sample.path}
+                  audioChunkId={sample.audio_chunk_id}
                   startTime={sample.start_time}
                   duration={sample.end_time - sample.start_time}
                 />
@@ -354,9 +437,7 @@ function ClusterCard({
           onName={onNameCluster}
           onHallucination={onHallucination}
           placeholder={
-            isMulti
-              ? `name all ${members.length} as...`
-              : "who is this?"
+            isMulti ? `name all ${members.length} as...` : "who is this?"
           }
         />
       </div>
@@ -476,11 +557,11 @@ function IdentifiedSpeakerCard({
             {samples[0] && (
               <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
                 <AudioClip
-                  path={samples[0].path}
+                  audioChunkId={samples[0].audio_chunk_id}
                   startTime={samples[0].start_time}
                   duration={Math.min(
                     samples[0].end_time - samples[0].start_time,
-                    3
+                    3,
                   )}
                 />
               </div>
@@ -562,12 +643,9 @@ function SpeakerDetail({
     setLoadingSimilar(true);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    localFetch(
-      `/speakers/similar?speaker_id=${speaker.id}&limit=5`,
-      {
-        signal: controller.signal,
-      }
-    )
+    localFetch(`/speakers/similar?speaker_id=${speaker.id}&limit=5`, {
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((data) => setSimilar(Array.isArray(data) ? data : []))
       .catch(() => setSimilar([]))
@@ -599,7 +677,7 @@ function SpeakerDetail({
             className="flex items-center gap-2 text-xs bg-background rounded px-2 py-1.5 border border-border/30"
           >
             <AudioClip
-              path={s.path}
+              audioChunkId={s.audio_chunk_id}
               startTime={s.start_time}
               duration={s.end_time - s.start_time}
             />
@@ -640,7 +718,7 @@ function SpeakerDetail({
               </div>
               {simSamples[0] && (
                 <AudioClip
-                  path={simSamples[0].path}
+                  audioChunkId={simSamples[0].audio_chunk_id}
                   startTime={simSamples[0].start_time}
                   duration={simSamples[0].end_time - simSamples[0].start_time}
                 />
@@ -680,7 +758,10 @@ function MergeBanner({
   onMerge,
   onDismiss,
 }: {
-  suggestions: { speaker: Speaker & { isNamed: boolean }; similar: SimilarSpeaker }[];
+  suggestions: {
+    speaker: Speaker & { isNamed: boolean };
+    similar: SimilarSpeaker;
+  }[];
   onMerge: (keepId: number, mergeId: number) => Promise<void>;
   onDismiss: (speakerId: number, similarId: number) => void;
 }) {
@@ -707,8 +788,7 @@ function MergeBanner({
 
   const handleDismiss = () => {
     onDismiss(suggestion.speaker.id, suggestion.similar.id);
-    if (current >= suggestions.length - 1)
-      setCurrent(Math.max(0, current - 1));
+    if (current >= suggestions.length - 1) setCurrent(Math.max(0, current - 1));
   };
 
   return (
@@ -758,7 +838,7 @@ function MergeBanner({
           {speakerSamples[0] && (
             <div className="space-y-1">
               <AudioClip
-                path={speakerSamples[0].path}
+                audioChunkId={speakerSamples[0].audio_chunk_id}
                 startTime={speakerSamples[0].start_time}
                 duration={
                   speakerSamples[0].end_time - speakerSamples[0].start_time
@@ -780,14 +860,13 @@ function MergeBanner({
                 : "?"}
             </div>
             <span className="text-sm font-medium truncate">
-              {suggestion.similar.name ||
-                `Speaker #${suggestion.similar.id}`}
+              {suggestion.similar.name || `Speaker #${suggestion.similar.id}`}
             </span>
           </div>
           {similarSamples[0] && (
             <div className="space-y-1">
               <AudioClip
-                path={similarSamples[0].path}
+                audioChunkId={similarSamples[0].audio_chunk_id}
                 startTime={similarSamples[0].start_time}
                 duration={
                   similarSamples[0].end_time - similarSamples[0].start_time
@@ -839,9 +918,7 @@ export function SpeakersSection() {
   const [mergeSuggestions, setMergeSuggestions] = useState<
     { speaker: Speaker & { isNamed: boolean }; similar: SimilarSpeaker }[]
   >([]);
-  const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(
-    new Set()
-  );
+  const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set());
   const [clusters, setClusters] = useState<SpeakerCluster[]>([]);
   const [clusterLoading, setClusterLoading] = useState(false);
   const { toast } = useToast();
@@ -854,13 +931,11 @@ export function SpeakersSection() {
       ]);
       if (namedRes.ok)
         setSpeakers(
-          await namedRes.json().then((d: any) => (Array.isArray(d) ? d : []))
+          await namedRes.json().then((d: any) => (Array.isArray(d) ? d : [])),
         );
       if (unnamedRes.ok)
         setUnnamed(
-          await unnamedRes
-            .json()
-            .then((d: any) => (Array.isArray(d) ? d : []))
+          await unnamedRes.json().then((d: any) => (Array.isArray(d) ? d : [])),
         );
     } catch {
       /* server not running */
@@ -894,7 +969,7 @@ export function SpeakersSection() {
           try {
             const res = await localFetch(
               `/speakers/similar?speaker_id=${speaker.id}&limit=5`,
-              { signal: controller.signal }
+              { signal: controller.signal },
             );
             if (!res.ok) return;
             const data = await res.json();
@@ -902,14 +977,12 @@ export function SpeakersSection() {
               // Only keep unnamed similar speakers for clustering
               const unnamedIds = new Set(unnamed.map((u) => u.id));
               const similarIds = data
-                .filter(
-                  (s: SimilarSpeaker) => !s.name && unnamedIds.has(s.id)
-                )
+                .filter((s: SimilarSpeaker) => !s.name && unnamedIds.has(s.id))
                 .map((s: SimilarSpeaker) => s.id);
               similarMap.set(speaker.id, similarIds);
             }
           } catch {}
-        })
+        }),
       );
 
       // Union-find style clustering
@@ -932,9 +1005,9 @@ export function SpeakersSection() {
         const members = unnamed.filter((u) => clusterIds.has(u.id));
         for (const m of members) assigned.add(m.id);
 
-        const firstSample = members
-          .flatMap((m) => parseSamples(m.metadata))
-          .find(Boolean) || null;
+        const firstSample =
+          members.flatMap((m) => parseSamples(m.metadata)).find(Boolean) ||
+          null;
 
         newClusters.push({
           members,
@@ -976,7 +1049,7 @@ export function SpeakersSection() {
           try {
             const res = await localFetch(
               `/speakers/similar?speaker_id=${speaker.id}&limit=1`,
-              { signal: controller.signal }
+              { signal: controller.signal },
             );
             if (!res.ok) return;
             const data = await res.json();
@@ -987,7 +1060,7 @@ export function SpeakersSection() {
               });
             }
           } catch {}
-        })
+        }),
       );
 
       setMergeSuggestions(suggestions);
@@ -1075,19 +1148,19 @@ export function SpeakersSection() {
   };
 
   const activeSuggestions = mergeSuggestions.filter(
-    (s) => !dismissedPairs.has(`${s.speaker.id}-${s.similar.id}`)
+    (s) => !dismissedPairs.has(`${s.speaker.id}-${s.similar.id}`),
   );
 
   const filteredSpeakers = speakers.filter(
     (s) =>
       !searchQuery ||
       s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      `#${s.id}`.includes(searchQuery)
+      `#${s.id}`.includes(searchQuery),
   );
 
   const filteredClusters = searchQuery
     ? clusters.filter((c) =>
-        c.members.some((m) => `#${m.id}`.includes(searchQuery))
+        c.members.some((m) => `#${m.id}`.includes(searchQuery)),
       )
     : clusters;
 
@@ -1206,8 +1279,8 @@ export function SpeakersSection() {
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
             <Users className="h-3 w-3" />
             pending identification ({unnamed.length} speaker
-            {unnamed.length !== 1 ? "s" : ""} in {filteredClusters.length}{" "}
-            group{filteredClusters.length !== 1 ? "s" : ""})
+            {unnamed.length !== 1 ? "s" : ""} in {filteredClusters.length} group
+            {filteredClusters.length !== 1 ? "s" : ""})
           </h3>
           {clusterLoading ? (
             <div className="space-y-2">
@@ -1246,9 +1319,7 @@ export function SpeakersSection() {
               key={s.id}
               speaker={s}
               expanded={expandedId === s.id}
-              onToggle={() =>
-                setExpandedId(expandedId === s.id ? null : s.id)
-              }
+              onToggle={() => setExpandedId(expandedId === s.id ? null : s.id)}
               onEdit={updateSpeaker}
               onDelete={deleteSpeaker}
               onMerge={mergeSpeakers}

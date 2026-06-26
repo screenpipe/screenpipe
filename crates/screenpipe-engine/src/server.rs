@@ -57,9 +57,10 @@ use crate::{
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         speakers::{
-            delete_speaker_handler, get_similar_speakers_handler, get_unnamed_speakers_handler,
-            mark_as_hallucination_handler, merge_speakers_handler, reassign_speaker_handler,
-            search_speakers_handler, undo_speaker_reassign_handler, update_speaker_handler,
+            delete_speaker_handler, get_similar_speakers_handler, get_speaker_sample_handler,
+            get_unnamed_speakers_handler, mark_as_hallucination_handler, merge_speakers_handler,
+            reassign_speaker_handler, search_speakers_handler, undo_speaker_reassign_handler,
+            update_speaker_handler,
         },
         streaming::stream_frames_handler,
         websocket::{
@@ -820,6 +821,10 @@ impl SCServer {
         // Build the main router with all routes
         let router = Router::new()
             .merge(server.into_router())
+            .route(
+                "/speakers/sample/:audio_chunk_id",
+                get(get_speaker_sample_handler),
+            )
             // Vision status endpoint (not in OpenAPI spec — no State param)
             .route("/vision/status", get(api_vision_status))
             // Vision/audio pipeline metrics (not in OpenAPI spec — external types)

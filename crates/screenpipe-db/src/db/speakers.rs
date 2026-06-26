@@ -431,6 +431,7 @@ impl DatabaseManager {
             WITH RecentAudioPaths AS (
                 SELECT DISTINCT
                     s.id as speaker_id,
+                    ac.id as audio_chunk_id,
                     ac.file_path,
                     at.transcription,
                     at.start_time,
@@ -442,6 +443,7 @@ impl DatabaseManager {
                 WHERE (s.name = '' OR s.name IS NULL)
                 AND s.hallucination = 0
                 AND ac.file_path NOT LIKE 'cloud://%'
+                AND TRIM(COALESCE(ac.file_path, '')) NOT IN ('', '.')
                 "#;
 
         let speaker_filter = match &speaker_ids {
@@ -471,6 +473,7 @@ impl DatabaseManager {
                     THEN json_object('audio_samples', json_group_array(
                         DISTINCT json_object(
                             'path', rap.file_path,
+                            'audio_chunk_id', rap.audio_chunk_id,
                             'transcript', rap.transcription,
                             'start_time', rap.start_time,
                             'end_time', rap.end_time,
@@ -482,6 +485,7 @@ impl DatabaseManager {
                         json_object('audio_samples', json_group_array(
                             DISTINCT json_object(
                                 'path', rap.file_path,
+                                'audio_chunk_id', rap.audio_chunk_id,
                                 'transcript', rap.transcription,
                                 'start_time', rap.start_time,
                                 'end_time', rap.end_time,
@@ -602,6 +606,7 @@ impl DatabaseManager {
             RecentAudioPaths AS (
                 SELECT DISTINCT
                     ns.id as speaker_id,
+                    ac.id as audio_chunk_id,
                     ac.file_path,
                     at2.transcription,
                     at2.start_time,
@@ -613,6 +618,7 @@ impl DatabaseManager {
                 )
                 JOIN audio_chunks ac ON at2.audio_chunk_id = ac.id
                 WHERE ac.file_path NOT LIKE 'cloud://%'
+                AND TRIM(COALESCE(ac.file_path, '')) NOT IN ('', '.')
                 AND at2.timestamp IN (
                     SELECT at3.timestamp
                     FROM audio_transcriptions at3
@@ -630,6 +636,7 @@ impl DatabaseManager {
                     ELSE json_object('audio_samples', json_group_array(
                         DISTINCT json_object(
                             'path', rap.file_path,
+                            'audio_chunk_id', rap.audio_chunk_id,
                             'transcript', rap.transcription,
                             'start_time', rap.start_time,
                             'end_time', rap.end_time,
@@ -723,6 +730,7 @@ impl DatabaseManager {
             WITH RecentAudioPaths AS (
                 SELECT DISTINCT
                     s.id as speaker_id,
+                    ac.id as audio_chunk_id,
                     ac.file_path,
                     at.transcription,
                     at.start_time,
@@ -733,6 +741,7 @@ impl DatabaseManager {
                 JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
                 AND s.hallucination = 0
                 AND ac.file_path NOT LIKE 'cloud://%'
+                AND TRIM(COALESCE(ac.file_path, '')) NOT IN ('', '.')
                 AND at.timestamp IN (
                     SELECT timestamp
                     FROM audio_transcriptions at2
@@ -751,6 +760,7 @@ impl DatabaseManager {
                     WHEN s.metadata = '' OR s.metadata IS NULL OR json_valid(s.metadata) = 0
                     THEN json_object('audio_samples', json_group_array(DISTINCT json_object(
                         'path', rap.file_path,
+                        'audio_chunk_id', rap.audio_chunk_id,
                         'transcript', rap.transcription,
                         'start_time', rap.start_time,
                         'end_time', rap.end_time,
@@ -760,6 +770,7 @@ impl DatabaseManager {
                         json(s.metadata),
                         json_object('audio_samples', json_group_array(DISTINCT json_object(
                             'path', rap.file_path,
+                            'audio_chunk_id', rap.audio_chunk_id,
                             'transcript', rap.transcription,
                             'start_time', rap.start_time,
                             'end_time', rap.end_time,

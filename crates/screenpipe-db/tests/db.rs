@@ -1658,6 +1658,12 @@ mod tests {
         println!("Audio samples: {:?}", audio_samples);
 
         assert_eq!(audio_samples.len(), 3);
+        assert!(
+            audio_samples
+                .iter()
+                .all(|sample| sample["audio_chunk_id"].as_i64().is_some()),
+            "speaker audio samples should include audio_chunk_id for local playback"
+        );
     }
 
     #[tokio::test]
