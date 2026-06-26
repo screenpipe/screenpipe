@@ -1521,7 +1521,52 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "quit" => {
             debug!("Quit requested");
-            process_exit::request_app_quit(app_handle.clone());
+            // De-dupe rapid re-clicks: a teardown is already in flight and will
+            // force-exit shortly, so don't pile another one onto the same locks.
+            if process_exit::QUIT_TEARDOWN_STARTED.load(Ordering::SeqCst) {
+                debug!("Quit ignored - teardown already in progress");
+                return;
+            }
+
+            // Stop recording before exiting
+            let app_handle_clone = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut running_pipes = Vec::new();
+                if let Some(recording_state) = app_handle_clone.try_state::<RecordingState>() {
+                    let server_guard = recording_state.server.lock().await;
+                    if let Some(ref server) = *server_guard {
+                        let pipe_manager = server.pipe_manager.lock().await;
+                        running_pipes = pipe_manager.get_running_pipes().await;
+                    }
+                }
+
+                if !running_pipes.is_empty() {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let dialog = app_handle_clone
+                        .dialog()
+                        .message(format!(
+                            "the following pipes are still running: {}.\n\n\
+                            quitting screenpipe now will interrupt their work.",
+                            running_pipes.join(", ")
+                        ))
+                        .title("screenpipe is still working")
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            "quit anyway".to_string(),
+                            "cancel".to_string(),
+                        ));
+
+                    dialog.show(move |clicked_quit| {
+                        let _ = tx.send(clicked_quit);
+                    });
+
+                    match rx.await {
+                        Ok(true) => {} // Proceed
+                        _ => return,   // Cancelled
+                    }
+                }
+
+                process_exit::request_app_quit(app_handle_clone);
+            });
         }
         _ => debug!("Unhandled menu event: {:?}", event.id()),
     }

@@ -299,6 +299,40 @@ pub async fn restart_for_update(
     app: tauri::AppHandle,
     timeout_secs: Option<u64>,
 ) -> Result<String, String> {
+    let mut running_pipes = Vec::new();
+    if let Some(recording_state) = app.try_state::<RecordingState>() {
+        let server_guard = recording_state.server.lock().await;
+        if let Some(ref server) = *server_guard {
+            let pipe_manager = server.pipe_manager.lock().await;
+            running_pipes = pipe_manager.get_running_pipes().await;
+        }
+    }
+
+    if !running_pipes.is_empty() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let dialog = app
+            .dialog()
+            .message(format!(
+                "the following pipes are still running: {}.\n\n\
+                relaunching screenpipe now will interrupt their work.",
+                running_pipes.join(", ")
+            ))
+            .title("screenpipe is still working")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "relaunch anyway".to_string(),
+                "cancel".to_string(),
+            ));
+
+        dialog.show(move |clicked_relaunch| {
+            let _ = tx.send(clicked_relaunch);
+        });
+
+        match rx.await {
+            Ok(true) => {}
+            _ => return Ok("cancelled".to_string()),
+        }
+    }
+
     let cap = Duration::from_secs(timeout_secs.unwrap_or(BANNER_GATE_TIMEOUT_SECS));
     let gate = await_restart_gate(cap, "banner-triggered restart").await;
     if !gate.should_restart() {
@@ -929,6 +963,40 @@ impl UpdatesManager {
                     "auto-update enabled, restarting to apply update v{}",
                     update.version
                 );
+
+                let mut running_pipes = Vec::new();
+                if let Some(recording_state) = self.app.try_state::<RecordingState>() {
+                    let server_guard = recording_state.server.lock().await;
+                    if let Some(ref server) = *server_guard {
+                        let pipe_manager = server.pipe_manager.lock().await;
+                        running_pipes = pipe_manager.get_running_pipes().await;
+                    }
+                }
+
+                if !running_pipes.is_empty() {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let dialog = self.app
+                        .dialog()
+                        .message(format!(
+                            "the following pipes are still running: {}.\n\n\
+                            relaunching screenpipe now for auto-update will interrupt their work.",
+                            running_pipes.join(", ")
+                        ))
+                        .title("screenpipe is still working")
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            "relaunch anyway".to_string(),
+                            "cancel".to_string(),
+                        ));
+
+                    dialog.show(move |clicked_relaunch| {
+                        let _ = tx.send(clicked_relaunch);
+                    });
+
+                    match rx.await {
+                        Ok(true) => {}
+                        _ => return Result::Ok(true), // Cancelled
+                    }
+                }
 
                 // #3622: gate process::exit on boot-ready to avoid the ORT teardown
                 // race. In the common case boot is already ready and this returns

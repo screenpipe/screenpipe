@@ -2067,6 +2067,12 @@ impl PipeManager {
         &self.pipes_dir
     }
 
+    /// Returns a list of currently running pipe names.
+    pub async fn get_running_pipes(&self) -> Vec<String> {
+        let running = self.running.lock().await;
+        running.keys().cloned().collect()
+    }
+
     /// Set extra context that gets appended to every pipe prompt.
     /// Used by the server to inject connected integrations info.
     pub fn set_extra_context(&mut self, ctx: String) {
