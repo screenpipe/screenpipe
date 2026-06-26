@@ -417,7 +417,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       cancelled = true;
       for (const unlisten of unlistenFns) unlisten();
     };
-  }, []);
+  }, [actions]);
 
   const runningPipes = useRunningPipes();
   const {
@@ -2048,8 +2048,9 @@ function RowMenuItems({
   existingGroups?: string[];
 }) {
   const P = ROW_MENU_PARTS[variant];
+  const { isMac } = usePlatform();
   const itemCls = "text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30";
-  const groupItemCls = "text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30";
+  const groupItemCls = "min-w-0 text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30";
   const shortcutCls = "text-[10px] tracking-normal text-muted-foreground/55";
   return (
     <>
@@ -2087,49 +2088,62 @@ function RowMenuItems({
             Move to group
           </P.SubTrigger>
           <P.SubContent
-            className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+            className="w-[196px] rounded-none border border-border bg-background p-0 shadow-none overflow-hidden"
             data-testid={`chat-row-move-to-group-menu-${session.id}`}
           >
-            {availableMoveGroups.map((g) => (
+            {availableMoveGroups.length > 0 && (
+              <div
+                className={cn(
+                  "max-h-[min(18rem,calc(100vh-10rem))] overflow-y-auto overflow-x-hidden overscroll-contain p-1",
+                  isMac ? "scrollbar-minimal" : "scrollbar-hide"
+                )}
+              >
+                {availableMoveGroups.map((g) => (
+                  <P.Item
+                    key={g}
+                    className={groupItemCls}
+                    onSelect={(e: Event) => {
+                      e.stopPropagation();
+                      onMoveToGroup(session.id, g);
+                    }}
+                  >
+                    <span className="block flex-1 truncate" title={g}>
+                      {g}
+                    </span>
+                  </P.Item>
+                ))}
+              </div>
+            )}
+            <div className="p-1">
+              {session.sidebarGroup && (
+                <>
+                  {availableMoveGroups.length > 0 && (
+                    <P.Separator className="my-1 bg-border/70" />
+                  )}
+                  <P.Item
+                    className={groupItemCls}
+                    onSelect={(e: Event) => {
+                      e.stopPropagation();
+                      onMoveToGroup(session.id, undefined);
+                    }}
+                  >
+                    Remove from group
+                  </P.Item>
+                </>
+              )}
+              {(availableMoveGroups.length > 0 || session.sidebarGroup) && (
+                <P.Separator className="my-1 bg-border/70" />
+              )}
               <P.Item
-                key={g}
                 className={groupItemCls}
                 onSelect={(e: Event) => {
                   e.stopPropagation();
-                  onMoveToGroup(session.id, g);
+                  onNewGroupRequest?.(session.id);
                 }}
               >
-                {g}
+                New group...
               </P.Item>
-            ))}
-            {session.sidebarGroup && (
-              <>
-                {availableMoveGroups.length > 0 && (
-                  <P.Separator className="my-1 bg-border/70" />
-                )}
-                <P.Item
-                  className={groupItemCls}
-                  onSelect={(e: Event) => {
-                    e.stopPropagation();
-                    onMoveToGroup(session.id, undefined);
-                  }}
-                >
-                  Remove from group
-                </P.Item>
-              </>
-            )}
-            {(availableMoveGroups.length > 0 || session.sidebarGroup) && (
-              <P.Separator className="my-1 bg-border/70" />
-            )}
-            <P.Item
-              className={groupItemCls}
-              onSelect={(e: Event) => {
-                e.stopPropagation();
-                onNewGroupRequest?.(session.id);
-              }}
-            >
-              New group...
-            </P.Item>
+            </div>
           </P.SubContent>
         </P.Sub>
       )}

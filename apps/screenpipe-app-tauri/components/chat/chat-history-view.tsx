@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { Archive, CheckSquare, FolderOpen, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,7 @@ export function ChatHistoryView({
   onNewChat: () => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
+  const { isMac } = usePlatform();
   const [tab, setTab] = useState<HistoryTab>("active");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -522,38 +524,51 @@ export function ChatHistoryView({
                     <FolderOpen className="h-3 w-3 text-muted-foreground" />
                     Move to group
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none">
-                    {availableMoveGroups.map((g) => (
-                        <DropdownMenuItem
-                          key={g}
-                          className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
-                          onSelect={() => void handleMoveToGroup(conv.id, g)}
-                        >
-                          {g}
-                        </DropdownMenuItem>
-                      ))}
-                    {currentSidebarGroup && (
-                      <>
-                        {availableMoveGroups.length > 0 && (
-                          <DropdownMenuSeparator className="my-1 bg-border/70" />
+                  <DropdownMenuSubContent className="w-[196px] rounded-none border border-border bg-background p-0 shadow-none overflow-hidden">
+                    {availableMoveGroups.length > 0 && (
+                      <div
+                        className={cn(
+                          "max-h-[min(18rem,calc(100vh-10rem))] overflow-y-auto overflow-x-hidden overscroll-contain p-1",
+                          isMac ? "scrollbar-minimal" : "scrollbar-hide"
                         )}
-                        <DropdownMenuItem
-                          className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
-                          onSelect={() => void handleMoveToGroup(conv.id, undefined)}
-                        >
-                          Remove from group
-                        </DropdownMenuItem>
-                      </>
+                      >
+                        {availableMoveGroups.map((g) => (
+                          <DropdownMenuItem
+                            key={g}
+                            className="min-w-0 text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30"
+                            onSelect={() => void handleMoveToGroup(conv.id, g)}
+                          >
+                            <span className="block flex-1 truncate" title={g}>
+                              {g}
+                            </span>
+                          </DropdownMenuItem>
+                        ))}
+                      </div>
                     )}
-                    {(availableMoveGroups.length > 0 || currentSidebarGroup) && (
-                      <DropdownMenuSeparator className="my-1 bg-border/70" />
-                    )}
-                    <DropdownMenuItem
-                      className="text-[11px] h-[30px] px-2 rounded-none focus:bg-muted/30"
-                      onSelect={() => setNewGroupSessionId(conv.id)}
-                    >
-                      New group...
-                    </DropdownMenuItem>
+                    <div className="p-1">
+                      {currentSidebarGroup && (
+                        <>
+                          {availableMoveGroups.length > 0 && (
+                            <DropdownMenuSeparator className="my-1 bg-border/70" />
+                          )}
+                          <DropdownMenuItem
+                            className="text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30"
+                            onSelect={() => void handleMoveToGroup(conv.id, undefined)}
+                          >
+                            Remove from group
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {(availableMoveGroups.length > 0 || currentSidebarGroup) && (
+                        <DropdownMenuSeparator className="my-1 bg-border/70" />
+                      )}
+                      <DropdownMenuItem
+                        className="text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30"
+                        onSelect={() => setNewGroupSessionId(conv.id)}
+                      >
+                        New group...
+                      </DropdownMenuItem>
+                    </div>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
                 {!conv.hidden ? (
