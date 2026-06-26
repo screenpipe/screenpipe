@@ -409,10 +409,10 @@ describe("applySidebarRecentsCap", () => {
     const result = applySidebarRecentsCap(sections, new Set(), 15);
     expect(result.map((section) => section.title)).toEqual(["product", "other"]);
     expect(result[0].items).toHaveLength(2);
-    expect(result[1].items).toHaveLength(11);
+    expect(result[1].items).toHaveLength(13);
   });
 
-  it("counts a collapsed manual group as one visible row", () => {
+  it("counts a collapsed manual group as zero visible rows", () => {
     const sections = buildSidebarRecentsSections([
       ...Array.from({ length: 5 }, (_, i) =>
         s(`m-${i}`, `manual ${i}`, undefined, "product"),
@@ -431,7 +431,7 @@ describe("applySidebarRecentsCap", () => {
     expect(result[0].title).toBe("product");
     expect(result[0].items).toHaveLength(0);
     expect(result[1].title).toBe("other");
-    expect(result[1].items).toHaveLength(13);
+    expect(result[1].items).toHaveLength(15);
   });
 
   it("treats a pipe group row as one visible row regardless of child count", () => {

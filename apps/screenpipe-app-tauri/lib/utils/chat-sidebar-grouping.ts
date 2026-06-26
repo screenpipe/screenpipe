@@ -327,8 +327,8 @@ export function buildSidebarRecentsSections(
  * sections.
  *
  * Counting rules:
- * - titled subsection header = 1 visible row
- * - collapsed subsection = header only
+ * - manual subsection headers do not consume the cap
+ * - collapsed manual subsections consume 0 rows
  * - top-level item inside an expanded subsection = 1 visible row
  * - pipe-group children do not count here; once the parent row is
  *   visible, expansion is a free reveal handled by the render layer
@@ -344,18 +344,14 @@ export function applySidebarRecentsCap(
   const capped: SidebarRecentsSection[] = [];
 
   for (const section of sections) {
-    if (remaining <= 0) break;
-
     const hasHeader = section.title.length > 0;
     const isCollapsed = hasHeader && collapsedSectionKeys.has(section.key);
 
-    if (hasHeader) {
-      if (remaining <= 0) break;
-      remaining -= 1;
-      if (isCollapsed) {
-        capped.push({ ...section, items: [] });
-        continue;
-      }
+    if (!hasHeader && remaining <= 0) break;
+
+    if (isCollapsed) {
+      capped.push({ ...section, items: [] });
+      continue;
     }
 
     const visibleItems: SidebarItem[] = [];
