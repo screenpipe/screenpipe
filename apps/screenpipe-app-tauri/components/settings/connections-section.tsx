@@ -4408,7 +4408,10 @@ export function ConnectionsSection({
       <Dialog
         open={!!selected && !!selectedTile}
         onOpenChange={(open) => {
-          if (!open) setSelected(null);
+          if (!open) {
+            setSelected(null);
+            setRequestedScopeVariant(null);
+          }
         }}
       >
         <DialogContent
