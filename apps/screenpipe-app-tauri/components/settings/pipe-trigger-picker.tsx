@@ -400,6 +400,17 @@ function accountsFor(conns: AvailableConnection[], app: string): { value: string
   }));
 }
 
+function openConnectionSetupForTrigger(app: "slack" | "notion") {
+  window.dispatchEvent(new CustomEvent("open-settings", {
+    detail: {
+      section: "connections",
+      connectionId: app,
+      category: app === "slack" ? "Communication" : "Notes",
+      scopeVariant: app === "slack" ? "read_write" : undefined,
+    },
+  }));
+}
+
 function SourceDetail({
   app,
   availableConnections,
@@ -442,11 +453,10 @@ function SourceDetail({
       }
       return;
     }
-    // Slack/Notion OAuth needs scope-variant + account selection (read access,
-    // not the send-only default) — hand off to the full Connections flow rather
-    // than reimplement it here. Reopen this picker once connected.
+    // Slack/Notion OAuth needs the full Connections flow: Pro gating,
+    // scope variants, account instances, reconnect/cancel handling.
     onClose();
-    window.dispatchEvent(new CustomEvent("open-settings", { detail: { section: "connections" } }));
+    openConnectionSetupForTrigger(app);
   }
 
   if (!connected) return <ConnectCard app={app} connecting={connecting} onConnect={doConnect} />;

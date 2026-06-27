@@ -79,6 +79,7 @@ type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "me
 type ConnectionFocusRequest = {
   id: string | null;
   category: string | null;
+  scopeVariant: string | null;
   requestId: number;
 };
 
@@ -793,6 +794,7 @@ function HomeContent() {
         setConnectionFocusRequest({
           id: typeof detail?.connectionId === "string" ? detail.connectionId : null,
           category: typeof detail?.category === "string" ? detail.category : null,
+          scopeVariant: typeof detail?.scopeVariant === "string" ? detail.scopeVariant : null,
           requestId: Date.now(),
         });
         setActiveSection("connections");
@@ -842,6 +844,7 @@ function HomeContent() {
           <ConnectionsSection
             focusConnectionId={connectionFocusRequest?.id ?? null}
             focusCategory={connectionFocusRequest?.category ?? null}
+            focusScopeVariant={connectionFocusRequest?.scopeVariant ?? null}
             focusRequestId={connectionFocusRequest?.requestId ?? 0}
             onFocusRequestConsumed={clearConnectionFocusRequest}
           />

@@ -2349,12 +2349,14 @@ function OAuthPanel({
   integrationId,
   integrationName,
   supportsOAuthInstances,
+  initialScopeVariant,
   onConnected,
   onDisconnected,
 }: {
   integrationId: string;
   integrationName: string;
   supportsOAuthInstances: boolean;
+  initialScopeVariant?: string | null;
   onConnected?: () => void;
   onDisconnected?: () => void;
 }) {
@@ -2374,7 +2376,15 @@ function OAuthPanel({
   // to the first (least-privileged) variant; null when the integration offers
   // no choice, in which case the backend uses its default scopes.
   const scopeVariants = OAUTH_SCOPE_VARIANTS[integrationId];
-  const [scopeVariant, setScopeVariant] = useState(scopeVariants?.[0]?.id ?? null);
+  const defaultScopeVariant = scopeVariants?.some((v) => v.id === initialScopeVariant)
+    ? initialScopeVariant!
+    : scopeVariants?.[0]?.id ?? null;
+  const [scopeVariant, setScopeVariant] = useState(defaultScopeVariant);
+
+  useEffect(() => {
+    if (!scopeVariants?.some((v) => v.id === initialScopeVariant)) return;
+    setScopeVariant(initialScopeVariant!);
+  }, [initialScopeVariant, scopeVariants]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -3728,6 +3738,7 @@ function ApiKeyMcpPanel({
 interface ConnectionsSectionProps {
   focusConnectionId?: string | null;
   focusCategory?: string | null;
+  focusScopeVariant?: string | null;
   focusRequestId?: number;
   onFocusRequestConsumed?: () => void;
 }
@@ -3735,6 +3746,7 @@ interface ConnectionsSectionProps {
 export function ConnectionsSection({
   focusConnectionId,
   focusCategory,
+  focusScopeVariant,
   focusRequestId = 0,
   onFocusRequestConsumed,
 }: ConnectionsSectionProps = {}) {
@@ -3742,6 +3754,10 @@ export function ConnectionsSection({
   const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
 
   const [selected, setSelected] = useState<string | null>(null);
+  const [requestedScopeVariant, setRequestedScopeVariant] = useState<{
+    connectionId: string;
+    scopeVariant: string;
+  } | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
   const [detectedConnectionIds, setDetectedConnectionIds] = useState<Set<string>>(() => new Set());
@@ -3758,6 +3774,11 @@ export function ConnectionsSection({
   useEffect(() => {
     if (!focusRequestId) return;
     setSelected(focusConnectionId || null);
+    setRequestedScopeVariant(
+      focusConnectionId && focusScopeVariant
+        ? { connectionId: focusConnectionId, scopeVariant: focusScopeVariant }
+        : null,
+    );
     setCategoryFilter(
       focusCategory
         ? normalizeConnectionCategory(focusCategory)
@@ -3765,7 +3786,7 @@ export function ConnectionsSection({
     );
     setSearch("");
     onFocusRequestConsumed?.();
-  }, [focusCategory, focusConnectionId, focusRequestId, onFocusRequestConsumed]);
+  }, [focusCategory, focusConnectionId, focusRequestId, focusScopeVariant, onFocusRequestConsumed]);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
@@ -4058,6 +4079,10 @@ export function ConnectionsSection({
   }, [allTiles, isDefaultView, suggested]);
 
   const selectedIntegration = integrations.find(i => i.id === selected);
+  const selectedScopeVariant =
+    selected && requestedScopeVariant?.connectionId === selected
+      ? requestedScopeVariant.scopeVariant
+      : null;
 
   const renderPanel = () => {
     if (!selected) return null;
@@ -4094,6 +4119,7 @@ export function ConnectionsSection({
                     integrationId={existing.id}
                     integrationName={existing.name}
                     supportsOAuthInstances={!!existing.supports_oauth_instances}
+                    initialScopeVariant={selectedScopeVariant}
                     onConnected={() => refreshIntegrationConnection(existing.id, true)}
                     onDisconnected={() => refreshIntegrationConnection(existing.id, false)}
                   />
@@ -4190,6 +4216,7 @@ export function ConnectionsSection({
                   integrationId={selectedIntegration.id}
                   integrationName={selectedIntegration.name}
                   supportsOAuthInstances={!!selectedIntegration.supports_oauth_instances}
+                  initialScopeVariant={selectedScopeVariant}
                   onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
                   onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
                 />
