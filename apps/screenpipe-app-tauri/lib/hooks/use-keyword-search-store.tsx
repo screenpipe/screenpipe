@@ -58,6 +58,28 @@ export interface SearchRequest {
 	};
 }
 
+export interface SavedKeywordSearchSession {
+	query: string;
+	searchResults: SearchMatch[];
+	searchGroups: SearchMatchGroup[];
+	uiEventResults: UiEventResult[];
+	currentResultIndex: number;
+	lastRequest: SearchRequest | null;
+	ocrOffset: number;
+	hasMoreOcr: boolean;
+	scrollTop: number;
+	selectedResultFrameId: number | null;
+	selectedTimestamp: string | null;
+	filters: {
+		contentFilter: string;
+		appFilter: string | null;
+		domainFilter: string | null;
+		timeFilter: string | null;
+	};
+	cameFromTimeline: boolean;
+	savedAt: number;
+}
+
 export interface KeywordSearchState {
 	searchResults: SearchMatch[];
 	searchGroups: SearchMatchGroup[];
@@ -87,12 +109,40 @@ export interface KeywordSearchState {
 	) => Promise<void>;
 	setCurrentResultIndex: (index: number) => void;
 	resetSearch: () => void;
+	saveSearchSession: (session: Omit<SavedKeywordSearchSession, "savedAt">) => void;
+	restoreSearchSession: () => SavedKeywordSearchSession | null;
+	getSavedSearchSession: () => SavedKeywordSearchSession | null;
+	updateSavedSearchScrollTop: (scrollTop: number) => void;
 	nextResult: () => void;
 	previousResult: () => void;
 }
 
 const fuzzy_default = true;
 const offset_default = 0;
+const saved_search_session_key = "screenpipe.keywordSearch.savedSession";
+
+function readSavedSearchSession(): SavedKeywordSearchSession | null {
+	if (typeof window === "undefined") return null;
+	try {
+		const raw = window.sessionStorage.getItem(saved_search_session_key);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as SavedKeywordSearchSession;
+		if (!parsed || typeof parsed.query !== "string") return null;
+		if (!Array.isArray(parsed.searchResults)) return null;
+		return parsed;
+	} catch {
+		return null;
+	}
+}
+
+function writeSavedSearchSession(session: SavedKeywordSearchSession): void {
+	if (typeof window === "undefined") return;
+	try {
+		window.sessionStorage.setItem(saved_search_session_key, JSON.stringify(session));
+	} catch {
+		// Session restore is a convenience; ignore storage quota/private-mode errors.
+	}
+}
 
 export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 	searchResults: [],
@@ -370,6 +420,51 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			lastRequest: null,
 			activeRequestId: null,
 			currentAbortController: null,
+		});
+	},
+
+	saveSearchSession: (session) => {
+		writeSavedSearchSession({
+			...session,
+			savedAt: Date.now(),
+		});
+	},
+
+	restoreSearchSession: () => {
+		const session = readSavedSearchSession();
+		if (!session || !session.cameFromTimeline) return null;
+
+		const { currentAbortController } = get();
+		if (currentAbortController) {
+			currentAbortController.abort();
+		}
+
+		set({
+			searchResults: session.searchResults,
+			searchGroups: session.searchGroups,
+			uiEventResults: session.uiEventResults,
+			isSearchingUiEvents: false,
+			currentResultIndex: session.currentResultIndex,
+			isSearching: false,
+			searchQuery: session.query,
+			error: null,
+			lastRequest: session.lastRequest,
+			activeRequestId: null,
+			currentAbortController: null,
+		});
+
+		return session;
+	},
+
+	getSavedSearchSession: () => readSavedSearchSession(),
+
+	updateSavedSearchScrollTop: (scrollTop) => {
+		const session = readSavedSearchSession();
+		if (!session) return;
+		writeSavedSearchSession({
+			...session,
+			scrollTop,
+			savedAt: Date.now(),
 		});
 	},
 

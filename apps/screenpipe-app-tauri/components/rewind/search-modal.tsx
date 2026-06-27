@@ -544,8 +544,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     searchQuery,
     searchKeywords,
     resetSearch,
+    saveSearchSession,
+    restoreSearchSession,
+    updateSavedSearchScrollTop,
     setCurrentResultIndex,
   } = useKeywordSearchStore();
+  const restoredSearchSessionRef = useRef(false);
+  const pendingRestoreScrollTopRef = useRef<number | null>(null);
 
   // --- Facet state (loaded async, independent of paginated results) ---
   const [facetApps, setFacetApps] = useState<[string, number][]>([]);
@@ -828,26 +833,49 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       const initialQuery = standalone
         ? new URLSearchParams(window.location.search).get("q") ?? ""
         : "";
-      setQuery(initialQuery);
-      resetSearch();
+      const restoredSession = !initialQuery && standalone
+        ? restoreSearchSession()
+        : null;
+      setQuery(restoredSession?.query ?? initialQuery);
+      if (restoredSession) {
+        restoredSearchSessionRef.current = true;
+        pendingRestoreScrollTopRef.current = restoredSession.scrollTop;
+        setContentFilter((restoredSession.filters.contentFilter as ContentFilter) || "all");
+        setAppFilter(restoredSession.filters.appFilter);
+        setDomainFilter(restoredSession.filters.domainFilter);
+        setTimeFilter(restoredSession.filters.timeFilter);
+        setOcrOffset(restoredSession.ocrOffset);
+        setHasMoreOcr(restoredSession.hasMoreOcr);
+      } else {
+        resetSearch();
+        setAppFilter(null);
+        setDomainFilter(null);
+        setTimeFilter(null);
+        setContentFilter("all");
+        setOcrOffset(0);
+        setHasMoreOcr(true);
+      }
       setSearchEpoch(e => e + 1);
       clearHighlight();
-      setAppFilter(null);
-      setDomainFilter(null);
-      setTimeFilter(null);
-      setContentFilter("all");
       setSpeakerResults([]);
       setTagResults([]);
       setAllTags([]);
       setSelectedSpeaker(null);
       setSpeakerTranscriptions([]);
       setSelectedTranscriptionIndex(0);
-      setOcrOffset(0);
-      setHasMoreOcr(true);
       setTranscriptionOffset(0);
       setHasMoreTranscriptions(true);
     }
-  }, [isOpen, resetSearch, standalone]);
+  }, [isOpen, resetSearch, restoreSearchSession, standalone]);
+
+  useEffect(() => {
+    if (!isOpen || pendingRestoreScrollTopRef.current === null || !gridRef.current) return;
+    const scrollTop = pendingRestoreScrollTopRef.current;
+    pendingRestoreScrollTopRef.current = null;
+    requestAnimationFrame(() => {
+      if (gridRef.current) gridRef.current.scrollTop = scrollTop;
+    });
+  }, [isOpen, searchResults.length, uiEventResults.length]);
 
   // Perform search when query changes
   useEffect(() => {
@@ -864,6 +892,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
     // Require at least 3 chars to avoid wasteful FTS queries while typing
     if (q.length < 3) return;
+
+    if (restoredSearchSessionRef.current && q === searchQuery && (searchResults.length > 0 || uiEventResults.length > 0)) {
+      restoredSearchSessionRef.current = false;
+      return;
+    }
 
     setAppFilter(null);
     setDomainFilter(null);
@@ -1184,6 +1217,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     e.stopPropagation();
     const target = e.currentTarget;
+    updateSavedSearchScrollTop(target.scrollTop);
     const nearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 200;
 
     if (nearBottom) {
@@ -1193,7 +1227,44 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         loadMoreOcr();
       }
     }
-  }, [selectedSpeaker, loadMoreOcr, loadMoreTranscriptions]);
+  }, [selectedSpeaker, loadMoreOcr, loadMoreTranscriptions, updateSavedSearchScrollTop]);
+
+  const saveCurrentSearchSession = useCallback((selectedResult?: SearchMatch, selectedTimestamp?: string) => {
+    if (!standalone || !query.trim()) return;
+    saveSearchSession({
+      query,
+      searchResults,
+      searchGroups,
+      uiEventResults,
+      currentResultIndex: useKeywordSearchStore.getState().currentResultIndex,
+      lastRequest: useKeywordSearchStore.getState().lastRequest,
+      ocrOffset,
+      hasMoreOcr,
+      scrollTop: gridRef.current?.scrollTop ?? 0,
+      selectedResultFrameId: selectedResult?.frame_id ?? null,
+      selectedTimestamp: selectedResult?.timestamp ?? selectedTimestamp ?? null,
+      filters: {
+        contentFilter,
+        appFilter,
+        domainFilter,
+        timeFilter,
+      },
+      cameFromTimeline: Boolean(selectedResult || selectedTimestamp),
+    });
+  }, [
+    standalone,
+    query,
+    searchResults,
+    searchGroups,
+    uiEventResults,
+    ocrOffset,
+    hasMoreOcr,
+    contentFilter,
+    appFilter,
+    domainFilter,
+    timeFilter,
+    saveSearchSession,
+  ]);
 
   const handleSelectResult = useCallback((result: SearchMatch) => {
     if (queryTokens.length > 0) {
@@ -1203,9 +1274,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     const idx = searchResults.findIndex((r) => r.frame_id === result.frame_id);
     if (idx >= 0) setCurrentResultIndex(idx);
     const resultsJson = JSON.stringify(searchResults);
+    saveCurrentSearchSession(result);
     onNavigateToTimestamp(result.timestamp, result.frame_id, queryTokens, resultsJson, query);
     onClose();
-  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex]);
+  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex, saveCurrentSearchSession]);
 
   // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
@@ -1234,6 +1306,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             e.preventDefault();
             setSelectedTranscriptionIndex(i => {
               if (transcriptions[i]?.timestamp) {
+                saveCurrentSearchSession(undefined, transcriptions[i].timestamp);
                 onNavigateToTimestamp(transcriptions[i].timestamp);
                 onClose();
               }
@@ -1325,7 +1398,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker]);
+  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, saveCurrentSearchSession]);
 
   // Scroll selected item into view (only on arrow-key navigation, not on new page load)
   const prevSelectedIndex = useRef(selectedIndex);
@@ -1466,6 +1539,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     data-index={index}
                     onClick={() => {
                       if (t.timestamp) {
+                        saveCurrentSearchSession(undefined, t.timestamp);
                         onNavigateToTimestamp(t.timestamp);
                         if (!embedded) onClose();
                       }
@@ -1592,6 +1666,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   key={frame.frame_id}
                   onClick={() => {
                     const resultsJson = JSON.stringify(searchResults);
+                    saveCurrentSearchSession(
+                      searchResults.find((result) => result.frame_id === frame.frame_id),
+                      frame.timestamp,
+                    );
                     onNavigateToTimestamp(frame.timestamp, frame.frame_id, queryTokens, resultsJson, query);
                     if (!embedded) onClose();
                   }}
@@ -1847,6 +1925,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     key={evt.id}
                     evt={evt}
                     onNavigate={() => {
+                      saveCurrentSearchSession(undefined, evt.timestamp);
                       onNavigateToTimestamp(evt.timestamp);
                       if (!embedded) onClose();
                     }}
