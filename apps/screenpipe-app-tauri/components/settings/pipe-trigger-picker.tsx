@@ -405,7 +405,6 @@ function openConnectionSetupForTrigger(app: "slack" | "notion") {
     detail: {
       section: "connections",
       connectionId: app,
-      category: app === "slack" ? "Communication" : "Notes",
       scopeVariant: app === "slack" ? "read_write" : undefined,
     },
   }));
