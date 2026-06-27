@@ -400,12 +400,16 @@ function accountsFor(conns: AvailableConnection[], app: string): { value: string
   }));
 }
 
-function openConnectionSetupForTrigger(app: "slack" | "notion") {
+const TRIGGER_CONNECTION_SCOPE_VARIANTS: Partial<Record<string, string>> = {
+  slack: "read_write",
+};
+
+function openConnectionSetupForTrigger(connectionId: string) {
   window.dispatchEvent(new CustomEvent("open-settings", {
     detail: {
       section: "connections",
-      connectionId: app,
-      scopeVariant: app === "slack" ? "read_write" : undefined,
+      connectionId,
+      scopeVariant: TRIGGER_CONNECTION_SCOPE_VARIANTS[connectionId],
     },
   }));
 }
@@ -452,7 +456,7 @@ function SourceDetail({
       }
       return;
     }
-    // Slack/Notion OAuth needs the full Connections flow: Pro gating,
+    // OAuth connections need the full Connections flow: Pro gating,
     // scope variants, account instances, reconnect/cancel handling.
     onClose();
     openConnectionSetupForTrigger(app);
