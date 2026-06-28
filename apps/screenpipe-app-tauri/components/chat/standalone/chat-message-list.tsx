@@ -20,7 +20,7 @@ import {
   isSteeredAssistantMessage,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
-import type { Message } from "@/lib/chat/types";
+import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
@@ -57,7 +57,7 @@ export interface ChatMessageListProps {
   branchConversation: (messageId: string) => Promise<void> | void;
   connectionItems?: ConnectionListItem[];
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
-  onConnectConnectionAction?: (connectionId: string) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
+  onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
   suppressSourceFooters?: boolean;

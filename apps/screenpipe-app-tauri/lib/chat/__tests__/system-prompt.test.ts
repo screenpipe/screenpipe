@@ -110,6 +110,25 @@ describe("buildAppAwarenessContext", () => {
     expect(out).toContain("- Preview: no matching connection known");
   });
 
+  it("tells the agent to use MCP tools for MCP-backed connections", () => {
+    const out = buildAppAwarenessContext({
+      apps: [{ name: "Linear", count: 8 }],
+      connections: [
+        {
+          id: "linear",
+          name: "Linear",
+          connected: true,
+          mcp: true,
+          mcp_server_id: "mcp-linear-123",
+        },
+      ],
+    });
+
+    expect(out).toContain("connection Linear (linear) is connected via MCP server mcp-linear-123");
+    expect(out).toContain("use sp_mcp_list_tools/sp_mcp_call");
+    expect(out).toContain("not /connections/linear/proxy");
+  });
+
   it("orders apps by activity count and caps the list", () => {
     const out = buildAppAwarenessContext({
       maxApps: 2,

@@ -32,7 +32,10 @@ export type AgentSource = "pi" | "pipe";
  *  on the Pi side and we don't want a strict type to drop unknown
  *  fields silently. */
 export interface AgentInnerEvent {
+  id?: string;
   type?: string;
+  method?: string;
+  title?: string;
   delta?: string;
   message?: {
     role?: string;

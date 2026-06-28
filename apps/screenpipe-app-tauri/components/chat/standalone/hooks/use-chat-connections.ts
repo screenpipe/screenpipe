@@ -120,6 +120,8 @@ export function useChatConnections({
           icon: connection.icon,
           category: connection.category,
           description: connection.description,
+          mcp: connection.mcp,
+          mcp_server_id: connection.mcp_server_id,
         }));
 
       setAllConnectionItems(allConnections);

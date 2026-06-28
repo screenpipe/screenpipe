@@ -903,6 +903,7 @@ function InlineConnectionActionCard({
   const continueLabel = block.pendingActionLabel ?? `continue with ${block.connectionName}`;
   const continuePrompt = block.pendingActionPrompt ??
     `${block.connectionName} is connected now. Continue the action we were discussing, but ask me for confirmation before writing to ${block.connectionName}.`;
+  const isPiGate = Boolean(block.extensionRequestId);
 
   const handleConnect = async () => {
     setConnectState("waiting");
@@ -950,9 +951,13 @@ function InlineConnectionActionCard({
             {connectLabel}
           </div>
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
-            {statusMessage ?? "token stays in the local secret store and is never shown to the model."}
+            {statusMessage ?? block.extensionReason ?? "token stays in the local secret store and is never shown to the model."}
           </div>
-          {effectiveConnected ? (
+          {effectiveConnected && isPiGate ? (
+            <div className="mt-3 text-xs uppercase tracking-wide text-muted-foreground">
+              continuing...
+            </div>
+          ) : effectiveConnected ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -999,38 +1004,10 @@ function autoConnectionActionsForMessage(
   connectionItems: ConnectionListItem[],
   dismissedConnectionIds: Set<string>,
 ): Extract<ContentBlock, { type: "connection_action" }>[] {
-  if (message.role !== "assistant") return [];
-  const text = message.content.toLowerCase();
-  if (!/\b(connect|connected|connection|not connected|not yet|isn['’]?t yet|isn['’]?t connected)\b/.test(text)) {
-    return [];
-  }
-
-  const explicitConnectionIds = new Set(
-    message.contentBlocks
-      ?.filter((block) => block.type === "connection_action")
-      .map((block) => block.connectionId) ?? [],
-  );
-
-  return connectionItems
-    .filter((connection) =>
-      !connection.connected &&
-      connection.id !== "owned-default" &&
-      !dismissedConnectionIds.has(connection.id) &&
-      !explicitConnectionIds.has(connection.id)
-    )
-    .filter((connection) => {
-      const name = connection.name.toLowerCase();
-      const id = connection.id.toLowerCase();
-      return (name.length > 2 && text.includes(name)) || (id.length > 2 && text.includes(id));
-    })
-    .slice(0, 2)
-    .map((connection) => ({
-      type: "connection_action" as const,
-      connectionId: connection.id,
-      connectionName: connection.name,
-      icon: connection.icon || connection.id,
-      description: connection.description,
-    }));
+  void message;
+  void connectionItems;
+  void dismissedConnectionIds;
+  return [];
 }
 
 // Build natural-language summary of completed tool calls
@@ -1170,7 +1147,7 @@ export function MessageContent({
   onRetry?: (prompt: string) => void;
   onOpenViewerPath?: (path: string) => void;
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
-  onConnectConnectionAction?: (connectionId: string) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
+  onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
 }) {
@@ -1197,7 +1174,7 @@ export function MessageContent({
               key={`auto-connection-${block.connectionId}`}
               block={block}
               connected={liveConnection?.connected ?? false}
-              onConnect={() => onConnectConnectionAction?.(block.connectionId) ?? onOpenConnectionSetup?.(block.connectionId)}
+              onConnect={() => onConnectConnectionAction?.(block.connectionId, block) ?? onOpenConnectionSetup?.(block.connectionId)}
               onContinue={onContinueConnectionAction}
               onDismiss={() =>
                 setDismissedAutoConnectionIds((current) => {
@@ -1381,7 +1358,7 @@ export function MessageContent({
                 key={`connection-${group.key}-${group.block.connectionId}`}
                 block={group.block}
                 connected={connected}
-                onConnect={() => onConnectConnectionAction?.(group.block.connectionId) ?? onOpenConnectionSetup?.(group.block.connectionId)}
+                onConnect={() => onConnectConnectionAction?.(group.block.connectionId, group.block) ?? onOpenConnectionSetup?.(group.block.connectionId)}
                 onContinue={onContinueConnectionAction}
                 onDismiss={() => onDismissConnectionAction?.(message.id, group.block.connectionId)}
               />

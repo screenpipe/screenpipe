@@ -1176,6 +1176,20 @@ fn ensure_save_artifact_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+    let ext_path = ext_dir.join("connection-gate.ts");
+    let ext_content = include_str!("../assets/extensions/connection-gate.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write connection-gate extension: {}", e))?;
+    debug!("connection-gate extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 /// Configuration for which AI provider Pi should use
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1569,6 +1583,10 @@ pub async fn pi_start_inner(
 
     // Save artifact: lets the agent register deliverables in the Artifacts library.
     ensure_save_artifact_extension(&project_dir)?;
+
+    // Connection gate: lets Pi block on inline app authorization before
+    // continuing app-dependent tasks.
+    ensure_connection_gate_extension(&project_dir)?;
 
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
@@ -2650,6 +2668,41 @@ pub async fn pi_pending(
         None => return Ok(Vec::new()),
     };
     Ok(qs.queued_snapshot())
+}
+
+/// Answer a Pi extension UI request. The request id must be the id from Pi's
+/// `extension_ui_request` event; the SDK uses it to resume the waiting tool.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_extension_ui_response(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    request_id: String,
+    response: serde_json::Value,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    if request_id.trim().is_empty() {
+        return Err("extension UI request id is required".to_string());
+    }
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("Pi is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    let mut payload = response;
+    let obj = payload
+        .as_object_mut()
+        .ok_or("extension UI response must be an object".to_string())?;
+    obj.insert("type".to_string(), json!("extension_ui_response"));
+    obj.insert("id".to_string(), json!(request_id));
+    queue.send_raw_immediate(payload).await
 }
 
 /// Abort current Pi operation. Priority command — cancels all pending commands

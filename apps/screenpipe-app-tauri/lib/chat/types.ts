@@ -34,6 +34,8 @@ export type ContentBlock =
       description?: string;
       pendingActionLabel?: string;
       pendingActionPrompt?: string;
+      extensionRequestId?: string;
+      extensionReason?: string;
     };
 
 export interface Message {

@@ -450,6 +450,31 @@ impl PiQueueHandle {
         write_result.map_err(|e| format!("stdin write failed: {}", e))
     }
 
+    /// Write a pre-formed RPC command to Pi stdin without stamping a new id.
+    /// Used for extension_ui_response, where the id must match Pi's pending
+    /// extension UI request exactly.
+    pub async fn send_raw_immediate(&self, payload: Value) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or("Pi stdin is not available".to_string())?;
+        let cmd_type = payload
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let cmd_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+        let mut stdin_guard = stdin.lock().await;
+        info!(
+            "pi_command_queue: writing raw immediate {}, {} bytes",
+            cmd_type,
+            cmd_str.len()
+        );
+        writeln!(*stdin_guard, "{}", cmd_str)
+            .and_then(|_| stdin_guard.flush())
+            .map_err(|e| format!("stdin write failed: {}", e))
+    }
+
     /// Abort only the active Pi turn. Unlike `abort`, this does not drain or
     /// clear queued follow-ups, so the queue can continue after the active
     /// reply stops.
@@ -1087,6 +1112,61 @@ mod tests {
         state.signal_terminated();
         drop(handle);
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Pi extension UI responses must echo the request id exactly. The normal
+    /// immediate command path stamps a fresh id, which would orphan Pi's
+    /// pending `extension_ui_request` and leave the chat waiting forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_raw_immediate_preserves_extension_ui_response_id() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat as a fake pi stdin");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+        let stdout = child.stdout.take().expect("child stdout");
+
+        let (tx, _rx) = mpsc::channel::<QueueMessage>(8);
+        let state = PiQueueState::new();
+        let handle = PiQueueHandle {
+            tx,
+            stdin: Some(stdin),
+            state,
+        };
+
+        handle
+            .send_raw_immediate(json!({
+                "type": "extension_ui_response",
+                "id": "request-123",
+                "confirmed": true
+            }))
+            .await
+            .expect("write raw response");
+
+        let line = tokio::task::spawn_blocking(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read response line");
+            line
+        })
+        .await
+        .expect("reader task");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("raw response is valid json");
+        assert_eq!(parsed["type"], "extension_ui_response");
+        assert_eq!(parsed["id"], "request-123");
+        assert_eq!(parsed["confirmed"], true);
+
+        drop(handle);
         let _ = child.kill();
         let _ = child.wait();
     }

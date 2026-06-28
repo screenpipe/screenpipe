@@ -19,6 +19,8 @@ export type ConnectedIntegration = {
 
 export type ConnectionListItem = ConnectedIntegration & {
   connected: boolean;
+  mcp?: boolean;
+  mcp_server_id?: string;
   is_oauth?: boolean;
   supports_oauth_instances?: boolean;
 };
