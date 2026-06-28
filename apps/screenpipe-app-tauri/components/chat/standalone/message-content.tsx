@@ -16,6 +16,7 @@ import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
+import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import { formatWorkDuration } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
@@ -890,22 +891,43 @@ function InlineConnectionActionCard({
 }: {
   block: Extract<ContentBlock, { type: "connection_action" }>;
   connected: boolean;
-  onConnect: () => void | Promise<void>;
+  onConnect: () => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinue?: (prompt: string, label?: string) => void | Promise<void>;
   onDismiss: () => void;
 }) {
-  const [opening, setOpening] = useState(false);
-  const connectLabel = connected ? `${block.connectionName} connected` : `connect ${block.connectionName}`;
+  const [connectState, setConnectState] = useState<"idle" | "waiting" | "error">("idle");
+  const [locallyConnected, setLocallyConnected] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const effectiveConnected = connected || locallyConnected;
+  const connectLabel = effectiveConnected ? `${block.connectionName} connected` : `connect ${block.connectionName}`;
   const continueLabel = block.pendingActionLabel ?? `continue with ${block.connectionName}`;
   const continuePrompt = block.pendingActionPrompt ??
     `${block.connectionName} is connected now. Continue the action we were discussing, but ask me for confirmation before writing to ${block.connectionName}.`;
 
   const handleConnect = async () => {
-    setOpening(true);
+    setConnectState("waiting");
+    setStatusMessage("opening authorization in your browser...");
     try {
-      await onConnect();
+      const result = await onConnect();
+      if (result?.status === "error") {
+        setConnectState("error");
+        setStatusMessage(result.reason);
+        return;
+      }
+      if (result?.status === "unsupported") {
+        setConnectState("error");
+        setStatusMessage(result.reason);
+        return;
+      }
+      if (result?.status === "connected") {
+        setLocallyConnected(true);
+        setStatusMessage("connected");
+      }
     } finally {
-      setTimeout(() => setOpening(false), 800);
+      setTimeout(() => {
+        setConnectState("idle");
+        setStatusMessage(null);
+      }, 1600);
     }
   };
 
@@ -913,7 +935,7 @@ function InlineConnectionActionCard({
     <div className="w-full max-w-xl border border-border bg-background p-3 font-mono">
       <div className="flex items-start gap-3">
         <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
-          {connected ? (
+          {effectiveConnected ? (
             <Check className="h-4 w-4" strokeWidth={2} aria-hidden />
           ) : (
             <IntegrationIcon
@@ -928,9 +950,9 @@ function InlineConnectionActionCard({
             {connectLabel}
           </div>
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
-            token stays in the local secret store and is never shown to the model.
+            {statusMessage ?? "token stays in the local secret store and is never shown to the model."}
           </div>
-          {connected ? (
+          {effectiveConnected ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -952,10 +974,10 @@ function InlineConnectionActionCard({
               <button
                 type="button"
                 onClick={handleConnect}
-                disabled={opening}
+                disabled={connectState === "waiting"}
                 className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-opacity duration-150 disabled:opacity-60"
               >
-                {opening ? "opening" : "connect"}
+                {connectState === "waiting" ? "waiting" : connectState === "error" ? "retry" : "connect"}
               </button>
               <button
                 type="button"
@@ -1137,6 +1159,7 @@ export function MessageContent({
   onRetry,
   onOpenViewerPath,
   onOpenConnectionSetup,
+  onConnectConnectionAction,
   onContinueConnectionAction,
   onDismissConnectionAction,
 }: {
@@ -1147,6 +1170,7 @@ export function MessageContent({
   onRetry?: (prompt: string) => void;
   onOpenViewerPath?: (path: string) => void;
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
+  onConnectConnectionAction?: (connectionId: string) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
 }) {
@@ -1173,7 +1197,7 @@ export function MessageContent({
               key={`auto-connection-${block.connectionId}`}
               block={block}
               connected={liveConnection?.connected ?? false}
-              onConnect={() => onOpenConnectionSetup?.(block.connectionId)}
+              onConnect={() => onConnectConnectionAction?.(block.connectionId) ?? onOpenConnectionSetup?.(block.connectionId)}
               onContinue={onContinueConnectionAction}
               onDismiss={() =>
                 setDismissedAutoConnectionIds((current) => {
@@ -1357,7 +1381,7 @@ export function MessageContent({
                 key={`connection-${group.key}-${group.block.connectionId}`}
                 block={group.block}
                 connected={connected}
-                onConnect={() => onOpenConnectionSetup?.(group.block.connectionId)}
+                onConnect={() => onConnectConnectionAction?.(group.block.connectionId) ?? onOpenConnectionSetup?.(group.block.connectionId)}
                 onContinue={onContinueConnectionAction}
                 onDismiss={() => onDismissConnectionAction?.(message.id, group.block.connectionId)}
               />

@@ -9,6 +9,7 @@ import type { ImageViewerState } from "@/components/chat/standalone/image-viewer
 import type { ChatMessageListProps } from "@/components/chat/standalone/chat-message-list";
 import type { Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
+import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
 interface UseChatMessageActionsOptions {
@@ -25,6 +26,7 @@ interface UseChatMessageActionsOptions {
   scheduleMessage: (message: string, displayLabel: string) => void;
   connectionItems?: ConnectionListItem[];
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
+  onConnectConnectionAction?: (connectionId: string) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
 }
 
 export function useChatMessageActions({
@@ -41,6 +43,7 @@ export function useChatMessageActions({
   scheduleMessage,
   connectionItems = [],
   onOpenConnectionSetup,
+  onConnectConnectionAction,
 }: UseChatMessageActionsOptions) {
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -222,6 +225,7 @@ export function useChatMessageActions({
     branchConversation,
     connectionItems,
     onOpenConnectionSetup,
+    onConnectConnectionAction,
     onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
     suppressSourceFooters: true,

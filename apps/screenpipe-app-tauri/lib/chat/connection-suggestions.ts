@@ -17,7 +17,11 @@ export type ConnectedIntegration = {
   description?: string;
 };
 
-export type ConnectionListItem = ConnectedIntegration & { connected: boolean };
+export type ConnectionListItem = ConnectedIntegration & {
+  connected: boolean;
+  is_oauth?: boolean;
+  supports_oauth_instances?: boolean;
+};
 export type ActivityAppItem = { name: string; count: number; app_name?: string };
 
 export function normalizeConnectionForPlatform<T extends ConnectedIntegration>(connection: T, isWindows: boolean): T {
