@@ -252,9 +252,10 @@ export function SummaryCards({
           </button>
         )}
         {onOpenConnection && visibleConnectionSetupSuggestions.map((connection) => {
+          const isBrowseAll = connection.id === "connections";
           const openConnection = () => {
             posthog.capture("home_card_clicked", {
-              kind: connection.id === "connections" ? "connection_browse_all" : "connection_setup",
+              kind: isBrowseAll ? "connection_browse_all" : "connection_setup",
               connection_id: connection.id,
             });
             onOpenConnection(connection.id);
@@ -266,15 +267,17 @@ export function SummaryCards({
             tabIndex={0}
             onClick={openConnection}
             onKeyDown={(e) => e.key === "Enter" && openConnection()}
-            className="group relative text-left p-2 border border-border/40 bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
+            className={`group relative text-left p-2 border bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer ${
+              isBrowseAll ? "border-border/40" : "border-dashed border-border/60"
+            }`}
           >
             <div className="mb-0.5 flex h-4 w-4 items-center justify-center">
-              {connection.icon === "connections"
+              {isBrowseAll
                 ? <Plug className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
                 : <ConnectionSuggestionIcon name={connection.icon} />}
             </div>
             <div className="text-[11px] font-medium group-hover:text-background mb-0.5 leading-tight pr-4">
-              {connection.title}
+              {isBrowseAll ? connection.title.toLowerCase() : `+ ${connection.title.toLowerCase()}`}
             </div>
             <div className="text-[10px] text-muted-foreground group-hover:text-background/60 leading-tight line-clamp-1">
               {connection.description}

@@ -127,3 +127,63 @@ export function buildConnectionsContext(
     .join("\n\n");
   return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`.\n\n${entries}`;
 }
+
+export function buildAppAwarenessContext({
+  apps,
+  connections,
+  maxApps = 8,
+}: {
+  apps: Array<{ name: string; count?: number; app_name?: string }>;
+  connections: Array<{ id: string; name: string; connected: boolean; category?: string; icon?: string }>;
+  maxApps?: number;
+}): string {
+  const normalizedConnections = connections
+    .filter((connection) => connection.id !== "owned-default")
+    .map((connection) => ({
+      ...connection,
+      searchText: `${connection.id} ${connection.name} ${connection.icon ?? ""} ${connection.category ?? ""}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim(),
+    }));
+
+  const normalizedApps = apps
+    .map((app, index) => {
+      const displayName = (app.name || app.app_name || "").trim();
+      if (!displayName) return null;
+      const searchText = `${app.name} ${app.app_name ?? ""}`
+        .toLowerCase()
+        .replace(/\.app|\.exe/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+      const matchingConnection = normalizedConnections.find((connection) => {
+        const connectionTerms = connection.searchText
+          .split(/\s+/)
+          .filter((term) => term.length > 3);
+        return (
+          searchText.includes(connection.id.toLowerCase()) ||
+          searchText.includes(connection.name.toLowerCase()) ||
+          connectionTerms.some((term) => searchText.includes(term))
+        );
+      });
+      return {
+        displayName,
+        count: app.count ?? 0,
+        firstSeenIndex: index,
+        matchingConnection,
+      };
+    })
+    .filter((app): app is NonNullable<typeof app> => Boolean(app))
+    .sort((a, b) => b.count - a.count || a.firstSeenIndex - b.firstSeenIndex)
+    .slice(0, maxApps);
+
+  if (normalizedApps.length === 0) return "";
+
+  const entries = normalizedApps.map((app) => {
+    const connection = app.matchingConnection;
+    if (!connection) return `- ${app.displayName}: no matching connection known`;
+    return `- ${app.displayName}: connection ${connection.name} (${connection.id}) is ${connection.connected ? "connected" : "not connected"}`;
+  });
+
+  return `\n\n# User app context\n\nThe user recently used these apps. Treat this as first-class context when answering, summarizing work, or deciding where an action could go. Do not claim an app is connected unless it says connected here. If an app is not connected, mention it as connectable instead of silently dropping it.\n\n${entries.join("\n")}`;
+}

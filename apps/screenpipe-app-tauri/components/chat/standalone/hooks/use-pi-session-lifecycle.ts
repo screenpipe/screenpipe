@@ -6,9 +6,9 @@ import { useCallback, useEffect, useRef } from "react";
 import type * as React from "react";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { toast } from "@/components/ui/use-toast";
-import { buildConnectionsContext, buildSystemPrompt } from "@/lib/chat/system-prompt";
+import { buildAppAwarenessContext, buildConnectionsContext, buildSystemPrompt } from "@/lib/chat/system-prompt";
 import { commands, type AIPreset, type PiInfo, type PiProviderConfig } from "@/lib/utils/tauri";
-import type { ConnectedIntegration } from "@/lib/chat/connection-suggestions";
+import type { ActivityAppItem, ConnectedIntegration, ConnectionListItem } from "@/lib/chat/connection-suggestions";
 
 type PiRunningConfig = {
   provider: string;
@@ -32,6 +32,8 @@ interface UsePiSessionLifecycleOptions {
   isSettingsLoaded: boolean;
   shouldFreezePresetSelection: boolean;
   userToken: string | null | undefined;
+  appItems: ActivityAppItem[];
+  allConnectionItems: ConnectionListItem[];
   connections: ConnectedIntegration[];
   piStarting: boolean;
   piInfo: PiInfo | null;
@@ -54,6 +56,8 @@ export function usePiSessionLifecycle({
   isSettingsLoaded,
   shouldFreezePresetSelection,
   userToken,
+  appItems,
+  allConnectionItems,
   connections,
   piStarting,
   piInfo,
@@ -114,7 +118,11 @@ export function usePiSessionLifecycle({
     if (!p) return null;
     const presetPrompt = p.prompt || "";
     const connectionsCtx = buildConnectionsContext(connections);
-    const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}`.trim() || null;
+    const appAwarenessCtx = buildAppAwarenessContext({
+      apps: appItems,
+      connections: allConnectionItems,
+    });
+    const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}${appAwarenessCtx}`.trim() || null;
     return {
       provider: p.provider,
       url: p.url || "",
@@ -130,6 +138,8 @@ export function usePiSessionLifecycle({
     activePreset?.prompt,
     activePreset?.provider,
     activePreset?.url,
+    allConnectionItems,
+    appItems,
     connections,
   ]);
 
@@ -205,7 +215,7 @@ export function usePiSessionLifecycle({
   ]);
 
   useEffect(() => {
-    if (connections.length === 0) return;
+    if (connections.length === 0 && appItems.length === 0) return;
     const config = buildProviderConfig();
     if (!config) return;
     const running = piRunningConfigRef.current;
@@ -219,7 +229,7 @@ export function usePiSessionLifecycle({
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections]);
+  }, [allConnectionItems, appItems, connections]);
 
   useEffect(() => {
     const checkPi = async () => {

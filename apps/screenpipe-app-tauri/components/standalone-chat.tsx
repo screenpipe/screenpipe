@@ -136,6 +136,7 @@ export function StandaloneChat({
     try { return localStorage.getItem("screenpipe_connect_banner_dismissed") !== "true"; } catch { return true; }
   });
   const {
+    allConnectionItems,
     connectionAwareSuggestions,
     connectionSetupSuggestions,
     connections,
@@ -782,6 +783,8 @@ export function StandaloneChat({
     isSettingsLoaded,
     shouldFreezePresetSelection: Boolean(activePipeExecution),
     userToken: settings.user?.token,
+    appItems,
+    allConnectionItems,
     connections,
     piStarting,
     piInfo,

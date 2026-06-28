@@ -7,7 +7,7 @@
 // existing contract so future refactors can't silently change it.
 
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, buildConnectionsContext } from "../system-prompt";
+import { buildAppAwarenessContext, buildSystemPrompt, buildConnectionsContext } from "../system-prompt";
 
 describe("buildSystemPrompt", () => {
   const prompt = buildSystemPrompt();
@@ -83,5 +83,51 @@ describe("buildConnectionsContext", () => {
     ]);
     expect(out).toContain("## A (a)\ndesc-a");
     expect(out).toContain("## B (b)\ndesc-b");
+  });
+});
+
+describe("buildAppAwarenessContext", () => {
+  it("returns empty context when there are no recent apps", () => {
+    expect(buildAppAwarenessContext({ apps: [], connections: [] })).toBe("");
+  });
+
+  it("marks matching recent apps as connected or not connected", () => {
+    const out = buildAppAwarenessContext({
+      apps: [
+        { name: "Linear", count: 8 },
+        { name: "Notion", count: 4 },
+        { name: "Preview", count: 2 },
+      ],
+      connections: [
+        { id: "linear", name: "Linear", connected: false },
+        { id: "notion", name: "Notion", connected: true },
+      ],
+    });
+
+    expect(out).toContain("# User app context");
+    expect(out).toContain("- Linear: connection Linear (linear) is not connected");
+    expect(out).toContain("- Notion: connection Notion (notion) is connected");
+    expect(out).toContain("- Preview: no matching connection known");
+  });
+
+  it("orders apps by activity count and caps the list", () => {
+    const out = buildAppAwarenessContext({
+      maxApps: 2,
+      apps: [
+        { name: "Slack", count: 1 },
+        { name: "Linear", count: 5 },
+        { name: "Notion", count: 3 },
+      ],
+      connections: [
+        { id: "slack", name: "Slack", connected: false },
+        { id: "linear", name: "Linear", connected: false },
+        { id: "notion", name: "Notion", connected: true },
+      ],
+    });
+
+    expect(out).toContain("- Linear:");
+    expect(out).toContain("- Notion:");
+    expect(out).not.toContain("- Slack:");
+    expect(out.indexOf("- Linear:")).toBeLessThan(out.indexOf("- Notion:"));
   });
 });
