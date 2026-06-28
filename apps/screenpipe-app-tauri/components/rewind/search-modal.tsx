@@ -483,6 +483,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const recentChatRequestRef = useRef(0);
   // Recent chats shown in the suggestions area (loaded on open, independent of chats tab)
   const [recentChats, setRecentChats] = useState<ConversationMeta[]>([]);
+  const visibleRecentChats = contentFilter === "all" ? recentChats : [];
 
   // App filter (for screen results and speaker drill-down)
   const [appFilter, setAppFilter] = useState<string | null>(null);
@@ -1719,7 +1720,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           )}
 
           {/* Inline chat section in "All" view — appears instantly (in-memory filter) while screen results load */}
-          {contentFilter !== "chats" && debouncedQuery.trim().length >= 1 && filteredChats.length > 0 && !isTagSearch && !isPeopleSearch && (
+          {contentFilter === "all" && debouncedQuery.trim().length >= 1 && filteredChats.length > 0 && !isTagSearch && !isPeopleSearch && (
             <div className="mb-4">
               <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
                 <MessageSquare className="w-3 h-3" />
@@ -2082,14 +2083,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {!debouncedQuery && !isSearching && contentFilter !== "chats" && (
             <div className="py-4 px-2 space-y-4">
               {/* Recent chats — list with timestamps */}
-              {recentChats.length > 0 && (
+              {visibleRecentChats.length > 0 && (
                 <div>
                   <p className="text-xs text-muted-foreground/60 mb-1 flex items-center gap-1.5">
                     <MessageSquare className="w-3 h-3" />
                     recent chats
                   </p>
                   <div className="flex flex-col">
-                    {recentChats.map((chat) => {
+                    {visibleRecentChats.map((chat) => {
                       const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
                       return (
                         <button
@@ -2127,7 +2128,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   </div>
                 </div>
               )}
-              {!recentChats.length && !suggestionsLoading && (
+              {!visibleRecentChats.length && !suggestionsLoading && (
                 <div className="text-center text-sm text-muted-foreground py-4">
                   type to search your screen history
                 </div>
