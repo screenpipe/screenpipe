@@ -1532,7 +1532,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               ] as const).map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
-                  onClick={() => { setContentFilter(key); setSelectedIndex(0); setSelectedChatIndex(0); }}
+                  onClick={() => { setContentFilter(key); setSelectedIndex(0); setSelectedChatIndex(0); setHoveredIndex(null); }}
                   className={cn(
                     "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full border transition-colors",
                     contentFilter === key
@@ -2195,6 +2195,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         {/* Results area — only shown when there's content */}
         {hasContent && (
           <div
+            key={contentFilter}
             ref={gridRef}
             className={cn(
               "flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y",
@@ -2304,6 +2305,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
         {/* Results area - isolate scroll to prevent timeline from scrolling */}
         <div
+          key={contentFilter}
           ref={gridRef}
           className="max-h-[60vh] overflow-y-auto p-4 overscroll-contain touch-pan-y"
           onWheel={(e) => {
