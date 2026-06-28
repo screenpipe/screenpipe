@@ -958,6 +958,45 @@ function InlineConnectionActionCard({
   );
 }
 
+function autoConnectionActionsForMessage(
+  message: Message,
+  connectionItems: ConnectionListItem[],
+  dismissedConnectionIds: Set<string>,
+): Extract<ContentBlock, { type: "connection_action" }>[] {
+  if (message.role !== "assistant") return [];
+  const text = message.content.toLowerCase();
+  if (!/\b(connect|connected|connection|not connected|not yet|isn['’]?t yet|isn['’]?t connected)\b/.test(text)) {
+    return [];
+  }
+
+  const explicitConnectionIds = new Set(
+    message.contentBlocks
+      ?.filter((block) => block.type === "connection_action")
+      .map((block) => block.connectionId) ?? [],
+  );
+
+  return connectionItems
+    .filter((connection) =>
+      !connection.connected &&
+      connection.id !== "owned-default" &&
+      !dismissedConnectionIds.has(connection.id) &&
+      !explicitConnectionIds.has(connection.id)
+    )
+    .filter((connection) => {
+      const name = connection.name.toLowerCase();
+      const id = connection.id.toLowerCase();
+      return (name.length > 2 && text.includes(name)) || (id.length > 2 && text.includes(id));
+    })
+    .slice(0, 2)
+    .map((connection) => ({
+      type: "connection_action" as const,
+      connectionId: connection.id,
+      connectionName: connection.name,
+      icon: connection.icon || connection.id,
+      description: connection.description,
+    }));
+}
+
 // Build natural-language summary of completed tool calls
 function buildToolSummary(toolCalls: ToolCall[]): string {
   const counts: Record<string, number> = {};
@@ -1098,9 +1137,34 @@ export function MessageContent({
   const isUser = message.role === "user";
   const { settings } = useSettings();
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
+  const [dismissedAutoConnectionIds, setDismissedAutoConnectionIds] = useState<Set<string>>(() => new Set());
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
   const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
     <SourceCitationFooter citations={sourceCitations} onOpenFile={onOpenViewerPath} />
+  ) : null;
+  const autoConnectionActions = autoConnectionActionsForMessage(
+    message,
+    connectionItems,
+    dismissedAutoConnectionIds,
+  );
+  const autoConnectionCards = autoConnectionActions.length > 0 ? (
+    <div className="space-y-2">
+      {autoConnectionActions.map((block) => (
+        <InlineConnectionActionCard
+          key={`auto-connection-${block.connectionId}`}
+          block={block}
+          connected={false}
+          onConnect={() => onOpenConnectionSetup?.(block.connectionId)}
+          onDismiss={() =>
+            setDismissedAutoConnectionIds((current) => {
+              const next = new Set(current);
+              next.add(block.connectionId);
+              return next;
+            })
+          }
+        />
+      ))}
+    </div>
   ) : null;
 
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -1297,6 +1361,7 @@ export function MessageContent({
           }
           return null;
         })}
+        {autoConnectionCards}
         {sourceFooter}
         {retryCta}
       </div>
@@ -1328,6 +1393,7 @@ export function MessageContent({
           return null;
         }}
       />
+      {autoConnectionCards}
       {sourceFooter}
       {retryCta}
     </div>
