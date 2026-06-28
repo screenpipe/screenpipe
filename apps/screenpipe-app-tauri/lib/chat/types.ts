@@ -25,7 +25,15 @@ export interface ToolCall {
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool"; toolCall: ToolCall }
-  | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number };
+  | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number }
+  | {
+      type: "connection_action";
+      connectionId: string;
+      connectionName: string;
+      icon?: string;
+      description?: string;
+      pendingActionLabel?: string;
+    };
 
 export interface Message {
   id: string;

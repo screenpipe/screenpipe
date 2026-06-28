@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Calendar, ChevronDown, ChevronUp, Plug, RefreshCw } from "lucide-react";
+import { Check, Calendar, ChevronDown, ChevronUp, Plug, RefreshCw } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
@@ -15,6 +15,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
+import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import { formatWorkDuration } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
@@ -780,6 +781,7 @@ function AppStatsBlock({ content }: { content: string }) {
 type GroupedBlock =
   | { type: "text"; text: string; key: number }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number; key: number }
+  | { type: "connection-action"; block: Extract<ContentBlock, { type: "connection_action" }>; key: number }
   | { type: "tool-group"; toolCalls: ToolCall[]; key: number }
   | { type: "work-group"; toolCalls: ToolCall[]; durationMs: number; key: number };
 
@@ -800,6 +802,8 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
         result.push({ type: "text", text: block.text, key: result.length });
       } else if (block.type === "thinking") {
         result.push({ type: "thinking", text: block.text, isThinking: block.isThinking, durationMs: block.durationMs, key: result.length });
+      } else if (block.type === "connection_action") {
+        result.push({ type: "connection-action", block, key: result.length });
       }
     }
   }
@@ -875,6 +879,83 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: b
 
   flushPending();
   return out;
+}
+
+function InlineConnectionActionCard({
+  block,
+  connected,
+  onConnect,
+  onDismiss,
+}: {
+  block: Extract<ContentBlock, { type: "connection_action" }>;
+  connected: boolean;
+  onConnect: () => void | Promise<void>;
+  onDismiss: () => void;
+}) {
+  const [opening, setOpening] = useState(false);
+  const connectLabel = connected ? `${block.connectionName} connected` : `connect ${block.connectionName}`;
+
+  const handleConnect = async () => {
+    setOpening(true);
+    try {
+      await onConnect();
+    } finally {
+      setTimeout(() => setOpening(false), 800);
+    }
+  };
+
+  return (
+    <div className="w-full max-w-xl border border-border bg-background p-3 font-mono">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
+          {connected ? (
+            <Check className="h-4 w-4" strokeWidth={2} aria-hidden />
+          ) : (
+            <IntegrationIcon
+              icon={block.icon || block.connectionId}
+              className="h-4 w-4 flex items-center justify-center"
+              fallbackClassName="h-4 w-4 text-foreground"
+            />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold leading-5 text-foreground">
+            {connectLabel}
+          </div>
+          <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+            token stays in the local secret store and is never shown to the model.
+          </div>
+          {block.pendingActionLabel && connected && (
+            <button
+              type="button"
+              className="mt-2 border border-border px-2 py-1 text-xs uppercase tracking-wide transition-colors duration-150 hover:bg-foreground hover:text-background"
+            >
+              {block.pendingActionLabel}
+            </button>
+          )}
+          {!connected && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleConnect}
+                disabled={opening}
+                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-opacity duration-150 disabled:opacity-60"
+              >
+                {opening ? "opening" : "connect"}
+              </button>
+              <button
+                type="button"
+                onClick={onDismiss}
+                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+              >
+                not now
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Build natural-language summary of completed tool calls
@@ -998,15 +1079,21 @@ function ToolCallGroup({
 export function MessageContent({
   message,
   deferSourceFooter = false,
+  connectionItems = [],
   onImageClick,
   onRetry,
   onOpenViewerPath,
+  onOpenConnectionSetup,
+  onDismissConnectionAction,
 }: {
   message: Message;
   deferSourceFooter?: boolean;
+  connectionItems?: ConnectionListItem[];
   onImageClick?: (images: string[], index: number) => void;
   onRetry?: (prompt: string) => void;
   onOpenViewerPath?: (path: string) => void;
+  onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
+  onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
 }) {
   const isUser = message.role === "user";
   const { settings } = useSettings();
@@ -1175,6 +1262,19 @@ export function MessageContent({
             // to raw reasoning instead of the response.
             if (hideThinkingBlocks) return null;
             return <ThinkingBlock key={`thinking-${group.key}`} text={group.text} isThinking={group.isThinking} durationMs={group.durationMs} />;
+          }
+          if (group.type === "connection-action") {
+            const liveConnection = connectionItems.find((connection) => connection.id === group.block.connectionId);
+            const connected = liveConnection?.connected ?? false;
+            return (
+              <InlineConnectionActionCard
+                key={`connection-${group.key}-${group.block.connectionId}`}
+                block={group.block}
+                connected={connected}
+                onConnect={() => onOpenConnectionSetup?.(group.block.connectionId)}
+                onDismiss={() => onDismissConnectionAction?.(message.id, group.block.connectionId)}
+              />
+            );
           }
           if (group.type === "tool-group") {
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;

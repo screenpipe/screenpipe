@@ -8,6 +8,7 @@ import { commands } from "@/lib/utils/tauri";
 import type { ImageViewerState } from "@/components/chat/standalone/image-viewer-dialog";
 import type { ChatMessageListProps } from "@/components/chat/standalone/chat-message-list";
 import type { Message } from "@/lib/chat/types";
+import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
 interface UseChatMessageActionsOptions {
@@ -22,6 +23,8 @@ interface UseChatMessageActionsOptions {
   openFilePreview: (path: string) => void;
   branchConversation: (messageId: string) => Promise<void> | void;
   scheduleMessage: (message: string, displayLabel: string) => void;
+  connectionItems?: ConnectionListItem[];
+  onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
 }
 
 export function useChatMessageActions({
@@ -36,6 +39,8 @@ export function useChatMessageActions({
   openFilePreview,
   branchConversation,
   scheduleMessage,
+  connectionItems = [],
+  onOpenConnectionSetup,
 }: UseChatMessageActionsOptions) {
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -172,6 +177,19 @@ export function useChatMessageActions({
     });
   }, [messages]);
 
+  const dismissConnectionAction = useCallback((messageId: string, connectionId: string) => {
+    setMessages((prev) =>
+      prev.flatMap((message) => {
+        if (message.id !== messageId || !message.contentBlocks?.length) return [message];
+        const nextBlocks = message.contentBlocks.filter(
+          (block) => block.type !== "connection_action" || block.connectionId !== connectionId,
+        );
+        if (nextBlocks.length === 0 && !message.content.trim()) return [];
+        return [{ ...message, contentBlocks: nextBlocks }];
+      }),
+    );
+  }, [setMessages]);
+
   const messageListProps: ChatMessageListProps = {
     messages,
     isLoading,
@@ -202,6 +220,9 @@ export function useChatMessageActions({
     sendMessage,
     openFilePreview,
     branchConversation,
+    connectionItems,
+    onOpenConnectionSetup,
+    onDismissConnectionAction: dismissConnectionAction,
     suppressSourceFooters: true,
   };
 

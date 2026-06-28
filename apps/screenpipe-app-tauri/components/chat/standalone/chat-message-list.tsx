@@ -21,6 +21,7 @@ import {
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
+import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
 export interface ChatMessageListProps {
@@ -53,6 +54,9 @@ export interface ChatMessageListProps {
   sendMessage: (message: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>;
   openFilePreview: (path: string) => void;
   branchConversation: (messageId: string) => Promise<void> | void;
+  connectionItems?: ConnectionListItem[];
+  onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
+  onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
   suppressSourceFooters?: boolean;
 }
 
@@ -86,6 +90,9 @@ export function ChatMessageList({
   sendMessage,
   openFilePreview,
   branchConversation,
+  connectionItems = [],
+  onOpenConnectionSetup,
+  onDismissConnectionAction,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
   return (
@@ -272,6 +279,9 @@ export function ChatMessageList({
                           onImageClick={onOpenImageViewer}
                           onRetry={(prompt) => sendMessage(prompt)}
                           onOpenViewerPath={openFilePreview}
+                          connectionItems={connectionItems}
+                          onOpenConnectionSetup={onOpenConnectionSetup}
+                          onDismissConnectionAction={onDismissConnectionAction}
                         />
                       )}
                     </div>
