@@ -2068,7 +2068,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               </div>
 
               {/* Load more indicator */}
-              {(isLoadingMore || (hasMoreOcr && filteredResults.length > 0)) && (
+              {(isLoadingMore || (hasMoreOcr && filteredResults.length > 0 && searchResults.length >= OCR_PAGE_SIZE)) && (
                 <div className="flex justify-center py-4">
                   {isLoadingMore ? (
                     <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
