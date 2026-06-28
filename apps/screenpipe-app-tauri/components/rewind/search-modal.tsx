@@ -1838,10 +1838,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* UI event results — shown above screen results so infinite scroll doesn't push them away */}
           {uiEventResults.length > 0 && contentFilter !== "screen" && contentFilter !== "chats" && (
             <div className={cn(contentFilter === "all" && "mb-4")}>
-              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                <Keyboard className="w-3 h-3" />
-                keyboard & clipboard
-              </p>
+              {contentFilter === "all" && (
+                <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Keyboard className="w-3 h-3" />
+                  keyboard & clipboard
+                </p>
+              )}
               <div className="flex flex-col gap-2">
                 {(contentFilter === "all" ? uiEventResults.slice(0, 5) : uiEventResults).map((evt) => (
                   <UiEventItem
