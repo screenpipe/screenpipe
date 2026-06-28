@@ -922,6 +922,8 @@ export function StandaloneChat({
           connectionName,
           icon: connection?.icon || connectionId,
           description: connection?.description,
+          pendingActionLabel: `continue with ${connectionName}`,
+          pendingActionPrompt: `${connectionName} is connected now. Continue the action we were discussing, but ask me for confirmation before writing to ${connectionName}.`,
         },
       ],
     };

@@ -222,6 +222,7 @@ export function useChatMessageActions({
     branchConversation,
     connectionItems,
     onOpenConnectionSetup,
+    onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
     suppressSourceFooters: true,
   };

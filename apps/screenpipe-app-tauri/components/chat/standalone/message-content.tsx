@@ -885,15 +885,20 @@ function InlineConnectionActionCard({
   block,
   connected,
   onConnect,
+  onContinue,
   onDismiss,
 }: {
   block: Extract<ContentBlock, { type: "connection_action" }>;
   connected: boolean;
   onConnect: () => void | Promise<void>;
+  onContinue?: (prompt: string, label?: string) => void | Promise<void>;
   onDismiss: () => void;
 }) {
   const [opening, setOpening] = useState(false);
   const connectLabel = connected ? `${block.connectionName} connected` : `connect ${block.connectionName}`;
+  const continueLabel = block.pendingActionLabel ?? `continue with ${block.connectionName}`;
+  const continuePrompt = block.pendingActionPrompt ??
+    `${block.connectionName} is connected now. Continue the action we were discussing, but ask me for confirmation before writing to ${block.connectionName}.`;
 
   const handleConnect = async () => {
     setOpening(true);
@@ -925,15 +930,24 @@ function InlineConnectionActionCard({
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
             token stays in the local secret store and is never shown to the model.
           </div>
-          {block.pendingActionLabel && connected && (
-            <button
-              type="button"
-              className="mt-2 border border-border px-2 py-1 text-xs uppercase tracking-wide transition-colors duration-150 hover:bg-foreground hover:text-background"
-            >
-              {block.pendingActionLabel}
-            </button>
-          )}
-          {!connected && (
+          {connected ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onContinue?.(continuePrompt, continueLabel)}
+                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-colors duration-150"
+              >
+                {continueLabel}
+              </button>
+              <button
+                type="button"
+                onClick={onDismiss}
+                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+              >
+                dismiss
+              </button>
+            </div>
+          ) : (
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1123,6 +1137,7 @@ export function MessageContent({
   onRetry,
   onOpenViewerPath,
   onOpenConnectionSetup,
+  onContinueConnectionAction,
   onDismissConnectionAction,
 }: {
   message: Message;
@@ -1132,6 +1147,7 @@ export function MessageContent({
   onRetry?: (prompt: string) => void;
   onOpenViewerPath?: (path: string) => void;
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
+  onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
 }) {
   const isUser = message.role === "user";
@@ -1150,19 +1166,25 @@ export function MessageContent({
   const autoConnectionCards = autoConnectionActions.length > 0 ? (
     <div className="space-y-2">
       {autoConnectionActions.map((block) => (
-        <InlineConnectionActionCard
-          key={`auto-connection-${block.connectionId}`}
-          block={block}
-          connected={false}
-          onConnect={() => onOpenConnectionSetup?.(block.connectionId)}
-          onDismiss={() =>
-            setDismissedAutoConnectionIds((current) => {
-              const next = new Set(current);
-              next.add(block.connectionId);
-              return next;
-            })
-          }
-        />
+        (() => {
+          const liveConnection = connectionItems.find((connection) => connection.id === block.connectionId);
+          return (
+            <InlineConnectionActionCard
+              key={`auto-connection-${block.connectionId}`}
+              block={block}
+              connected={liveConnection?.connected ?? false}
+              onConnect={() => onOpenConnectionSetup?.(block.connectionId)}
+              onContinue={onContinueConnectionAction}
+              onDismiss={() =>
+                setDismissedAutoConnectionIds((current) => {
+                  const next = new Set(current);
+                  next.add(block.connectionId);
+                  return next;
+                })
+              }
+            />
+          );
+        })()
       ))}
     </div>
   ) : null;
@@ -1336,6 +1358,7 @@ export function MessageContent({
                 block={group.block}
                 connected={connected}
                 onConnect={() => onOpenConnectionSetup?.(group.block.connectionId)}
+                onContinue={onContinueConnectionAction}
                 onDismiss={() => onDismissConnectionAction?.(message.id, group.block.connectionId)}
               />
             );

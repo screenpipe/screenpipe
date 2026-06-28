@@ -33,6 +33,7 @@ export type ContentBlock =
       icon?: string;
       description?: string;
       pendingActionLabel?: string;
+      pendingActionPrompt?: string;
     };
 
 export interface Message {

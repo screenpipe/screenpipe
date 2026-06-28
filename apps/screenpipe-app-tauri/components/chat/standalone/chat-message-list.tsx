@@ -56,6 +56,7 @@ export interface ChatMessageListProps {
   branchConversation: (messageId: string) => Promise<void> | void;
   connectionItems?: ConnectionListItem[];
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
+  onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
   suppressSourceFooters?: boolean;
 }
@@ -92,6 +93,7 @@ export function ChatMessageList({
   branchConversation,
   connectionItems = [],
   onOpenConnectionSetup,
+  onContinueConnectionAction,
   onDismissConnectionAction,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
@@ -281,6 +283,7 @@ export function ChatMessageList({
                           onOpenViewerPath={openFilePreview}
                           connectionItems={connectionItems}
                           onOpenConnectionSetup={onOpenConnectionSetup}
+                          onContinueConnectionAction={onContinueConnectionAction}
                           onDismissConnectionAction={onDismissConnectionAction}
                         />
                       )}
