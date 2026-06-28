@@ -1237,6 +1237,18 @@ async piCheck() : Promise<Result<PiCheckResult, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Answer a Pi extension UI request. The request id must be the id from Pi's
+ * `extension_ui_request` event; the SDK uses it to resume the waiting tool.
+ */
+async piExtensionUiResponse(sessionId: string | null, requestId: string, response: JsonValue) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_extension_ui_response", { sessionId, requestId, response }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async piGetThinkingLevel() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_get_thinking_level") };
