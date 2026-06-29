@@ -543,12 +543,42 @@ pub async fn write_redacted(
         redacted_at_col = table.redacted_at_col(),
         pk = table.pk_col(),
     );
-    sqlx::query(&q)
-        .bind(redacted)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
+    match sqlx::query(&q).bind(redacted).bind(id).execute(pool).await {
+        Ok(_) => Ok(()),
+        // `audio_transcriptions` carries a UNIQUE(audio_chunk_id, transcription)
+        // index (migration 20260126200000_dedupe_audio_transcriptions). When the
+        // redacted text equals a sibling row for the same chunk, this row is a
+        // redundant duplicate — the audio pipeline's recovery/retry path can
+        // insert the same transcription twice. Letting the UNIQUE error bubble
+        // up left `redacted_at` NULL, so the worker re-fetched the same poison
+        // row every poll: a tight reconciliation loop (observed ~25k errors/day,
+        // log/CPU flooding) that also blocked the rest of the audio batch behind
+        // it. Resolve by deleting the duplicate — it drops the un-redacted copy
+        // (PII gone) and lets the worker make progress; the surviving sibling
+        // holds the equivalent text and is redacted on its own pass. The FTS
+        // delete trigger keeps the search index in sync. Scoped to
+        // AudioTranscription: no other target has a UNIQUE constraint on its
+        // redacted column, so elsewhere a UNIQUE error stays a real error.
+        Err(e) if table == TargetTable::AudioTranscription && is_unique_violation(&e) => {
+            sqlx::query("DELETE FROM audio_transcriptions WHERE id = ?")
+                .bind(id)
+                .execute(pool)
+                .await?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// True if `e` is a SQLite UNIQUE-constraint violation (extended result code
+/// 2067 = `SQLITE_CONSTRAINT_UNIQUE`, or the textual "UNIQUE constraint failed"
+/// the driver surfaces).
+fn is_unique_violation(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .map(|d| {
+            d.code().as_deref() == Some("2067") || d.message().contains("UNIQUE constraint failed")
+        })
+        .unwrap_or(false)
 }
 
 /// One `ui_events` row to redact, carrying every free-text column so the
@@ -776,6 +806,111 @@ mod tests {
         let when: Option<i64> = row.get(1);
         assert_eq!(raw, "[EMAIL]", "source column must be overwritten");
         assert!(when.is_some(), "redacted_at must be stamped");
+    }
+
+    /// Create the `audio_transcriptions` table with the production
+    /// UNIQUE(audio_chunk_id, transcription) index (migration
+    /// 20260126200000_dedupe_audio_transcriptions) so the dedup-collision
+    /// path can be exercised.
+    async fn setup_audio() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE audio_transcriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                audio_chunk_id INTEGER NOT NULL,
+                transcription TEXT NOT NULL,
+                redacted_at INTEGER
+            );
+            CREATE UNIQUE INDEX idx_audio_transcription_chunk_text
+                ON audio_transcriptions(audio_chunk_id, transcription);
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// Regression: a duplicate transcription whose redacted text collides with
+    /// a sibling row for the same chunk must NOT error (which left it unstamped
+    /// and re-fetched forever — the ~25k-errors/day reconciliation loop). It is
+    /// deleted instead; the sibling survives and progress is made.
+    #[tokio::test]
+    async fn write_redacted_deletes_duplicate_on_unique_collision() {
+        let pool = setup_audio().await;
+        // Sibling already carrying the redacted text for chunk 1.
+        sqlx::query(
+            "INSERT INTO audio_transcriptions (id, audio_chunk_id, transcription, redacted_at) \
+             VALUES (1, 1, '[REDACTED]', 100)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Duplicate row for the same chunk, still unredacted (carries PII).
+        sqlx::query(
+            "INSERT INTO audio_transcriptions (id, audio_chunk_id, transcription) \
+             VALUES (2, 1, 'the api key is sk-proj-AbCdEf123456')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Redacting row 2 yields '[REDACTED]', which collides with row 1.
+        write_redacted(&pool, TargetTable::AudioTranscription, 2, "[REDACTED]")
+            .await
+            .expect("collision must be resolved, not surfaced as an error");
+
+        // Row 2 (the un-redacted duplicate) is gone; the sibling remains.
+        let ids: Vec<i64> = sqlx::query("SELECT id FROM audio_transcriptions ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<i64, _>(0))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![1],
+            "duplicate row 2 must be deleted, sibling kept"
+        );
+    }
+
+    /// The non-colliding audio path still overwrites + stamps normally.
+    #[tokio::test]
+    async fn write_redacted_audio_normal_path_overwrites_and_stamps() {
+        let pool = setup_audio().await;
+        sqlx::query(
+            "INSERT INTO audio_transcriptions (id, audio_chunk_id, transcription) \
+             VALUES (1, 7, 'call me at +1 555 010 0000')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        write_redacted(
+            &pool,
+            TargetTable::AudioTranscription,
+            1,
+            "call me at [PHONE]",
+        )
+        .await
+        .unwrap();
+
+        let row =
+            sqlx::query("SELECT transcription, redacted_at FROM audio_transcriptions WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.get::<String, _>(0), "call me at [PHONE]");
+        assert!(
+            row.get::<Option<i64>, _>(1).is_some(),
+            "redacted_at stamped"
+        );
     }
 
     #[tokio::test]
