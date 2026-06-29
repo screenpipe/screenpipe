@@ -9,9 +9,9 @@ use crate::health::{
     get_vision_device_status, set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
 use crate::process_exit;
-use crate::recording::{local_api_context_from_app, RecordingState};
+use crate::recording::local_api_context_from_app;
 use crate::store::{OnboardingStore, SettingsStore};
-use crate::updates::{is_enterprise_build, is_source_build};
+use crate::updates::{confirm_running_pipes_interruption, is_enterprise_build, is_source_build};
 use crate::window::ShowRewindWindow;
 use anyhow::Result;
 use once_cell::sync::Lazy;
@@ -35,6 +35,10 @@ use tracing::{debug, error, info, warn};
 
 /// Re-export for callers that already import from tray.
 pub use crate::process_exit::QUIT_REQUESTED;
+
+/// Latched while the running-pipes confirmation is open so repeated Quit clicks
+/// do not stack duplicate dialogs before teardown begins.
+static QUIT_PROMPT_SHOWING: AtomicBool = AtomicBool::new(false);
 
 /// Pre-fetched data for building the tray menu. All store reads, settings
 /// deserialization, and permission checks happen OFF the main thread; only
@@ -1528,41 +1532,23 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 return;
             }
 
+            if QUIT_PROMPT_SHOWING.swap(true, Ordering::SeqCst) {
+                debug!("Quit ignored — confirmation already open");
+                return;
+            }
+
             // Stop recording before exiting
             let app_handle_clone = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let mut running_pipes = Vec::new();
-                if let Some(recording_state) = app_handle_clone.try_state::<RecordingState>() {
-                    let server_guard = recording_state.server.lock().await;
-                    if let Some(ref server) = *server_guard {
-                        let pipe_manager = server.pipe_manager.lock().await;
-                        running_pipes = pipe_manager.get_running_pipes().await;
-                    }
-                }
-
-                if !running_pipes.is_empty() {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    let dialog = app_handle_clone
-                        .dialog()
-                        .message(format!(
-                            "the following pipes are still running: {}.\n\n\
-                            quitting screenpipe now will interrupt their work.",
-                            running_pipes.join(", ")
-                        ))
-                        .title("screenpipe is still working")
-                        .buttons(MessageDialogButtons::OkCancelCustom(
-                            "quit anyway".to_string(),
-                            "cancel".to_string(),
-                        ));
-
-                    dialog.show(move |clicked_quit| {
-                        let _ = tx.send(clicked_quit);
-                    });
-
-                    match rx.await {
-                        Ok(true) => {} // Proceed
-                        _ => return,   // Cancelled
-                    }
+                if !confirm_running_pipes_interruption(
+                    &app_handle_clone,
+                    "quitting screenpipe now will interrupt their work.",
+                    "quit anyway",
+                )
+                .await
+                {
+                    QUIT_PROMPT_SHOWING.store(false, Ordering::SeqCst);
+                    return;
                 }
 
                 process_exit::request_app_quit(app_handle_clone);
