@@ -142,6 +142,8 @@ interface TimelineSliderProps {
 	filtersRef?: React.MutableRefObject<HTMLDivElement | null>;
 	/** Ref attached to the scrubber area — used for Live Text click guard */
 	scrubberRef?: React.MutableRefObject<HTMLDivElement | null>;
+	/** True while wheel/trackpad navigation is active; use instant recentering to avoid stacked smooth scroll animations. */
+	isWheelNavigating?: boolean;
 }
 
 interface AppGroup {
@@ -401,6 +403,7 @@ export const TimelineSlider = ({
 	onRefresh,
 	filtersRef,
 	scrubberRef,
+	isWheelNavigating = false,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	// The inner flex content (motion.div) that lays out frame bars and is the
@@ -981,12 +984,12 @@ export const TimelineSlider = ({
 		if (!currentElement) return;
 
 		currentElement.scrollIntoView({
-			behavior: "smooth",
+			behavior: isWheelNavigating ? "auto" : "smooth",
 			block: "nearest",
 			inline: "center",
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentIndex, frames.length]);
+	}, [currentIndex, frames.length, isWheelNavigating]);
 
 	useEffect(() => {
 		if (!selectionRange) {

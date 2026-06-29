@@ -145,6 +145,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// Arrow key navigation flag — disables debounce for instant frame stepping
 	const [isArrowNav, setIsArrowNav] = useState(false);
 	const arrowNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const [isWheelNavigating, setIsWheelNavigating] = useState(false);
 
 	const dismissSearchHighlight = useSearchHighlight((s) => s.dismiss);
 	const clearSearchHighlight = useSearchHighlight((s) => s.clear);
@@ -303,6 +304,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		searchResultsCount: searchResults.length,
 		navigateToSearchResultRef,
 		showSearchModal,
+		onWheelNavigationStateChange: setIsWheelNavigating,
 	});
 
 	// When new frames stream in (live recording), they're prepended at the
@@ -1456,7 +1458,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							e.preventDefault();
 							e.stopPropagation();
 							// Scroll/swipe navigates between search results
-							const direction = Math.sign(e.deltaY);
+							const dominantDelta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+							const direction = Math.sign(dominantDelta);
 							if (direction > 0 && searchResultIndex < searchResults.length - 1) {
 								navigateToSearchResult(searchResultIndex + 1);
 							} else if (direction < 0 && searchResultIndex > 0) {
@@ -1543,6 +1546,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							onRefresh={handleRefresh}
 							filtersRef={filtersRef}
 							scrubberRef={scrubberRef}
+							isWheelNavigating={isWheelNavigating}
 						/>
 					) : (
 						<div className="bg-card/80 backdrop-blur-sm p-4 border-t border-border">
