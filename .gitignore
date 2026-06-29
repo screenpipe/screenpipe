@@ -86,3 +86,12 @@ packages/cli/*/LICENSE.md
 packages/screenpipe-mcp/LICENSE.md
 ee/sdk/LICENSE.md
 ee/sdk/npm/*/LICENSE.md
+# internal meeting-detection notes — kept entirely local, never committed
+docs/meeting-detection-windows-notes.md
+
+# claude.ai/design sync — kept entirely local, never committed
+.design-sync/
+.ds-sync/
+ds-bundle/
+apps/screenpipe-app-tauri/.ds-build/
+apps/screenpipe-app-tauri/.ds-build-tsconfig.json
