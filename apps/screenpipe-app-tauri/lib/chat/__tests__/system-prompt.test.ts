@@ -129,6 +129,40 @@ describe("buildAppAwarenessContext", () => {
     expect(out).toContain("not /connections/linear/proxy");
   });
 
+  it("does not match connections by substring inside unrelated app names", () => {
+    const out = buildAppAwarenessContext({
+      apps: [
+        { name: "Linearity Curve", count: 8 },
+        { name: "Google Chrome", count: 5 },
+      ],
+      connections: [
+        { id: "linear", name: "Linear", connected: true },
+        { id: "google-calendar", name: "Google Calendar", connected: true },
+      ],
+    });
+
+    expect(out).toContain("- Linearity Curve: no matching connection known");
+    expect(out).toContain("- Google Chrome: no matching connection known");
+    expect(out).not.toContain("connection Linear (linear) is connected");
+    expect(out).not.toContain("connection Google Calendar (google-calendar) is connected");
+  });
+
+  it("matches connection names and hyphenated ids as exact token sequences", () => {
+    const out = buildAppAwarenessContext({
+      apps: [
+        { name: "Linear.app", count: 8 },
+        { name: "Google Calendar", count: 5 },
+      ],
+      connections: [
+        { id: "linear", name: "Linear", connected: true },
+        { id: "google-calendar", name: "Google Calendar", connected: true },
+      ],
+    });
+
+    expect(out).toContain("- Linear.app: connection Linear (linear) is connected");
+    expect(out).toContain("- Google Calendar: connection Google Calendar (google-calendar) is connected");
+  });
+
   it("orders apps by activity count and caps the list", () => {
     const out = buildAppAwarenessContext({
       maxApps: 2,

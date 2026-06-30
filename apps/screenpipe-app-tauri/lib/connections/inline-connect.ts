@@ -7,20 +7,7 @@ import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { commands } from "@/lib/utils/tauri";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
-
-const MCP_OAUTH_PROVIDERS: Record<string, { name: string; url: string }> = {
-  linear: { name: "Linear", url: "https://mcp.linear.app/mcp" },
-  stripe: { name: "Stripe", url: "https://mcp.stripe.com" },
-  sentry: { name: "Sentry", url: "https://mcp.sentry.dev/mcp" },
-  intercom: { name: "Intercom", url: "https://mcp.intercom.com/mcp" },
-  asana: { name: "Asana", url: "https://mcp.asana.com/mcp" },
-  monday: { name: "monday.com", url: "https://mcp.monday.com/mcp" },
-  clickup: { name: "ClickUp", url: "https://mcp.clickup.com/mcp" },
-  airtable: { name: "Airtable", url: "https://mcp.airtable.com/mcp" },
-  confluence: { name: "Confluence", url: "https://mcp.atlassian.com/v1/mcp" },
-  jira: { name: "Jira", url: "https://mcp.atlassian.com/v1/mcp" },
-  notion: { name: "Notion", url: "https://mcp.notion.com/mcp" },
-};
+import { MCP_OAUTH_PROVIDERS } from "@/components/settings/connections-section";
 
 const DEFAULT_OAUTH_VARIANTS: Record<string, string | null> = {
   slack: "send",
@@ -37,7 +24,7 @@ export type InlineConnectStatus =
 
 export function canInlineConnect(connection: Pick<ConnectionListItem, "id" | "is_oauth">): boolean {
   if (NEEDS_EXTRA_INLINE_INPUT.has(connection.id)) return false;
-  return Boolean(MCP_OAUTH_PROVIDERS[connection.id] || connection.is_oauth);
+  return Boolean(MCP_OAUTH_PROVIDERS.some((provider) => provider.id === connection.id) || connection.is_oauth);
 }
 
 function mcpRandomId() {
@@ -56,21 +43,39 @@ async function findMcpServerIdByUrl(url: string): Promise<string | null> {
   return list.find((server) => (server.url ?? "").replace(/\/+$/, "") === normalizedUrl)?.id ?? null;
 }
 
-async function pollMcpOAuthStatus(serverId: string, timeoutMs = 120_000): Promise<boolean> {
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
+async function pollMcpOAuthStatus(serverId: string, timeoutMs = 120_000, signal?: AbortSignal): Promise<boolean> {
   const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
+  while (!signal?.aborted && Date.now() - started < timeoutMs) {
     const statusRes = await localFetch(`/mcp-servers/${encodeURIComponent(serverId)}/oauth/status`);
     if (statusRes.ok) {
       const body = await statusRes.json();
       if (body?.data?.connected) return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await sleepWithAbort(2000, signal);
   }
   return false;
 }
 
-async function connectMcpProvider(connectionId: string): Promise<InlineConnectStatus> {
-  const provider = MCP_OAUTH_PROVIDERS[connectionId];
+async function connectMcpProvider(connectionId: string, signal?: AbortSignal): Promise<InlineConnectStatus> {
+  const provider = MCP_OAUTH_PROVIDERS.find((item) => item.id === connectionId);
   if (!provider) return { status: "unsupported", reason: "not an inline MCP OAuth provider" };
 
   const existingId = await findMcpServerIdByUrl(provider.url);
@@ -90,7 +95,15 @@ async function connectMcpProvider(connectionId: string): Promise<InlineConnectSt
   }
 
   await openUrl(body.data.auth_url);
-  const connected = await pollMcpOAuthStatus(targetId);
+  let connected = false;
+  try {
+    connected = await pollMcpOAuthStatus(targetId, 120_000, signal);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return { status: "error", reason: "sign-in was cancelled" };
+    }
+    throw error;
+  }
   if (!connected) return { status: "error", reason: "sign-in was not completed" };
   notifyConnectionsUpdated();
   return { status: "connected" };
@@ -119,7 +132,7 @@ async function connectOAuthIntegration(connection: ConnectionListItem): Promise<
   };
 }
 
-export async function connectInlineConnection(connection: ConnectionListItem): Promise<InlineConnectStatus> {
-  if (MCP_OAUTH_PROVIDERS[connection.id]) return connectMcpProvider(connection.id);
+export async function connectInlineConnection(connection: ConnectionListItem, signal?: AbortSignal): Promise<InlineConnectStatus> {
+  if (MCP_OAUTH_PROVIDERS.some((provider) => provider.id === connection.id)) return connectMcpProvider(connection.id, signal);
   return connectOAuthIntegration(connection);
 }

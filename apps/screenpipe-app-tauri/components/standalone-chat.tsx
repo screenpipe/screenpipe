@@ -201,6 +201,7 @@ export function StandaloneChat({
   const isLoadingRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
   const connectionCardCleanupTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const inlineConnectAbortRef = useRef<AbortController | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -980,6 +981,8 @@ export function StandaloneChat({
 
   useEffect(() => {
     return () => {
+      inlineConnectAbortRef.current?.abort();
+      inlineConnectAbortRef.current = null;
       for (const timer of connectionCardCleanupTimersRef.current) clearTimeout(timer);
       connectionCardCleanupTimersRef.current = [];
     };
@@ -996,7 +999,15 @@ export function StandaloneChat({
       return { status: "unsupported", reason: "opening setup for this connection" };
     }
 
-    const result = await connectInlineConnection(connection);
+    inlineConnectAbortRef.current?.abort();
+    const inlineConnectAbortController = new AbortController();
+    inlineConnectAbortRef.current = inlineConnectAbortController;
+    const result = await connectInlineConnection(connection, inlineConnectAbortController.signal)
+      .finally(() => {
+        if (inlineConnectAbortRef.current === inlineConnectAbortController) {
+          inlineConnectAbortRef.current = null;
+        }
+      });
     if (result.status === "connected") {
       await refreshConnectionState();
       await answerPiExtensionUiRequest(block?.extensionRequestId, { confirmed: true });

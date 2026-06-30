@@ -3339,7 +3339,7 @@ const PLAUD_MCP_URL = "https://mcp.plaud.ai/mcp";
 // (/mcp), NOT the legacy /sse transport the engine can't drive. Each id
 // must match a registered connector id so it lands on the right tile.
 // (DCR support verified live against each provider's OAuth metadata.)
-const MCP_OAUTH_PROVIDERS: {
+export const MCP_OAUTH_PROVIDERS: {
   id: string;
   name: string;
   url: string;

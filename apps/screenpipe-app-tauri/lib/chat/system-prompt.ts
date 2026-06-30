@@ -134,6 +134,30 @@ export function buildConnectionsContext(
   return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`.\n\n${entries}`;
 }
 
+function normalizedTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/\.app|\.exe/g, "")
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function containsTokenSequence(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let i = 0; i <= haystack.length - needle.length; i++) {
+    let matched = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
 export function buildAppAwarenessContext({
   apps,
   connections,
@@ -147,29 +171,21 @@ export function buildAppAwarenessContext({
     .filter((connection) => connection.id !== "owned-default")
     .map((connection) => ({
       ...connection,
-      searchText: `${connection.id} ${connection.name} ${connection.icon ?? ""} ${connection.category ?? ""}`
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, " ")
-        .trim(),
+      matchTokenSequences: [
+        normalizedTokens(connection.id),
+        normalizedTokens(connection.name),
+        normalizedTokens(connection.icon ?? ""),
+      ].filter((tokens) => tokens.length > 0),
     }));
 
   const normalizedApps = apps
     .map((app, index) => {
       const displayName = (app.name || app.app_name || "").trim();
       if (!displayName) return null;
-      const searchText = `${app.name} ${app.app_name ?? ""}`
-        .toLowerCase()
-        .replace(/\.app|\.exe/g, "")
-        .replace(/[^a-z0-9]+/g, " ")
-        .trim();
+      const appTokens = normalizedTokens(`${app.name} ${app.app_name ?? ""}`);
       const matchingConnection = normalizedConnections.find((connection) => {
-        const connectionTerms = connection.searchText
-          .split(/\s+/)
-          .filter((term) => term.length > 3);
-        return (
-          searchText.includes(connection.id.toLowerCase()) ||
-          searchText.includes(connection.name.toLowerCase()) ||
-          connectionTerms.some((term) => searchText.includes(term))
+        return connection.matchTokenSequences.some((tokens) =>
+          containsTokenSequence(appTokens, tokens)
         );
       });
       return {

@@ -999,17 +999,6 @@ function InlineConnectionActionCard({
   );
 }
 
-function autoConnectionActionsForMessage(
-  message: Message,
-  connectionItems: ConnectionListItem[],
-  dismissedConnectionIds: Set<string>,
-): Extract<ContentBlock, { type: "connection_action" }>[] {
-  void message;
-  void connectionItems;
-  void dismissedConnectionIds;
-  return [];
-}
-
 // Build natural-language summary of completed tool calls
 function buildToolSummary(toolCalls: ToolCall[]): string {
   const counts: Record<string, number> = {};
@@ -1154,40 +1143,9 @@ export function MessageContent({
   const isUser = message.role === "user";
   const { settings } = useSettings();
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
-  const [dismissedAutoConnectionIds, setDismissedAutoConnectionIds] = useState<Set<string>>(() => new Set());
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
   const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
     <SourceCitationFooter citations={sourceCitations} onOpenFile={onOpenViewerPath} />
-  ) : null;
-  const autoConnectionActions = autoConnectionActionsForMessage(
-    message,
-    connectionItems,
-    dismissedAutoConnectionIds,
-  );
-  const autoConnectionCards = autoConnectionActions.length > 0 ? (
-    <div className="space-y-2">
-      {autoConnectionActions.map((block) => (
-        (() => {
-          const liveConnection = connectionItems.find((connection) => connection.id === block.connectionId);
-          return (
-            <InlineConnectionActionCard
-              key={`auto-connection-${block.connectionId}`}
-              block={block}
-              connected={liveConnection?.connected ?? false}
-              onConnect={() => onConnectConnectionAction?.(block.connectionId, block) ?? onOpenConnectionSetup?.(block.connectionId)}
-              onContinue={onContinueConnectionAction}
-              onDismiss={() =>
-                setDismissedAutoConnectionIds((current) => {
-                  const next = new Set(current);
-                  next.add(block.connectionId);
-                  return next;
-                })
-              }
-            />
-          );
-        })()
-      ))}
-    </div>
   ) : null;
 
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -1358,7 +1316,12 @@ export function MessageContent({
                 key={`connection-${group.key}-${group.block.connectionId}`}
                 block={group.block}
                 connected={connected}
-                onConnect={() => onConnectConnectionAction?.(group.block.connectionId, group.block) ?? onOpenConnectionSetup?.(group.block.connectionId)}
+                onConnect={() => {
+                  if (onConnectConnectionAction) {
+                    return onConnectConnectionAction(group.block.connectionId, group.block);
+                  }
+                  return onOpenConnectionSetup?.(group.block.connectionId);
+                }}
                 onContinue={onContinueConnectionAction}
                 onDismiss={() => onDismissConnectionAction?.(message.id, group.block.connectionId)}
               />
@@ -1385,7 +1348,6 @@ export function MessageContent({
           }
           return null;
         })}
-        {autoConnectionCards}
         {sourceFooter}
         {retryCta}
       </div>
@@ -1417,7 +1379,6 @@ export function MessageContent({
           return null;
         }}
       />
-      {autoConnectionCards}
       {sourceFooter}
       {retryCta}
     </div>
