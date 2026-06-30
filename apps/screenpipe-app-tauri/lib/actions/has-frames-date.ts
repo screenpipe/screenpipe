@@ -5,6 +5,19 @@
 import { isSameDay } from "date-fns";
 import { localFetch } from "@/lib/api";
 
+/** Timestamps from screen frames and audio transcriptions (matches listDaysWithFrames). */
+const CAPTURE_TIMESTAMPS_SUBQUERY = `
+	SELECT timestamp FROM frames WHERE timestamp IS NOT NULL
+	UNION ALL
+	SELECT timestamp FROM audio_transcriptions WHERE timestamp IS NOT NULL
+`;
+
+/** UTC DB timestamp → local calendar midnight (matches Calendar / startOfDay). */
+export function toLocalCalendarMidnight(isoTimestamp: string | Date): Date {
+	const t = new Date(isoTimestamp);
+	return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+}
+
 /**
  * List the local-calendar days that have ANY captured data — screen
  * frames OR audio chunks. Used by the timeline calendar picker to
@@ -42,9 +55,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		// One row per local-calendar day, so 10000 = ~27 years of headroom.
 		const query = `
 			SELECT DISTINCT DATE(timestamp, 'localtime') AS day FROM (
-				SELECT timestamp FROM frames WHERE timestamp IS NOT NULL
-				UNION ALL
-				SELECT timestamp FROM audio_transcriptions WHERE timestamp IS NOT NULL
+				${CAPTURE_TIMESTAMPS_SUBQUERY}
 			)
 			ORDER BY day
 			LIMIT 10000
@@ -85,12 +96,14 @@ export async function hasFramesForDate(date: Date): Promise<boolean> {
 			endOfDay = new Date(now.getTime() - 5 * 60 * 1000); // 5 minutes ago
 		}
 
-		// Use SELECT 1 ... LIMIT 1 instead of COUNT(*) — short-circuits after first row
+		// Use SELECT 1 ... LIMIT 1 instead of COUNT(*) — short-circuits after first row.
+		// Include audio_transcriptions so audio-only days match the calendar picker.
 		const query = `
-            SELECT 1 as has_frames
-            FROM frames f
-            WHERE f.timestamp >= '${startOfDay.toISOString()}'
-            AND f.timestamp <= '${endOfDay.toISOString()}'
+            SELECT 1 as has_data FROM (
+				${CAPTURE_TIMESTAMPS_SUBQUERY}
+			)
+            WHERE timestamp >= '${startOfDay.toISOString()}'
+            AND timestamp <= '${endOfDay.toISOString()}'
             LIMIT 1
         `;
 
@@ -173,11 +186,12 @@ export async function findNearestDateWithFrames(
 		const order = direction === "backward" ? "DESC" : "ASC";
 
 		const query = `
-			SELECT f.timestamp
-			FROM frames f
-			WHERE f.timestamp >= '${rangeStart.toISOString()}'
-			AND f.timestamp <= '${rangeEnd.toISOString()}'
-			ORDER BY f.timestamp ${order}
+			SELECT timestamp FROM (
+				${CAPTURE_TIMESTAMPS_SUBQUERY}
+			)
+			WHERE timestamp >= '${rangeStart.toISOString()}'
+			AND timestamp <= '${rangeEnd.toISOString()}'
+			ORDER BY timestamp ${order}
 			LIMIT 1
 		`;
 
@@ -202,12 +216,7 @@ export async function findNearestDateWithFrames(
 		// The DB stores UTC, but startOfDay/endOfDay in the caller use local time.
 		// Without this, a UTC timestamp like "2026-02-20T03:00Z" becomes Feb 19
 		// in PST, causing fetchTimeRange to load the wrong day's frames.
-		const nearestTimestamp = new Date(result[0].timestamp);
-		const localMidnight = new Date(
-			nearestTimestamp.getFullYear(),
-			nearestTimestamp.getMonth(),
-			nearestTimestamp.getDate(),
-		);
+		const localMidnight = toLocalCalendarMidnight(result[0].timestamp);
 		console.log("findNearestDateWithFrames:", targetDate.toISOString(), "→ DB:", result[0].timestamp, "→ local day:", localMidnight.toISOString());
 		return localMidnight;
 	} catch (e) {

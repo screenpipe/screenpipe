@@ -218,6 +218,8 @@ export function useDateNavigation(opts: {
 			pendingNavigationRef.current = null;
 		}
 
+		const requestedDate = startOfDay(newDate);
+
 		// Pause playback and reset filters on date change
 		pausePlayback();
 		resetFilters();
@@ -227,51 +229,68 @@ export function useDateNavigation(opts: {
 		setIsNavigating(true);
 
 		// Show loading feedback IMMEDIATELY (before any HTTP calls)
-		setSeekingTimestamp(newDate.toISOString());
+		setSeekingTimestamp(requestedDate.toISOString());
+
+		const jumpToFirstFrameOfDay = (targetDate: Date): boolean => {
+			const targetDayStart = startOfDay(targetDate);
+			const targetDayEnd = endOfDay(targetDate);
+			const targetIndex = frames.findIndex((frame) => {
+				const frameDate = new Date(frame.timestamp);
+				return frameDate >= targetDayStart && frameDate <= targetDayEnd;
+			});
+			if (targetIndex === -1) return false;
+			resetFilters();
+			const snapped = snapToDevice(targetIndex);
+			setCurrentIndex(snapped);
+			setCurrentFrame(frames[snapped]);
+			pendingNavigationRef.current = null;
+			pendingFrameIdRef.current = undefined;
+			isNavigatingRef.current = false;
+			setIsNavigating(false);
+			setSeekingTimestamp(null);
+			return true;
+		};
 
 		try {
 			// For today, skip any HTTP checks — hot cache guarantees frames
-			const isToday = isSameDay(newDate, new Date());
+			const isToday = isSameDay(requestedDate, new Date());
 
 			// Determine the actual target date (may differ if newDate has no frames)
-			let targetDate = newDate;
+			let targetDate = requestedDate;
 
 			if (!isToday) {
 				// Single query to find nearest date with frames (replaces recursive loop)
-				const direction = isAfter(currentDate, newDate) ? "backward" : "forward";
-				const nearest = await findNearestDateWithFrames(newDate, direction, MAX_DATE_RETRIES);
+				const direction = isAfter(startOfDay(currentDate), requestedDate) ? "backward" : "forward";
+				const nearest = await findNearestDateWithFrames(requestedDate, direction, MAX_DATE_RETRIES);
 
-				if (!nearest) {
-					isNavigatingRef.current = false;
-					setIsNavigating(false);
-					setSeekingTimestamp(null);
-					return;
+				if (nearest) {
+					targetDate = startOfDay(nearest);
+				} else {
+					// Don't silently no-op — user picked a day or the query failed; try it.
+					console.warn(
+						"[handleDateChange] no nearest day from SQL; navigating to requested date",
+						requestedDate.toISOString(),
+					);
+					targetDate = requestedDate;
 				}
-
-				targetDate = nearest;
 			}
 
-			// Already on this day - jump to first frame of the day
-			if (isSameDay(targetDate, currentDate)) {
-				const targetDayStart = startOfDay(targetDate);
-				const targetDayEnd = endOfDay(targetDate);
-				const targetIndex = frames.findIndex((frame) => {
-					const frameDate = new Date(frame.timestamp);
-					return frameDate >= targetDayStart && frameDate <= targetDayEnd;
-				});
-				if (targetIndex !== -1) {
-					const snapped = snapToDevice(targetIndex);
-					setCurrentIndex(snapped);
-					setCurrentFrame(frames[snapped]);
+			// Prefetch from timeline scroll may already have this day in memory — jump
+			// in place instead of clearing + refetching (fixes #4690 calendar/arrows).
+			if (jumpToFirstFrameOfDay(targetDate)) {
+				setCurrentDate(targetDate);
+				if (!isSameDay(targetDate, currentDate)) {
+					dateChangesRef.current += 1;
+					posthog.capture("timeline_date_changed", {
+						from_date: currentDate.toISOString(),
+						to_date: targetDate.toISOString(),
+					});
 				}
-				isNavigatingRef.current = false;
-				setIsNavigating(false);
-				setSeekingTimestamp(null);
 				return;
 			}
 
 			// Don't go before start date
-			if (isAfter(startAndEndDates.start, targetDate)) {
+			if (isAfter(startOfDay(startAndEndDates.start), targetDate)) {
 				isNavigatingRef.current = false;
 				setIsNavigating(false);
 				setSeekingTimestamp(null);
@@ -299,10 +318,6 @@ export function useDateNavigation(opts: {
 			// This triggers the effect that fetches frames for the new date
 			setCurrentIndex(0);
 			setCurrentDate(targetDate);
-
-			// DON'T try to find frames here - they won't be loaded yet!
-			// The pending navigation effect handles jumping to the
-			// correct frame once the new date's frames arrive via WebSocket.
 
 			// Safety timeout: clear navigation state if frames don't arrive within 10s
 			setTimeout(() => {

@@ -103,6 +103,14 @@ export function TimelineControls({
 		[settings.searchShortcut, settings.disabledShortcuts, isMac]
 	);
 
+	// Day the user is actually viewing (playhead), not just the store's fetch anchor.
+	// After scrolling into prefetched days, currentDate can lag behind currentTime —
+	// arrows + calendar must follow the visible day (#4690).
+	const anchorDate = useMemo(
+		() => startOfDay(currentTime ?? currentDate),
+		[currentTime, currentDate],
+	);
+
 	const chatShortcutDisplay = useMemo(
 		() => {
 			if (settings.disabledShortcuts.includes("showChatShortcut")) return "";
@@ -115,9 +123,7 @@ export function TimelineControls({
 	const jumpDay = async (days: number) => {
 		const today = startOfDay(new Date());
 
-		// Use startOfDay so the date passed to handleDateChange is a clean
-		// midnight — identical to what the Calendar picker sends.
-		const newDate = startOfDay(new Date(currentDate));
+		const newDate = startOfDay(new Date(anchorDate));
 		newDate.setDate(newDate.getDate() + days);
 
 		// Prevent jumping to future dates
@@ -131,16 +137,15 @@ export function TimelineControls({
 
 	// Disable forward button and jump-to-today if we're already at today
 	const isAtToday = useMemo(
-		() => isSameDay(new Date(), currentDate),
-		[currentDate],
+		() => isSameDay(startOfDay(new Date()), anchorDate),
+		[anchorDate],
 	);
 
 	// Disable back button if we're at or before the earliest recorded date
 	const isAtEarliestDate = useMemo(() => {
-		const previousDay = subDays(currentDate, 1);
-		// Disabled if previous day would be before the start date
+		const previousDay = subDays(anchorDate, 1);
 		return isAfter(startOfDay(startAndEndDates.start), startOfDay(previousDay));
-	}, [startAndEndDates.start, currentDate]);
+	}, [startAndEndDates.start, anchorDate]);
 
 	return (
 		<div
@@ -190,11 +195,11 @@ export function TimelineControls({
 					>
 						<Calendar
 							mode="single"
-							selected={currentDate}
+							selected={anchorDate}
 							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} onSelect={(date) => {
-								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
+								console.log("[Calendar] onSelect called with:", date?.toISOString(), "anchorDate:", anchorDate.toISOString());
 								if (date) {
-									onDateChange(date);
+									onDateChange(startOfDay(date));
 									setCalendarOpen(false);
 								}
 							}}
