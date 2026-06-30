@@ -990,10 +990,32 @@ impl DatabaseManager {
         Ok(all_results)
     }
 
+    const DEFAULT_TIMELINE_CHUNK_LIMIT: usize = 10_000;
+
+    fn bounded_timeline_limit(limit: usize) -> i64 {
+        limit.clamp(1, Self::DEFAULT_TIMELINE_CHUNK_LIMIT) as i64
+    }
+
     pub async fn find_video_chunks(
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
+    ) -> Result<TimeSeriesChunk, SqlxError> {
+        self.find_video_chunks_limited(
+            start,
+            end,
+            Self::DEFAULT_TIMELINE_CHUNK_LIMIT,
+            Order::Descending,
+        )
+        .await
+    }
+
+    pub async fn find_video_chunks_limited(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        limit: usize,
+        order: Order,
     ) -> Result<TimeSeriesChunk, SqlxError> {
         // Acquire a heavy-read permit (max 2 concurrent). This prevents slow
         // queries (60s+ on legacy data) from consuming all pool connections.
@@ -1011,11 +1033,21 @@ impl DatabaseManager {
         // retired in 2026-06 and the 2026-06-13 migration backfilled full_text,
         // app_name, and window_name onto every legacy frame, so the old
         // correlated-subquery fallbacks are no longer needed.
-        let frames_query = r#"
-         SELECT
-            f.id,
-            f.timestamp,
-            f.offset_index,
+        let frame_limit = Self::bounded_timeline_limit(limit);
+        // Audio/live transcript rows can be denser than frame rows during calls.
+        // Keep enough context to attach nearby audio while avoiding the old
+        // unconditional 10k + 10k + 10k row materialization for small timeline
+        // requests.
+        let aux_limit = Self::bounded_timeline_limit(limit.saturating_mul(4).max(250));
+        let is_ascending = order == Order::Ascending;
+        let order_sql = if is_ascending { "ASC" } else { "DESC" };
+
+        let frames_query = format!(
+            r#"
+	         SELECT
+	            f.id,
+	            f.timestamp,
+	            f.offset_index,
             COALESCE(
                 SUBSTR(f.full_text, 1, 200),
                 SUBSTR(f.accessibility_text, 1, 200)
@@ -1028,18 +1060,20 @@ impl DatabaseManager {
             f.browser_url,
             f.machine_id
         FROM frames f
-        LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
-        WHERE f.timestamp >= ?1 AND f.timestamp <= ?2
-          AND COALESCE(vc.file_path, f.snapshot_path, '') NOT LIKE 'cloud://%'
-        ORDER BY f.timestamp DESC, f.offset_index DESC
-        LIMIT 10000
-    "#;
+	        LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
+	        WHERE f.timestamp >= ?1 AND f.timestamp <= ?2
+	          AND COALESCE(vc.file_path, f.snapshot_path, '') NOT LIKE 'cloud://%'
+	        ORDER BY f.timestamp {order_sql}, f.offset_index {order_sql}
+	        LIMIT ?3
+	    "#
+        );
 
         // Get audio data with proper time windows for synchronization
-        let audio_query = r#"
-        SELECT
-            at.timestamp,
-            at.transcription,
+        let audio_query = format!(
+            r#"
+	        SELECT
+	            at.timestamp,
+	            at.transcription,
             at.device as audio_device,
             at.is_input_device,
             ac.file_path as audio_path,
@@ -1053,12 +1087,13 @@ impl DatabaseManager {
                  as REAL) as duration_secs
         FROM audio_transcriptions at
         JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
-        LEFT JOIN speakers s ON at.speaker_id = s.id
-        WHERE at.timestamp >= ?1 AND at.timestamp <= ?2
-          AND ac.file_path NOT LIKE 'cloud://%'
-        ORDER BY at.timestamp DESC
-        LIMIT 10000
-        "#;
+	        LEFT JOIN speakers s ON at.speaker_id = s.id
+	        WHERE at.timestamp >= ?1 AND at.timestamp <= ?2
+	          AND ac.file_path NOT LIKE 'cloud://%'
+	        ORDER BY at.timestamp {order_sql}
+	        LIMIT ?3
+	        "#
+        );
 
         // Live meeting transcripts live in a SEPARATE table (meeting_transcript_segments)
         // and are NOT in audio_transcriptions: when a meeting is transcribed live,
@@ -1069,10 +1104,11 @@ impl DatabaseManager {
         // UNIONs both tables) shows it. Columns are aliased to match audio_query so the
         // same row-processing path below handles both. There is no audio file / chunk for
         // a live segment, so audio_path='' and audio_chunk_id=-1 (transcript-only entry).
-        let live_query = r#"
-        SELECT
-            mts.captured_at AS timestamp,
-            mts.transcript AS transcription,
+        let live_query = format!(
+            r#"
+	        SELECT
+	            mts.captured_at AS timestamp,
+	            mts.transcript AS transcription,
             mts.device_name AS audio_device,
             CASE WHEN mts.device_type = 'input' THEN 1 ELSE 0 END AS is_input_device,
             '' AS audio_path,
@@ -1083,26 +1119,30 @@ impl DatabaseManager {
             NULL AS speaker_id,
             0.0 AS duration_secs
         FROM meeting_transcript_segments mts
-        WHERE julianday(mts.captured_at) >= julianday(?1)
-          AND julianday(mts.captured_at) <= julianday(?2)
-          AND TRIM(mts.transcript) != ''
-        ORDER BY julianday(mts.captured_at) DESC
-        LIMIT 10000
-        "#;
+	        WHERE julianday(mts.captured_at) >= julianday(?1)
+	          AND julianday(mts.captured_at) <= julianday(?2)
+	          AND TRIM(mts.transcript) != ''
+	        ORDER BY julianday(mts.captured_at) {order_sql}
+	        LIMIT ?3
+	        "#
+        );
 
         // Execute queries in parallel
         let (frame_rows, audio_rows, live_rows) = tokio::try_join!(
-            sqlx::query(frames_query)
+            sqlx::query(&frames_query)
                 .bind(start)
                 .bind(end)
+                .bind(frame_limit)
                 .fetch_all(&self.pool),
-            sqlx::query(audio_query)
+            sqlx::query(&audio_query)
                 .bind(start)
                 .bind(end)
+                .bind(aux_limit)
                 .fetch_all(&self.pool),
-            sqlx::query(live_query)
+            sqlx::query(&live_query)
                 .bind(start)
                 .bind(end)
+                .bind(aux_limit)
                 .fetch_all(&self.pool)
         )?;
 
@@ -1277,7 +1317,11 @@ impl DatabaseManager {
         }
 
         Ok(TimeSeriesChunk {
-            frames: frames_map.into_values().rev().collect(),
+            frames: if is_ascending {
+                frames_map.into_values().collect()
+            } else {
+                frames_map.into_values().rev().collect()
+            },
             start_time: start,
             end_time: end,
         })

@@ -639,10 +639,12 @@ impl SCServer {
                 NonZeroUsize::new(1000).unwrap(),
             )))),
             ws_connection_count: Arc::new(AtomicUsize::new(0)),
-            // Search cache: 1000 entries, 60 second TTL
+            // Search cache: short-lived and intentionally small. Search payloads
+            // can contain large OCR/audio text blobs; the route also skips
+            // caching oversized responses before they reach this cache.
             search_cache: MokaCache::builder()
-                .max_capacity(1000)
-                .time_to_live(Duration::from_secs(60))
+                .max_capacity(128)
+                .time_to_live(Duration::from_secs(30))
                 .build(),
             use_pii_removal: self.use_pii_removal,
             // Cloud search client (disabled by default, can be enabled via API)

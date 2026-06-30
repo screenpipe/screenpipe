@@ -411,7 +411,12 @@ async fn handle_stream_frames_socket(
                                 let sent_ids_backfill = sent_ids_clone.clone();
                                 tokio::spawn(async move {
                                     match db_backfill
-                                        .find_video_chunks(start_time, backfill_end)
+                                        .find_video_chunks_limited(
+                                            start_time,
+                                            backfill_end,
+                                            backfill_limit,
+                                            request_order(is_descending),
+                                        )
                                         .await
                                     {
                                         Ok(mut chunks) => {
@@ -425,33 +430,18 @@ async fn handle_stream_frames_socket(
                                                     .sort_by_key(|a| (a.timestamp, a.offset_index));
                                             }
                                             downsample_in_place(&mut chunks.frames, backfill_limit);
-                                            // Record sent IDs first, then drop lock
-                                            // before sending frames. Previously the
-                                            // lock was held across channel sends,
-                                            // deadlocking with the send_handle which
-                                            // needs the same lock to process live
-                                            // frames (the only channel consumer).
-                                            let frames_to_send: Vec<_> = {
-                                                let mut sent = sent_ids_backfill.lock().await;
-                                                chunks
-                                                    .frames
-                                                    .into_iter()
-                                                    .filter_map(|chunk| {
-                                                        if sent.contains(&chunk.frame_id) {
-                                                            return None;
-                                                        }
-                                                        sent.insert(chunk.frame_id);
-                                                        let frame = create_time_series_frame(chunk);
-                                                        if frame.frame_data.is_empty() {
-                                                            None
-                                                        } else {
-                                                            Some(frame)
-                                                        }
-                                                    })
-                                                    .collect()
-                                            }; // lock dropped
-
-                                            for frame in frames_to_send {
+                                            for chunk in chunks.frames {
+                                                let should_send = {
+                                                    let mut sent = sent_ids_backfill.lock().await;
+                                                    sent.insert(chunk.frame_id)
+                                                };
+                                                if !should_send {
+                                                    continue;
+                                                }
+                                                let frame = create_time_series_frame(chunk);
+                                                if frame.frame_data.is_empty() {
+                                                    continue;
+                                                }
                                                 if frame_tx_db.send(frame).await.is_err() {
                                                     break;
                                                 }
@@ -714,7 +704,9 @@ async fn fetch_and_process_frames_with_tracking(
     limit: usize,
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
 ) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
-    let mut chunks = db.find_video_chunks(start_time, end_time).await?;
+    let mut chunks = db
+        .find_video_chunks_limited(start_time, end_time, limit, request_order(is_descending))
+        .await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
 
     // Sort chunks based on order
@@ -727,29 +719,16 @@ async fn fetch_and_process_frames_with_tracking(
     }
     downsample_in_place(&mut chunks.frames, limit);
 
-    // Record all sent IDs in one lock acquisition, then drop the lock
-    // before sending frames through the channel. Acquiring the lock per-frame
-    // or holding it across async sends can contend with the send_handle's
-    // live-frame path which also needs this lock.
-    let frames_to_send: Vec<_> = {
-        let mut sent = sent_frame_ids.lock().await;
-        chunks
-            .frames
-            .into_iter()
-            .filter_map(|chunk| {
-                sent.insert(chunk.frame_id);
-                let ts = chunk.timestamp;
-                let frame = create_time_series_frame(chunk);
-                if frame.frame_data.is_empty() {
-                    None
-                } else {
-                    Some((ts, frame))
-                }
-            })
-            .collect()
-    }; // lock dropped
-
-    for (ts, frame) in frames_to_send {
+    for chunk in chunks.frames {
+        {
+            let mut sent = sent_frame_ids.lock().await;
+            sent.insert(chunk.frame_id);
+        }
+        let ts = chunk.timestamp;
+        let frame = create_time_series_frame(chunk);
+        if frame.frame_data.is_empty() {
+            continue;
+        }
         if latest_timestamp.is_none() || ts > latest_timestamp.unwrap() {
             latest_timestamp = Some(ts);
         }
@@ -757,6 +736,14 @@ async fn fetch_and_process_frames_with_tracking(
     }
 
     Ok(latest_timestamp)
+}
+
+fn request_order(is_descending: bool) -> Order {
+    if is_descending {
+        Order::Descending
+    } else {
+        Order::Ascending
+    }
 }
 
 async fn pending_batch_flush(next_flush_at: Option<TokioInstant>) {

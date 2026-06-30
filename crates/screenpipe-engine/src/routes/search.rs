@@ -285,6 +285,20 @@ fn group_related_tags(rows: Vec<(String, i64)>) -> std::collections::HashMap<Str
     grouped
 }
 
+const SEARCH_CACHE_MAX_ITEMS: usize = 200;
+const SEARCH_CACHE_MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
+fn estimated_search_response_bytes(response: &SearchResponse) -> usize {
+    serde_json::to_vec(response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn should_cache_search_response(response: &SearchResponse) -> bool {
+    response.data.len() <= SEARCH_CACHE_MAX_ITEMS
+        && estimated_search_response_bytes(response) <= SEARCH_CACHE_MAX_RESPONSE_BYTES
+}
+
 /// Middle-truncate a string to at most `max_chars` characters.
 /// Keeps the first half and last half, inserting a marker in between.
 /// Safe on UTF-8 char boundaries.
@@ -839,8 +853,10 @@ pub(crate) async fn search(
         related,
     };
 
-    // Cache the result (only for queries without frame extraction)
-    if !query.include_frames {
+    // Cache the result (only for queries without frame extraction). Large
+    // search result sets can retain megabytes of OCR/audio text; keep those
+    // uncached so fanout traffic does not pin transient response bodies.
+    if !query.include_frames && should_cache_search_response(&response) {
         state
             .search_cache
             .insert(cache_key, Arc::new(response.clone()))
@@ -1293,6 +1309,49 @@ mod tests {
         let rows = vec![("person:ada".to_string(), 3), ("person:ada".to_string(), 1)];
         let grouped = group_related_tags(rows);
         assert_eq!(grouped.get("people").unwrap(), &vec!["ada"]);
+    }
+
+    #[test]
+    fn test_search_response_cache_guard_rejects_large_payloads() {
+        let memory_item = |content: String| {
+            ContentItem::Memory(MemoryContent {
+                id: 1,
+                content,
+                source: "test".to_string(),
+                source_context: None,
+                tags: vec![],
+                importance: 0.0,
+                frame_id: None,
+                created_at: "2026-06-30T00:00:00Z".to_string(),
+                updated_at: "2026-06-30T00:00:00Z".to_string(),
+            })
+        };
+        let response = |data| SearchResponse {
+            data,
+            pagination: PaginationInfo {
+                limit: 20,
+                offset: 0,
+                total: 1,
+            },
+            cloud: None,
+            related: None,
+        };
+
+        assert!(should_cache_search_response(&response(vec![memory_item(
+            "small".to_string()
+        )])));
+
+        assert!(!should_cache_search_response(&response(vec![memory_item(
+            "x".repeat(SEARCH_CACHE_MAX_RESPONSE_BYTES + 1)
+        )])));
+
+        assert!(!should_cache_search_response(&response(vec![
+            memory_item(
+                "small".to_string()
+            );
+            SEARCH_CACHE_MAX_ITEMS
+                + 1
+        ])));
     }
 
     #[test]
