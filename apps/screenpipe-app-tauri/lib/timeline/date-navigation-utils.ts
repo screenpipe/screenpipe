@@ -7,6 +7,17 @@ import { endOfDay, isAfter, startOfDay } from "date-fns";
 /** Max calendar-day gap when probing for the nearest day with capture data. */
 export const MAX_DATE_SEARCH_DAYS = 365;
 
+/** Standard calendar/arrow navigation — frames should arrive within this window. */
+export const NAV_TIMEOUT_MS = 10_000;
+
+/** Search / narrow-window fetch on large DBs can take much longer. */
+export const SEARCH_NAV_TIMEOUT_MS = 90_000;
+
+export interface DateChangeOptions {
+	/** Calendar picks an explicit day — do not redirect to a different nearby day. */
+	preferExactDay?: boolean;
+}
+
 export interface TimestampedFrame {
 	timestamp: string;
 }
@@ -40,4 +51,19 @@ export function navigationDirection(
 	return isAfter(startOfDay(anchorDate), startOfDay(requestedDate))
 		? "backward"
 		: "forward";
+}
+
+/** Parse `YYYY-MM-DD` from SQLite DATE(..., 'localtime') as local midnight. */
+export function parseLocalDayString(day: string): Date {
+	const [y, m, d] = day.split("-").map(Number);
+	return new Date(y, m - 1, d);
+}
+
+/** Format a Date as `YYYY-MM-DD` in local time (matches SQLite DATE localtime). */
+export function formatLocalDayString(date: Date): string {
+	const d = startOfDay(date);
+	const y = d.getFullYear();
+	const m = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	return `${y}-${m}-${day}`;
 }

@@ -4,12 +4,22 @@
 
 import { isSameDay } from "date-fns";
 import { localFetch } from "@/lib/api";
+import {
+	formatLocalDayString,
+	parseLocalDayString,
+} from "@/lib/timeline/date-navigation-utils";
 
 /** Timestamps from screen frames and audio transcriptions (matches listDaysWithFrames). */
 const CAPTURE_TIMESTAMPS_SUBQUERY = `
 	SELECT timestamp FROM frames WHERE timestamp IS NOT NULL
 	UNION ALL
 	SELECT timestamp FROM audio_transcriptions WHERE timestamp IS NOT NULL
+`;
+
+const DISTINCT_DAYS_SUBQUERY = `
+	SELECT DISTINCT DATE(timestamp, 'localtime') AS day FROM (
+		${CAPTURE_TIMESTAMPS_SUBQUERY}
+	)
 `;
 
 /** UTC DB timestamp → local calendar midnight (matches Calendar / startOfDay). */
@@ -59,9 +69,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		// future heavy users with many recording days don't get clipped.
 		// One row per local-calendar day, so 10000 = ~27 years of headroom.
 		const query = `
-			SELECT DISTINCT DATE(timestamp, 'localtime') AS day FROM (
-				${CAPTURE_TIMESTAMPS_SUBQUERY}
-			)
+			${DISTINCT_DAYS_SUBQUERY}
 			ORDER BY day
 			LIMIT 10000
 		`;
@@ -77,7 +85,6 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		}
 		const rows = (await response.json()) as Array<{ day: string }>;
 		const set = new Set(rows.map((r) => r.day).filter(Boolean));
-		console.log(`[timeline] listDaysWithFrames: ${set.size} days with data`);
 		daysCache = { at: Date.now(), days: set };
 		return set;
 	} catch (e) {
@@ -127,7 +134,6 @@ export async function hasFramesForDate(date: Date): Promise<boolean> {
 		}
 
 		const result = await response.json();
-		console.log("hasFramesForDate result:", date.toISOString(), result);
 		return result.length > 0;
 	} catch (e) {
 		console.error("Error checking frames for date:", e);
@@ -137,17 +143,9 @@ export async function hasFramesForDate(date: Date): Promise<boolean> {
 }
 
 /**
- * Find the nearest date (local calendar day) with frames in a single SQL query.
- * Replaces the recursive hasFramesForDate loop (up to 7 HTTP calls → 1).
- *
- * Returns a Date at midnight local time for the day that has frames.
- * This matches what Calendar picker and startOfDay produce, avoiding
- * timezone bugs where a UTC timestamp maps to the wrong local date.
- *
- * @param targetDate - The date to search from (local time)
- * @param direction - "backward" searches older dates, "forward" searches newer
- * @param maxDays - Maximum number of days to search (default 7)
- * @returns A Date at midnight local time for the nearest day with frames, or null
+ * Find the nearest local calendar day with capture data.
+ * Uses distinct day buckets so we land on the closest *day* to the target,
+ * not merely the latest timestamp inside a wide UTC range.
  */
 export async function findNearestDateWithFrames(
 	targetDate: Date,
@@ -155,48 +153,23 @@ export async function findNearestDateWithFrames(
 	maxDays: number = 7,
 ): Promise<Date | null> {
 	try {
-		const target = new Date(targetDate);
-		const now = new Date();
+		const targetDay = formatLocalDayString(targetDate);
 
-		let rangeStart: Date;
-		let rangeEnd: Date;
-
-		if (direction === "backward") {
-			// Search from (targetDate - maxDays) to end of targetDate
-			rangeStart = new Date(target);
-			rangeStart.setDate(rangeStart.getDate() - maxDays);
-			rangeStart.setHours(0, 0, 0, 0);
-
-			rangeEnd = new Date(target);
-			rangeEnd.setHours(23, 59, 59, 999);
-		} else {
-			// Search from start of targetDate to (targetDate + maxDays)
-			rangeStart = new Date(target);
-			rangeStart.setHours(0, 0, 0, 0);
-
-			rangeEnd = new Date(target);
-			rangeEnd.setDate(rangeEnd.getDate() + maxDays);
-			rangeEnd.setHours(23, 59, 59, 999);
-
-			// Don't search past now
-			if (rangeEnd > now) {
-				rangeEnd = now;
-			}
-		}
-
-		// Single query: find the nearest frame timestamp within the range,
-		// ordered so the closest to targetDate comes first.
-		// For backward: we want the most recent frame (ORDER BY DESC)
-		// For forward: we want the earliest frame (ORDER BY ASC)
-		const order = direction === "backward" ? "DESC" : "ASC";
-
-		const query = `
-			SELECT timestamp FROM (
-				${CAPTURE_TIMESTAMPS_SUBQUERY}
-			)
-			WHERE timestamp >= '${rangeStart.toISOString()}'
-			AND timestamp <= '${rangeEnd.toISOString()}'
-			ORDER BY timestamp ${order}
+		const query =
+			direction === "backward"
+				? `
+			SELECT day FROM (${DISTINCT_DAYS_SUBQUERY})
+			WHERE day <= '${targetDay}'
+			  AND day >= DATE('${targetDay}', '-${maxDays} days')
+			ORDER BY day DESC
+			LIMIT 1
+		`
+				: `
+			SELECT day FROM (${DISTINCT_DAYS_SUBQUERY})
+			WHERE day >= '${targetDay}'
+			  AND day <= DATE('${targetDay}', '+${maxDays} days')
+			  AND day <= DATE('now', 'localtime')
+			ORDER BY day ASC
 			LIMIT 1
 		`;
 
@@ -211,19 +184,12 @@ export async function findNearestDateWithFrames(
 			return null;
 		}
 
-		const result = await response.json();
-		if (result.length === 0) {
-			console.log("findNearestDateWithFrames: no frames found within", maxDays, "days", direction, "from", targetDate.toISOString());
+		const result = (await response.json()) as Array<{ day: string }>;
+		if (result.length === 0 || !result[0]?.day) {
 			return null;
 		}
 
-		// Convert UTC timestamp to LOCAL midnight for that calendar day.
-		// The DB stores UTC, but startOfDay/endOfDay in the caller use local time.
-		// Without this, a UTC timestamp like "2026-02-20T03:00Z" becomes Feb 19
-		// in PST, causing fetchTimeRange to load the wrong day's frames.
-		const localMidnight = toLocalCalendarMidnight(result[0].timestamp);
-		console.log("findNearestDateWithFrames:", targetDate.toISOString(), "→ DB:", result[0].timestamp, "→ local day:", localMidnight.toISOString());
-		return localMidnight;
+		return parseLocalDayString(result[0].day);
 	} catch (e) {
 		console.error("Error finding nearest date with frames:", e);
 		return null;

@@ -8,7 +8,10 @@ import {
 	findFirstFrameIndexForDay,
 	hasLoadedFramesForDay,
 	MAX_DATE_SEARCH_DAYS,
+	NAV_TIMEOUT_MS,
 	navigationDirection,
+	parseLocalDayString,
+	formatLocalDayString,
 } from "@/lib/timeline/date-navigation-utils";
 
 describe("toLocalCalendarMidnight", () => {
@@ -73,5 +76,27 @@ describe("findFirstFrameIndexForDay", () => {
 describe("MAX_DATE_SEARCH_DAYS", () => {
 	it("matches use-date-navigation and timeline fetch window", () => {
 		expect(MAX_DATE_SEARCH_DAYS).toBe(365);
+	});
+});
+
+describe("local day string helpers", () => {
+	it("parseLocalDayString returns local midnight", () => {
+		const d = parseLocalDayString("2026-06-15");
+		expect(d.getFullYear()).toBe(2026);
+		expect(d.getMonth()).toBe(5);
+		expect(d.getDate()).toBe(15);
+		expect(d.getHours()).toBe(0);
+	});
+
+	it("formatLocalDayString round-trips parseLocalDayString", () => {
+		const d = new Date(2026, 5, 15, 14, 30);
+		expect(formatLocalDayString(d)).toBe("2026-06-15");
+		expect(formatLocalDayString(parseLocalDayString("2026-06-15"))).toBe(
+			"2026-06-15",
+		);
+	});
+
+	it("NAV_TIMEOUT_MS is shorter than search navigation timeout", () => {
+		expect(NAV_TIMEOUT_MS).toBe(10_000);
 	});
 });

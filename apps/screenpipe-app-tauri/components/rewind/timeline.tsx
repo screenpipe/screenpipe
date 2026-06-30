@@ -409,7 +409,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					// pendingNavigationRef and seekingTimestamp get cleared on completion
 					// but the focus debounce (500ms) may still be pending.
 					const recentSearchNav = Date.now() - lastSearchNavRef.current < 2000;
-					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
+					if (isNavigatingRef.current || isNavigating || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
+						return;
+					}
+
+					const viewingToday = isSameDay(currentDate, new Date());
+					if (!viewingToday) {
+						// Historical browse — refresh that day without snapping to today.
+						onWindowFocus();
 						return;
 					}
 
@@ -440,7 +447,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters]);
+	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters, currentDate, isNavigating]);
 
 	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {

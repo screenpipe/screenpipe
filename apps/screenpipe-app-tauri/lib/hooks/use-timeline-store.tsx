@@ -818,16 +818,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	onWindowFocus: () => {
-		const { websocket, fetchTimeRange, connectWebSocket } = get();
+		const { websocket, fetchTimeRange, connectWebSocket, currentDate } = get();
 
-		// Always reset to today when the window is focused.
-		// The window is hidden/shown (not destroyed), so stale dates persist.
 		const today = new Date();
 		const todayStr = today.toDateString();
-
-		// Also clear the old date's sentRequests in case it was different
-		const { currentDate: oldDate } = get();
-		const oldDateStr = oldDate.toDateString();
+		const viewingToday = currentDate.toDateString() === todayStr;
+		const refreshDate = viewingToday ? today : currentDate;
+		const refreshStr = refreshDate.toDateString();
 
 		set((state) => {
 			const newSentRequests = new Set<string>();
@@ -835,33 +832,26 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				const startIso = key.split('_')[0];
 				try {
 					const keyDateStr = new Date(startIso).toDateString();
-					if (keyDateStr === todayStr || keyDateStr === oldDateStr) continue;
+					if (keyDateStr === refreshStr) continue;
 				} catch { /* keep non-matching keys */ }
 				newSentRequests.add(key);
 			}
 			return {
 				sentRequests: newSentRequests,
-				currentDate: today,
-				// Signal that position should reset to latest (index 0)
-				// by clearing pendingNavigation and setting a flag
-				pendingNavigation: null,
+				...(viewingToday
+					? { currentDate: today, pendingNavigation: null }
+					: {}),
 			};
 		});
 
-		// If the socket is open AND actually alive, just fetch today's data.
-		// If it looks open but has gone silent past the stale threshold it's a
-		// zombie (the machine slept and the close event never fired) — a fetch
-		// would vanish into a dead socket, so reconnect instead for instant
-		// recovery on return.
 		const isStale = Date.now() - lastMessageAt > LIVENESS_STALE_THRESHOLD_MS;
 		if (websocket && websocket.readyState === WebSocket.OPEN && !isStale) {
-			const startTime = new Date(today);
+			const startTime = new Date(refreshDate);
 			startTime.setHours(0, 0, 0, 0);
-			const endTime = new Date(today);
+			const endTime = new Date(refreshDate);
 			endTime.setHours(23, 59, 59, 999);
 			fetchTimeRange(startTime, endTime);
 		} else {
-			// WebSocket is closed or a zombie — reconnect (which fetches on open).
 			resetBackoffCounters();
 			connectWebSocket();
 		}

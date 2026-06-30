@@ -19,6 +19,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Calendar } from "@/components/ui/calendar";
 import { listDaysWithFrames, invalidateDaysWithFramesCache } from "@/lib/actions/has-frames-date";
+import type { DateChangeOptions } from "@/lib/timeline/date-navigation-utils";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import {
 	Popover,
@@ -38,7 +39,7 @@ interface TimelineControlsProps {
 	// shown in the date pill so the label tracks the cursor minute-to-minute
 	// (currentDate only changes when the day changes). Null until frames load.
 	currentTime?: Date | null;
-	onDateChange: (date: Date) => Promise<any>;
+	onDateChange: (date: Date, options?: DateChangeOptions) => Promise<any>;
 	onJumpToday: () => void;
 	onSearchClick?: () => void;
 	onChatClick?: () => void;
@@ -197,10 +198,9 @@ export function TimelineControls({
 						<Calendar
 							mode="single"
 							selected={anchorDate}
-							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} onSelect={(date) => {
-								console.log("[Calendar] onSelect called with:", date?.toISOString(), "anchorDate:", anchorDate.toISOString());
+							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} 							onSelect={(date) => {
 								if (date) {
-									onDateChange(startOfDay(date));
+									onDateChange(startOfDay(date), { preferExactDay: true });
 									setCalendarOpen(false);
 								}
 							}}

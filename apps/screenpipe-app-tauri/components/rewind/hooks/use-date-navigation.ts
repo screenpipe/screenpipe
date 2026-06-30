@@ -8,7 +8,10 @@ import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import {
 	findFirstFrameIndexForDay,
 	MAX_DATE_SEARCH_DAYS,
+	NAV_TIMEOUT_MS,
+	SEARCH_NAV_TIMEOUT_MS,
 	navigationDirection,
+	type DateChangeOptions,
 } from "@/lib/timeline/date-navigation-utils";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -77,6 +80,41 @@ export function useDateNavigation(opts: {
 
 	// Navigation in progress — disables day arrows to prevent double-clicks
 	const [isNavigating, setIsNavigating] = useState(false);
+
+	const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const clearNavTimeout = useCallback(() => {
+		if (navTimeoutRef.current) {
+			clearTimeout(navTimeoutRef.current);
+			navTimeoutRef.current = null;
+		}
+	}, []);
+
+	const finishNavigation = useCallback(() => {
+		pendingNavigationRef.current = null;
+		pendingFrameIdRef.current = undefined;
+		setSeekingTimestamp(null);
+		setPendingNavigation(null);
+		setIsNavigating(false);
+		isNavigatingRef.current = false;
+		clearNavTimeout();
+	}, [clearNavTimeout, pendingNavigationRef, setPendingNavigation, isNavigatingRef]);
+
+	const scheduleNavTimeout = useCallback(
+		(ms: number) => {
+			clearNavTimeout();
+			navTimeoutRef.current = setTimeout(() => {
+				navTimeoutRef.current = null;
+				if (pendingNavigationRef.current) {
+					console.warn("[date-nav] timeout clearing navigation state");
+					finishNavigation();
+				}
+			}, ms);
+		},
+		[clearNavTimeout, finishNavigation, pendingNavigationRef],
+	);
+
+	useEffect(() => () => clearNavTimeout(), [clearNavTimeout]);
 
 	const searchResults = useKeywordSearchStore((s) => s.searchResults);
 	const highlightTerms = useSearchHighlight((s) => s.highlightTerms);
@@ -164,11 +202,7 @@ export function useDateNavigation(opts: {
 			setCurrentFrame(frames[finalIndex]);
 			setCurrentDate(normalized);
 			setSearchNavFrame(true);
-			pendingNavigationRef.current = null;
-			pendingFrameIdRef.current = undefined;
-			isNavigatingRef.current = false;
-			setIsNavigating(false);
-			setSeekingTimestamp(null);
+			finishNavigation();
 			return;
 		}
 
@@ -199,20 +233,8 @@ export function useDateNavigation(opts: {
 		setCurrentIndex(0);
 		setCurrentDate(targetDate);
 
-		// Past-day queries can take 60s+ on large DBs (legacy data with
-		// correlated subqueries). The [currentDate, websocket] effect already
-		// fires a full-day fetch, so we just need to wait long enough.
-		// Give up after 90s — if the query hasn't finished by then, it won't.
-		setTimeout(() => {
-			if (pendingNavigationRef.current && isSameDay(pendingNavigationRef.current, targetDate)) {
-				console.warn("[navigateDirectToDate] Timeout after 90s: clearing navigation state");
-				pendingNavigationRef.current = null;
-				setSeekingTimestamp(null);
-				setIsNavigating(false);
-				isNavigatingRef.current = false;
-			}
-		}, 90000);
-	}, [currentDate, frames, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef, resetFilters, snapToDevice, setSearchNavFrame, setIsNavigating, setSeekingTimestamp]);
+		scheduleNavTimeout(SEARCH_NAV_TIMEOUT_MS);
+	}, [currentDate, frames, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef, resetFilters, snapToDevice, setSearchNavFrame, setIsNavigating, setSeekingTimestamp, finishNavigation, scheduleNavTimeout]);
 
 	// Navigate to a specific search result by index (arrow keys in search review mode)
 	const navigateToSearchResult = useCallback((index: number) => {
@@ -244,16 +266,16 @@ export function useDateNavigation(opts: {
 	}, [searchResults, highlightTerms, setHighlight, currentDate, frames, setSeekingTimestamp, navigateDirectToDate, pendingNavigationRef, setSearchNavFrame, jumpToTime]); // eslint-disable-line react-hooks/exhaustive-deps
 	navigateToSearchResultRef.current = navigateToSearchResult;
 
-	const handleDateChange = useCallback(async (newDate: Date) => {
+	const handleDateChange = useCallback(async (newDate: Date, options?: DateChangeOptions) => {
 		// If a previous navigation is stuck (e.g. frames never arrived),
 		// force-clear so the user isn't locked out of date picking.
 		if (isNavigatingRef.current) {
 			console.warn("[handleDateChange] Clearing stale navigation lock");
-			isNavigatingRef.current = false;
-			pendingNavigationRef.current = null;
+			finishNavigation();
 		}
 
 		const requestedDate = startOfDay(newDate);
+		const preferExactDay = options?.preferExactDay ?? false;
 
 		// Pause playback and reset filters on date change
 		pausePlayback();
@@ -273,6 +295,7 @@ export function useDateNavigation(opts: {
 			const snapped = snapToDevice(targetIndex);
 			setCurrentIndex(snapped);
 			setCurrentFrame(frames[snapped]);
+			clearNavTimeout();
 			pendingNavigationRef.current = null;
 			pendingFrameIdRef.current = undefined;
 			isNavigatingRef.current = false;
@@ -288,7 +311,7 @@ export function useDateNavigation(opts: {
 			// Determine the actual target date (may differ if newDate has no frames)
 			let targetDate = requestedDate;
 
-			if (!isToday) {
+			if (!isToday && !preferExactDay) {
 				// Single query to find nearest date with frames (replaces recursive loop)
 				const direction = navigationDirection(visibleDayAnchor, requestedDate);
 				const nearest = await findNearestDateWithFrames(requestedDate, direction, MAX_DATE_SEARCH_DAYS);
@@ -321,9 +344,7 @@ export function useDateNavigation(opts: {
 
 			// Don't go before start date
 			if (isAfter(startOfDay(startAndEndDates.start), targetDate)) {
-				isNavigatingRef.current = false;
-				setIsNavigating(false);
-				setSeekingTimestamp(null);
+				finishNavigation();
 				return;
 			}
 
@@ -349,25 +370,13 @@ export function useDateNavigation(opts: {
 			setCurrentIndex(0);
 			setCurrentDate(targetDate);
 
-			// Safety timeout: clear navigation state if frames don't arrive within 10s
-			setTimeout(() => {
-				if (pendingNavigationRef.current && isSameDay(pendingNavigationRef.current, targetDate)) {
-					console.warn("[handleDateChange] Timeout: frames didn't arrive, clearing navigation state");
-					pendingNavigationRef.current = null;
-					setSeekingTimestamp(null);
-					setIsNavigating(false);
-					isNavigatingRef.current = false;
-				}
-			}, 10000);
+			scheduleNavTimeout(NAV_TIMEOUT_MS);
 
 		} catch (error) {
 			console.error("[handleDateChange] Error:", error);
-			isNavigatingRef.current = false;
-			setIsNavigating(false);
-			pendingNavigationRef.current = null;
-			setSeekingTimestamp(null);
+			finishNavigation();
 		}
-	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef, visibleDayAnchor]);
+	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef, visibleDayAnchor, finishNavigation, clearNavTimeout, scheduleNavTimeout]);
 
 	const handleJumpToday = useCallback(() => {
 		return handleDateChange(startOfDay(new Date()));
@@ -423,7 +432,7 @@ export function useDateNavigation(opts: {
 				// Use HTTP JPEG fallback for this first frame (skip slow video seek)
 				setSearchNavFrame(true);
 
-				// Clear pending navigation and UI state
+				clearNavTimeout();
 				pendingNavigationRef.current = null;
 				pendingFrameIdRef.current = undefined;
 				setSeekingTimestamp(null);
@@ -433,21 +442,7 @@ export function useDateNavigation(opts: {
 			}
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [frames, currentDate, setPendingNavigation]);
-
-	// Timeout: clear seeking overlay if navigation doesn't resolve within 10s
-	useEffect(() => {
-		if (!seekingTimestamp) return;
-		const timer = setTimeout(() => {
-			console.warn("Navigation timeout — clearing seeking state");
-			setSeekingTimestamp(null);
-			pendingNavigationRef.current = null;
-			setPendingNavigation(null);
-			setIsNavigating(false);
-			isNavigatingRef.current = false;
-		}, 10000);
-		return () => clearTimeout(timer);
-	}, [seekingTimestamp, setPendingNavigation]);
+	}, [frames, currentDate, setPendingNavigation, clearNavTimeout]);
 
 	return {
 		navigateDirectToDate,
