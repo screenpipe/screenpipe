@@ -78,6 +78,9 @@ export function useDateNavigation(opts: {
 	// Frame ID to match when pending navigation resolves (exact match > timestamp)
 	const pendingFrameIdRef = useRef<number | undefined>(undefined);
 
+	// Ignore stale async handleDateChange results when user clicks rapidly.
+	const navGenerationRef = useRef(0);
+
 	// Navigation in progress — disables day arrows to prevent double-clicks
 	const [isNavigating, setIsNavigating] = useState(false);
 
@@ -216,22 +219,19 @@ export function useDateNavigation(opts: {
 		});
 
 		clearFramesForNavigation();
-		clearSentRequestForDate(targetDate);
+		clearSentRequestForDate(normalized);
 
-		pendingNavigationRef.current = targetDate;
+		pendingNavigationRef.current = normalized;
 		setSeekingTimestamp(targetDate.toISOString());
 
-		// Fire narrow ±5min fetch IMMEDIATELY via the store's websocket
-		// (don't wait for React effect cycle — that delays by 100ms+ and
-		// can get cancelled by dependency changes)
+		// Fire narrow ±5min fetch immediately — don't wait for React effect cycle.
 		const targetMs = targetDate.getTime();
 		const narrowStart = new Date(targetMs - 5 * 60 * 1000);
 		const narrowEnd = new Date(targetMs + 5 * 60 * 1000);
 		fetchTimeRange(narrowStart, narrowEnd);
 
-		// Don't clear currentFrame — keep old frame visible while new ones load
 		setCurrentIndex(0);
-		setCurrentDate(targetDate);
+		setCurrentDate(normalized);
 
 		scheduleNavTimeout(SEARCH_NAV_TIMEOUT_MS);
 	}, [currentDate, frames, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef, resetFilters, snapToDevice, setSearchNavFrame, setIsNavigating, setSeekingTimestamp, finishNavigation, scheduleNavTimeout]);
@@ -261,6 +261,8 @@ export function useDateNavigation(opts: {
 				pendingNavigationRef.current = null;
 				pendingFrameIdRef.current = undefined;
 				setSeekingTimestamp(null);
+			} else {
+				navigateDirectToDate(targetDate, result.frame_id);
 			}
 		}
 	}, [searchResults, highlightTerms, setHighlight, currentDate, frames, setSeekingTimestamp, navigateDirectToDate, pendingNavigationRef, setSearchNavFrame, jumpToTime]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -276,6 +278,7 @@ export function useDateNavigation(opts: {
 
 		const requestedDate = startOfDay(newDate);
 		const preferExactDay = options?.preferExactDay ?? false;
+		const navGeneration = ++navGenerationRef.current;
 
 		// Pause playback and reset filters on date change
 		pausePlayback();
@@ -315,6 +318,8 @@ export function useDateNavigation(opts: {
 				// Single query to find nearest date with frames (replaces recursive loop)
 				const direction = navigationDirection(visibleDayAnchor, requestedDate);
 				const nearest = await findNearestDateWithFrames(requestedDate, direction, MAX_DATE_SEARCH_DAYS);
+
+				if (navGeneration !== navGenerationRef.current) return;
 
 				if (nearest) {
 					targetDate = startOfDay(nearest);
@@ -363,12 +368,11 @@ export function useDateNavigation(opts: {
 			clearSentRequestForDate(targetDate);
 
 			// Store pending navigation - will be processed when frames arrive
-			pendingNavigationRef.current = targetDate;
+			pendingNavigationRef.current = startOfDay(targetDate);
 
 			// Keep old frame visible while new date's frames load
-			// This triggers the effect that fetches frames for the new date
 			setCurrentIndex(0);
-			setCurrentDate(targetDate);
+			setCurrentDate(startOfDay(targetDate));
 
 			scheduleNavTimeout(NAV_TIMEOUT_MS);
 
@@ -385,13 +389,11 @@ export function useDateNavigation(opts: {
 	// Process pending navigation when frames load after date change
 	useEffect(() => {
 		if (pendingNavigationRef.current && frames.length > 0) {
-			const targetDate = pendingNavigationRef.current;
-			// Only jump if we're on the correct date AND frames for that day have loaded
-			// Check that at least one frame is from the target date
+			const targetDate = startOfDay(pendingNavigationRef.current);
 			const hasFramesForTargetDate = frames.some(frame =>
 				isSameDay(new Date(frame.timestamp), targetDate)
 			);
-			if (isSameDay(targetDate, currentDate) && hasFramesForTargetDate) {
+			if (isSameDay(targetDate, startOfDay(currentDate)) && hasFramesForTargetDate) {
 				const pendingFrameId = pendingFrameIdRef.current;
 
 				// Try exact frame_id match first (avoids off-by-one from timestamp rounding)

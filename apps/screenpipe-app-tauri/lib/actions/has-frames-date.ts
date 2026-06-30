@@ -7,6 +7,7 @@ import { localFetch } from "@/lib/api";
 import {
 	formatLocalDayString,
 	parseLocalDayString,
+	MAX_DATE_SEARCH_DAYS,
 } from "@/lib/timeline/date-navigation-utils";
 
 /** Timestamps from screen frames and audio transcriptions (matches listDaysWithFrames). */
@@ -150,7 +151,7 @@ export async function hasFramesForDate(date: Date): Promise<boolean> {
 export async function findNearestDateWithFrames(
 	targetDate: Date,
 	direction: "backward" | "forward" = "backward",
-	maxDays: number = 7,
+	maxDays: number = MAX_DATE_SEARCH_DAYS,
 ): Promise<Date | null> {
 	try {
 		const targetDay = formatLocalDayString(targetDate);

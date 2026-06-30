@@ -4,8 +4,8 @@
 
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
-import { hasFramesForDate } from "../actions/has-frames-date";
-import { subDays } from "date-fns";
+import { hasFramesForDate, findNearestDateWithFrames } from "../actions/has-frames-date";
+import { endOfDay, isSameDay, startOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
 	appendAuthToken,
@@ -113,7 +113,7 @@ interface TimelineState {
 	setCurrentDate: (date: Date) => void;
 	connectWebSocket: () => void;
 	fetchTimeRange: (startTime: Date, endTime: Date) => void;
-	fetchNextDayData: (date: Date) => void;
+	fetchNextDayData: (date: Date, direction?: "forward" | "backward") => void;
 	hasDateBeenFetched: (date: Date) => boolean;
 	flushFrameBuffer: () => void;
 	onWindowFocus: () => void;
@@ -781,40 +781,49 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		sendOrRetry(0);
 	},
 
-	fetchNextDayData: async (date: Date) => {
-		const hasFrames = await hasFramesForDate(date);
+	fetchNextDayData: async (date: Date, direction: "forward" | "backward" = "backward") => {
+		let targetDay = startOfDay(new Date(date));
 
+		const hasFrames = await hasFramesForDate(targetDay);
 		if (!hasFrames) {
-			date = subDays(date, 1);
-		}
-
-		const nextDay = new Date(date);
-		nextDay.setDate(nextDay.getDate());
-		nextDay.setHours(0, 0, 0, 0);
-
-		const endTime = new Date(nextDay);
-		endTime.setHours(23, 59, 59, 999);
-
-		const { websocket, sentRequests } = get();
-		const requestKey = `${nextDay.toISOString()}_${endTime.toISOString()}`;
-
-		if (sentRequests.has(requestKey)) {
-			return;
-		}
-
-		if (websocket && websocket.readyState === WebSocket.OPEN) {
-			websocket.send(
-				JSON.stringify({
-					start_time: nextDay.toISOString(),
-					end_time: endTime.toISOString(),
-					order: "descending",
-					limit: TIMELINE_STREAM_FRAME_LIMIT,
-				}),
+			const nearest = await findNearestDateWithFrames(
+				targetDay,
+				direction,
+				7,
 			);
-			set((state) => ({
-				sentRequests: new Set(state.sentRequests).add(requestKey),
-			}));
+			if (!nearest || isSameDay(nearest, targetDay)) {
+				return;
+			}
+			targetDay = startOfDay(nearest);
 		}
+
+		const endTime = endOfDay(targetDay);
+		const requestKey = `${targetDay.toISOString()}_${endTime.toISOString()}`;
+
+		const sendPrefetch = (attempt: number) => {
+			const { websocket, sentRequests } = get();
+			if (sentRequests.has(requestKey)) {
+				return;
+			}
+			if (websocket && websocket.readyState === WebSocket.OPEN) {
+				websocket.send(
+					JSON.stringify({
+						start_time: targetDay.toISOString(),
+						end_time: endTime.toISOString(),
+						order: "descending",
+						limit: TIMELINE_STREAM_FRAME_LIMIT,
+					}),
+				);
+				set((state) => ({
+					sentRequests: new Set(state.sentRequests).add(requestKey),
+				}));
+			} else if (attempt < 5) {
+				const delay = 500 * (attempt + 1);
+				setTimeout(() => sendPrefetch(attempt + 1), delay);
+			}
+		};
+
+		sendPrefetch(0);
 	},
 
 	onWindowFocus: () => {
@@ -838,9 +847,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 			return {
 				sentRequests: newSentRequests,
-				...(viewingToday
-					? { currentDate: today, pendingNavigation: null }
-					: {}),
+				...(viewingToday ? { currentDate: today } : {}),
 			};
 		});
 

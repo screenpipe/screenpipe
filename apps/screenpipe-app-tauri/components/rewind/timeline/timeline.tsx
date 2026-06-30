@@ -109,8 +109,10 @@ interface TimelineSliderProps {
 	currentIndex: number;
 	startAndEndDates: TimeRange;
 	onFrameChange: (index: number) => void;
-	fetchNextDayData: (date: Date) => void;
+	fetchNextDayData: (date: Date, direction?: "forward" | "backward") => void;
 	currentDate: Date;
+	/** Playhead day — drives scroll prefetch when it differs from store currentDate. */
+	scrollAnchorDate?: Date;
 	onSelectionChange?: (selectedFrames: StreamTimeSeriesResponse[]) => void;
 	newFramesCount?: number; // Number of new frames added (for animation)
 	lastFlushTimestamp?: number; // When frames were last added (to trigger animation)
@@ -374,6 +376,7 @@ export const TimelineSlider = ({
 	fetchNextDayData,
 	startAndEndDates,
 	currentDate,
+	scrollAnchorDate,
 	onSelectionChange,
 	newFramesCount = 0,
 	lastFlushTimestamp = 0,
@@ -907,6 +910,11 @@ export const TimelineSlider = ({
 		return markers;
 	}, [visibleFrames]);
 
+	const prefetchAnchor = useMemo(
+		() => startOfDay(scrollAnchorDate ?? currentDate),
+		[scrollAnchorDate, currentDate],
+	);
+
 	useEffect(() => {
 		const observerTarget = observerTargetRef.current;
 		if (!observerTarget) return;
@@ -916,7 +924,7 @@ export const TimelineSlider = ({
 				const entry = entries[0];
 				if (!entry.isIntersecting) return;
 
-				const lastDate = subDays(currentDate, 1);
+				const lastDate = subDays(prefetchAnchor, 1);
 				const now = new Date();
 				const canFetch =
 					!lastFetchRef.current ||
@@ -924,7 +932,7 @@ export const TimelineSlider = ({
 
 				if (isAfter(lastDate, startAndEndDates.start) && canFetch) {
 					lastFetchRef.current = now;
-					fetchNextDayData(lastDate);
+					fetchNextDayData(lastDate, "backward");
 				}
 			},
 			{
@@ -936,7 +944,7 @@ export const TimelineSlider = ({
 
 		observer.observe(observerTarget);
 		return () => observer.disconnect();
-	}, [fetchNextDayData, currentDate, startAndEndDates]);
+	}, [fetchNextDayData, prefetchAnchor, startAndEndDates]);
 
 	// Forward observer: fetch newer day's data when scrolling left (toward newer frames)
 	useEffect(() => {
@@ -948,7 +956,7 @@ export const TimelineSlider = ({
 				const entry = entries[0];
 				if (!entry.isIntersecting) return;
 
-				const nextDate = addDays(currentDate, 1);
+				const nextDate = addDays(prefetchAnchor, 1);
 				const today = startOfDay(new Date());
 				const now = new Date();
 				const canFetch =
@@ -958,7 +966,7 @@ export const TimelineSlider = ({
 				// Don't fetch beyond today
 				if (!isAfter(startOfDay(nextDate), today) && canFetch) {
 					lastForwardFetchRef.current = now;
-					fetchNextDayData(nextDate);
+					fetchNextDayData(nextDate, "forward");
 				}
 			},
 			{
@@ -970,7 +978,7 @@ export const TimelineSlider = ({
 
 		forwardObserver.observe(forwardTarget);
 		return () => forwardObserver.disconnect();
-	}, [fetchNextDayData, currentDate]);
+	}, [fetchNextDayData, prefetchAnchor]);
 
 	useEffect(() => {
 		const container = containerRef.current;
