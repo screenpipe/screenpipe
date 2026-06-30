@@ -18,7 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Calendar } from "@/components/ui/calendar";
-import { listDaysWithFrames } from "@/lib/actions/has-frames-date";
+import { listDaysWithFrames, invalidateDaysWithFramesCache } from "@/lib/actions/has-frames-date";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import {
 	Popover,
@@ -86,6 +86,7 @@ export function TimelineControls({
 	const [daysWithFrames, setDaysWithFrames] = useState<Set<string>>(new Set());
 	useEffect(() => {
 		if (!calendarOpen) return;
+		invalidateDaysWithFramesCache();
 		let cancelled = false;
 		listDaysWithFrames().then((s) => {
 			if (!cancelled) setDaysWithFrames(s);

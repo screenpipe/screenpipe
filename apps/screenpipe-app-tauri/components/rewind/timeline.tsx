@@ -24,6 +24,7 @@ import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
+import { MAX_DATE_SEARCH_DAYS } from "@/lib/timeline/date-navigation-utils";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -248,6 +249,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		setCurrentFrame,
 	});
 
+	const visibleDayAnchor = useMemo(
+		() =>
+			startOfDay(
+				currentFrame
+					? new Date(currentFrame.timestamp)
+					: currentDate,
+			),
+		[currentFrame, currentDate],
+	);
+
 	const {
 		navigateDirectToDate,
 		handleDateChange,
@@ -283,6 +294,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		resetFilters,
 		pausePlayback,
 		dateChangesRef,
+		visibleDayAnchor,
 	});
 
 	const { zoomLevel, targetZoom, setTargetZoom, onContainerWheel } = useScrollZoom({
@@ -883,7 +895,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		return () => clearInterval(interval);
 	}, []);
 
-	const MAX_DATE_RETRIES = 7; // Don't walk back more than 7 days
+	const MAX_DATE_RETRIES = MAX_DATE_SEARCH_DAYS;
 
 	useEffect(() => {
 		// Wait for websocket to be ready before fetching
@@ -947,7 +959,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			return;
 		}
 		if (currentFrame) {
-			const frameDate = new Date(currentFrame.timestamp);
+			const frameDate = startOfDay(new Date(currentFrame.timestamp));
 			const storeDate = useTimelineStore.getState().currentDate;
 			if (!isSameDay(frameDate, storeDate)) {
 				setCurrentDate(frameDate);

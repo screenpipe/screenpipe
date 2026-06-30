@@ -39,6 +39,11 @@ export function toLocalCalendarMidnight(isoTimestamp: string | Date): Date {
 let daysCache: { at: number; days: Set<string> } | null = null;
 const DAYS_CACHE_TTL_MS = 60_000;
 
+/** Bust calendar day-set cache (e.g. after new recordings land). */
+export function invalidateDaysWithFramesCache(): void {
+	daysCache = null;
+}
+
 export async function listDaysWithFrames(): Promise<Set<string>> {
 	if (daysCache && Date.now() - daysCache.at < DAYS_CACHE_TTL_MS) {
 		return daysCache.days;
