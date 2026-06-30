@@ -31,7 +31,7 @@ import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useAudioPlayback } from "@/lib/hooks/use-audio-playback";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
-import { useSettings } from "@/lib/hooks/use-settings";
+import { getStore, saveAndEncrypt, useSettings } from "@/lib/hooks/use-settings";
 import { usePipes, type TemplatePipe } from "@/lib/hooks/use-pipes";
 
 import posthog from "posthog-js";
@@ -92,18 +92,75 @@ const easeOutCubic = (x: number): number => {
 	return 1 - Math.pow(1 - x, 3);
 };
 
+const TIMELINE_SCROLL_HINT_SEEN_KEY = "timeline_scroll_hint_seen_v1";
+
 function TimelineScrollHint({
 	embedded,
 	hasFrames,
 	disabled,
+	isWheelNavigating,
 }: {
 	embedded: boolean;
 	hasFrames: boolean;
 	disabled: boolean;
+	isWheelNavigating: boolean;
 }) {
-	const [dismissed, setDismissed] = useState(false);
+	const [hasSeenHint, setHasSeenHint] = useState(true);
+	const seenRef = useRef(false);
+	const wheelNavigatedRef = useRef(false);
 
-	if (!hasFrames || disabled || dismissed) return null;
+	const markSeen = useCallback(async (reason: "dismiss" | "scroll") => {
+		if (seenRef.current) return;
+		seenRef.current = true;
+		setHasSeenHint(true);
+		try {
+			const store = await getStore();
+			await store.set(TIMELINE_SCROLL_HINT_SEEN_KEY, true);
+			await saveAndEncrypt(store);
+		} catch (error) {
+			console.warn("failed to persist timeline scroll hint state", error);
+		}
+		posthog.capture("timeline_scroll_hint_dismissed", {
+			reason,
+			embedded,
+		});
+	}, [embedded]);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		const loadSeenState = async () => {
+			try {
+				const store = await getStore();
+				const seen = await store.get<boolean>(TIMELINE_SCROLL_HINT_SEEN_KEY);
+				if (cancelled) return;
+				seenRef.current = seen === true;
+				setHasSeenHint(seen === true);
+				if (seen !== true && wheelNavigatedRef.current) {
+					void markSeen("scroll");
+				}
+			} catch (error) {
+				console.warn("failed to read timeline scroll hint state", error);
+				if (!cancelled) setHasSeenHint(false);
+			}
+		};
+
+		void loadSeenState();
+		return () => {
+			cancelled = true;
+		};
+	}, [markSeen]);
+
+	useEffect(() => {
+		if (isWheelNavigating) {
+			wheelNavigatedRef.current = true;
+		}
+		if (isWheelNavigating && !hasSeenHint) {
+			void markSeen("scroll");
+		}
+	}, [hasSeenHint, isWheelNavigating, markSeen]);
+
+	if (!hasFrames || disabled || hasSeenHint) return null;
 
 	return (
 		<div className={`absolute left-1/2 z-[46] w-[min(300px,calc(100vw-2rem))] -translate-x-1/2 pointer-events-none ${embedded ? "bottom-32" : "bottom-36"}`}>
@@ -112,48 +169,42 @@ function TimelineScrollHint({
 				animate={{ opacity: 1, y: 0, scale: 1 }}
 				exit={{ opacity: 0, y: 8, scale: 0.98 }}
 				transition={{ duration: 0.22, ease: "easeOut" }}
-				>
-					<div className="pointer-events-auto relative flex min-h-[42px] items-center gap-2 rounded-md border border-white/16 bg-neutral-900/96 px-2.5 py-2 text-white shadow-[0_8px_24px_rgba(0,0,0,0.42),0_0_0_1px_rgba(0,0,0,0.28)] backdrop-blur-md">
-						<div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded border border-white/36 bg-white/8">
-							<motion.div
-								className="absolute left-[10px] top-1/2 flex -translate-y-1/2 flex-col gap-1"
-								animate={{ y: [-3, 3, 3, -3] }}
-								transition={{
-									duration: 2.4,
-									repeat: Infinity,
-									ease: "easeInOut",
-									times: [0, 0.38, 0.56, 1],
-								}}
-							>
-								<span className="h-1.5 w-1.5 rounded-full bg-white" />
-								<span className="h-1.5 w-1.5 rounded-full bg-white" />
-							</motion.div>
-							<div className="absolute right-2 top-1/2 h-4 w-2 -translate-y-1/2 rounded-r-full border-r-2 border-white/85" />
-						</div>
-						<div className="min-w-0 flex-1 pr-5">
-							<p className="text-[13px] font-medium leading-none tracking-normal">
-								Scroll timeline
-							</p>
-							<p className="mt-1 truncate text-[10px] leading-none text-white/72">
-								Use two fingers or mouse wheel over the rail
-							</p>
-						</div>
-						<button
-							type="button"
-							className="absolute right-2 top-2 rounded-sm p-0.5 text-white/58 transition-colors hover:bg-white/10 hover:text-white"
-							title="Dismiss"
-							onClick={() => {
-								setDismissed(true);
-								posthog.capture("timeline_scroll_hint_dismissed", {
-									reason: "dismiss",
-									embedded,
-								});
+			>
+				<div className="pointer-events-auto relative flex min-h-[42px] items-center gap-2 rounded-md border border-white/16 bg-neutral-900/96 px-2.5 py-2 text-white shadow-[0_8px_24px_rgba(0,0,0,0.42),0_0_0_1px_rgba(0,0,0,0.28)] backdrop-blur-md">
+					<div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded border border-white/36 bg-white/8">
+						<motion.div
+							className="absolute left-[10px] top-1/2 flex -translate-y-1/2 flex-col gap-1"
+							animate={{ y: [-3, 3, 3, -3] }}
+							transition={{
+								duration: 2.4,
+								repeat: Infinity,
+								ease: "easeInOut",
+								times: [0, 0.38, 0.56, 1],
 							}}
 						>
-							<X className="h-3 w-3" />
-						</button>
-						<div className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[7px] border-t-[13px] border-x-transparent border-t-neutral-900/96" />
+							<span className="h-1.5 w-1.5 rounded-full bg-white" />
+							<span className="h-1.5 w-1.5 rounded-full bg-white" />
+						</motion.div>
+						<div className="absolute right-2 top-1/2 h-4 w-2 -translate-y-1/2 rounded-r-full border-r-2 border-white/85" />
 					</div>
+					<div className="min-w-0 flex-1 pr-5">
+						<p className="text-[13px] font-medium leading-none tracking-normal">
+							Scroll timeline
+						</p>
+						<p className="mt-1 truncate text-[10px] leading-none text-white/72">
+							Use two fingers or mouse wheel over the rail
+						</p>
+					</div>
+					<button
+						type="button"
+						className="absolute right-2 top-2 rounded-sm p-0.5 text-white/58 transition-colors hover:bg-white/10 hover:text-white"
+						title="Dismiss"
+						onClick={() => void markSeen("dismiss")}
+					>
+						<X className="h-3 w-3" />
+					</button>
+					<div className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[7px] border-t-[13px] border-x-transparent border-t-neutral-900/96" />
+				</div>
 			</motion.div>
 		</div>
 	);
@@ -1661,6 +1712,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					embedded={embedded}
 					hasFrames={frames.length > 1}
 					disabled={showSearchModal || showBlockingLoader || !!error}
+					isWheelNavigating={isWheelNavigating}
 				/>
 
 	
