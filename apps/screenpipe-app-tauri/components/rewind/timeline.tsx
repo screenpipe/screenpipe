@@ -170,8 +170,8 @@ function TimelineScrollHint({
 				exit={{ opacity: 0, y: 8, scale: 0.98 }}
 				transition={{ duration: 0.22, ease: "easeOut" }}
 			>
-				<div className="pointer-events-auto relative flex min-h-[42px] items-center gap-2 rounded-md border border-white/16 bg-neutral-900/96 px-2.5 py-2 text-white shadow-[0_8px_24px_rgba(0,0,0,0.42),0_0_0_1px_rgba(0,0,0,0.28)] backdrop-blur-md">
-					<div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded border border-white/36 bg-white/8">
+				<div className="pointer-events-auto relative flex min-h-[46px] items-center gap-2 rounded-md border border-border bg-background/95 px-2.5 py-2 text-foreground shadow-2xl ring-1 ring-black/10 backdrop-blur-sm dark:ring-white/10">
+					<div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded border border-border bg-background/80">
 						<motion.div
 							className="absolute left-[10px] top-1/2 flex -translate-y-1/2 flex-col gap-1"
 							animate={{ y: [-3, 3, 3, -3] }}
@@ -182,28 +182,28 @@ function TimelineScrollHint({
 								times: [0, 0.38, 0.56, 1],
 							}}
 						>
-							<span className="h-1.5 w-1.5 rounded-full bg-white" />
-							<span className="h-1.5 w-1.5 rounded-full bg-white" />
+							<span className="h-1.5 w-1.5 rounded-full bg-foreground" />
+							<span className="h-1.5 w-1.5 rounded-full bg-foreground" />
 						</motion.div>
-						<div className="absolute right-2 top-1/2 h-4 w-2 -translate-y-1/2 rounded-r-full border-r-2 border-white/85" />
+						<div className="absolute right-2 top-1/2 h-4 w-2 -translate-y-1/2 rounded-r-full border-r-2 border-foreground/70" />
 					</div>
 					<div className="min-w-0 flex-1 pr-5">
-						<p className="text-[13px] font-medium leading-none tracking-normal">
+						<p className="text-[13px] font-medium leading-[15px] tracking-normal">
 							Scroll timeline
 						</p>
-						<p className="mt-1 truncate text-[10px] leading-none text-white/72">
+						<p className="mt-0.5 truncate text-[10px] leading-[14px] text-muted-foreground">
 							Use two fingers or mouse wheel over the rail
 						</p>
 					</div>
 					<button
 						type="button"
-						className="absolute right-2 top-2 rounded-sm p-0.5 text-white/58 transition-colors hover:bg-white/10 hover:text-white"
+						className="absolute right-2 top-2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 						title="Dismiss"
 						onClick={() => void markSeen("dismiss")}
 					>
 						<X className="h-3 w-3" />
 					</button>
-					<div className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[7px] border-t-[13px] border-x-transparent border-t-neutral-900/96" />
+					<div className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[7px] border-t-[13px] border-x-transparent border-t-background drop-shadow-md" />
 				</div>
 			</motion.div>
 		</div>
