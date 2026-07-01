@@ -8,6 +8,7 @@ import {
   buildCollapsedSteerRenderItems,
   collapsedSteerWorkDuration,
   formatDurationParts,
+  formatStoppedWorkDuration,
   formatWorkDuration,
   getMessageIntentLabel,
   hasRenderableAssistantBody,
@@ -31,6 +32,8 @@ describe("message rendering helpers", () => {
     expect(formatWorkDuration(61_000)).toBe("Worked for 1 min 1 sec");
     expect(formatWorkDuration(100_000)).toBe("Worked for 1 min 40 sec");
     expect(formatDurationParts(60_000)).toBe("1 min");
+    expect(formatStoppedWorkDuration()).toBe("You stopped");
+    expect(formatStoppedWorkDuration(68_000)).toBe("You stopped after 1 min 8 sec");
   });
 
   it("detects placeholder titles and steered assistant messages", () => {
@@ -45,6 +48,7 @@ describe("message rendering helpers", () => {
 
   it("treats assistant content blocks as renderable body", () => {
     expect(hasRenderableAssistantBody(message({ id: "a1", role: "assistant", content: "Processing..." }))).toBe(false);
+    expect(hasRenderableAssistantBody(message({ id: "a-stopped", role: "assistant", stoppedByUser: true }))).toBe(true);
     expect(
       hasRenderableAssistantBody(
         message({

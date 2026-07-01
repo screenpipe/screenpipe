@@ -47,6 +47,7 @@ export interface Message {
   interruptedBySteer?: boolean;
   steeredResponse?: boolean;
   workDurationMs?: number;
+  stoppedByUser?: boolean;
 }
 
 export type QueuedDisplayPayload = {

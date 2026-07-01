@@ -696,6 +696,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.provider ? { provider: m.provider } : {}),
           ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
           ...(m.steeredResponse ? { steeredResponse: true } : {}),
+          ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
+          ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
         };
       }),
       createdAt: existing?.createdAt ?? Date.now(),
@@ -1192,6 +1194,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         ...((m as any).provider ? { provider: (m as any).provider } : {}),
         ...((m as any).interruptedBySteer ? { interruptedBySteer: true } : {}),
         ...((m as any).steeredResponse ? { steeredResponse: true } : {}),
+        ...((m as any).workDurationMs ? { workDurationMs: (m as any).workDurationMs } : {}),
+        ...((m as any).stoppedByUser ? { stoppedByUser: true } : {}),
       }));
       // Make sure a record exists, then seed messages and mark hydrated.
       if (!store.sessions[conv.id]) {
@@ -1369,6 +1373,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.provider ? { provider: m.provider } : {}),
           ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
           ...(m.steeredResponse ? { steeredResponse: true } : {}),
+          ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
+          ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
         };
       }),
       createdAt,

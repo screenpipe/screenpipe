@@ -113,6 +113,7 @@ export interface ChatMessage {
 	}>;
 	interruptedBySteer?: boolean;
 	steeredResponse?: boolean;
+	stoppedByUser?: boolean;
 	/** Wall-clock work duration for coalesced assistant messages (pipe
 	 *  runs). Used by the chat renderer as a fallback when no thinking
 	 *  blocks contributed a duration, so the work-group can still show

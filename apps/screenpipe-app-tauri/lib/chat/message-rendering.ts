@@ -20,6 +20,11 @@ export function formatWorkDuration(durationMs: number): string {
   return `Worked for ${formatDurationParts(durationMs)}`;
 }
 
+export function formatStoppedWorkDuration(durationMs?: number): string {
+  if (!durationMs || durationMs <= 0) return "You stopped";
+  return `You stopped after ${formatDurationParts(durationMs)}`;
+}
+
 export function getMessageIntentLabel(message: Message): string | null {
   if (message.role === "assistant" && (message.intent === "steer" || message.steeredResponse)) {
     return "Steered conversation";
@@ -39,6 +44,7 @@ export function isSteeredAssistantMessage(message: Message): boolean {
 
 export function hasRenderableAssistantBody(message: Message): boolean {
   if (message.role !== "assistant") return false;
+  if (message.stoppedByUser) return true;
   if (message.content && message.content !== "Processing...") return true;
   return Boolean(message.contentBlocks?.length);
 }

@@ -829,6 +829,8 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.provider ? { provider: m.provider } : {}),
             ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
             ...(m.steeredResponse ? { steeredResponse: true } : {}),
+            ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
+            ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),

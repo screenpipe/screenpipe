@@ -15,7 +15,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
-import { formatDurationParts, formatWorkDuration } from "@/lib/chat/message-rendering";
+import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
   endpointFamily,
@@ -948,16 +948,29 @@ function WorkSummaryText({
   );
 }
 
+function WorkStatusHeader({ label }: { label: string }) {
+  return (
+    <div className="w-full min-w-0">
+      <div className="py-1 text-xs font-mono text-foreground/50">
+        {label}
+      </div>
+      <div className="w-full min-w-full border-t border-border/50" />
+    </div>
+  );
+}
+
 function ToolCallGroup({
   toolCalls,
   defaultExpanded = false,
   isGenerating = false,
+  preferSummaryOverride = false,
   summaryOverride,
   workStartedAtMs,
 }: {
   toolCalls: ToolCall[];
   defaultExpanded?: boolean;
   isGenerating?: boolean;
+  preferSummaryOverride?: boolean;
   summaryOverride?: string;
   workStartedAtMs?: number;
 }) {
@@ -978,7 +991,13 @@ function ToolCallGroup({
     ? completedWorkSummaryFromRunning(runningSummary)
     : null;
   const summary = allDone
-    ? (justCompletedSummary || completedLiveSummary || (completedDurationMs ? formatWorkDuration(completedDurationMs) : (summaryOverride || "Worked")))
+    ? (
+        preferSummaryOverride && summaryOverride
+          ? summaryOverride
+          : justCompletedSummary ||
+            completedLiveSummary ||
+            (completedDurationMs ? formatWorkDuration(completedDurationMs) : (summaryOverride || "Worked"))
+      )
     : "";
 
   useEffect(() => {
@@ -1224,8 +1243,13 @@ export function MessageContent({
     // and the chat panel reads as empty even though there's real
     // content to see.
     const hasText = grouped.some((g) => g.type === "text");
+    const stoppedSummary = message.stoppedByUser
+      ? formatStoppedWorkDuration(message.workDurationMs)
+      : undefined;
+    const hasWorkStatusGroup = displayGroups.some((g) => g.type === "tool-group" || g.type === "work-group");
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
+        {stoppedSummary && !hasWorkStatusGroup ? <WorkStatusHeader label={stoppedSummary} /> : null}
         {displayGroups.map((group) => {
           if (group.type === "text") {
             return (
@@ -1262,7 +1286,8 @@ export function MessageContent({
                 toolCalls={group.toolCalls}
                 defaultExpanded={!hasText}
                 isGenerating={isGenerating && !message.workDurationMs}
-                summaryOverride={message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined}
+                preferSummaryOverride={Boolean(stoppedSummary)}
+                summaryOverride={stoppedSummary || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
                 workStartedAtMs={message.timestamp}
               />
             );
@@ -1279,7 +1304,8 @@ export function MessageContent({
                 toolCalls={group.toolCalls}
                 defaultExpanded={!hasText}
                 isGenerating={isGenerating && !message.workDurationMs}
-                summaryOverride={formatWorkDuration(durationMs)}
+                preferSummaryOverride={Boolean(stoppedSummary)}
+                summaryOverride={stoppedSummary || formatWorkDuration(durationMs)}
                 workStartedAtMs={message.timestamp}
               />
             );
@@ -1299,24 +1325,30 @@ export function MessageContent({
   const displayText = !isUser && message.content.startsWith("Error: ")
     ? message.content.slice("Error: ".length)
     : message.content;
+  const stoppedSummary = !isUser && message.stoppedByUser
+    ? formatStoppedWorkDuration(message.workDurationMs)
+    : undefined;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 min-w-0 w-full">
       {attachmentsRow}
-      <MarkdownBlock
-        text={displayText}
-        isUser={isUser}
-        onOpenViewerPath={onOpenViewerPath}
-        renderSpecialCodeBlock={(language, content) => {
-          if (language === "mermaid") {
-            return <MermaidDiagramBlock chart={content} />;
-          }
-          if (language === "app-stats") {
-            return <AppStatsBlock content={content} />;
-          }
-          return null;
-        }}
-      />
+      {stoppedSummary ? <WorkStatusHeader label={stoppedSummary} /> : null}
+      {displayText ? (
+        <MarkdownBlock
+          text={displayText}
+          isUser={isUser}
+          onOpenViewerPath={onOpenViewerPath}
+          renderSpecialCodeBlock={(language, content) => {
+            if (language === "mermaid") {
+              return <MermaidDiagramBlock chart={content} />;
+            }
+            if (language === "app-stats") {
+              return <AppStatsBlock content={content} />;
+            }
+            return null;
+          }}
+        />
+      ) : null}
       {sourceFooter}
       {retryCta}
     </div>

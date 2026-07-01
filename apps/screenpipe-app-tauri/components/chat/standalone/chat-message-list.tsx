@@ -94,8 +94,8 @@ export function ChatMessageList({
         {(() => {
           const visibleMessages = messages.filter((m) => {
             if (m.role !== "assistant") return true;
-            if (m.content === "Processing..." && !m.contentBlocks?.length) return false;
-            if (!m.content && !m.contentBlocks?.length && !isSteeredAssistantMessage(m)) return false;
+            if (m.content === "Processing..." && !m.contentBlocks?.length && !m.stoppedByUser) return false;
+            if (!m.content && !m.contentBlocks?.length && !isSteeredAssistantMessage(m) && !m.stoppedByUser) return false;
             return true;
           });
 

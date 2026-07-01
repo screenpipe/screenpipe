@@ -748,7 +748,18 @@ export function usePiForegroundEvents({
                 contentBlocks.push({ type: "text", text: content });
               }
               return prev.map((m) => m.id === msgId
-                ? { ...m, content, contentBlocks, ...(emptyResponseRetryPrompt ? { retryPrompt: emptyResponseRetryPrompt } : {}) }
+                ? {
+                    ...m,
+                    content,
+                    contentBlocks,
+                    ...(wasStoppedByUser
+                      ? {
+                          workDurationMs: Math.max(1, Date.now() - m.timestamp),
+                          stoppedByUser: true,
+                        }
+                      : {}),
+                    ...(emptyResponseRetryPrompt ? { retryPrompt: emptyResponseRetryPrompt } : {}),
+                  }
                 : m);
             });
             if (!isPipeWatch) {
