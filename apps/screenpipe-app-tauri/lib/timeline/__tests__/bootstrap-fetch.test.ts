@@ -7,8 +7,10 @@ import {
 	shouldBootstrapFetchDay,
 	shouldBootstrapProbeNearestDay,
 	needsFullDayBackfillAfterPendingNav,
+	canResolvePendingNavigation,
+	getFullDayBackfillRangeIfNeeded,
 } from "@/lib/timeline/date-navigation-utils";
-import { startOfDay } from "date-fns";
+import { startOfDay, endOfDay } from "date-fns";
 
 const jun28Frames = [{ timestamp: "2026-06-28T12:00:00.000Z" }];
 const jun28 = new Date(2026, 5, 28);
@@ -139,5 +141,67 @@ describe("needsFullDayBackfillAfterPendingNav", () => {
 				seekingTimestamp: midnight,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("canResolvePendingNavigation", () => {
+	it("blocks resolution while pendingDateSwap is in flight", () => {
+		expect(
+			canResolvePendingNavigation({
+				hasPendingTarget: true,
+				framesLength: 10,
+				pendingDateSwap: true,
+				targetDayMatchesStoreDate: true,
+				hasFramesForTargetDay: true,
+			}),
+		).toBe(false);
+	});
+
+	it("allows resolution after swap completes", () => {
+		expect(
+			canResolvePendingNavigation({
+				hasPendingTarget: true,
+				framesLength: 10,
+				pendingDateSwap: false,
+				targetDayMatchesStoreDate: true,
+				hasFramesForTargetDay: true,
+			}),
+		).toBe(true);
+	});
+
+	it("rejects when target day frames are not loaded yet", () => {
+		expect(
+			canResolvePendingNavigation({
+				hasPendingTarget: true,
+				framesLength: 5,
+				pendingDateSwap: false,
+				targetDayMatchesStoreDate: true,
+				hasFramesForTargetDay: false,
+			}),
+		).toBe(false);
+	});
+});
+
+describe("getFullDayBackfillRangeIfNeeded", () => {
+	it("returns local day bounds for search jumps", () => {
+		const targetDate = new Date(2026, 5, 28, 14, 30);
+		const range = getFullDayBackfillRangeIfNeeded({
+			targetDate,
+			seekingTimestamp: targetDate.toISOString(),
+			pendingFrameId: 99,
+		});
+		expect(range).not.toBeNull();
+		expect(range!.start).toEqual(startOfDay(targetDate));
+		expect(range!.end).toEqual(endOfDay(targetDate));
+	});
+
+	it("returns null for calendar midnight navigation", () => {
+		const day = startOfDay(new Date(2026, 5, 28));
+		expect(
+			getFullDayBackfillRangeIfNeeded({
+				targetDate: day,
+				seekingTimestamp: day.toISOString(),
+			}),
+		).toBeNull();
 	});
 });

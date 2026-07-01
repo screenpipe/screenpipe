@@ -13,6 +13,8 @@ import {
 	SEARCH_NAV_TIMEOUT_MS,
 	navigationDirection,
 	needsFullDayBackfillAfterPendingNav,
+	canResolvePendingNavigation,
+	getFullDayBackfillRangeIfNeeded,
 	type DateChangeOptions,
 } from "@/lib/timeline/date-navigation-utils";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
@@ -304,6 +306,14 @@ export function useDateNavigation(opts: {
 			if (hasTargetDayFrames) {
 				setSearchNavFrame(true);
 				jumpToTime(targetDate, result.frame_id);
+				const backfill = getFullDayBackfillRangeIfNeeded({
+					targetDate,
+					seekingTimestamp: result.timestamp,
+					pendingFrameId: result.frame_id,
+				});
+				if (backfill) {
+					fetchTimeRange(backfill.start, backfill.end);
+				}
 				pendingNavigationRef.current = null;
 				pendingFrameIdRef.current = undefined;
 				setSeekingTimestamp(null);
@@ -311,7 +321,7 @@ export function useDateNavigation(opts: {
 				navigateDirectToDate(targetDate, result.frame_id);
 			}
 		}
-	}, [searchResults, highlightTerms, setHighlight, currentDate, frames, setSeekingTimestamp, navigateDirectToDate, pendingNavigationRef, setSearchNavFrame, jumpToTime]);
+	}, [searchResults, highlightTerms, setHighlight, currentDate, frames, setSeekingTimestamp, navigateDirectToDate, pendingNavigationRef, setSearchNavFrame, jumpToTime, fetchTimeRange]);
 	navigateToSearchResultRef.current = navigateToSearchResult;
 
 	const handleDateChange = useCallback(async (newDate: Date, options?: DateChangeOptions) => {
@@ -422,60 +432,74 @@ export function useDateNavigation(opts: {
 	}, [handleDateChange]);
 
 	useEffect(() => {
-		if (pendingNavigationRef.current && frames.length > 0) {
-			const targetDay = startOfDay(pendingNavigationRef.current);
-			const hasFramesForTargetDate = frames.some(frame =>
-				isSameDay(new Date(frame.timestamp), targetDay)
+		if (!pendingNavigationRef.current || frames.length === 0) {
+			return;
+		}
+
+		const targetDay = startOfDay(pendingNavigationRef.current);
+		const hasFramesForTargetDate = frames.some((frame) =>
+			isSameDay(new Date(frame.timestamp), targetDay),
+		);
+		const { pendingDateSwap } = useTimelineStore.getState();
+
+		if (
+			!canResolvePendingNavigation({
+				hasPendingTarget: true,
+				framesLength: frames.length,
+				pendingDateSwap,
+				targetDayMatchesStoreDate: isSameDay(targetDay, startOfDay(currentDate)),
+				hasFramesForTargetDay: hasFramesForTargetDate,
+			})
+		) {
+			return;
+		}
+
+		const pendingFrameId = pendingFrameIdRef.current;
+
+		let closestIndex = -1;
+		if (pendingFrameId != null) {
+			closestIndex = frames.findIndex((f) =>
+				isSameDay(new Date(f.timestamp), targetDay) &&
+				f.devices.some((d) => String(d.frame_id) === String(pendingFrameId))
 			);
-			if (isSameDay(targetDay, startOfDay(currentDate)) && hasFramesForTargetDate) {
-				const pendingFrameId = pendingFrameIdRef.current;
+		}
 
-				let closestIndex = -1;
-				if (pendingFrameId != null) {
-					closestIndex = frames.findIndex((f) =>
-						isSameDay(new Date(f.timestamp), targetDay) &&
-						f.devices.some((d) => String(d.frame_id) === String(pendingFrameId))
-					);
+		if (closestIndex < 0) {
+			const targetTime = seekingTimestamp
+				? new Date(seekingTimestamp).getTime()
+				: pendingNavigationRef.current!.getTime();
+			let closestDiff = Infinity;
+			closestIndex = 0;
+
+			frames.forEach((frame, index) => {
+				if (!isSameDay(new Date(frame.timestamp), targetDay)) return;
+				const frameTime = new Date(frame.timestamp).getTime();
+				const diff = Math.abs(frameTime - targetTime);
+				if (diff < closestDiff) {
+					closestDiff = diff;
+					closestIndex = index;
 				}
+			});
+		}
 
-				if (closestIndex < 0) {
-					const targetTime = seekingTimestamp
-						? new Date(seekingTimestamp).getTime()
-						: pendingNavigationRef.current.getTime();
-					let closestDiff = Infinity;
-					closestIndex = 0;
+		resetFilters();
+		const finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
+			frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
+			? closestIndex
+			: snapToDevice(closestIndex);
+		setCurrentIndex(finalIndex);
+		setCurrentFrame(frames[finalIndex]);
+		if (pendingFrameId != null) {
+			setSearchNavFrame(true);
+		}
 
-					frames.forEach((frame, index) => {
-						if (!isSameDay(new Date(frame.timestamp), targetDay)) return;
-						const frameTime = new Date(frame.timestamp).getTime();
-						const diff = Math.abs(frameTime - targetTime);
-						if (diff < closestDiff) {
-							closestDiff = diff;
-							closestIndex = index;
-						}
-					});
-				}
-
-				resetFilters();
-				const finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
-					frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
-					? closestIndex
-					: snapToDevice(closestIndex);
-				setCurrentIndex(finalIndex);
-				setCurrentFrame(frames[finalIndex]);
-				if (pendingFrameId != null) {
-					setSearchNavFrame(true);
-				}
-
-				const shouldBackfill = needsFullDayBackfillAfterPendingNav({
-					seekingTimestamp,
-					pendingFrameId: pendingFrameId ?? undefined,
-				});
-				finishNavigation();
-				if (shouldBackfill) {
-					fetchTimeRange(startOfDay(targetDay), endOfDay(targetDay));
-				}
-			}
+		const shouldBackfill = needsFullDayBackfillAfterPendingNav({
+			seekingTimestamp,
+			pendingFrameId: pendingFrameId ?? undefined,
+		});
+		finishNavigation();
+		if (shouldBackfill) {
+			fetchTimeRange(startOfDay(targetDay), endOfDay(targetDay));
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [frames, currentDate, seekingTimestamp, finishNavigation, fetchTimeRange]);

@@ -24,7 +24,7 @@ import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
-import { MAX_DATE_SEARCH_DAYS, navigationDirection, shouldBootstrapFetchDay, shouldBootstrapProbeNearestDay } from "@/lib/timeline/date-navigation-utils";
+import { MAX_DATE_SEARCH_DAYS, navigationDirection, shouldBootstrapFetchDay, shouldBootstrapProbeNearestDay, getFullDayBackfillRangeIfNeeded } from "@/lib/timeline/date-navigation-utils";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -428,7 +428,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					isNavigatingRef.current = false;
 					setIsNavigating(false);
 					pendingNavigationRef.current = null;
-					setPendingNavigation(null);
 					setSeekingTimestamp(null);
 
 					onWindowFocus();
@@ -443,7 +442,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters, visibleDayAnchor, setIsNavigating, setPendingNavigation]);
+	}, [onWindowFocus, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters, visibleDayAnchor, setIsNavigating]);
 
 	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {
@@ -542,6 +541,13 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			);
 			if (hasTargetDayFrames) {
 				jumpToTime(targetDate);
+				const backfill = getFullDayBackfillRangeIfNeeded({
+					targetDate,
+					seekingTimestamp: targetTimestamp,
+				});
+				if (backfill) {
+					fetchTimeRange(backfill.start, backfill.end);
+				}
 				pendingNavigationRef.current = null;
 				setSeekingTimestamp(null);
 				return;
@@ -555,7 +561,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		// nearest *day* (local midnight), landing the jump at the start of the
 		// day instead of the captured moment.
 		await navigateDirectToDate(targetDate);
-	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback, fetchTimeRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Listen for navigate-to-timestamp events from search window / deep links
 	useEffect(() => {
@@ -1121,6 +1127,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				);
 				if (hasTargetDayFrames) {
 					jumpToTime(targetDate, frameId);
+					const backfill = getFullDayBackfillRangeIfNeeded({
+						targetDate,
+						seekingTimestamp: timestamp,
+						pendingFrameId: frameId,
+					});
+					if (backfill) {
+						fetchTimeRange(backfill.start, backfill.end);
+					}
 					pendingNavigationRef.current = null;
 					setSeekingTimestamp(null);
 					return;
@@ -1129,7 +1143,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			navigateDirectToDate(targetDate, frameId);
 		});
 		return () => { unlisten.then(fn => fn()); };
-	}, [navigateDirectToDate, currentDate, frames, jumpToTime, setHighlight]);
+	}, [navigateDirectToDate, currentDate, frames, jumpToTime, setHighlight, fetchTimeRange]);
 
 	// The same Timeline component is used in both overlay and window mode.
 	// The window sizing/decoration is handled by Rust (window_api.rs).
@@ -1701,6 +1715,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 										if (hasTargetDayFrames) {
 											setSearchNavFrame(true);
 											jumpToTime(targetDate, frameId);
+											const backfill = getFullDayBackfillRangeIfNeeded({
+												targetDate,
+												seekingTimestamp: timestamp,
+												pendingFrameId: frameId,
+											});
+											if (backfill) {
+												fetchTimeRange(backfill.start, backfill.end);
+											}
 											pendingNavigationRef.current = null;
 											setSeekingTimestamp(null);
 										} else {

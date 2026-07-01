@@ -117,3 +117,41 @@ export function needsFullDayBackfillAfterPendingNav(options: {
 	const seek = new Date(options.seekingTimestamp);
 	return seek.getTime() !== startOfDay(seek).getTime();
 }
+
+/** Full-day fetch range after a search/deeplink jump, or null if unnecessary. */
+export function getFullDayBackfillRangeIfNeeded(options: {
+	targetDate: Date;
+	seekingTimestamp: string;
+	pendingFrameId?: number;
+}): { start: Date; end: Date } | null {
+	if (
+		!needsFullDayBackfillAfterPendingNav({
+			seekingTimestamp: options.seekingTimestamp,
+			pendingFrameId: options.pendingFrameId,
+		})
+	) {
+		return null;
+	}
+	const day = startOfDay(options.targetDate);
+	return { start: day, end: endOfDay(day) };
+}
+
+/**
+ * Pending in-app navigation must not resolve while a date swap is in flight —
+ * stale multi-day frames can satisfy hasFramesForTargetDay before the fetch replaces them.
+ */
+export function canResolvePendingNavigation(options: {
+	hasPendingTarget: boolean;
+	framesLength: number;
+	pendingDateSwap: boolean;
+	targetDayMatchesStoreDate: boolean;
+	hasFramesForTargetDay: boolean;
+}): boolean {
+	if (!options.hasPendingTarget || options.framesLength === 0) {
+		return false;
+	}
+	if (options.pendingDateSwap) {
+		return false;
+	}
+	return options.targetDayMatchesStoreDate && options.hasFramesForTargetDay;
+}
