@@ -609,6 +609,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
       toolName: (payload as any).toolName || "unknown",
       args: (payload as any).args || {},
       isRunning: true,
+      startedAtMs: Date.now(),
     };
     const blocks = [...((cur.contentBlocks as any[]) ?? []), { type: "tool", toolCall: tool }];
     store.actions.setStreaming(sid, { contentBlocks: blocks });
@@ -641,6 +642,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
               isRunning: false,
               result: truncated,
               isError: (payload as any).isError,
+              endedAtMs: Date.now(),
             },
           }
         : b

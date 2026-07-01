@@ -102,6 +102,9 @@ export function ChatMessageList({
           const renderItems = buildCollapsedSteerRenderItems(visibleMessages, {
             canCollapseSteerWork: !isLoading && !isStreaming && !activeSourceFooterMessageId,
           });
+          const activeAssistantMessageId =
+            activeSourceFooterMessageId ??
+            [...visibleMessages].reverse().find((candidate) => candidate.role === "assistant")?.id;
 
           return renderItems.map((item) => {
             if (item.type === "collapsed-steer-work") {
@@ -131,7 +134,7 @@ export function ChatMessageList({
             const isActiveStreamingAssistantMessage =
               message.role === "assistant" &&
               (isLoading || isStreaming) &&
-              message.id === activeSourceFooterMessageId;
+              message.id === activeAssistantMessageId;
             const shouldShowMessageActionBar =
               canShowMessageActions && !isActiveStreamingAssistantMessage;
             const nextAssistant = visibleMessages
@@ -201,7 +204,7 @@ export function ChatMessageList({
                         "relative rounded-xl text-sm overflow-hidden max-w-full transition-all",
                         message.role === "user"
                           ? "bg-muted/60 text-foreground px-4 py-3"
-                          : "bg-background text-foreground py-1",
+                          : "bg-background text-foreground py-1 w-full",
                         canEditMessage && editingMessageId !== message.id && "cursor-text",
                         editingMessageId === message.id && message.role === "user" && "w-full"
                       )}
@@ -264,6 +267,7 @@ export function ChatMessageList({
                       ) : (
                         <MessageContent
                           message={message}
+                          isGenerating={isActiveStreamingAssistantMessage}
                           deferSourceFooter={
                             suppressSourceFooters ||
                             citationPlan.deferredMessageIds.has(message.id) ||
@@ -279,7 +283,12 @@ export function ChatMessageList({
                   {!hideSupersededSteerBody && shouldShowMessageActionBar ? (
                     <>
                       {editingMessageId !== message.id && (
-                        <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 transition-all duration-200">
+                        <div
+                          className={cn(
+                            "flex items-center gap-0.5 mt-1 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 transition-all duration-200",
+                            message.role === "assistant" ? "self-start" : "self-end"
+                          )}
+                        >
                           <button
                             onClick={() => onCopyMessage(message)}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
@@ -411,8 +420,8 @@ export function ChatMessageList({
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.15 }}
               className={cn(
-                "w-fit ml-auto",
-                loaderPhase === "streaming"
+                "w-fit self-start",
+                loaderPhase === "streaming" || loaderPhase === "analyzing"
                   ? "px-2 py-1"
                   : "px-3 py-2 border border-border/50"
               )}

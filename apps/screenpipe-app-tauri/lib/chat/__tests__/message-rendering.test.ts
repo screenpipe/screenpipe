@@ -7,6 +7,7 @@ import type { Message } from "../types";
 import {
   buildCollapsedSteerRenderItems,
   collapsedSteerWorkDuration,
+  formatDurationParts,
   formatWorkDuration,
   getMessageIntentLabel,
   hasRenderableAssistantBody,
@@ -25,8 +26,11 @@ function message(overrides: Partial<Message> & Pick<Message, "id" | "role">): Me
 describe("message rendering helpers", () => {
   it("formats work duration labels", () => {
     expect(formatWorkDuration(0)).toBe("Worked");
-    expect(formatWorkDuration(1_000)).toBe("Worked for <1 min");
-    expect(formatWorkDuration(90_000)).toBe("Worked for 2 mins");
+    expect(formatWorkDuration(1_000)).toBe("Worked for 1s");
+    expect(formatWorkDuration(18_000)).toBe("Worked for 18s");
+    expect(formatWorkDuration(61_000)).toBe("Worked for 1 min 1 sec");
+    expect(formatWorkDuration(100_000)).toBe("Worked for 1 min 40 sec");
+    expect(formatDurationParts(60_000)).toBe("1 min");
   });
 
   it("detects placeholder titles and steered assistant messages", () => {
@@ -101,6 +105,6 @@ describe("message rendering helpers", () => {
       { canCollapseSteerWork: true }
     ).filter((renderItem) => renderItem.type === "collapsed-steer-work");
 
-    expect(collapsedSteerWorkDuration(item)).toBe("Worked for 1 min");
+    expect(collapsedSteerWorkDuration(item)).toBe("Worked for 1 min 15 sec");
   });
 });

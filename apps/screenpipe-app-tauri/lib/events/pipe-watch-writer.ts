@@ -242,6 +242,7 @@ function apply(sid: string, payload: AgentInnerEvent): void {
       toolName: (payload as any).toolName || "unknown",
       args: (payload as any).args || {},
       isRunning: true,
+      startedAtMs: Date.now(),
     };
     const blocks = [
       ...((cur.contentBlocks as any[]) ?? []),
@@ -276,6 +277,7 @@ function apply(sid: string, payload: AgentInnerEvent): void {
               isRunning: false,
               result: truncated,
               isError: (payload as any).isError,
+              endedAtMs: Date.now(),
             },
           }
         : b,

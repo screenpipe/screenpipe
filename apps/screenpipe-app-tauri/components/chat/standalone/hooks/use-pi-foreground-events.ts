@@ -334,6 +334,7 @@ export function usePiForegroundEvents({
               toolName: stringValue(data.toolName, "unknown"),
               args: isRecord(data.args) ? data.args : {},
               isRunning: true,
+              startedAtMs: Date.now(),
             };
             // Add tool block (text before it is already its own block)
             piContentBlocksRef.current.push({ type: "tool", toolCall });
@@ -356,6 +357,7 @@ export function usePiForegroundEvents({
                 block.toolCall.isRunning = false;
                 block.toolCall.result = truncated;
                 block.toolCall.isError = data.isError === true;
+                block.toolCall.endedAtMs = Date.now();
               }
             }
             const contentBlocks = [...piContentBlocksRef.current];
