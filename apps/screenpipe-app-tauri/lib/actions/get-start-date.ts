@@ -69,6 +69,18 @@ export async function getStartDate() {
 		const video = (await videoData.json())[0];
 		const audio = (await audioData.json())[0];
 
+		if (!video && !audio) {
+			return {
+				error: "no data found",
+			};
+		}
+		if (!video) {
+			return new Date(audio.timestamp);
+		}
+		if (!audio) {
+			return new Date(video.timestamp);
+		}
+
 		const videoStart = new Date(video.timestamp);
 		const audioStart = new Date(audio.timestamp);
 

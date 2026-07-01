@@ -86,6 +86,51 @@ export interface TimeRange {
 	end: Date;
 }
 
+// Sentinel lower bound used only until getStartDate() resolves the real
+// earliest-recording date. Must not impose any real restriction — a "1 year
+// ago" fallback here would lock out older recordings until the async fetch
+// (which may itself fail) completes. Exported for tests.
+export const UNRESOLVED_START_DATE = new Date(0);
+
+/**
+ * Computes the initial (pre-load) timeline bounds. `start` is a permissive
+ * placeholder until the real earliest-recording date is fetched — it must
+ * never be treated as a real lower bound.
+ */
+export function getInitialStartAndEndDates(now: Date): TimeRange {
+	return {
+		start: UNRESOLVED_START_DATE,
+		end: now,
+	};
+}
+
+// Retry delays (ms) between getStartDate() attempts. Exported so tests can
+// pass a fast override instead of waiting on real timers.
+export const START_DATE_RETRY_DELAYS_MS = [500, 1500, 3000];
+
+/**
+ * Fetches the real earliest-recording date, retrying on error so a single
+ * transient failure (timeout, malformed response, etc.) doesn't leave the
+ * timeline permanently stuck on the placeholder bound. Returns null only
+ * after all retries are exhausted (caller keeps whatever bound it already
+ * had).
+ */
+export async function fetchAndValidateStartDate(
+	fetchStartDate: () => ReturnType<typeof getStartDate> = getStartDate,
+	retryDelaysMs: number[] = START_DATE_RETRY_DELAYS_MS,
+): Promise<Date | null> {
+	for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+		const data = await fetchStartDate();
+		if (!("error" in data)) {
+			return data;
+		}
+		if (attempt < retryDelaysMs.length) {
+			await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]));
+		}
+	}
+	return null;
+}
+
 // Add this easing function at the top level
 const easeOutCubic = (x: number): number => {
 	return 1 - Math.pow(1 - x, 3);
@@ -106,14 +151,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// Stable guardRefs object for Live Text click guards — refs are stable, so useMemo with empty deps is fine
 	const guardRefs = useMemo(() => ({ filters: filtersRef, scrubber: scrubberRef }), []);
 
-	const [startAndEndDates, setStartAndEndDates] = useState<TimeRange>(() => {
+	const [startAndEndDates, setStartAndEndDates] = useState<TimeRange>(
 		// Lazy init to avoid SSR/client hydration mismatch from new Date()
-		const now = new Date();
-		return {
-			start: new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()),
-			end: now,
-		};
-	});
+		() => getInitialStartAndEndDates(new Date()),
+	);
 
 	// Performance tracking refs
 	const timelineOpenedAtRef = useRef<number>(performance.now());
@@ -858,12 +899,19 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 	useEffect(() => {
 		const getStartDateAndSet = async () => {
-			const data = await getStartDate();
-			if (!("error" in data)) {
+			const start = await fetchAndValidateStartDate();
+			if (start) {
 				setStartAndEndDates((prev) => ({
 					...prev,
-					start: data,
+					start,
 				}));
+			} else {
+				console.error("failed to resolve earliest recording date after retries");
+				toast({
+					title: "couldn't determine earliest recording",
+					description: "some older recordings may not be reachable — try reopening the timeline",
+					variant: "destructive",
+				});
 			}
 		};
 

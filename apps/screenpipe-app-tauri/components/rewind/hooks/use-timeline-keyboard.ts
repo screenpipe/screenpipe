@@ -269,7 +269,7 @@ export function useTimelineKeyboard(opts: {
 
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
-				if (!isPlaying) pausePlayback();
+				if (isPlaying) pausePlayback();
 				if (isAlt) {
 					// Alt+ArrowLeft = prev app boundary
 					setCurrentIndex((prev: number) => {
@@ -300,7 +300,7 @@ export function useTimelineKeyboard(opts: {
 				}
 			} else if (e.key === "ArrowRight") {
 				e.preventDefault();
-				if (!isPlaying) pausePlayback();
+				if (isPlaying) pausePlayback();
 				if (isAlt) {
 					// Alt+ArrowRight = next app boundary
 					setCurrentIndex((prev: number) => {
