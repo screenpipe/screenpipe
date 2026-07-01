@@ -77,6 +77,7 @@ mod pi;
 mod pi_command_queue;
 mod pipe_suggestions_scheduler;
 mod power_awake;
+mod process_exit;
 mod recording;
 mod remote_sync_commands;
 mod secrets;
@@ -658,8 +659,6 @@ async fn main() {
         // Obj-C (e.g. tao::send_event), we get panic_cannot_unwind and lose the real message.
         eprintln!("PANIC: {}", info);
 
-        let thread = std::thread::current();
-        let thread_name = thread.name().unwrap_or("<unnamed>");
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
             s.to_string()
         } else if let Some(s) = info.payload().downcast_ref::<String>() {
@@ -672,22 +671,15 @@ async fn main() {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_default();
 
-        // Suppress "tokio context being shutdown" panics from background
-        // tasks (redact workers, etc.) — these fire when a task is mid-
-        // sqlx/timer poll at the moment the runtime tears down on app
-        // quit. ServerCore::shutdown signals workers to exit cleanly, but
-        // a residual race is possible if the worker is inside an await
-        // that doesn't include the shutdown future. Either way, this is
-        // orderly-shutdown noise — not a crash — and logging it to
-        // last-panic.log + Sentry makes the app look unstable to users
-        // and skews crash-rate dashboards.
-        if payload.contains("Tokio 1.x context was found, but it is being shutdown") {
+        if crate::process_exit::is_orderly_shutdown_panic(&payload) {
             eprintln!(
-                "(suppressed tokio shutdown-time panic on thread '{}' at {})",
-                thread_name, location
+                "(suppressed orderly-shutdown panic at {}: {})",
+                location, payload
             );
             return;
         }
+
+        let thread_name = crate::process_exit::panic_thread_label();
 
         // Force-capture a backtrace before abort() kills us
         let backtrace = std::backtrace::Backtrace::force_capture();
@@ -997,7 +989,11 @@ async fn main() {
                         .separator();
                 }
                 let app_submenu = app_submenu_builder
-                    .item(&PredefinedMenuItem::quit(app, Some("Quit screenpipe"))?)
+                    .item(
+                        &MenuItemBuilder::with_id("quit_app", "Quit screenpipe")
+                            .accelerator("CmdOrCtrl+Q")
+                            .build(app)?,
+                    )
                     .build()?;
 
                 let edit_submenu = SubmenuBuilder::new(app, "Edit")
@@ -1033,6 +1029,9 @@ async fn main() {
                                     tracing::error!("menu: check for updates failed: {}", e);
                                 }
                             });
+                        }
+                        "quit_app" => {
+                            process_exit::request_app_quit(app_handle.clone());
                         }
                         _ => {}
                     }
@@ -1999,12 +1998,11 @@ async fn main() {
                         }
                     });
                 }
-                tauri::RunEvent::ExitRequested { api, .. } => {
-                    // When the user clicks "quit screenpipe" in the tray menu,
-                    // QUIT_REQUESTED is set to true — let the exit proceed.
-                    // Otherwise, prevent auto-exit so the app stays alive in the
-                    // tray when all windows are closed / destroyed.
-                    if tray::QUIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if code == Some(tauri::RESTART_EXIT_CODE) {
+                        process_exit::PENDING_RESTART.store(true, std::sync::atomic::Ordering::SeqCst);
+                        info!("ExitRequested event — app restart, allowing exit");
+                    } else if process_exit::QUIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("ExitRequested event — quit was requested, allowing exit");
                     } else {
                         info!("ExitRequested event — preventing (app stays in tray)");
@@ -2015,7 +2013,7 @@ async fn main() {
                 tauri::RunEvent::Exit => {
                     info!("App exiting — running cleanup");
 
-                    // Send app closed analytics
+                    // Best-effort analytics; do not block _exit on network.
                     let app_handle_v2 = app_handle.app_handle().clone();
                     tauri::async_runtime::spawn(async move {
                         if let Some(analytics) = app_handle_v2.try_state::<Arc<AnalyticsManager>>()
@@ -2031,37 +2029,14 @@ async fn main() {
                         }
                     });
 
-                    // Shut down embedded server (incl. audio manager / ggml Metal cleanup)
-                    // MUST happen synchronously before exit() runs C++ static destructors,
-                    // otherwise the ggml Metal device destructor hits a freed resource → SIGABRT.
-                    //
-                    // Run on a dedicated thread to avoid "Cannot start a runtime from within
-                    // a runtime" panic when the Exit event fires from a tokio async context.
-                    let app_handle_shutdown = app_handle.app_handle().clone();
-                    let _ = std::thread::spawn(move || {
-                        tauri::async_runtime::block_on(async move {
-                            if let Some(recording_state) =
-                                app_handle_shutdown.try_state::<recording::RecordingState>()
-                            {
-                                // Stop capture first (self-contained), then server
-                                if let Some(session) = recording_state.capture.lock().await.take() {
-                                    session.stop().await;
-                                }
-                                if let Some(server) = recording_state.server.lock().await.take() {
-                                    server.shutdown().await;
-                                }
-                            }
-                        })
-                    })
-                    .join();
+                    process_exit::run_blocking_pre_exit_teardown(app_handle.app_handle().clone());
 
-                    // Cleanup Pi sidecar
-                    let app_handle_pi = app_handle.app_handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Some(pi_state) = app_handle_pi.try_state::<pi::PiState>() {
-                            pi::cleanup_pi(&pi_state).await;
-                        }
-                    });
+                    if process_exit::PENDING_RESTART.load(std::sync::atomic::Ordering::SeqCst) {
+                        info!("Restart pending — returning from Exit without _exit");
+                        return;
+                    }
+
+                    process_exit::force_process_exit(0);
                 }
 
                 tauri::RunEvent::WindowEvent {

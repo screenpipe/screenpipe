@@ -770,7 +770,8 @@ export function cleanPipeStdout(raw: string): string {
   flushText();
   const text = parts.join("\n\n").trim();
   if (!text && errorMessage) {
-    return `error: ${errorMessage}`;
+    const parsed = parsePipeError(errorMessage);
+    return parsed.type === "unknown" ? `error: ${errorMessage}` : parsed.message;
   }
   return text;
 }

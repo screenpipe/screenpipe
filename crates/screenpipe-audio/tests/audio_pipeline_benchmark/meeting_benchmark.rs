@@ -8,7 +8,7 @@
 //! `MeetingDetector` and measures detection latency, recall, and false positives.
 //!
 //! Note: In v2, MeetingDetector is a thin wrapper around an AtomicBool override.
-//! The actual UI-scanning detection logic lives in `screenpipe-engine::meeting_detector`.
+//! The actual UI-scanning detection logic lives in `screenpipe-engine::meeting_watcher::ui_scan`.
 //! These benchmarks simulate the v2 detection by directly setting the override flag
 //! based on timeline events.
 

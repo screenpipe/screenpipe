@@ -75,21 +75,49 @@ jobs:
                   return None
 
           def parse_version(release_str):
-              """Extract the patch version number from release strings like 'screenpipe-app@2.0.259' or 'screenpipe-engine@0.3.51'"""
-              m = re.search(r"@(\d+\.\d+\.(\d+))", release_str)
+              """Extract semantic version from releases like 'screenpipe-app@2.5.84'."""
+              m = re.search(r"@(\d+)\.(\d+)\.(\d+)", release_str or "")
               if m:
-                  return int(m.group(2)), m.group(1)
+                  version = tuple(int(part) for part in m.groups())
+                  return version, ".".join(str(part) for part in version)
               return None, None
 
-          def get_current_patch(project_slug):
-              """Get the current patch version for a project"""
+          def parse_current_version(version_str):
+              parts = version_str.split(".")
+              if len(parts) < 3:
+                  return None
+              try:
+                  return tuple(int(part) for part in parts[:3])
+              except ValueError:
+                  return None
+
+          def get_current_version(project_slug):
+              """Get the current semantic version for a project."""
               if project_slug == "screenpipe-app":
-                  parts = APP_VERSION.split(".")
-                  return int(parts[-1]) if len(parts) >= 3 else None
+                  return parse_current_version(APP_VERSION)
               elif project_slug == "screenpipe-cli":
-                  parts = SERVER_VERSION.split(".")
-                  return int(parts[-1]) if len(parts) >= 3 else None
+                  return parse_current_version(SERVER_VERSION)
               return None
+
+          def version_gap(current_version, event_version):
+              if not current_version or not event_version:
+                  return None
+              if current_version[:2] != event_version[:2]:
+                  return None
+              return current_version[2] - event_version[2]
+
+          def should_resolve_version(current_version, event_version):
+              if not current_version or not event_version:
+                  return False, "unknown-version"
+              if event_version[:2] < current_version[:2]:
+                  return True, "older-major-minor"
+              if event_version[:2] > current_version[:2]:
+                  return False, "newer-major-minor"
+
+              gap = current_version[2] - event_version[2]
+              if gap >= VERSION_GAP:
+                  return True, f"patch-gap-{gap}"
+              return False, f"patch-gap-{gap}"
 
           def get_release_prefix(project_slug):
               if project_slug == "screenpipe-app":
@@ -126,16 +154,17 @@ jobs:
                       return f"top={function} ({filename})"
               return "stack=unavailable"
 
-          def issue_context(issue, event, release_tag, full_ver, gap):
+          def issue_context(issue, event, release_tag, full_ver, gap, reason):
               issue_url = issue.get("permalink") or issue.get("url") or ""
               culprit = issue.get("culprit") or "culprit=unknown"
               release_part = f"v{full_ver}" if full_ver else f"release={release_tag or 'missing'}"
-              gap_part = f"gap={gap}" if gap is not None else "gap=unknown"
-              return f"{release_part} ({gap_part}) {get_top_stack_frame(event)} culprit={culprit} {issue_url}".strip()
+              gap_part = f"gap={gap}" if gap is not None else "gap=n/a"
+              reason_part = f"reason={reason}" if reason else "reason=unknown"
+              return f"{release_part} ({gap_part}, {reason_part}) {get_top_stack_frame(event)} culprit={culprit} {issue_url}".strip()
 
           print(f"=== Sentry Cleanup ===")
-          print(f"App version: {APP_VERSION} (patch: {APP_VERSION.split('.')[-1]})")
-          print(f"Server version: {SERVER_VERSION} (patch: {SERVER_VERSION.split('.')[-1]})")
+          print(f"App version: {APP_VERSION}")
+          print(f"Server version: {SERVER_VERSION}")
           print(f"Version gap threshold: {VERSION_GAP}")
           print(f"Dry run: {DRY_RUN}")
           print()
@@ -144,14 +173,16 @@ jobs:
           skipped_count = 0
 
           for project in ["screenpipe-app", "screenpipe-cli"]:
-              current_patch = get_current_patch(project)
-              if current_patch is None:
+              current_version = get_current_version(project)
+              if current_version is None:
                   print(f"Could not determine current version for {project}, skipping")
                   continue
 
+              current_patch = current_version[2]
               threshold_patch = current_patch - VERSION_GAP
               print(f"--- {project} ---")
-              print(f"  Current patch: {current_patch}, threshold: {threshold_patch} (resolve if latest event <= {threshold_patch})")
+              print(f"  Current version: {'.'.join(str(part) for part in current_version)}")
+              print(f"  Patch threshold: {threshold_patch} (same major/minor only; older major/minor releases are stale)")
               print()
 
               # Fetch all unresolved issues for this project (use org-level endpoint for broader token compatibility)
@@ -175,9 +206,10 @@ jobs:
                   event_url = f"https://sentry.io/api/0/organizations/{ORG_SLUG}/issues/{issue_id}/events/latest/"
                   event = sentry_request(event_url)
                   release_tag = get_release_tag(event)
-                  event_patch, full_ver = parse_version(release_tag) if release_tag else (None, None)
-                  gap = current_patch - event_patch if event_patch is not None else None
-                  context = issue_context(issue, event, release_tag, full_ver, gap)
+                  event_version, full_ver = parse_version(release_tag) if release_tag else (None, None)
+                  gap = version_gap(current_version, event_version)
+                  should_resolve, reason = should_resolve_version(current_version, event_version)
+                  context = issue_context(issue, event, release_tag, full_ver, gap, reason)
 
                   # Skip if has assignee (someone is working on it)
                   if assignee:
@@ -199,12 +231,12 @@ jobs:
                       skipped_count += 1
                       continue
 
-                  if event_patch is None:
+                  if event_version is None:
                       print(f"  KEEP [{short_id}] release-unparseable {context} {event_count} events, {user_count} users - {title}")
                       skipped_count += 1
                       continue
 
-                  if gap >= VERSION_GAP:
+                  if should_resolve:
                       if DRY_RUN:
                           print(f"  WOULD RESOLVE [{short_id}] {context} {event_count} events, {user_count} users - {title}")
                       else:

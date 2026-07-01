@@ -167,6 +167,22 @@ describe("useEnterprisePolicy manual activation", () => {
     expect(mocks.commands.saveEnterpriseLicenseKey).not.toHaveBeenCalled();
   });
 
+  it("surfaces policy fetch failures with retryable copy", async () => {
+    mockEnterpriseApi({ policyStatus: 500 });
+    const { result } = await renderEnterprisePolicy();
+
+    let activation!: Awaited<ReturnType<typeof result.current.submitLicenseKey>>;
+    await act(async () => {
+      activation = await result.current.submitLicenseKey(KEY);
+    });
+
+    expect(activation).toEqual({
+      ok: false,
+      error: "could not validate license - check your connection and try again",
+    });
+    expect(mocks.commands.saveEnterpriseLicenseKey).not.toHaveBeenCalled();
+  });
+
   it("saves a valid key and closes the prompt before applying local policy", async () => {
     mockEnterpriseApi({ policy: { lockedSettings: { disableKeyboardCapture: "false" } } });
     const { result } = await renderEnterprisePolicy();

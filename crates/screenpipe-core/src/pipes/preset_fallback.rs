@@ -334,6 +334,17 @@ impl PresetFallbackRegistry {
     pub fn record_failure_from_output(&self, preset_id: &str, stderr: &str, stdout: &str) -> bool {
         let combined = format!("{} {}", stderr, stdout).to_lowercase();
 
+        // Bare "quota"/"billing" is deliberately avoided here: a transient rate
+        // limit that merely mentions those words (checked below) must still fall
+        // back rather than being treated as a terminal, non-retryable gate.
+        if combined.contains("daily_cost_limit_exceeded")
+            || combined.contains("daily_limit_exceeded")
+            || combined.contains("credits_exhausted")
+            || super::has_quota_exhausted_token(&combined)
+        {
+            return false;
+        }
+
         let reason = if combined.contains("rate limit")
             || combined.contains("rate_limit")
             || combined.contains("usage limit")
@@ -542,6 +553,18 @@ mod tests {
     fn test_retryable_errors() {
         let registry = PresetFallbackRegistry::new(Path::new("/tmp"));
         assert!(registry.record_failure("test", Some("rate_limited")));
+    }
+
+    #[test]
+    fn test_daily_limit_output_does_not_trip_breaker() {
+        let registry = fresh_registry("daily_limit_no_trip");
+        assert!(!registry.record_failure_from_output(
+            "test",
+            r#"429 "{\"error\":\"daily_cost_limit_exceeded\",\"message\":\"You've hit today's AI usage limit.\"}""#,
+            ""
+        ));
+        let presets = vec!["test".to_string()];
+        assert_eq!(registry.pick_preset(&presets), Some(("test", 0)));
     }
 
     /// Hermetic registry in a unique temp dir so persisted state can't leak

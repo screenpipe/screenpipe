@@ -23,16 +23,15 @@ jobs:
   windows-e2e-test:
     name: Windows E2E Tests
     runs-on: windows-2022
-    # NOT RUN ON PUSH/PR: build + 58-spec suite exceeds even a 120-min budget on
-    # windows-2022 runners (ran 2:01:09 → killed by the timeout), so it was
-    # CANCELLED on every run. continue-on-error does NOT cover timeout-cancellation,
-    # so it kept reddening E2E on every commit while never once completing or
-    # gating anything. Gated to manual workflow_dispatch until it's sharded/sped
-    # up (#4650); macOS + Linux are the required E2E gates. continue-on-error +
-    # timeout kept so a manual dispatch still won't hard-fail.
-    if: github.event_name == 'workflow_dispatch'
     continue-on-error: true
     timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_OPT_LEVEL: "0"
+      CARGO_PROFILE_DEV_CODEGEN_UNITS: "256"
+      CARGO_PROFILE_DEV_INCREMENTAL: "false"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      NEXT_TELEMETRY_DISABLED: "1"
     steps:
     - uses: actions/checkout@v4
 
@@ -103,15 +102,6 @@ jobs:
         target: x86_64-pc-windows-msvc
         cache-bin: false
 
-    - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
-
-    - name: Configure sccache
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-      shell: bash
-
     - name: Rust cache
       # cache restore/save is an optimization only; a transient GHA cache
       # service error must never fail the job (skipped build+tests, red CI)
@@ -119,8 +109,9 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
-        shared-key: screenpipe-tauri-e2e
+        shared-key: screenpipe-tauri-e2e-windows
         cache-bin: false
+        save-if: true
 
     - name: Configure Bun cache on same drive as workspace (Windows perf fix)
       shell: pwsh
@@ -178,6 +169,8 @@ jobs:
         # Bypass the billing gate in the e2e build so the suite exercises real
         # features; the dedicated gate spec re-enables it at runtime.
         NEXT_PUBLIC_SCREENPIPE_E2E: "true"
+        # Skip source maps in CI — faster Next.js compile, not needed for E2E.
+        NEXT_DISABLE_SOURCEMAPS: "1"
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"

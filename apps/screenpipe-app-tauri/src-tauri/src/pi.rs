@@ -875,9 +875,9 @@ fn apply_no_window(_cmd: &mut Command) {
 
 fn bun_command(bun: &str) -> Command {
     let mut cmd = Command::new(bun);
-    // Single source of truth in screenpipe-core: only strips LD_LIBRARY_PATH
-    // when running inside an AppImage (APPDIR set), so bun doesn't load the
-    // bundle's glibc/libstdc++ and crash.
+    // Single source of truth in screenpipe-core: on Linux, bun subprocesses
+    // must not inherit the app's LD_LIBRARY_PATH, or bundled runtimes like
+    // AppImage can make bun crash before it prints diagnostics.
     screenpipe_core::agents::pi::scrub_bun_runtime_env(&mut cmd);
     cmd
 }

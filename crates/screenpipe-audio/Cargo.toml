@@ -107,6 +107,11 @@ windows = { workspace = true, features = [
     "Win32_System_Threading",
     "Win32_Devices_FunctionDiscovery",
     "Win32_UI_Shell_PropertiesSystem",
+    # meeting_processes.rs WASAPI input-audio sensor: process resolution
+    # (OpenProcess/QueryFullProcessImageNameW + CloseHandle/HRESULT codes) and
+    # RDP-session detection (GetSystemMetrics/SM_REMOTESESSION).
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # Bundle ONNX Runtime at build time on Windows x86_64 (same as Linux/macOS-arm64).
@@ -128,7 +133,7 @@ libsamplerate-sys = { workspace = true }
 # so the `download-binaries` strategy that comes in transitively is overridden by
 # ORT_STRATEGY=system).
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-ort = { workspace = true, default-features = false, features = ["api-24", "tracing"] }
+ort = { workspace = true, default-features = false, features = ["api-24"] }
 ort-sys = { workspace = true }
 samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }

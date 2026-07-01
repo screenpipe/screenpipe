@@ -42,4 +42,29 @@ describe("EnterpriseLicensePrompt", () => {
     await waitFor(() => expect(screen.getByText("failed to validate license key")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: /activate/i })).not.toBeDisabled();
   });
+
+  it("normalizes lowercase and surrounding spaces before submit", async () => {
+    const onSubmit = vi.fn(async () => ({ ok: true }));
+    render(<EnterpriseLicensePrompt onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByPlaceholderText("ENT-XXXX-XXXX-XXXX-XXXX"), {
+      target: { value: "  ent-gwxx-rnub-lw9f-3ya6  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /activate/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("ENT-GWXX-RNUB-LW9F-3YA6"));
+  });
+
+  it("rejects malformed license keys locally", async () => {
+    const onSubmit = vi.fn(async () => ({ ok: true }));
+    render(<EnterpriseLicensePrompt onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByPlaceholderText("ENT-XXXX-XXXX-XXXX-XXXX"), {
+      target: { value: "not-a-license" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /activate/i }));
+
+    expect(await screen.findByText("enter a license key like ENT-XXXX-XXXX-XXXX-XXXX")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

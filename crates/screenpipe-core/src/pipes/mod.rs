@@ -1516,9 +1516,59 @@ fn parse_error_type_from_output(stderr: &str, stdout: &str) -> (Option<String>, 
     parse_error_type(stdout)
 }
 
+/// Specific tokens that mean a terminal provider quota/billing gate (no point
+/// retrying or falling back). Deliberately NOT a bare "quota"/"billing" match:
+/// transient rate-limit messages often mention those words (e.g. "rate limited —
+/// see your quota/billing dashboard"), and since quota is classified before
+/// rate_limit, a loose match would suppress a legitimate retry.
+pub(crate) const QUOTA_EXHAUSTED_TOKENS: &[&str] = &[
+    "insufficient_quota",
+    "quota_exhausted",
+    "quota exceeded",
+    "exceeded your current quota",
+    "billing_hard_limit",
+    "billing_not_active",
+    "check your plan and billing",
+    "credit balance is too low",
+];
+
+/// `text` must already be lowercased.
+pub(crate) fn has_quota_exhausted_token(text: &str) -> bool {
+    QUOTA_EXHAUSTED_TOKENS
+        .iter()
+        .any(|token| text.contains(token))
+}
+
 /// Parse structured error types from a single output string.
 fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     let lower = stderr.to_lowercase();
+    if let Some(parsed) = parse_structured_llm_error(stderr) {
+        return parsed;
+    }
+    if lower.contains("daily_cost_limit_exceeded") || lower.contains("daily_limit_exceeded") {
+        return (
+            Some("daily_limit".to_string()),
+            Some("daily AI usage limit reached".to_string()),
+        );
+    }
+    if lower.contains("credits_exhausted") {
+        return (
+            Some("credits_exhausted".to_string()),
+            Some("AI credits exhausted".to_string()),
+        );
+    }
+    if lower.contains("model_not_allowed") {
+        return (
+            Some("model_not_allowed".to_string()),
+            Some("model not available on current tier".to_string()),
+        );
+    }
+    if has_quota_exhausted_token(&lower) {
+        return (
+            Some("quota_exhausted".to_string()),
+            Some("provider quota or billing limit reached".to_string()),
+        );
+    }
     if lower.contains("rate limit") || lower.contains("429") || lower.contains("rate_limit") {
         return (
             Some("rate_limited".to_string()),
@@ -1557,6 +1607,117 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
         );
     }
     (None, None)
+}
+
+fn parse_structured_llm_error(input: &str) -> Option<(Option<String>, Option<String>)> {
+    for candidate in json_candidates(input) {
+        if let Some(parsed) = parse_llm_error_json(&candidate) {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn json_candidates(input: &str) -> Vec<String> {
+    let mut candidates = vec![input.to_string()];
+    let unescaped = input.replace("\\\"", "\"").replace("\\\\", "\\");
+    if unescaped != input {
+        candidates.push(unescaped);
+    }
+    candidates
+}
+
+fn parse_llm_error_json(input: &str) -> Option<(Option<String>, Option<String>)> {
+    for (idx, ch) in input.char_indices() {
+        if ch != '{' {
+            continue;
+        }
+        let slice = &input[idx..];
+        let mut stream = serde_json::Deserializer::from_str(slice).into_iter::<serde_json::Value>();
+        let Ok(value) = stream.next()? else {
+            continue;
+        };
+        if let Some(parsed) = classify_llm_error_value(&value) {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>, Option<String>)> {
+    let error_value = value.get("error").unwrap_or(value);
+    let error_name = value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let code = string_field(error_value, "code").or_else(|| string_field(value, "code"));
+    let error_type = string_field(error_value, "type").or_else(|| string_field(value, "type"));
+    let message = string_field(error_value, "message")
+        .or_else(|| string_field(value, "message"))
+        .or_else(|| error_name.clone());
+    let combined = [
+        error_name.as_deref(),
+        code.as_deref(),
+        error_type.as_deref(),
+        message.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase();
+
+    if combined.contains("daily_cost_limit_exceeded") || combined.contains("daily_limit_exceeded") {
+        return Some((
+            Some("daily_limit".to_string()),
+            Some(message.unwrap_or_else(|| "daily AI usage limit reached".to_string())),
+        ));
+    }
+    if combined.contains("credits_exhausted") {
+        return Some((
+            Some("credits_exhausted".to_string()),
+            Some(message.unwrap_or_else(|| "AI credits exhausted".to_string())),
+        ));
+    }
+    if combined.contains("model_not_allowed") {
+        return Some((
+            Some("model_not_allowed".to_string()),
+            Some(message.unwrap_or_else(|| "model not available on current tier".to_string())),
+        ));
+    }
+    if has_quota_exhausted_token(&combined) {
+        return Some((
+            Some("quota_exhausted".to_string()),
+            Some(message.unwrap_or_else(|| "provider quota or billing limit reached".to_string())),
+        ));
+    }
+    if combined.contains("rate_limit")
+        || combined.contains("rate limit")
+        || combined.contains("too many requests")
+    {
+        return Some((
+            Some("rate_limited".to_string()),
+            Some(message.unwrap_or_else(|| "rate limited by LLM provider".to_string())),
+        ));
+    }
+    None
+}
+
+fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
+    !matches!(
+        error_type,
+        Some(
+            "auth_failed"
+                | "credits_exhausted"
+                | "daily_limit"
+                | "model_not_allowed"
+                | "quota_exhausted"
+        )
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -3351,6 +3512,12 @@ impl PipeManager {
                 cleanup_pipe_token(token, self.token_registry.as_ref());
             }
 
+            let retry_error_type = if log.success {
+                None
+            } else {
+                parse_error_type_from_output(&log.stderr, &log.stdout).0
+            };
+
             // Immediate fallback retry: if the run failed and there is another
             // fallback preset we haven't tried this run, retry now with the next
             // one instead of waiting for the next scheduled run.
@@ -3362,9 +3529,12 @@ impl PipeManager {
             // crashes — so gating fallback on it meant the next model silently
             // never ran when the main one timed out or errored (#3914).
             let max_attempts = config.preset.len().min(preset_fallback::MAX_FALLBACK_DEPTH);
-            if let (false, Some(cur_idx), false) =
-                (log.success, active_preset_idx, cancelled_for_retry)
-            {
+            if let (false, Some(cur_idx), false, true) = (
+                log.success,
+                active_preset_idx,
+                cancelled_for_retry,
+                should_try_fallback_preset(retry_error_type.as_deref()),
+            ) {
                 let next_idx = cur_idx + 1;
                 if next_idx < max_attempts {
                     if let Some(next_preset_id) = config.preset.get(next_idx) {
@@ -6610,6 +6780,93 @@ mod tests {
     fn test_parse_error_type_rate_limited_429() {
         let (etype, _msg) = parse_error_type("429 rate limit exceeded");
         assert_eq!(etype.as_deref(), Some("rate_limited"));
+    }
+
+    #[test]
+    fn test_parse_error_type_daily_cost_limit_json() {
+        let (etype, msg) = parse_error_type(
+            r#"429 "{\"error\":\"daily_cost_limit_exceeded\",\"message\":\"You've hit today's AI usage limit.\",\"tier\":\"subscribed\"}""#,
+        );
+        assert_eq!(etype.as_deref(), Some("daily_limit"));
+        assert_eq!(msg.as_deref(), Some("You've hit today's AI usage limit."));
+    }
+
+    #[test]
+    fn test_parse_error_type_daily_cost_limit_code_string() {
+        let (etype, msg) = parse_error_type(r#"429 "daily_cost_limit_exceeded""#);
+        assert_eq!(etype.as_deref(), Some("daily_limit"));
+        assert_eq!(msg.as_deref(), Some("daily AI usage limit reached"));
+    }
+
+    #[test]
+    fn test_parse_error_type_credits_exhausted_json() {
+        let (etype, msg) = parse_error_type(
+            r#"429 {"error":"credits_exhausted","message":"You've used all free queries and have no credits remaining."}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("credits_exhausted"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("You've used all free queries and have no credits remaining.")
+        );
+    }
+
+    #[test]
+    fn test_parse_error_type_credits_exhausted_code_string() {
+        let (etype, msg) = parse_error_type(r#"429 "credits_exhausted""#);
+        assert_eq!(etype.as_deref(), Some("credits_exhausted"));
+        assert_eq!(msg.as_deref(), Some("AI credits exhausted"));
+    }
+
+    #[test]
+    fn test_parse_error_type_openai_insufficient_quota_json() {
+        let (etype, msg) = parse_error_type(
+            r#"429 {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("quota_exhausted"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("You exceeded your current quota, please check your plan and billing details.")
+        );
+    }
+
+    #[test]
+    fn test_parse_error_type_anthropic_rate_limit_json() {
+        let (etype, msg) = parse_error_type(
+            r#"429 {"type":"error","error":{"type":"rate_limit_error","message":"Your account has hit a rate limit."}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("rate_limited"));
+        assert_eq!(msg.as_deref(), Some("Your account has hit a rate limit."));
+    }
+
+    #[test]
+    fn test_parse_error_type_rate_limit_mentioning_quota_billing_stays_rate_limited() {
+        // quota is classified before rate_limit, so a bare "quota"/"billing"
+        // substring match would wrongly mark this terminal and suppress retry.
+        let (etype, _) = parse_error_type(
+            r#"429 {"error":{"type":"rate_limit_error","message":"Rate limited — see your quota and billing dashboard for details."}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("rate_limited"));
+
+        let (etype, _) =
+            parse_error_type("Error: rate limit reached — check your quota/billing dashboard");
+        assert_eq!(etype.as_deref(), Some("rate_limited"));
+    }
+
+    #[test]
+    fn test_parse_error_type_billing_hard_limit_is_quota_exhausted() {
+        let (etype, _) = parse_error_type(
+            r#"429 {"error":{"type":"billing_hard_limit","message":"billing_hard_limit reached"}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("quota_exhausted"));
+    }
+
+    #[test]
+    fn test_daily_limit_does_not_try_fallback_preset() {
+        assert!(!should_try_fallback_preset(Some("daily_limit")));
+        assert!(!should_try_fallback_preset(Some("credits_exhausted")));
+        assert!(!should_try_fallback_preset(Some("quota_exhausted")));
+        assert!(should_try_fallback_preset(Some("rate_limited")));
+        assert!(should_try_fallback_preset(Some("timeout")));
     }
 
     #[test]

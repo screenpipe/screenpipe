@@ -11,6 +11,13 @@ interface EnterpriseLicensePromptProps {
   onSubmit: (key: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
+const LICENSE_KEY_PATTERN = /^ENT-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+const LICENSE_KEY_FORMAT_ERROR = "enter a license key like ENT-XXXX-XXXX-XXXX-XXXX";
+
+function normalizeLicenseKey(value: string): string {
+  return value.trim().toUpperCase();
+}
+
 export function EnterpriseLicensePrompt({ onSubmit }: EnterpriseLicensePromptProps) {
   const [key, setKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -18,14 +25,18 @@ export function EnterpriseLicensePrompt({ onSubmit }: EnterpriseLicensePromptPro
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = key.trim();
-    if (!trimmed) return;
+    const normalized = normalizeLicenseKey(key);
+    if (!normalized) return;
+    if (!LICENSE_KEY_PATTERN.test(normalized)) {
+      setError(LICENSE_KEY_FORMAT_ERROR);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
     try {
-      const result = await onSubmit(trimmed);
+      const result = await onSubmit(normalized);
       if (!result.ok) {
         setError(result.error || "failed to validate license key");
       }
@@ -49,7 +60,10 @@ export function EnterpriseLicensePrompt({ onSubmit }: EnterpriseLicensePromptPro
           <input
             type="text"
             value={key}
-            onChange={(e) => setKey(e.target.value)}
+            onChange={(e) => {
+              setKey(e.target.value.toUpperCase());
+              if (error) setError(null);
+            }}
             placeholder="ENT-XXXX-XXXX-XXXX-XXXX"
             className="w-full px-3 py-2 text-sm border border-border rounded bg-background font-mono focus:outline-none focus:ring-2 focus:ring-ring"
             autoFocus
@@ -64,7 +78,7 @@ export function EnterpriseLicensePrompt({ onSubmit }: EnterpriseLicensePromptPro
 
           <button
             type="submit"
-            disabled={loading || !key.trim()}
+            disabled={loading || !normalizeLicenseKey(key)}
             className="w-full px-4 py-2 text-sm font-medium bg-foreground text-background rounded hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading ? (

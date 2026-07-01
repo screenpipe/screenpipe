@@ -12,7 +12,9 @@ use oasgen::{oasgen, OaSchema};
 use screenpipe_db::DatabaseManager;
 use screenpipe_db::{MeetingRecord, MeetingTranscriptSegment, MEETING_END_REASON_EXPLICIT_STOP};
 
-use crate::meeting_telemetry::{capture_detection_decision, capture_detection_feedback};
+use crate::meeting_watcher::shared::telemetry::{
+    capture_detection_decision, capture_detection_feedback,
+};
 use crate::server::AppState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

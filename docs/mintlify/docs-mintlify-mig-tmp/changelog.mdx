@@ -15,6 +15,10 @@ icon: "newspaper"
 
 - **↑ / ↓ to recall recent chat messages** — pressing the up arrow in an empty chat input now cycles back through your recent messages (down to move forward), so you can re-send or tweak a previous prompt without retyping. Works across pipe chats and the main chat surface.
 - **opt-in secret scrubbing for pi agent logs** — pi agent session logs can now be scrubbed of secrets by a background worker before they're shared or stored. Off by default; toggle it on in **settings → privacy** or via the CLI. See [privacy filter](/privacy-filter).
+- **actionable notification inbox** — the bell in the top bar is now a persistent inbox: notifications stick around after you close the popover, and each one can carry actions you run inline (including a new `chat` action that runs a prompt without needing a pipe). See [home](/home).
+- **pause recording per display from the dot popover** — click the recording dot in the menu bar to pause or resume screen capture for a specific monitor without stopping the others. Handy when you want to keep recording a work display while muting a personal one. See [permissions](/permissions).
+- **feedback shares settings + PII-redacted logs** — the in-app **Send feedback** flow now bundles your current settings and runs shared logs through the cloud PII model before upload, so support gets enough context to reproduce issues without you scrubbing files by hand. See [troubleshooting](/troubleshooting).
+- **enterprise: remote-trigger device log collection** — admins can now request logs from an enrolled device on demand; the always-on background loop picks up the request and uploads without user action. See [intune deployment](/intune-deployment).
 
 ### updates
 
@@ -31,6 +35,10 @@ icon: "newspaper"
 - **menu-bar menu opens on the first click (macOS)** — the macOS tray menu used to flash open then immediately close on the first click after launch, requiring a second click to actually use it. First-click open now works.
 - **audio reconciliation no longer loops on dedup collisions** — a rare race in audio dedup could leave the reconciliation loop retrying forever on a UNIQUE-constraint collision, spiking CPU. The loop now exits cleanly on the collision. See [meeting transcription](/meeting-transcription).
 - **app refocuses correctly after the macOS permission grant** — granting screen-recording permission during onboarding used to leave the app behind other windows with no way to bring it forward. The app now reliably shows, unminimizes, and refocuses after the system grant, so onboarding continues without a manual switch. See [getting started](/getting-started).
+- **opening the bell no longer marks every notification read** — clicking the notification bell used to instantly mark the entire inbox as read, so unread counts vanished the moment you peeked. Notifications now stay unread until you actually open or act on them. See [home](/home).
+- **search results grid reflows to fit the window** — resizing the app used to leave gaps or clip the last column on the search page. The results grid now auto-fills the container and reflows cleanly at every width. See [search screen history](/search-screen-history).
+- **Arch Linux AppImage launches again** — bundled `libavif` / `libsharpyuv` conflicted with system libraries on Arch, preventing the AppImage from starting. The conflicting bundled copies are now stripped and Arch is covered by a launch smoke test.
+- **enterprise: Windows updater falls back cleanly** — a failed update on Windows in the enterprise build could leave the app stuck instead of retrying through the fallback path. The fallback now runs as designed and the app updates on the next attempt.
 
 ## week of june 24, 2026
 

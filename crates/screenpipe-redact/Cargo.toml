@@ -111,23 +111,23 @@ optional = true
 # only (load-dynamic) and loads the bundled libonnxruntime.dylib at runtime.
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies.ort]
 workspace = true
-features = ["download-binaries", "copy-dylibs", "tracing", "api-24"]
+features = ["download-binaries", "copy-dylibs", "api-24"]
 optional = true
 
 [target.'cfg(target_os = "linux")'.dependencies.ort]
 workspace = true
-features = ["download-binaries", "copy-dylibs", "tracing", "api-24"]
+features = ["download-binaries", "copy-dylibs", "api-24"]
 optional = true
 
 [target.'cfg(target_os = "windows")'.dependencies.ort]
 workspace = true
-features = ["download-binaries", "copy-dylibs", "tracing", "api-24"]
+features = ["download-binaries", "copy-dylibs", "api-24"]
 optional = true
 
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies.ort]
 workspace = true
 default-features = false
-features = ["load-dynamic", "api-24", "tracing"]
+features = ["load-dynamic", "api-24"]
 optional = true
 
 [dependencies.ndarray]

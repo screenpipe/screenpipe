@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use screenpipe_a11y::tree::{create_tree_walker, TreeWalkResult, TreeWalkerConfig};
-use screenpipe_engine::meeting_detector::{
+use screenpipe_engine::meeting_watcher::{
     load_detection_profiles, MeetingDetectionProfile, MeetingUiScanner,
 };
 

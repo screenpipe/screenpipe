@@ -9,7 +9,7 @@
 //! This eliminates the heavy `find_video_chunks` polling that starved the DB pool.
 
 use chrono::{DateTime, Datelike, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, RwLock};
 use tracing::{info, warn};
@@ -221,7 +221,11 @@ impl HotFrameCache {
         match db.find_video_chunks(start, end).await {
             Ok(chunks) => {
                 let mut frame_count = 0;
+                let mut audio_count = 0;
+                let mut earliest_frame_ts: Option<DateTime<Utc>> = None;
+                let mut seen_audio = HashSet::new();
                 let mut frames = self.frames.write().await;
+                let mut audio_map = self.audio.write().await;
 
                 for frame_data in chunks.frames {
                     // Convert FrameData to HotFrames
@@ -251,44 +255,60 @@ impl HotFrameCache {
                         };
                         frames.insert((hot.timestamp, hot.frame_id), hot);
                         frame_count += 1;
+                        earliest_frame_ts =
+                            Some(earliest_frame_ts.map_or(frame_data.timestamp, |existing| {
+                                existing.min(frame_data.timestamp)
+                            }));
                     }
 
                     // Convert audio entries
-                    if !frame_data.audio_entries.is_empty() {
-                        let mut audio_map = self.audio.write().await;
-                        for audio_entry in &frame_data.audio_entries {
-                            let hot_audio = HotAudio {
-                                audio_chunk_id: audio_entry.audio_chunk_id,
-                                timestamp: frame_data.timestamp,
-                                transcription: Arc::from(audio_entry.transcription.as_str()),
-                                device_name: Arc::from(audio_entry.device_name.as_str()),
-                                is_input: audio_entry.is_input,
-                                audio_file_path: Arc::from(audio_entry.audio_file_path.as_str()),
-                                duration_secs: audio_entry.duration_secs,
-                                start_time: audio_entry.start_time,
-                                end_time: audio_entry.end_time,
-                                speaker_id: audio_entry.speaker_id,
-                                speaker_name: audio_entry.speaker_name.as_deref().map(Arc::from),
-                            };
-                            audio_map
-                                .entry(hot_audio.timestamp)
-                                .or_default()
-                                .push(hot_audio);
+                    for audio_entry in &frame_data.audio_entries {
+                        let audio_key = (
+                            audio_entry.audio_chunk_id,
+                            audio_entry.start_time.map(f64::to_bits),
+                            audio_entry.end_time.map(f64::to_bits),
+                            audio_entry.device_name.clone(),
+                            audio_entry.audio_file_path.clone(),
+                            audio_entry.transcription.clone(),
+                        );
+                        if !seen_audio.insert(audio_key) {
+                            continue;
                         }
+                        let hot_audio = HotAudio {
+                            audio_chunk_id: audio_entry.audio_chunk_id,
+                            timestamp: frame_data.timestamp,
+                            transcription: Arc::from(audio_entry.transcription.as_str()),
+                            device_name: Arc::from(audio_entry.device_name.as_str()),
+                            is_input: audio_entry.is_input,
+                            audio_file_path: Arc::from(audio_entry.audio_file_path.as_str()),
+                            duration_secs: audio_entry.duration_secs,
+                            start_time: audio_entry.start_time,
+                            end_time: audio_entry.end_time,
+                            speaker_id: audio_entry.speaker_id,
+                            speaker_name: audio_entry.speaker_name.as_deref().map(Arc::from),
+                        };
+                        audio_map
+                            .entry(hot_audio.timestamp)
+                            .or_default()
+                            .push(hot_audio);
+                        audio_count += 1;
                     }
                 }
+
+                drop(audio_map);
+                drop(frames);
 
                 // Only set cache coverage if we actually found frames. When the
                 // cache is empty (e.g. vision disabled, fresh install), we must
                 // NOT claim coverage — otherwise the streaming handler skips
                 // the DB backfill and the timeline stays permanently empty.
-                if frame_count > 0 {
-                    *self.cache_warm_start.write().await = Some(start);
+                if let Some(earliest) = earliest_frame_ts {
+                    *self.cache_warm_start.write().await = Some(earliest);
                 }
 
                 info!(
-                    "hot_frame_cache: warmed with {} frame entries, coverage from {}",
-                    frame_count, start
+                    "hot_frame_cache: warmed with {} frame entries and {} deduped audio entries, coverage from {:?}",
+                    frame_count, audio_count, earliest_frame_ts
                 );
             }
             Err(e) => {

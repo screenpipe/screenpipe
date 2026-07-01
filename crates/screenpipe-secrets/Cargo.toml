@@ -25,4 +25,4 @@ keyring = { workspace = true, features = ["linux-native-sync-persistent"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
-serial_test = "3"
+serial_test = "3.2.0"

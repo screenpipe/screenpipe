@@ -48,11 +48,12 @@ impl oasgen::OaParameter for OptionalPipePerms {}
 use chrono::{DateTime, Utc};
 use screenpipe_db::{ContentType, DatabaseManager, Order, SearchResult};
 
-use futures::future::{try_join, try_join_all};
+use futures::future::{join_all, try_join};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::hash_map::DefaultHasher,
+    future::Future,
     hash::{Hash, Hasher},
     str::FromStr,
     sync::Arc,
@@ -251,6 +252,49 @@ const RELATED_TAGS_LIMIT: u32 = 30;
 /// a generous safety net, not a normal-path limit.
 const RELATED_TAGS_TIMEOUT_SECS: u64 = 5;
 
+async fn attach_frames_to_ocr_items<F, Fut>(content_items: &mut [ContentItem], extract: F)
+where
+    F: Fn(String, i64) -> Fut,
+    Fut: Future<Output = Result<String, anyhow::Error>>,
+{
+    debug!("extracting frames for ocr content");
+    let frame_futures: Vec<_> = content_items
+        .iter()
+        .filter_map(|item| {
+            if let ContentItem::OCR(ocr_content) = item {
+                Some(extract(
+                    ocr_content.file_path.clone(),
+                    ocr_content.offset_index,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // join_all (not try_join_all): one frame that can't be extracted — e.g. an
+    // offset in the still-being-recorded chunk, or a corrupt file — must not
+    // discard the frames for the whole batch. A missing frame here is expected,
+    // so log it at debug rather than spamming warnings.
+    let frames = join_all(frame_futures).await;
+
+    let mut frames = frames.into_iter();
+    for item in content_items.iter_mut() {
+        if let ContentItem::OCR(ref mut ocr_content) = item {
+            match frames.next() {
+                Some(Ok(frame)) => ocr_content.frame = Some(frame),
+                Some(Err(e)) => {
+                    debug!(
+                        "skipping frame for {} at offset {}: {}",
+                        ocr_content.file_path, ocr_content.offset_index, e
+                    )
+                }
+                None => {}
+            }
+        }
+    }
+}
+
 /// Pluralize a tag namespace into the `related` map key. Mirrors the shape
 /// callers expect (`person:` → `people`, `project:` → `projects`,
 /// `workflow:` → `workflows`); unknown namespaces just get a trailing `s`.
@@ -283,6 +327,20 @@ fn group_related_tags(rows: Vec<(String, i64)>) -> std::collections::HashMap<Str
         }
     }
     grouped
+}
+
+const SEARCH_CACHE_MAX_ITEMS: usize = 200;
+const SEARCH_CACHE_MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
+fn estimated_search_response_bytes(response: &SearchResponse) -> usize {
+    serde_json::to_vec(response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn should_cache_search_response(response: &SearchResponse) -> bool {
+    response.data.len() <= SEARCH_CACHE_MAX_ITEMS
+        && estimated_search_response_bytes(response) <= SEARCH_CACHE_MAX_RESPONSE_BYTES
 }
 
 /// Middle-truncate a string to at most `max_chars` characters.
@@ -736,34 +794,10 @@ pub(crate) async fn search(
     }
 
     if query.include_frames {
-        debug!("extracting frames for ocr content");
-        let frame_futures: Vec<_> = content_items
-            .iter()
-            .filter_map(|item| {
-                if let ContentItem::OCR(ocr_content) = item {
-                    Some(extract_frame(
-                        &ocr_content.file_path,
-                        ocr_content.offset_index,
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let frames = match try_join_all(frame_futures).await {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::warn!("failed to extract some frames: {}", e);
-                vec![]
-            }
-        };
-
-        for (item, frame) in content_items.iter_mut().zip(frames.into_iter()) {
-            if let ContentItem::OCR(ref mut ocr_content) = item {
-                ocr_content.frame = Some(frame);
-            }
-        }
+        attach_frames_to_ocr_items(&mut content_items, |file_path, offset_index| async move {
+            extract_frame(&file_path, offset_index).await
+        })
+        .await;
     }
 
     debug!("search completed: found {} results", total);
@@ -839,8 +873,10 @@ pub(crate) async fn search(
         related,
     };
 
-    // Cache the result (only for queries without frame extraction)
-    if !query.include_frames {
+    // Cache the result (only for queries without frame extraction). Large
+    // search result sets can retain megabytes of OCR/audio text; keep those
+    // uncached so fanout traffic does not pin transient response bodies.
+    if !query.include_frames && should_cache_search_response(&response) {
         state
             .search_cache
             .insert(cache_key, Arc::new(response.clone()))
@@ -1010,6 +1046,72 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_ocr(frame_id: i64, file_path: &str) -> OCRContent {
+        OCRContent {
+            frame_id,
+            text: format!("ocr {frame_id}"),
+            timestamp: Utc::now(),
+            file_path: file_path.to_string(),
+            offset_index: 0,
+            app_name: "test".to_string(),
+            window_name: "test".to_string(),
+            tags: vec![],
+            frame: None,
+            frame_name: None,
+            browser_url: None,
+            focused: None,
+            device_name: "test-device".to_string(),
+            text_source: Some("ocr".to_string()),
+        }
+    }
+
+    fn test_memory(id: i64) -> MemoryContent {
+        MemoryContent {
+            id,
+            content: format!("memory {id}"),
+            source: "test".to_string(),
+            source_context: None,
+            tags: vec![],
+            importance: 0.0,
+            frame_id: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[tokio::test]
+    async fn include_frames_skips_failed_ocr_without_misaligning_interleaved_items() {
+        let mut items = vec![
+            ContentItem::OCR(test_ocr(1, "bad-frame.mp4")),
+            ContentItem::Memory(test_memory(10)),
+            ContentItem::OCR(test_ocr(2, "good-frame.mp4")),
+        ];
+
+        attach_frames_to_ocr_items(&mut items, |file_path, _offset_index| async move {
+            if file_path == "bad-frame.mp4" {
+                Err(anyhow::anyhow!("corrupt frame"))
+            } else {
+                Ok(format!("encoded:{file_path}"))
+            }
+        })
+        .await;
+
+        match &items[0] {
+            ContentItem::OCR(ocr) => assert_eq!(ocr.frame.as_deref(), None),
+            other => panic!("expected first item to stay OCR, got {other:?}"),
+        }
+        match &items[1] {
+            ContentItem::Memory(memory) => assert_eq!(memory.id, 10),
+            other => panic!("expected interleaved item to stay Memory, got {other:?}"),
+        }
+        match &items[2] {
+            ContentItem::OCR(ocr) => {
+                assert_eq!(ocr.frame.as_deref(), Some("encoded:good-frame.mp4"));
+            }
+            other => panic!("expected second OCR item, got {other:?}"),
+        }
+    }
 
     #[test]
     fn flexible_bool_accepts_common_truthy_falsy_values() {
@@ -1293,6 +1395,49 @@ mod tests {
         let rows = vec![("person:ada".to_string(), 3), ("person:ada".to_string(), 1)];
         let grouped = group_related_tags(rows);
         assert_eq!(grouped.get("people").unwrap(), &vec!["ada"]);
+    }
+
+    #[test]
+    fn test_search_response_cache_guard_rejects_large_payloads() {
+        let memory_item = |content: String| {
+            ContentItem::Memory(MemoryContent {
+                id: 1,
+                content,
+                source: "test".to_string(),
+                source_context: None,
+                tags: vec![],
+                importance: 0.0,
+                frame_id: None,
+                created_at: "2026-06-30T00:00:00Z".to_string(),
+                updated_at: "2026-06-30T00:00:00Z".to_string(),
+            })
+        };
+        let response = |data| SearchResponse {
+            data,
+            pagination: PaginationInfo {
+                limit: 20,
+                offset: 0,
+                total: 1,
+            },
+            cloud: None,
+            related: None,
+        };
+
+        assert!(should_cache_search_response(&response(vec![memory_item(
+            "small".to_string()
+        )])));
+
+        assert!(!should_cache_search_response(&response(vec![memory_item(
+            "x".repeat(SEARCH_CACHE_MAX_RESPONSE_BYTES + 1)
+        )])));
+
+        assert!(!should_cache_search_response(&response(vec![
+            memory_item(
+                "small".to_string()
+            );
+            SEARCH_CACHE_MAX_ITEMS
+                + 1
+        ])));
     }
 
     #[test]

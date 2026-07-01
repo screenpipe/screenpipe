@@ -8,7 +8,8 @@ use crate::health::{
     get_audio_device_status, get_high_fps_status, get_recording_info, get_recording_status,
     set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
-use crate::recording::{local_api_context_from_app, RecordingState, PRE_EXIT_TEARDOWN_TIMEOUT};
+use crate::process_exit;
+use crate::recording::{local_api_context_from_app, RecordingState};
 use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window::ShowRewindWindow;
@@ -32,15 +33,8 @@ use tauri_plugin_opener::OpenerExt;
 
 use tracing::{debug, error, info, warn};
 
-/// Flag set by the "quit screenpipe" menu item so that the ExitRequested
-/// handler in main.rs knows this is an intentional quit (not just a window close).
-pub static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// Latched once a quit teardown has started so repeated "Quit" clicks don't each
-/// spawn another blocking teardown. In the 2026-06-26 MacBook Air hang the user
-/// rage-clicked Quit while an update-restart looked frozen, and each click piled
-/// another unbounded `stop_screenpipe` onto the same wedged capture lock.
-pub static QUIT_TEARDOWN_STARTED: AtomicBool = AtomicBool::new(false);
+/// Re-export for callers that already import from tray.
+pub use crate::process_exit::QUIT_REQUESTED;
 
 /// Pre-fetched data for building the tray menu. All store reads, settings
 /// deserialization, and permission checks happen OFF the main thread; only
@@ -1477,65 +1471,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "quit" => {
             debug!("Quit requested");
-
-            // Signal that this is an intentional quit so the ExitRequested
-            // handler in main.rs won't prevent it.
-            QUIT_REQUESTED.store(true, Ordering::SeqCst);
-
-            // De-dupe rapid re-clicks: a teardown is already in flight and will
-            // force-exit shortly, so don't pile another one onto the same locks.
-            if QUIT_TEARDOWN_STARTED.swap(true, Ordering::SeqCst) {
-                debug!("Quit ignored — teardown already in progress");
-                return;
-            }
-
-            // Stop recording before exiting
-            let app_handle_clone = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                info!("Stopping screenpipe recording before quit...");
-                let teardown = async {
-                    if let Some(recording_state) = app_handle_clone.try_state::<RecordingState>() {
-                        // Stop capture first (self-contained)
-                        if let Some(session) = recording_state.capture.lock().await.take() {
-                            session.stop().await;
-                        }
-                        // Then shutdown server
-                        if let Some(server) = recording_state.server.lock().await.take() {
-                            server.shutdown().await;
-                        }
-                        info!("Screenpipe server + recording stopped successfully");
-                    }
-                };
-                // Never let a wedged capture/audio shutdown block the exit: the
-                // process is dying anyway, and a stuck quit is what stranded the
-                // 2026-06-26 MacBook Air for ~57s. Force-exit once the bound elapses.
-                if tokio::time::timeout(PRE_EXIT_TEARDOWN_TIMEOUT, teardown)
-                    .await
-                    .is_err()
-                {
-                    warn!(
-                        "quit: teardown exceeded {}s (capture shutdown wedged) — force-exiting",
-                        PRE_EXIT_TEARDOWN_TIMEOUT.as_secs()
-                    );
-                }
-                info!("All tasks stopped, exiting process");
-                // Use _exit() instead of exit() to skip C++ atexit/static destructors.
-                // The whisper/ggml Metal GPU context registers a global destructor that
-                // asserts during teardown (ggml_metal_rsets_free), causing SIGABRT.
-                // We've already done our own cleanup above, so atexit handlers have
-                // nothing useful left to do.
-                #[cfg(unix)]
-                {
-                    extern "C" {
-                        fn _exit(status: i32) -> !;
-                    }
-                    unsafe {
-                        _exit(0);
-                    }
-                }
-                #[cfg(not(unix))]
-                app_handle_clone.exit(0);
-            });
+            process_exit::request_app_quit(app_handle.clone());
         }
         _ => debug!("Unhandled menu event: {:?}", event.id()),
     }

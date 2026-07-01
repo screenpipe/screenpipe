@@ -4,7 +4,7 @@
 
 //! Meeting-detection eval harness.
 //!
-//! Drives the prod state machine (`screenpipe_engine::meeting_detector::advance_state`)
+//! Drives the prod state machine (`screenpipe_engine::meeting_watcher::advance_state`)
 //! against scripted scan traces and computes precision/recall/flap metrics.
 //!
 //! # Why this exists
@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use screenpipe_engine::meeting_detector::{advance_state, MeetingState, ScanResult, StateAction};
+use screenpipe_engine::meeting_watcher::{advance_state, MeetingState, ScanResult, StateAction};
 
 /// Scenario loaded from TOML.
 #[derive(Deserialize, Debug, Clone)]

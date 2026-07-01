@@ -70,17 +70,26 @@ pub fn mark_all_read() {
 
 pub fn mark_read_by_id(id: &str) -> bool {
     let mut history = read_all();
+    let (found, changed) = mark_read_by_id_in(&mut history, id);
+    if changed {
+        write_all(&history);
+    }
+    found
+}
+
+fn mark_read_by_id_in(entries: &mut [NotificationHistoryEntry], id: &str) -> (bool, bool) {
+    let mut found = false;
     let mut changed = false;
-    for entry in &mut history {
+    for entry in entries {
+        if entry.id == id {
+            found = true;
+        }
         if entry.id == id && !entry.read {
             entry.read = true;
             changed = true;
         }
     }
-    if changed {
-        write_all(&history);
-    }
-    changed
+    (found, changed)
 }
 
 pub fn remove_by_id(id: &str) -> bool {
@@ -97,4 +106,38 @@ pub fn remove_by_id(id: &str) -> bool {
 
 pub fn clear() {
     write_all(&[]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, read: bool) -> NotificationHistoryEntry {
+        NotificationHistoryEntry {
+            id: id.to_string(),
+            notification_type: "pipe".to_string(),
+            title: "title".to_string(),
+            body: "body".to_string(),
+            pipe_name: None,
+            source_session_id: None,
+            source_message_id: None,
+            source_url: None,
+            timestamp: "2026-07-01T00:00:00Z".to_string(),
+            read,
+            actions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn mark_read_by_id_is_idempotent_for_existing_entries() {
+        let mut entries = vec![entry("one", false), entry("two", true)];
+
+        assert_eq!(mark_read_by_id_in(&mut entries, "one"), (true, true));
+        assert!(entries[0].read);
+
+        assert_eq!(mark_read_by_id_in(&mut entries, "two"), (true, false));
+        assert!(entries[1].read);
+
+        assert_eq!(mark_read_by_id_in(&mut entries, "missing"), (false, false));
+    }
 }

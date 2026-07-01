@@ -4,7 +4,7 @@
 
 //! Minimal meeting detector — just an override flag for the audio pipeline.
 //!
-//! The actual meeting detection logic lives in `screenpipe-engine::meeting_detector`.
+//! The actual meeting detection logic lives in `screenpipe-engine::meeting_watcher`.
 //! This struct exists solely so the audio pipeline can query `is_in_meeting()` and
 //! `is_in_audio_session()` without depending on the engine crate.
 //!

@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   INTEGRATION_ICON_KEYS,
   TRY_IN_CHAT_PROMPTS,
+  getOAuthFallbackMessage,
   isMcpOAuthProviderTileConnected,
 } from "../connections-section";
 import { connectionNameToId } from "../../../lib/utils/connection-chip";
@@ -45,5 +46,18 @@ describe("isMcpOAuthProviderTileConnected", () => {
 
   it("does not apply MCP provider state to unrelated connections", () => {
     expect(isMcpOAuthProviderTileConnected("github", false, { github: true })).toBe(false);
+  });
+});
+
+describe("getOAuthFallbackMessage", () => {
+  it("surfaces a Zendesk token fallback when the OAuth app is unavailable", () => {
+    expect(getOAuthFallbackMessage("zendesk", "failed", "No such client")).toContain(
+      "connect with a token"
+    );
+  });
+
+  it("shows the Zendesk pending-flow hint only for Zendesk", () => {
+    expect(getOAuthFallbackMessage("zendesk", "pending")).toContain("No such client");
+    expect(getOAuthFallbackMessage("slack", "pending")).toBeNull();
   });
 });

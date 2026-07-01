@@ -955,8 +955,13 @@ pub async fn spawn_screenpipe(
                         return Ok(());
                     }
                     drop(capture_guard);
-                    // Start capture on existing server
-                    return start_capture_internal(&state, &app).await;
+                    // Start capture on existing server. If this fails before
+                    // start_capture_internal reaches its success cleanup, clear
+                    // startup flags so the next retry is not wedged.
+                    let result = start_capture_internal(&state, &app).await;
+                    state.is_starting.store(false, Ordering::SeqCst);
+                    state.is_starting_capture.store(false, Ordering::SeqCst);
+                    return result;
                 }
                 _ => {
                     warn!("Server exists but not responding, will do full restart");

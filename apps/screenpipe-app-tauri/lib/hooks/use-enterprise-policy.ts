@@ -808,7 +808,7 @@ export function useEnterprisePolicy() {
         ok: false,
         error: result.reason === "invalid_key"
           ? "invalid or expired license key"
-          : "could not reach server — check your internet connection",
+          : "could not validate license - check your connection and try again",
       };
     }
 

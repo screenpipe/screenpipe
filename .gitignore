@@ -51,6 +51,7 @@ app.py
 *.pyo
 *.pyd
 *.py
+!scripts/memory-leak/leak_hunt.py
 *.pyw
 *.pyz
 *.py3

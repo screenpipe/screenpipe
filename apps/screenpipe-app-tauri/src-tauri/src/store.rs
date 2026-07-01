@@ -462,7 +462,9 @@ pub fn reencrypt_store_file(app: &AppHandle) {
         let flag_path = base_dir.join(".encrypt-store");
         let store_path = base_dir.join("store.bin");
 
-        // Read the setting from the store JSON on disk
+        // Read the setting from the store JSON on disk. If the file is missing,
+        // encrypted, or temporarily unparsable, leave the flag unchanged; defaulting
+        // to "on" here silently opts users into repeated re-encryption churn.
         let encrypt_enabled = std::fs::read(&store_path)
             .ok()
             .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
@@ -470,13 +472,14 @@ pub fn reencrypt_store_file(app: &AppHandle) {
                 json.get("settings")
                     .and_then(|s| s.get("encryptStore"))
                     .and_then(|v| v.as_bool())
-            })
-            .unwrap_or(true);
+            });
 
-        if encrypt_enabled && !flag_path.exists() {
-            let _ = std::fs::write(&flag_path, b"");
-        } else if !encrypt_enabled && flag_path.exists() {
-            let _ = std::fs::remove_file(&flag_path);
+        if let Some(encrypt_enabled) = encrypt_enabled {
+            if encrypt_enabled && !flag_path.exists() {
+                let _ = std::fs::write(&flag_path, b"");
+            } else if !encrypt_enabled && flag_path.exists() {
+                let _ = std::fs::remove_file(&flag_path);
+            }
         }
 
         // Durably flush the plugin's non-atomic write of store.bin before we

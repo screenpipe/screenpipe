@@ -55,6 +55,14 @@ fn stream_frame_limit(requested: Option<usize>) -> usize {
         .clamp(1, MAX_STREAM_FRAME_LIMIT)
 }
 
+fn stream_db_fetch_limit(display_limit: usize) -> usize {
+    if display_limit == 0 {
+        0
+    } else {
+        MAX_STREAM_FRAME_LIMIT
+    }
+}
+
 /// Reduce an already-display-ordered list to at most `limit` items by keeping an
 /// evenly-spaced stride across the WHOLE list (both ends included), rather than
 /// `truncate`, which keeps only the head and silently drops the tail.
@@ -323,6 +331,7 @@ async fn handle_stream_frames_socket(
                         let end_time = request.end_time;
                         let is_descending = request.order == Order::Descending;
                         let limit = stream_frame_limit(request.limit);
+                        let db_fetch_limit = stream_db_fetch_limit(limit);
 
                         // Clear sent IDs for new request
                         sent_ids_clone.lock().await.clear();
@@ -337,11 +346,12 @@ async fn handle_stream_frames_socket(
                             && end_time >= now;
 
                         info!(
-                            "WebSocket stream request: {} to {} (source={}, limit={})",
+                            "WebSocket stream request: {} to {} (source={}, limit={}, db_fetch_limit={})",
                             start_time,
                             end_time,
                             if is_today { "hot_cache" } else { "database" },
-                            limit
+                            limit,
+                            db_fetch_limit
                         );
 
                         // Set live subscription flag
@@ -404,6 +414,7 @@ async fn handle_stream_frames_socket(
                             };
 
                             let backfill_limit = limit.saturating_sub(initial_count);
+                            let backfill_fetch_limit = stream_db_fetch_limit(backfill_limit);
                             if backfill_needed && backfill_limit > 0 {
                                 let backfill_end = cache_start.unwrap_or(end_time);
                                 let frame_tx_db = frame_tx.clone();
@@ -411,7 +422,12 @@ async fn handle_stream_frames_socket(
                                 let sent_ids_backfill = sent_ids_clone.clone();
                                 tokio::spawn(async move {
                                     match db_backfill
-                                        .find_video_chunks(start_time, backfill_end)
+                                        .find_video_chunks_limited(
+                                            start_time,
+                                            backfill_end,
+                                            backfill_fetch_limit,
+                                            request_order(is_descending),
+                                        )
                                         .await
                                     {
                                         Ok(mut chunks) => {
@@ -425,33 +441,18 @@ async fn handle_stream_frames_socket(
                                                     .sort_by_key(|a| (a.timestamp, a.offset_index));
                                             }
                                             downsample_in_place(&mut chunks.frames, backfill_limit);
-                                            // Record sent IDs first, then drop lock
-                                            // before sending frames. Previously the
-                                            // lock was held across channel sends,
-                                            // deadlocking with the send_handle which
-                                            // needs the same lock to process live
-                                            // frames (the only channel consumer).
-                                            let frames_to_send: Vec<_> = {
-                                                let mut sent = sent_ids_backfill.lock().await;
-                                                chunks
-                                                    .frames
-                                                    .into_iter()
-                                                    .filter_map(|chunk| {
-                                                        if sent.contains(&chunk.frame_id) {
-                                                            return None;
-                                                        }
-                                                        sent.insert(chunk.frame_id);
-                                                        let frame = create_time_series_frame(chunk);
-                                                        if frame.frame_data.is_empty() {
-                                                            None
-                                                        } else {
-                                                            Some(frame)
-                                                        }
-                                                    })
-                                                    .collect()
-                                            }; // lock dropped
-
-                                            for frame in frames_to_send {
+                                            for chunk in chunks.frames {
+                                                let should_send = {
+                                                    let mut sent = sent_ids_backfill.lock().await;
+                                                    sent.insert(chunk.frame_id)
+                                                };
+                                                if !should_send {
+                                                    continue;
+                                                }
+                                                let frame = create_time_series_frame(chunk);
+                                                if frame.frame_data.is_empty() {
+                                                    continue;
+                                                }
                                                 if frame_tx_db.send(frame).await.is_err() {
                                                     break;
                                                 }
@@ -714,7 +715,14 @@ async fn fetch_and_process_frames_with_tracking(
     limit: usize,
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
 ) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
-    let mut chunks = db.find_video_chunks(start_time, end_time).await?;
+    let mut chunks = db
+        .find_video_chunks_limited(
+            start_time,
+            end_time,
+            stream_db_fetch_limit(limit),
+            request_order(is_descending),
+        )
+        .await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
 
     // Sort chunks based on order
@@ -727,29 +735,16 @@ async fn fetch_and_process_frames_with_tracking(
     }
     downsample_in_place(&mut chunks.frames, limit);
 
-    // Record all sent IDs in one lock acquisition, then drop the lock
-    // before sending frames through the channel. Acquiring the lock per-frame
-    // or holding it across async sends can contend with the send_handle's
-    // live-frame path which also needs this lock.
-    let frames_to_send: Vec<_> = {
-        let mut sent = sent_frame_ids.lock().await;
-        chunks
-            .frames
-            .into_iter()
-            .filter_map(|chunk| {
-                sent.insert(chunk.frame_id);
-                let ts = chunk.timestamp;
-                let frame = create_time_series_frame(chunk);
-                if frame.frame_data.is_empty() {
-                    None
-                } else {
-                    Some((ts, frame))
-                }
-            })
-            .collect()
-    }; // lock dropped
-
-    for (ts, frame) in frames_to_send {
+    for chunk in chunks.frames {
+        {
+            let mut sent = sent_frame_ids.lock().await;
+            sent.insert(chunk.frame_id);
+        }
+        let ts = chunk.timestamp;
+        let frame = create_time_series_frame(chunk);
+        if frame.frame_data.is_empty() {
+            continue;
+        }
         if latest_timestamp.is_none() || ts > latest_timestamp.unwrap() {
             latest_timestamp = Some(ts);
         }
@@ -757,6 +752,14 @@ async fn fetch_and_process_frames_with_tracking(
     }
 
     Ok(latest_timestamp)
+}
+
+fn request_order(is_descending: bool) -> Order {
+    if is_descending {
+        Order::Descending
+    } else {
+        Order::Ascending
+    }
 }
 
 async fn pending_batch_flush(next_flush_at: Option<TokioInstant>) {
@@ -795,7 +798,7 @@ async fn send_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use screenpipe_db::{AudioEntry as DbAudioEntry, FrameData, OCREntry};
+    use screenpipe_db::{AudioEntry as DbAudioEntry, FrameData, OCREntry, OcrEngine};
 
     fn create_test_frame_data(num_ocr_entries: usize, num_audio_entries: usize) -> FrameData {
         let ocr_entries: Vec<OCREntry> = (0..num_ocr_entries)
@@ -922,6 +925,83 @@ mod tests {
         assert_eq!(
             stream_frame_limit(Some(MAX_STREAM_FRAME_LIMIT + 1)),
             MAX_STREAM_FRAME_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_stream_db_fetch_limit_uses_memory_cap_not_display_limit() {
+        assert_eq!(stream_db_fetch_limit(0), 0);
+        assert_eq!(stream_db_fetch_limit(1), MAX_STREAM_FRAME_LIMIT);
+        assert_eq!(stream_db_fetch_limit(500), MAX_STREAM_FRAME_LIMIT);
+        assert_eq!(stream_db_fetch_limit(2_500), MAX_STREAM_FRAME_LIMIT);
+        assert_eq!(
+            stream_db_fetch_limit(MAX_STREAM_FRAME_LIMIT),
+            MAX_STREAM_FRAME_LIMIT
+        );
+    }
+
+    #[tokio::test]
+    async fn timeline_fetch_downsamples_after_bounded_db_fetch() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .expect("in-memory database should initialize"),
+        );
+        db.insert_video_chunk("/tmp/timeline-regression.mp4", "monitor")
+            .await
+            .expect("video chunk should insert");
+
+        let start = DateTime::parse_from_rfc3339("2026-06-28T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let total_frames = 3_000usize;
+        let display_limit = 2_500usize;
+        let seeded_frames: Vec<_> = (0..total_frames)
+            .map(|idx| {
+                (
+                    start + chrono::Duration::seconds(idx as i64),
+                    idx as i64,
+                    Vec::new(),
+                )
+            })
+            .collect();
+
+        db.insert_multi_frames_with_ocr_batch(
+            "monitor",
+            &seeded_frames,
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .expect("frames should seed");
+
+        let end = start + chrono::Duration::seconds(total_frames as i64 - 1);
+        let (frame_tx, mut frame_rx) = mpsc::channel(display_limit + 1);
+        let latest_timestamp = fetch_and_process_frames_with_tracking(
+            db,
+            start,
+            end,
+            frame_tx,
+            true,
+            display_limit,
+            Arc::new(Mutex::new(std::collections::HashSet::new())),
+        )
+        .await
+        .expect("timeline fetch should succeed");
+
+        let mut streamed_frames = Vec::new();
+        while let Some(frame) = frame_rx.recv().await {
+            streamed_frames.push(frame);
+        }
+
+        assert_eq!(streamed_frames.len(), display_limit);
+        assert_eq!(streamed_frames.first().unwrap().timestamp, end);
+        assert_eq!(streamed_frames.last().unwrap().timestamp, start);
+        assert_eq!(latest_timestamp, Some(end));
+        assert!(
+            streamed_frames
+                .windows(2)
+                .all(|window| window[0].timestamp > window[1].timestamp),
+            "descending stream order should be preserved after downsampling"
         );
     }
 

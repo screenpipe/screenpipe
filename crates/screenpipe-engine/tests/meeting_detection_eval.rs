@@ -17,7 +17,7 @@
 
 use std::time::{Duration, Instant};
 
-use screenpipe_engine::meeting_detector::{
+use screenpipe_engine::meeting_watcher::{
     advance_state, audio_or_calendar_keepalive, MeetingState, ScanResult, StateAction,
 };
 
