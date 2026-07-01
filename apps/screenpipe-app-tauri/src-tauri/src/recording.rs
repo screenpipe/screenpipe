@@ -841,9 +841,14 @@ pub async fn spawn_screenpipe(
     //
     // A 30-minute safety ceiling prevents a wedged start from hanging the app
     // forever; for context, even a 100GB migration finishes in ~1 minute.
+    // If the phase is already "ready" but HTTP is unreachable, treat that as
+    // stale state after a short grace period. This happens when a restart dies
+    // before publishing a fresh boot phase, leaving "ready" from the previous
+    // server instance behind.
     if state.is_starting.swap(true, Ordering::SeqCst) {
         info!("Server start already in progress, waiting for boot phase...");
         const MAX_WAIT_SECS: u64 = 1800; // 30 minutes
+        const STALE_READY_TAKEOVER_SECS: u64 = 10;
         const POLL_MS: u64 = 500;
         let start_wait = std::time::Instant::now();
         loop {
@@ -863,7 +868,21 @@ pub async fn spawn_screenpipe(
             match phase.phase.as_str() {
                 "ready" => {
                     // Phase says ready — HTTP may be binding right now. Loop
-                    // once more without extra wait; it'll resolve on next poll.
+                    // briefly, but do not let stale "ready" state mask a dead
+                    // server forever.
+                    if start_wait.elapsed()
+                        > std::time::Duration::from_secs(STALE_READY_TAKEOVER_SECS)
+                    {
+                        warn!(
+                            "In-flight server start still unreachable after {}s despite boot phase=ready — taking over stale start",
+                            STALE_READY_TAKEOVER_SECS
+                        );
+                        state.is_starting.store(false, Ordering::SeqCst);
+                        if state.is_starting.swap(true, Ordering::SeqCst) {
+                            return Ok(());
+                        }
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
                     continue;
                 }
@@ -959,8 +978,21 @@ pub async fn spawn_screenpipe(
         }
     }
 
-    // Kill orphaned processes
-    kill_process_on_port(port).await;
+    // Kill orphaned processes. Bound the cleanup so a hung OS helper cannot
+    // leak `is_starting=true` and wedge future restarts behind the
+    // "start already in progress" guard.
+    if tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        kill_process_on_port(port),
+    )
+    .await
+    .is_err()
+    {
+        warn!(
+            "Timed out while killing orphaned process(es) on port {}; continuing with port-release wait",
+            port
+        );
+    }
 
     // Wait for port release
     let max_poll_iters = if cfg!(windows) { 40 } else { 20 };
@@ -1178,6 +1210,8 @@ pub async fn spawn_screenpipe(
     match result_rx.await {
         Ok(Ok(())) => {
             info!("Screenpipe started successfully");
+            state.is_starting.store(false, Ordering::SeqCst);
+            state.is_starting_capture.store(false, Ordering::SeqCst);
             let spawn_epoch = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1195,6 +1229,7 @@ pub async fn spawn_screenpipe(
         }
         Err(_) => {
             state.is_starting.store(false, Ordering::SeqCst);
+            state.is_starting_capture.store(false, Ordering::SeqCst);
             Err("Server startup channel dropped unexpectedly".to_string())
         }
     }

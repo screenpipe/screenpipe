@@ -966,6 +966,7 @@ export function PipesSection() {
   // Per-pipe recent executions (always fetched for all pipes)
   const [pipeExecutions, setPipeExecutions] = useState<Record<string, PipeExecution[]>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [runningPipe, setRunningPipe] = useState<string | null>(null);
   const [stoppingPipe, setStoppingPipe] = useState<string | null>(null);
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
@@ -1140,6 +1141,7 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
+      setLoadError(null);
       // Load pipes WITH recent executions inline so the list shows the real
       // last-run status. Without this the "last run" column always reads
       // "never run" for pipes that have actually run (the badge is driven by
@@ -1149,7 +1151,13 @@ export function PipesSection() {
       // tab still loads lazily via /pipes/:name/executions.
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5_000);
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+      const pipesEndpoint = isRemote
+        ? `${apiBase}/pipes?include_executions=true`
+        : "/pipes?include_executions=true";
+      const res = await localFetch(pipesEndpoint, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+      if (!res.ok) {
+        throw new Error(`pipes api returned ${res.status}`);
+      }
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -1188,10 +1196,16 @@ export function PipesSection() {
       });
     } catch (e) {
       console.error("failed to fetch pipes:", e);
+      const message = (e as any)?.name === "AbortError"
+        ? `timed out connecting to ${apiBase}`
+        : e instanceof Error
+          ? e.message
+          : "failed to fetch pipes";
+      setLoadError(message);
     } finally {
       setLoading(false);
     }
-  }, [apiBase]);
+  }, [apiBase, isRemote]);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -2008,6 +2022,28 @@ export function PipesSection() {
             </Card>
           ))}
         </div>
+      ) : loadError ? (
+        <Card>
+          <CardContent className="py-8 text-center">
+            <div className="mx-auto max-w-md space-y-4 text-muted-foreground">
+              <AlertCircle className="h-7 w-7 mx-auto text-muted-foreground/70" />
+              <div>
+                <p className="text-foreground font-medium text-base">
+                  {isRemote ? "couldn't load pipes from this device" : "screenpipe backend is unavailable"}
+                </p>
+                <p className="text-sm mt-1">
+                  {isRemote
+                    ? `the remote API at ${apiBase} did not answer. check that screenpipe is running on that device.`
+                    : `your pipe files may still be installed, but the local API at ${apiBase} did not answer.`}
+                </p>
+                <p className="text-xs mt-2 font-mono text-muted-foreground/80">{loadError}</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void fetchPipes()}>
+                retry
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       ) : filteredPipes.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">

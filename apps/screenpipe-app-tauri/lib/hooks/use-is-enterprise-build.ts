@@ -7,7 +7,24 @@ import { commands } from "@/lib/utils/tauri";
 let cachedResult: boolean | null = null;
 let pendingPromise: Promise<boolean> | null = null;
 
+export const E2E_FORCE_ENTERPRISE_BUILD_KEY = "screenpipe_e2e_force_enterprise_build";
+
+function isE2eEnterpriseForced(): boolean {
+  if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" || typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage?.getItem(E2E_FORCE_ENTERPRISE_BUILD_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 async function resolveEnterpriseBuild(): Promise<boolean> {
+  if (isE2eEnterpriseForced()) {
+    cachedResult = true;
+    return true;
+  }
   if (cachedResult !== null) return cachedResult;
   if (pendingPromise) return pendingPromise;
 

@@ -79,7 +79,7 @@ pick **Manually configure detection rules**. for first-time installs, a file-exi
 |---|---|
 | rule type | File |
 | path | `%ProgramFiles%\screenpipe` |
-| file or folder | `screenpipe.exe` |
+| file or folder | `screenpipe-app.exe` |
 | detection method | File or folder exists |
 | associated with a 32-bit app on 64-bit clients | No |
 
@@ -146,7 +146,7 @@ screenpipe needs the license key to enable enterprise mode (centralized telemetr
 ## verifying the deployment
 
 - in the Intune admin center: **Apps → screenpipe → Device install status** shows per-device install state
-- on the device: `C:\Program Files\screenpipe\screenpipe.exe` exists, screenpipe icon appears in the system tray after first user sign-in
+- on the device: `C:\Program Files\screenpipe\screenpipe-app.exe` exists, screenpipe icon appears in the system tray after first user sign-in
 - in the [enterprise dashboard](https://screenpi.pe/enterprise) → **devices** tab: each installed device starts heartbeating within minutes of launch, scoped to your license
 
 ## troubleshooting

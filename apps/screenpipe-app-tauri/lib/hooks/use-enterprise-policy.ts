@@ -59,8 +59,118 @@ const ENTERPRISE_DEFAULT_HIDDEN = ["referral"];
 
 // Re-fetch policy every 5 minutes so admin changes propagate without app restart
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+const LOCAL_POLICY_COMMAND_TIMEOUT_MS = 8_000;
+const ENGINE_RESTART_COMMAND_TIMEOUT_MS = 12_000;
 
 const CACHE_KEY = "enterprise-policy-cache";
+export const E2E_ENTERPRISE_POLICY_KEY = "screenpipe_e2e_enterprise_policy";
+export const E2E_ENTERPRISE_HEARTBEAT_STATUS_KEY = "screenpipe_e2e_enterprise_heartbeat_status";
+export const E2E_ENTERPRISE_SKIP_SAVED_LICENSE_KEY =
+  "screenpipe_e2e_enterprise_skip_saved_license";
+
+function enterpriseE2eMocksEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" && typeof window !== "undefined";
+}
+
+type E2ePolicyMockResult =
+  | { present: false }
+  | { present: true; ok: true; data: Record<string, unknown> }
+  | { present: true; ok: false; reason: "invalid_key" | "network_error" };
+
+function readE2ePolicyMock(licenseKey: string): E2ePolicyMockResult {
+  if (!enterpriseE2eMocksEnabled()) return { present: false };
+
+  try {
+    const raw = window.localStorage?.getItem(E2E_ENTERPRISE_POLICY_KEY);
+    if (!raw) return { present: false };
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const acceptedLicenseKey = parsed.acceptedLicenseKey;
+    if (
+      typeof acceptedLicenseKey === "string" &&
+      acceptedLicenseKey.trim() !== licenseKey.trim()
+    ) {
+      return { present: true, ok: false, reason: "invalid_key" };
+    }
+
+    const status = typeof parsed.status === "number" ? parsed.status : 200;
+    if (status === 401 || status === 402) {
+      return { present: true, ok: false, reason: "invalid_key" };
+    }
+    if (status < 200 || status >= 300) {
+      return { present: true, ok: false, reason: "network_error" };
+    }
+
+    const policy =
+      parsed.policy && typeof parsed.policy === "object" && !Array.isArray(parsed.policy)
+        ? (parsed.policy as Record<string, unknown>)
+        : parsed;
+
+    return {
+      present: true,
+      ok: true,
+      data: {
+        hiddenSections: [],
+        lockedSettings: {},
+        managedAiPreset: null,
+        aiPresetPolicy: DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
+        appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+        managedPipes: [],
+        orgName: "E2E Enterprise",
+        ...policy,
+      },
+    };
+  } catch {
+    return { present: true, ok: false, reason: "network_error" };
+  }
+}
+
+function readE2eHeartbeatMock(): HeartbeatResult | null {
+  if (!enterpriseE2eMocksEnabled()) return null;
+
+  try {
+    const raw = window.localStorage?.getItem(E2E_ENTERPRISE_HEARTBEAT_STATUS_KEY);
+    if (!raw) return null;
+    const status = Number(raw);
+    if (status === 403) {
+      return { ok: false, reason: "seat_limit", error: "license seat limit reached" };
+    }
+    if (status === 401 || status === 402) {
+      return { ok: false, reason: "invalid_license", error: "invalid or expired license key" };
+    }
+    if (status >= 200 && status < 300) {
+      return { ok: true };
+    }
+    return { ok: false, reason: "network_error", error: `heartbeat failed: ${status}` };
+  } catch (e) {
+    return { ok: false, reason: "network_error", error: String(e) };
+  }
+}
+
+function shouldSkipSavedLicenseForE2e(): boolean {
+  if (!enterpriseE2eMocksEnabled()) return false;
+
+  try {
+    return window.localStorage?.getItem(E2E_ENTERPRISE_SKIP_SAVED_LICENSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function withTimeout<T>(label: string, promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
 
 function toLocalAiPreset(
   preset: EnterpriseManagedAiPreset,
@@ -240,19 +350,35 @@ async function applyManagedDeviceSettings(lockedSettings: Record<string, unknown
   if (managedSettingsRestartInFlight) return;
   managedSettingsRestartInFlight = true;
   try {
-    await commands.stopScreenpipe();
+    await withTimeout(
+      "enterprise input capture stopScreenpipe",
+      commands.stopScreenpipe(),
+      ENGINE_RESTART_COMMAND_TIMEOUT_MS
+    );
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await commands.spawnScreenpipe(null);
+    await withTimeout(
+      "enterprise input capture spawnScreenpipe",
+      commands.spawnScreenpipe(null),
+      ENGINE_RESTART_COMMAND_TIMEOUT_MS
+    );
   } finally {
     managedSettingsRestartInFlight = false;
   }
 }
 
 /**
- * Fire-and-forget heartbeat to report device status to the enterprise API.
- * Called after a successful policy fetch. Never throws, never blocks.
+ * Report device status to the enterprise API.
+ * Never throws. Callers can ignore the result for background polling, or surface
+ * explicit license/seat errors during manual activation.
  */
-async function sendHeartbeat(licenseKey: string): Promise<void> {
+type HeartbeatResult =
+  | { ok: true }
+  | { ok: false; reason: "seat_limit" | "invalid_license" | "network_error"; error?: string };
+
+async function sendHeartbeat(licenseKey: string): Promise<HeartbeatResult> {
+  const e2eHeartbeat = readE2eHeartbeatMock();
+  if (e2eHeartbeat) return e2eHeartbeat;
+
   try {
     const store = await getStore();
     const settings = (await store.get<Record<string, unknown>>("settings")) || {};
@@ -285,7 +411,7 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
       pipeStatuses = await gatherPipeStatuses();
     } catch {}
 
-    await tauriFetch("https://screenpipe.com/api/enterprise/heartbeat", {
+    const res = await tauriFetch("https://screenpipe.com/api/enterprise/heartbeat", {
       method: "POST",
       headers: {
         "X-License-Key": licenseKey,
@@ -310,7 +436,24 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
         pipe_statuses: pipeStatuses,
       }),
     });
-  } catch {}
+
+    if (res.status === 403) {
+      return { ok: false, reason: "seat_limit", error: "license seat limit reached" };
+    }
+    if (res.status === 401 || res.status === 402) {
+      return { ok: false, reason: "invalid_license", error: "invalid or expired license key" };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: "network_error",
+        error: `heartbeat failed: ${res.status} ${res.statusText}`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: "network_error", error: String(e) };
+  }
 }
 
 function cachePolicy(policy: EnterprisePolicy) {
@@ -338,6 +481,10 @@ type FetchResult =
   | { ok: true; policy: EnterprisePolicy }
   | { ok: false; reason: "invalid_key" | "network_error" };
 
+interface FetchPolicyOptions {
+  applyLocalPolicy?: boolean;
+}
+
 /**
  * Enterprise UI policy hook.
  *
@@ -361,7 +508,10 @@ export function useEnterprisePolicy() {
   const licenseKeyRef = useRef<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchPolicy = useCallback(async (licenseKey: string): Promise<FetchResult> => {
+  const fetchPolicy = useCallback(async (
+    licenseKey: string,
+    options: FetchPolicyOptions = {}
+  ): Promise<FetchResult> => {
     try {
       // Include device ID for pipe targeting + cloud session JWT so the
       // server can tell us whether the signed-in user is an admin of this
@@ -402,19 +552,28 @@ export function useEnterprisePolicy() {
       if (cloudToken) {
         headers["Authorization"] = `Bearer ${cloudToken}`;
       }
-      const res = await tauriFetch("https://screenpipe.com/api/enterprise/policy", {
-        method: "GET",
-        headers,
-      });
-      if (res.status === 401 || res.status === 402) {
-        console.error(`[enterprise] policy fetch: key rejected (${res.status})`);
-        return { ok: false, reason: "invalid_key" };
+      let data: any;
+      const e2ePolicy = readE2ePolicyMock(licenseKey);
+      if (e2ePolicy.present) {
+        if (!e2ePolicy.ok) {
+          return { ok: false, reason: e2ePolicy.reason };
+        }
+        data = e2ePolicy.data;
+      } else {
+        const res = await tauriFetch("https://screenpipe.com/api/enterprise/policy", {
+          method: "GET",
+          headers,
+        });
+        if (res.status === 401 || res.status === 402) {
+          console.error(`[enterprise] policy fetch: key rejected (${res.status})`);
+          return { ok: false, reason: "invalid_key" };
+        }
+        if (!res.ok) {
+          console.error(`[enterprise] policy fetch failed: ${res.status} ${res.statusText}`);
+          return { ok: false, reason: "network_error" };
+        }
+        data = await res.json();
       }
-      if (!res.ok) {
-        console.error(`[enterprise] policy fetch failed: ${res.status} ${res.statusText}`);
-        return { ok: false, reason: "network_error" };
-      }
-      const data = await res.json();
       const aiPresetPolicy = normalizeEnterpriseAiPresetPolicy(
         data.aiPresetPolicy ?? data.managedAiPreset ?? null
       );
@@ -440,6 +599,10 @@ export function useEnterprisePolicy() {
         `[enterprise] policy loaded: org=${result.orgName}, hidden=[${result.hiddenSections.join(",")}], locked=[${lockedKeys.join(",")}]`
       );
       cachePolicy(result);
+
+      if (options.applyLocalPolicy === false) {
+        return { ok: true, policy: result };
+      }
 
       // Apply enterprise AI preset policy to settings store.
       if (result.aiPresetPolicy) {
@@ -482,7 +645,11 @@ export function useEnterprisePolicy() {
       }
 
       // Fire-and-forget heartbeat
-      sendHeartbeat(licenseKey);
+      sendHeartbeat(licenseKey).then((heartbeat) => {
+        if (!heartbeat.ok) {
+          console.warn("[enterprise] heartbeat failed:", heartbeat.reason, heartbeat.error);
+        }
+      });
 
       // Sync managed pipes to local filesystem. Always runs (even with an
       // empty list) so pipes removed from the policy get disabled on devices.
@@ -497,13 +664,21 @@ export function useEnterprisePolicy() {
 
       // Push hidden sections to Rust so tray menu can use them
       try {
-        await commands.setEnterprisePolicy(result.hiddenSections);
+        await withTimeout(
+          "enterprise setEnterprisePolicy",
+          commands.setEnterprisePolicy(result.hiddenSections),
+          LOCAL_POLICY_COMMAND_TIMEOUT_MS
+        );
         // Reconcile the live app with the policy we just pushed: if it turns on
         // hidden-UI mode, retract any windows already on screen and drop the
         // dock icon now (set_enterprise_policy only updates state — it doesn't
         // hide what's already visible). Also persists the decision so the next
         // launch starts hidden before any window renders. No-op when not hidden.
-        await commands.applyEnterpriseUiVisibility();
+        await withTimeout(
+          "enterprise applyEnterpriseUiVisibility",
+          commands.applyEnterpriseUiVisibility(),
+          LOCAL_POLICY_COMMAND_TIMEOUT_MS
+        );
       } catch (e) {
         console.warn("[enterprise] failed to push policy to Rust:", e);
       }
@@ -527,13 +702,17 @@ export function useEnterprisePolicy() {
             : rawMode === true
             ? "cited"
             : "off";
-        await commands.setSyncStreams(
-          pickBool("frames"),
-          pickBool("audio"),
-          pickBool("ui_events"),
-          pickBool("memories"),
-          pickBool("snapshots"),
-          frameImages,
+        await withTimeout(
+          "enterprise setSyncStreams",
+          commands.setSyncStreams(
+            pickBool("frames"),
+            pickBool("audio"),
+            pickBool("ui_events"),
+            pickBool("memories"),
+            pickBool("snapshots"),
+            frameImages,
+          ),
+          LOCAL_POLICY_COMMAND_TIMEOUT_MS
         );
       } catch (e) {
         console.warn("[enterprise] failed to push sync streams to Rust:", e);
@@ -552,7 +731,11 @@ export function useEnterprisePolicy() {
           console.log(
             `[enterprise] persisting team config: is_admin=${adminFlag} (raw response.isAdmin=${data.isAdmin})`
           );
-          await commands.saveEnterpriseTeamConfig(adminFlag, true, null);
+          await withTimeout(
+            "enterprise saveEnterpriseTeamConfig",
+            commands.saveEnterpriseTeamConfig(adminFlag, true, null),
+            LOCAL_POLICY_COMMAND_TIMEOUT_MS
+          );
         } catch (e) {
           console.warn("[enterprise] failed to persist team config:", e);
         }
@@ -619,7 +802,7 @@ export function useEnterprisePolicy() {
    * API, saves it to ~/.screenpipe/enterprise.json, and starts fetching policy.
    */
   const submitLicenseKey = useCallback(async (key: string): Promise<{ ok: boolean; error?: string }> => {
-    const result = await fetchPolicy(key);
+    const result = await fetchPolicy(key, { applyLocalPolicy: false });
     if (!result.ok) {
       return {
         ok: false,
@@ -629,9 +812,34 @@ export function useEnterprisePolicy() {
       };
     }
 
-    // Save to disk
+    const heartbeat = await withTimeout(
+      "enterprise heartbeat",
+      sendHeartbeat(key),
+      LOCAL_POLICY_COMMAND_TIMEOUT_MS
+    ).catch((e): HeartbeatResult => ({
+      ok: false,
+      reason: "network_error",
+      error: String(e),
+    }));
+    if (!heartbeat.ok && heartbeat.reason === "seat_limit") {
+      return {
+        ok: false,
+        error: "license seat limit reached - contact your admin to add seats",
+      };
+    }
+    if (!heartbeat.ok && heartbeat.reason === "invalid_license") {
+      return { ok: false, error: "invalid or expired license key" };
+    }
+
+    // Save only after the server accepts this device. Otherwise a full-seat
+    // response could leave a rejected key on disk and look activated after a
+    // restart.
     try {
-      const saveResult = await commands.saveEnterpriseLicenseKey(key);
+      const saveResult = await withTimeout(
+        "enterprise saveEnterpriseLicenseKey",
+        commands.saveEnterpriseLicenseKey(key),
+        LOCAL_POLICY_COMMAND_TIMEOUT_MS
+      );
       if (saveResult.status === "error") {
         return { ok: false, error: saveResult.error };
       }
@@ -644,6 +852,17 @@ export function useEnterprisePolicy() {
     setNeedsLicenseKey(false);
     setPolicy(result.policy);
     startPolling(key);
+
+    fetchPolicy(key)
+      .then((backgroundResult) => {
+        if (backgroundResult.ok) {
+          setPolicy(backgroundResult.policy);
+        }
+      })
+      .catch((e) => {
+        console.warn("[enterprise] background policy apply failed:", e);
+      });
+
     return { ok: true };
   }, [fetchPolicy, startPolling]);
 
@@ -655,15 +874,19 @@ export function useEnterprisePolicy() {
     (async () => {
       // Read license key from enterprise.json (MDM or ~/.screenpipe/)
       let key: string | null = null;
-      try {
-        key = await commands.getEnterpriseLicenseKey();
-        if (key) {
-          console.log(`[enterprise] license key found: ${key.slice(0, 8)}...`);
-        } else {
-          console.warn("[enterprise] getEnterpriseLicenseKey returned null");
+      if (!shouldSkipSavedLicenseForE2e()) {
+        try {
+          key = await commands.getEnterpriseLicenseKey();
+          if (key) {
+            console.log(`[enterprise] license key found: ${key.slice(0, 8)}...`);
+          } else {
+            console.warn("[enterprise] getEnterpriseLicenseKey returned null");
+          }
+        } catch (e) {
+          console.error("[enterprise] failed to read enterprise.json:", e);
         }
-      } catch (e) {
-        console.error("[enterprise] failed to read enterprise.json:", e);
+      } else {
+        console.warn("[enterprise] e2e skipping saved enterprise license");
       }
 
       if (cancelled) return;

@@ -327,6 +327,14 @@ for active long-term retention, prefer [cloud archive](/cloud-archive) or a stab
 - close the timeline view if you're not using it (it loads video frames)
 - local PII models can use several GB while active, then unload after idle time. see [privacy data flow](/privacy-data-flow).
 
+**multi-monitor setups**: screenpipe captures all monitors simultaneously. with 2-3+ displays, memory usage can double or triple because each monitor frame is processed independently.
+
+**fixes for multi-monitor setups:**
+1. reduce capture rate: settings → capture rate → try 0.5 FPS instead of 1 FPS. this is the most effective optimization for multi-monitor systems
+2. close the timeline view when not actively using it — it buffers video frames from all monitors in memory
+3. if you only need one display: in the UI, disable or hide unused monitors in the settings → recording section
+4. monitor your actual usage: `curl http://localhost:3030/vision/list` shows active monitors. each additional monitor increases baseline memory by 50-200 MB depending on resolution
+
 ### timeline or owned browser is blank on Windows
 
 1. install or repair Microsoft Edge WebView2 Runtime.

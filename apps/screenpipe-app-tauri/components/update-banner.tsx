@@ -64,6 +64,30 @@ interface UpdateBannerProps {
   variant?: "default" | "sidebar";
 }
 
+async function getWindowsUpdateOptions() {
+  const cpuArch = arch();
+  const isEnterprise = await commands.isEnterpriseBuildCmd().catch(() => false);
+  const channel = isEnterprise ? "enterprise" : "stable";
+  const headers: Record<string, string> = {};
+
+  if (isEnterprise) {
+    const licenseKey = await commands.getEnterpriseLicenseKey().catch(() => null);
+    if (licenseKey) {
+      headers["X-License-Key"] = licenseKey;
+    }
+  }
+
+  return {
+    checkOptions: {
+      endpoints: [
+        `https://screenpipe.com/api/app-update/${channel}/windows-${cpuArch}/{{current_version}}`,
+      ],
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    },
+    downloadOptions: Object.keys(headers).length > 0 ? { headers } : undefined,
+  };
+}
+
 export function UpdateBanner({ className, compact = false, variant = "default" }: UpdateBannerProps) {
   const { isVisible, updateInfo, isInstalling, setIsInstalling, pendingUpdate, authRequired, dismiss } = useUpdateBanner();
   const { toast } = useToast();
@@ -106,17 +130,15 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
 
         // Get or check for the update
         let update = pendingUpdate;
+        const { checkOptions, downloadOptions } = await getWindowsUpdateOptions();
         if (!update) {
-          const cpuArch = arch();
-          update = await check({ endpoints: [
-            `https://screenpipe.com/api/app-update/stable/windows-${cpuArch}/{{current_version}}`,
-          ] } as any);
+          update = await check(checkOptions as any);
         }
 
         if (update?.available) {
 
 
-          await update.downloadAndInstall();
+          await update.downloadAndInstall(undefined, downloadOptions);
 
           toast({
             title: "update complete",

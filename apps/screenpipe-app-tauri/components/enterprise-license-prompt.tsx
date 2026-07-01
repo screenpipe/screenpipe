@@ -24,11 +24,17 @@ export function EnterpriseLicensePrompt({ onSubmit }: EnterpriseLicensePromptPro
     setLoading(true);
     setError(null);
 
-    const result = await onSubmit(trimmed);
-    if (!result.ok) {
-      setError(result.error || "failed to validate license key");
+    try {
+      const result = await onSubmit(trimmed);
+      if (!result.ok) {
+        setError(result.error || "failed to validate license key");
+      }
+    } catch (e) {
+      console.error("[enterprise] license activation failed:", e);
+      setError("failed to validate license key");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
