@@ -24,7 +24,7 @@ import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
-import { MAX_DATE_SEARCH_DAYS, navigationDirection } from "@/lib/timeline/date-navigation-utils";
+import { MAX_DATE_SEARCH_DAYS, navigationDirection, hasLoadedFramesForDay } from "@/lib/timeline/date-navigation-utils";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -641,14 +641,18 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	useEffect(() => {
 		if (!pendingNavigation) return;
 
-		const consume = async () => {
+		let cancelled = false;
+
+		const consume = async (attempt = 0) => {
+			if (cancelled) return;
 			if (isNavigatingRef.current || pendingNavigationRef.current) {
-				setPendingNavigation(null);
+				// In-app nav in progress — retry until idle (max ~5s).
+				if (attempt < 10) {
+					setTimeout(() => consume(attempt + 1), 500);
+				}
 				return;
 			}
 			if (pendingNavigation.frameId) {
-				// Frame navigation — emit so listener fetches metadata and navigates
-				// Longer delay for frame: API + websocket may still be initializing
 				await emit("navigate-to-frame", pendingNavigation.frameId);
 			} else if (pendingNavigation.timestamp) {
 				setPendingNavigation(null);
@@ -657,8 +661,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		};
 
 		const delay = pendingNavigation.frameId ? 1500 : 500;
-		const timer = setTimeout(consume, delay);
-		return () => clearTimeout(timer);
+		const timer = setTimeout(() => consume(0), delay);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
 	}, [pendingNavigation, navigateToTimestamp, setPendingNavigation]);
 
 	// Progressive loading: show UI immediately once we have any frames.
@@ -924,7 +931,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (
 				!isToday &&
 				!isNavigatingRef.current &&
-				!pendingNavigationRef.current
+				!pendingNavigationRef.current &&
+				!hasLoadedFramesForDay(frames, dateToCheck)
 			) {
 				if (cancelled) return;
 				const direction = navigationDirection(visibleDayAnchor, dateToCheck);
@@ -967,7 +975,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			cancelled = true;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentDate, websocket]); // Re-run when websocket connects or date changes
+	}, [currentDate, websocket, frames, visibleDayAnchor]); // Re-run when websocket connects or date changes
 
 	// Sync currentDate to frame's date - but NOT during intentional navigation
 	// This effect helps when scrolling across day boundaries, but must not fight
@@ -1150,7 +1158,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			>
 				{/* Main Image - Full Screen - Should fill entire viewport */}
 				<div className={`absolute inset-0 z-10 ${embedded ? "bg-background" : "bg-black"}`} onWheel={onContainerWheel}>
-					{currentFrame ? (
+					{currentFrame && frames.length > 0 ? (
 						<CurrentFrameTimeline
 							currentFrame={currentFrame}
 							isPlaying={isPlaying}

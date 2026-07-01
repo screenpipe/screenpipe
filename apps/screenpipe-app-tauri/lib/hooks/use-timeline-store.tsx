@@ -884,10 +884,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				setTimeout(() => sendOrRetry(attempt + 1), delay);
 			} else {
 				console.error("[fetchTimeRange] WebSocket not open after 5 retries, giving up");
-				set({
-					isLoading: false,
-					message: "Connection lost — please try again",
-				});
+				if (get().pendingDateSwap) {
+					get().abortPendingDateSwap("failed");
+				} else {
+					set({
+						isLoading: false,
+						message: "Connection lost — please try again",
+					});
+				}
 			}
 		};
 
