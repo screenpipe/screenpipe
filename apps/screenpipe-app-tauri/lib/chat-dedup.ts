@@ -21,6 +21,10 @@
 // dragging the filesystem layer into the store's dependency graph.
 // ---------------------------------------------------------------------------
 
+// `stripPromptPlumbing` lives in the tauri-free chat-title module, so importing
+// it here keeps chat-dedup.ts I/O-free (see module note above).
+import { stripPromptPlumbing } from "@/lib/utils/chat-title";
+
 /** Placeholder the chat panel writes for an assistant turn that hasn't started
  *  streaming yet (see standalone-chat.tsx send path). Centralized here so the
  *  dedup's "completed reply" check can't silently drift from the writer. */
@@ -36,6 +40,9 @@ export const CONVERSATION_DEDUP_WINDOW_MS = 30 * 60 * 1000;
 interface DedupMessageLike {
   role?: string;
   content?: unknown;
+  /** Short user-facing label (e.g. "dbb", a card title) — set when the raw
+   *  `content` is a plumbing-wrapped payload the bubble hides. */
+  displayContent?: unknown;
   contentBlocks?: unknown[];
 }
 
@@ -44,17 +51,28 @@ interface DedupConvLike {
   messages?: unknown;
 }
 
-/** Dedup key for a conversation: its first user message, normalized. Returns
- *  null for non-chat (pipe) conversations — repeated pipe runs share a
- *  templated first message and must never be collapsed — and for chats with
- *  no user message. */
+/** Dedup key for a conversation: its first user message, normalized to the
+ *  user's SEMANTIC text. Returns null for non-chat (pipe) conversations —
+ *  repeated pipe runs share a templated first message and must never be
+ *  collapsed — and for chats with no user message.
+ *
+ *  Why semantic, not raw `content`: a cross-window save race persists one
+ *  logical chat under two ids, and the two copies frequently disagree on the
+ *  raw first-message string — one carries a plumbing wrapper the other
+ *  doesn't (`<connections_context>`, `<attached file: …>`,
+ *  `<screenpipe-large-context>`, `<conversation_history>`, …). Keying on the
+ *  raw string made the keys diverge, so the twins never collapsed and both
+ *  rows showed. Prefer the clean `displayContent` label; else strip the
+ *  wrappers so both copies produce the same key. */
 export function conversationDedupKey(conv: DedupConvLike | null | undefined): string | null {
   const kind = conv?.kind ?? "chat";
   if (kind !== "chat") return null;
   const messages = Array.isArray(conv?.messages) ? (conv!.messages as DedupMessageLike[]) : [];
   const firstUser = messages.find((m) => m?.role === "user");
-  const raw = typeof firstUser?.content === "string" ? firstUser.content : "";
-  const cleaned = raw.trim().toLowerCase().replace(/\s+/g, " ");
+  const display = typeof firstUser?.displayContent === "string" ? firstUser.displayContent : "";
+  const content = typeof firstUser?.content === "string" ? firstUser.content : "";
+  const semantic = display.trim() || stripPromptPlumbing(content);
+  const cleaned = semantic.trim().toLowerCase().replace(/\s+/g, " ");
   return cleaned ? cleaned.slice(0, 200) : null;
 }
 
