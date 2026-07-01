@@ -1761,6 +1761,25 @@ fn resolve_capture_metadata(
     Option<String>,
     Option<String>,
 ) {
+    resolve_capture_metadata_with_policy(
+        tree_snapshot,
+        trigger,
+        lightweight_metadata,
+        cfg!(target_os = "linux"),
+    )
+}
+
+fn resolve_capture_metadata_with_policy(
+    tree_snapshot: Option<&screenpipe_a11y::tree::TreeSnapshot>,
+    trigger: &CaptureTrigger,
+    lightweight_metadata: Option<&LightweightFocusedMetadata>,
+    prefer_lightweight_metadata: bool,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let (mut app_name, mut window_name, browser_url, document_path) = match tree_snapshot {
         Some(snap) => (
             Some(snap.app_name.clone()),
@@ -1774,15 +1793,20 @@ fn resolve_capture_metadata(
     app_name = normalize_metadata_value(app_name.as_deref());
     window_name = normalize_metadata_value(window_name.as_deref());
 
-    // Prefer lightweight focused-window metadata when available. On Linux
-    // Wayland, AT-SPI can return stale or generic app names (for example
-    // "electron") while Hyprland knows the actual focused app/window.
+    // Prefer focused-window metadata on Linux Wayland, where AT-SPI can return
+    // stale or generic app names (for example "electron") while Hyprland knows
+    // the actual focused app/window. Other platforms keep the older fallback
+    // behavior because their lightweight source may itself be cached.
     if let Some(metadata) = lightweight_metadata {
         if let Some(name) = normalize_metadata_value(metadata.app_name.as_deref()) {
-            app_name = Some(name);
+            if prefer_lightweight_metadata || app_name.is_none() {
+                app_name = Some(name);
+            }
         }
         if let Some(name) = normalize_metadata_value(metadata.window_name.as_deref()) {
-            window_name = Some(name);
+            if prefer_lightweight_metadata || window_name.is_none() {
+                window_name = Some(name);
+            }
         }
     }
 
@@ -2892,6 +2916,40 @@ mod tests {
 
         assert_eq!(app_name.as_deref(), Some("Alacritty"));
         assert_eq!(window_name.as_deref(), Some("screenpipe-wayland-fix"));
+    }
+
+    #[test]
+    fn resolve_capture_metadata_keeps_tree_values_when_lightweight_is_fallback_only() {
+        let snapshot = screenpipe_a11y::tree::TreeSnapshot {
+            app_name: "Safari".into(),
+            window_name: "Current Page".into(),
+            text_content: "visible text".into(),
+            nodes: Vec::new(),
+            browser_url: None,
+            document_path: None,
+            timestamp: Utc::now(),
+            node_count: 0,
+            walk_duration: Duration::from_millis(1),
+            content_hash: 0,
+            simhash: 0,
+            truncated: false,
+            truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            max_depth_reached: 0,
+        };
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("Terminal".into()),
+            window_name: Some("Stale Terminal".into()),
+        };
+
+        let (app_name, window_name, _, _) = resolve_capture_metadata_with_policy(
+            Some(&snapshot),
+            &CaptureTrigger::Idle,
+            Some(&metadata),
+            false,
+        );
+
+        assert_eq!(app_name.as_deref(), Some("Safari"));
+        assert_eq!(window_name.as_deref(), Some("Current Page"));
     }
 
     #[test]
