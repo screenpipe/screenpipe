@@ -48,7 +48,7 @@ impl oasgen::OaParameter for OptionalPipePerms {}
 use chrono::{DateTime, Utc};
 use screenpipe_db::{ContentType, DatabaseManager, Order, SearchResult};
 
-use futures::future::{try_join, try_join_all};
+use futures::future::{join_all, try_join};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -751,17 +751,25 @@ pub(crate) async fn search(
             })
             .collect();
 
-        let frames = match try_join_all(frame_futures).await {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::warn!("failed to extract some frames: {}", e);
-                vec![]
-            }
-        };
+        // join_all (not try_join_all): one frame that can't be extracted — e.g. an
+        // offset in the still-being-recorded chunk, or a corrupt file — must not
+        // discard the frames for the whole batch. A missing frame here is expected,
+        // so log it at debug rather than spamming warnings.
+        let frames = join_all(frame_futures).await;
 
-        for (item, frame) in content_items.iter_mut().zip(frames.into_iter()) {
+        let mut frames = frames.into_iter();
+        for item in content_items.iter_mut() {
             if let ContentItem::OCR(ref mut ocr_content) = item {
-                ocr_content.frame = Some(frame);
+                match frames.next() {
+                    Some(Ok(frame)) => ocr_content.frame = Some(frame),
+                    Some(Err(e)) => {
+                        debug!(
+                            "skipping frame for {} at offset {}: {}",
+                            ocr_content.file_path, ocr_content.offset_index, e
+                        )
+                    }
+                    None => {}
+                }
             }
         }
     }
