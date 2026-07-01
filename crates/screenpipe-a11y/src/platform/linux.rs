@@ -16,7 +16,7 @@
 //!
 //! ## Window Tracking
 //!
-//! Uses `xdotool` (X11) or D-Bus (Wayland) to track the active window.
+//! Uses Hyprland IPC (Wayland) or `xdotool` (X11) to track the active window.
 //!
 //! ## Clipboard
 //!
@@ -202,7 +202,7 @@ impl UiRecorder {
             );
         }
 
-        // Thread 2: App/window observer (always runs — uses xdotool, no evdev needed)
+        // Thread 2: App/window observer (always runs — uses compositor/X11 metadata, no evdev needed)
         let tx2 = tx.clone();
         let stop2 = stop.clone();
         let config2 = self.config.clone();
@@ -989,8 +989,73 @@ fn run_window_observer(
 }
 
 /// Get active window info: (app_name, window_title, pid).
-/// Tries xdotool (X11) first, falls back to D-Bus.
-fn get_active_window_info() -> Option<(String, String, i32)> {
+/// Uses Hyprland IPC on Hyprland/Wayland, then falls back to xdotool for X11.
+pub fn get_active_window_info() -> Option<(String, String, i32)> {
+    get_hyprland_active_window_info().or_else(get_x11_active_window_info)
+}
+
+fn get_hyprland_active_window_info() -> Option<(String, String, i32)> {
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()
+        && std::env::var_os("XDG_CURRENT_DESKTOP")
+            .and_then(|v| v.into_string().ok())
+            .map_or(true, |desktop| {
+                !desktop.to_ascii_lowercase().contains("hyprland")
+            })
+    {
+        return None;
+    }
+
+    let output = std::process::Command::new("hyprctl")
+        .args(["-j", "activewindow"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+
+    parse_hyprland_active_window_json(&output.stdout)
+}
+
+fn parse_hyprland_active_window_json(raw: &[u8]) -> Option<(String, String, i32)> {
+    let value: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    let app_name = value
+        .get("class")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            value
+                .get("initialClass")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })?
+        .to_string();
+
+    let window_title = value
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(clean_hyprland_title)
+        .unwrap_or_default();
+
+    let pid = value.get("pid").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+    Some((app_name, window_title, pid))
+}
+
+fn clean_hyprland_title(title: &str) -> String {
+    title
+        .chars()
+        .filter(|c| {
+            !matches!(
+                *c as u32,
+                0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069
+            )
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn get_x11_active_window_info() -> Option<(String, String, i32)> {
     // Try xdotool (works on X11 and XWayland)
     let wid_output = std::process::Command::new("xdotool")
         .arg("getactivewindow")
@@ -1393,6 +1458,39 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_parse_hyprland_active_window_json() {
+        let raw = br#"{
+            "class": "org.telegram.desktop",
+            "title": "\u200e\u2068Lucern Clinic\u2069 \u2013 (106539)",
+            "initialClass": "Telegram",
+            "pid": 2800,
+            "xwayland": false
+        }"#;
+
+        let (app_name, window_title, pid) = parse_hyprland_active_window_json(raw).unwrap();
+
+        assert_eq!(app_name, "org.telegram.desktop");
+        assert_eq!(window_title, "Lucern Clinic \u{2013} (106539)");
+        assert_eq!(pid, 2800);
+    }
+
+    #[test]
+    fn test_parse_hyprland_active_window_json_falls_back_to_initial_class() {
+        let raw = br#"{
+            "class": "",
+            "title": "Terminal",
+            "initialClass": "Alacritty",
+            "pid": 123
+        }"#;
+
+        let (app_name, window_title, pid) = parse_hyprland_active_window_json(raw).unwrap();
+
+        assert_eq!(app_name, "Alacritty");
+        assert_eq!(window_title, "Terminal");
+        assert_eq!(pid, 123);
     }
 
     #[test]

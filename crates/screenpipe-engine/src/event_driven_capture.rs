@@ -1738,10 +1738,16 @@ struct CaptureOutput {
     corrupt: Option<CorruptKind>,
 }
 
+#[derive(Debug, Clone)]
+struct LightweightFocusedMetadata {
+    app_name: Option<String>,
+    window_name: Option<String>,
+}
+
 fn resolve_capture_metadata(
     tree_snapshot: Option<&screenpipe_a11y::tree::TreeSnapshot>,
     trigger: &CaptureTrigger,
-    lightweight_app_name: Option<&str>,
+    lightweight_metadata: Option<&LightweightFocusedMetadata>,
 ) -> (
     Option<String>,
     Option<String>,
@@ -1758,14 +1764,23 @@ fn resolve_capture_metadata(
         None => (None, None, None, None),
     };
 
-    // Fallback to the lightweight focused-app query when the tree walk returned
-    // nothing (focused_window AX query failed, e.g. Zoom during meetings).
+    // Fallback to lightweight focused-window metadata when the tree walk returned
+    // nothing (focused_window AX query failed, e.g. Zoom during meetings, or
+    // native Wayland apps where AT-SPI did not identify the frontmost window).
     // Without this, captures triggered by click/visual_change/idle would be
-    // stored with null app_name even though we know the focused app.
+    // stored with null app/window metadata even though the compositor or OS
+    // knows the focused target.
     if app_name.is_none() {
-        if let Some(name) = lightweight_app_name {
+        if let Some(name) = lightweight_metadata.and_then(|m| m.app_name.as_deref()) {
             if !name.is_empty() {
                 app_name = Some(name.to_string());
+            }
+        }
+    }
+    if window_name.is_none() {
+        if let Some(name) = lightweight_metadata.and_then(|m| m.window_name.as_deref()) {
+            if !name.is_empty() {
+                window_name = Some(name.to_string());
             }
         }
     }
@@ -2102,22 +2117,19 @@ async fn do_capture(
     // reduced max_nodes and timeout to avoid blocking their UI thread.
     let mut config = params.tree_walker_config.clone();
 
-    // Get the focused app name for budget decisions. AppSwitch triggers carry
+    // Get focused metadata for budget decisions. AppSwitch triggers carry
     // the name directly; for all other triggers (visual change, idle, manual)
-    // we do a lightweight AX query to get the focused app. This ensures the
-    // walk budget applies to ALL captures, not just app switches.
+    // we do a lightweight platform query. This ensures the walk budget applies
+    // to ALL captures, not just app switches.
+    let lightweight_focused_metadata = match trigger {
+        CaptureTrigger::AppSwitch { .. } => None,
+        _ => get_focused_metadata_lightweight(),
+    };
     let trigger_app = match trigger {
         CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
-        _ => {
-            #[cfg(target_os = "macos")]
-            {
-                get_focused_app_name_lightweight()
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                None
-            }
-        }
+        _ => lightweight_focused_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.app_name.clone()),
     };
 
     // Terminal OCR rate-limit: wezterm/alacritty/kitty/hyper/warp all bypass AX
@@ -2333,7 +2345,11 @@ async fn do_capture(
     // Use tree metadata by default, but for focus-change triggers prefer the
     // event payload when the tree lags or reports the wrong frontmost target.
     let (app_name_owned, window_name_owned, browser_url_owned, document_path_owned) =
-        resolve_capture_metadata(tree_snapshot.as_ref(), trigger, trigger_app.as_deref());
+        resolve_capture_metadata(
+            tree_snapshot.as_ref(),
+            trigger,
+            lightweight_focused_metadata.as_ref(),
+        );
 
     // Skip lock screen / screensaver — these waste disk and pollute timeline.
     // Also update the global SCREEN_IS_LOCKED flag so subsequent loop iterations
@@ -2449,7 +2465,7 @@ async fn do_capture(
     })
 }
 
-/// Cheaply get the focused app name. Used to tag captures and to apply
+/// Cheaply get focused app/window metadata. Used to tag captures and to apply
 /// per-app throttles (walk budget, terminal OCR, Obsidian OCR).
 ///
 /// Tries NSWorkspace first: filters `running_apps()` to the one with
@@ -2467,7 +2483,7 @@ async fn do_capture(
 /// TTL keeps staleness bounded to something no human perceives while
 /// collapsing the common case to a single atomic load.
 #[cfg(target_os = "macos")]
-fn get_focused_app_name_lightweight() -> Option<String> {
+fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
     use arc_swap::ArcSwap;
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
@@ -2476,7 +2492,8 @@ fn get_focused_app_name_lightweight() -> Option<String> {
 
     // (name, captured_at). ArcSwap gives lock-free reads; in the common
     // case the whole function is one atomic load + a clock read + clone.
-    static CACHE: OnceLock<ArcSwap<(Option<String>, Instant)>> = OnceLock::new();
+    static CACHE: OnceLock<ArcSwap<(Option<LightweightFocusedMetadata>, Instant)>> =
+        OnceLock::new();
     let cache = CACHE.get_or_init(|| {
         ArcSwap::from_pointee((None, Instant::now() - CACHE_TTL - Duration::from_secs(1)))
     });
@@ -2489,9 +2506,34 @@ fn get_focused_app_name_lightweight() -> Option<String> {
         }
     }
 
-    let fresh = query_frontmost_app_name_uncached();
+    let fresh = query_frontmost_app_name_uncached().map(|app_name| LightweightFocusedMetadata {
+        app_name: Some(app_name),
+        window_name: None,
+    });
     cache.store(std::sync::Arc::new((fresh.clone(), now)));
     fresh
+}
+
+#[cfg(target_os = "linux")]
+fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
+    let (app_name, window_name, _) = screenpipe_a11y::platform::linux::get_active_window_info()?;
+    Some(LightweightFocusedMetadata {
+        app_name: if app_name.is_empty() {
+            None
+        } else {
+            Some(app_name)
+        },
+        window_name: if window_name.is_empty() {
+            None
+        } else {
+            Some(window_name)
+        },
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -2757,6 +2799,42 @@ mod tests {
         assert_eq!(CaptureTrigger::VisualChange.as_str(), "visual_change");
         assert_eq!(CaptureTrigger::Idle.as_str(), "idle");
         assert_eq!(CaptureTrigger::Manual.as_str(), "manual");
+    }
+
+    #[test]
+    fn resolve_capture_metadata_uses_lightweight_app_and_window_without_tree() {
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("Telegram".into()),
+            window_name: Some("Lucern Clinic".into()),
+        };
+
+        let (app_name, window_name, browser_url, document_path) =
+            resolve_capture_metadata(None, &CaptureTrigger::Idle, Some(&metadata));
+
+        assert_eq!(app_name.as_deref(), Some("Telegram"));
+        assert_eq!(window_name.as_deref(), Some("Lucern Clinic"));
+        assert_eq!(browser_url, None);
+        assert_eq!(document_path, None);
+    }
+
+    #[test]
+    fn resolve_capture_metadata_prefers_window_focus_trigger_title() {
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("Telegram".into()),
+            window_name: Some("Stale Title".into()),
+        };
+
+        let (app_name, window_name, _, _) = resolve_capture_metadata(
+            None,
+            &CaptureTrigger::WindowFocus {
+                window_name: "Fresh Title".into(),
+                target: None,
+            },
+            Some(&metadata),
+        );
+
+        assert_eq!(app_name.as_deref(), Some("Telegram"));
+        assert_eq!(window_name.as_deref(), Some("Fresh Title"));
     }
 
     #[test]
