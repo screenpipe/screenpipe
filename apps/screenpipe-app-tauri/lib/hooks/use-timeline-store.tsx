@@ -16,6 +16,11 @@ import {
 } from "@/lib/api";
 import { mergeTimelineFrames } from "./timeline-frame-merge";
 import { evaluateTimelineLiveness } from "./timeline-liveness";
+import {
+	EMPTY_STATE_MESSAGE_TIMEOUT_MS,
+	shouldArmEmptyStateMessageTimeout,
+	shouldClearMessageOnEmptyStateTimeout,
+} from "./timeline-empty-state";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -43,6 +48,58 @@ let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
 const RECONNECT_BASE_DELAY_MS = 2000;
 const RECONNECT_MAX_DELAY_MS = 30000;
+
+let emptyStateMessageTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearEmptyStateMessageTimer() {
+	if (emptyStateMessageTimer) {
+		clearTimeout(emptyStateMessageTimer);
+		emptyStateMessageTimer = null;
+	}
+}
+
+function armEmptyStateMessageTimer(
+	get: () => {
+		frames: StreamTimeSeriesResponse[];
+		message: string | null;
+		pendingDateSwap: boolean;
+	},
+	set: (partial: { message: string | null; isLoading: boolean }) => void,
+) {
+	clearEmptyStateMessageTimer();
+	emptyStateMessageTimer = setTimeout(() => {
+		emptyStateMessageTimer = null;
+		const state = get();
+		if (
+			shouldClearMessageOnEmptyStateTimeout({
+				framesLength: state.frames.length,
+				message: state.message,
+				pendingDateSwap: state.pendingDateSwap,
+			})
+		) {
+			set({ message: null, isLoading: false });
+		}
+	}, EMPTY_STATE_MESSAGE_TIMEOUT_MS);
+}
+
+function trackEmptyStateMessage(
+	prevMessage: string | null,
+	get: () => {
+		frames: StreamTimeSeriesResponse[];
+		message: string | null;
+		pendingDateSwap: boolean;
+	},
+	set: (partial: { message: string | null; isLoading: boolean }) => void,
+) {
+	const { message, frames } = get();
+	if (frames.length > 0) {
+		clearEmptyStateMessageTimer();
+		return;
+	}
+	if (shouldArmEmptyStateMessageTimeout(prevMessage, message, frames.length)) {
+		armEmptyStateMessageTimer(get, set);
+	}
+}
 
 // Guards connectWebSocket against re-entry. connectWebSocket awaits
 // ensureApiReady() before it bumps currentWsId / closes the old socket, so two
@@ -311,6 +368,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 			// If pendingDateSwap, replace frames entirely with new batch (date changed)
 			if (state.pendingDateSwap) {
+				clearEmptyStateMessageTimer();
 				// Frames received - clear the request timeout (no need to retry)
 				if (requestTimeoutTimer) {
 					clearTimeout(requestTimeoutTimer);
@@ -349,6 +407,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					error: null,
 				};
 			}
+
+			clearEmptyStateMessageTimer();
 
 			// Frames received - clear the request timeout (no need to retry)
 			if (requestTimeoutTimer) {
@@ -429,6 +489,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				message: currentFrames.length > 0 ? null : "connecting...",
 				isConnected: false,
 			});
+			if (currentFrames.length === 0) {
+				trackEmptyStateMessage(null, get, (partial) => set(partial));
+			}
 			
 			frameBuffer = [];
 			requestRetryCount = 0; // Reset retry counter on reconnection
@@ -533,11 +596,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Flush any pending frames when we get keep-alive
 					get().flushFrameBuffer();
 					const currentFrames = get().frames;
+					const prevMessage = get().message;
 					set((state) => ({
 						error: null,
 						isLoading: false,
 						message: currentFrames.length === 0 ? "waiting for data..." : null,
 					}));
+					trackEmptyStateMessage(prevMessage, get, (partial) => set(partial));
 					return;
 				}
 

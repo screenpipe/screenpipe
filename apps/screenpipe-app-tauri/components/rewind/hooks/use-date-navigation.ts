@@ -58,7 +58,6 @@ export function useDateNavigation(opts: {
 		setSearchNavFrame,
 		fetchTimeRange,
 		startAndEndDates,
-		setPendingNavigation,
 		clearSentRequestForDate,
 		isNavigatingRef,
 		pendingNavigationRef,
@@ -77,6 +76,7 @@ export function useDateNavigation(opts: {
 	const revertDateRef = useRef<Date>(startOfDay(new Date()));
 	const [isNavigating, setIsNavigating] = useState(false);
 	const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const navTimeoutMsRef = useRef(NAV_TIMEOUT_MS);
 
 	const clearNavTimeout = useCallback(() => {
 		if (navTimeoutRef.current) {
@@ -90,11 +90,12 @@ export function useDateNavigation(opts: {
 		pendingNavigationRef.current = null;
 		pendingFrameIdRef.current = undefined;
 		setSeekingTimestamp(null);
-		setPendingNavigation(null);
+		// Don't clear zustand pendingNavigation here — external deeplinks (screenpipe://)
+		// must survive in-app calendar/search nav; consume effect clears when handled.
 		setIsNavigating(false);
 		isNavigatingRef.current = false;
 		clearNavTimeout();
-	}, [clearNavTimeout, pendingNavigationRef, setPendingNavigation, isNavigatingRef]);
+	}, [clearNavTimeout, pendingNavigationRef, isNavigatingRef]);
 
 	const abortNavigation = useCallback(
 		(options?: { revertDate?: Date; showToast?: boolean; message?: string }) => {
@@ -119,6 +120,7 @@ export function useDateNavigation(opts: {
 
 	const scheduleNavTimeout = useCallback(
 		(ms: number) => {
+			navTimeoutMsRef.current = ms;
 			clearNavTimeout();
 			navTimeoutRef.current = setTimeout(() => {
 				navTimeoutRef.current = null;
@@ -161,7 +163,7 @@ export function useDateNavigation(opts: {
 				state.navigationFetchConfirmedAt > 0 &&
 				pendingNavigationRef.current
 			) {
-				scheduleNavTimeout(NAV_TIMEOUT_MS);
+				scheduleNavTimeout(navTimeoutMsRef.current);
 			}
 		});
 	}, [scheduleNavTimeout, pendingNavigationRef]);
@@ -244,7 +246,14 @@ export function useDateNavigation(opts: {
 			if (frameId != null) {
 				setSearchNavFrame(true);
 			}
+			const shouldBackfill = needsFullDayBackfillAfterPendingNav({
+				seekingTimestamp: targetDate.toISOString(),
+				pendingFrameId: frameId,
+			});
 			finishNavigation();
+			if (shouldBackfill) {
+				fetchTimeRange(startOfDay(normalized), endOfDay(normalized));
+			}
 			return;
 		}
 
