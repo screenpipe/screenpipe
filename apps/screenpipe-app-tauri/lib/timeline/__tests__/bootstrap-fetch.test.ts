@@ -11,6 +11,8 @@ import {
 	getFullDayBackfillRangeIfNeeded,
 	frameBatchMatchesSwapTarget,
 	fetchRangeMatchesSwapTarget,
+	isActiveDateSwapRequest,
+	parseFetchRequestKey,
 } from "@/lib/timeline/date-navigation-utils";
 import { startOfDay, endOfDay } from "date-fns";
 
@@ -242,6 +244,34 @@ describe("stale date-swap batch guards", () => {
 				"2026-06-28T14:25:00.000Z",
 				"2026-06-28T14:35:00.000Z",
 				jun28,
+			),
+		).toBe(true);
+	});
+});
+
+describe("parseFetchRequestKey / isActiveDateSwapRequest", () => {
+	it("parseFetchRequestKey splits ISO range keys", () => {
+		expect(
+			parseFetchRequestKey(
+				"2026-06-28T00:00:00.000Z_2026-06-28T23:59:59.999Z",
+			),
+		).toEqual({
+			startIso: "2026-06-28T00:00:00.000Z",
+			endIso: "2026-06-28T23:59:59.999Z",
+		});
+	});
+
+	it("isActiveDateSwapRequest rejects stale retry/timeout targets", () => {
+		expect(
+			isActiveDateSwapRequest(
+				"2026-06-27T00:00:00.000Z_2026-06-27T23:59:59.999Z",
+				"2026-06-28",
+			),
+		).toBe(false);
+		expect(
+			isActiveDateSwapRequest(
+				"2026-06-28T00:00:00.000Z_2026-06-28T23:59:59.999Z",
+				"2026-06-28",
 			),
 		).toBe(true);
 	});

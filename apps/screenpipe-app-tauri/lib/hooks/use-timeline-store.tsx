@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { hasFramesForDate, findNearestDateWithFrames } from "../actions/has-frames-date";
-import { MAX_DATE_SEARCH_DAYS, formatLocalDayString, frameBatchMatchesSwapTarget, fetchRangeMatchesSwapTarget } from "../timeline/date-navigation-utils";
+import { MAX_DATE_SEARCH_DAYS, formatLocalDayString, frameBatchMatchesSwapTarget, fetchRangeMatchesSwapTarget, isActiveDateSwapRequest } from "../timeline/date-navigation-utils";
 import { endOfDay, isSameDay, startOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
@@ -946,6 +946,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					requestTimeoutTimer = null;
 					const { frames: currentFrames, pendingDateSwap: stillSwapping } = get();
 
+					if (
+						stillSwapping &&
+						!isActiveDateSwapRequest(requestKey, dateSwapTargetDay)
+					) {
+						return;
+					}
+
 					// Retry forever with backoff if no frames arrived
 					if (currentFrames.length === 0 || stillSwapping) {
 						requestRetryCount++;
@@ -1049,6 +1056,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	onWindowFocus: () => {
+		if (get().pendingDateSwap) {
+			return;
+		}
+
 		const { websocket, fetchTimeRange, connectWebSocket, currentDate } = get();
 
 		const today = new Date();

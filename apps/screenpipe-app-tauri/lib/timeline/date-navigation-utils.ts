@@ -196,3 +196,30 @@ export function fetchRangeMatchesSwapTarget(
 	const rangeEnd = endTimeIso ? new Date(endTimeIso).getTime() : rangeStart;
 	return rangeStart <= targetEnd && rangeEnd >= targetStart;
 }
+
+/** Parse `startISO_endISO` keys used by the timeline request deduper. */
+export function parseFetchRequestKey(requestKey: string): {
+	startIso?: string;
+	endIso?: string;
+} {
+	const sep = requestKey.indexOf("_");
+	if (sep <= 0) {
+		return {};
+	}
+	return {
+		startIso: requestKey.slice(0, sep),
+		endIso: requestKey.slice(sep + 1),
+	};
+}
+
+/** Ignore fetch timeouts/retries for WS requests that aren't the active date swap. */
+export function isActiveDateSwapRequest(
+	requestKey: string,
+	swapTargetDay: string | null,
+): boolean {
+	if (!swapTargetDay) {
+		return true;
+	}
+	const { startIso, endIso } = parseFetchRequestKey(requestKey);
+	return fetchRangeMatchesSwapTarget(startIso, endIso, swapTargetDay);
+}

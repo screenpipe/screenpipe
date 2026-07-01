@@ -7,7 +7,6 @@ import { isSameDay, isAfter, startOfDay, endOfDay } from "date-fns";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import {
 	findFirstFrameIndexForDay,
-	hasLoadedFramesForDay,
 	MAX_DATE_SEARCH_DAYS,
 	NAV_TIMEOUT_MS,
 	SEARCH_NAV_TIMEOUT_MS,
@@ -481,6 +480,17 @@ export function useDateNavigation(opts: {
 					closestIndex = index;
 				}
 			});
+		}
+
+		if (
+			closestIndex < 0 ||
+			!frames[closestIndex] ||
+			!isSameDay(new Date(frames[closestIndex].timestamp), targetDay)
+		) {
+			closestIndex = findFirstFrameIndexForDay(frames, targetDay);
+		}
+		if (closestIndex < 0) {
+			return;
 		}
 
 		resetFilters();
