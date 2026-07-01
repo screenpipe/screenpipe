@@ -17,6 +17,7 @@ use screenpipe_db::{DatabaseManager, FrameData, Order};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info, warn};
 
@@ -33,6 +34,7 @@ struct StreamBatchComplete {
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     frame_count: usize,
+    generation: u64,
 }
 
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -49,6 +51,9 @@ pub struct StreamFramesRequest {
     order: Order,
     #[serde(default)]
     limit: Option<usize>,
+    /// Client navigation generation — superseded requests stop sending frames.
+    #[serde(default)]
+    generation: u64,
 }
 
 const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
@@ -317,6 +322,9 @@ async fn handle_stream_frames_socket(
     // Shared flag: should we subscribe to live cache updates?
     let live_subscribe: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 
+    // Supersede in-flight fetches when the client sends a newer generation.
+    let active_generation = Arc::new(AtomicU64::new(0));
+
     let sent_ids_clone = sent_frame_ids.clone();
     let live_sub_clone = live_subscribe.clone();
     let cache_clone = cache.clone();
@@ -333,6 +341,9 @@ async fn handle_stream_frames_socket(
                         let end_time = request.end_time;
                         let is_descending = request.order == Order::Descending;
                         let limit = stream_frame_limit(request.limit);
+                        let req_generation = request.generation;
+                        active_generation.store(req_generation, Ordering::SeqCst);
+                        let active_gen = active_generation.clone();
 
                         // Clear sent IDs for new request
                         sent_ids_clone.lock().await.clear();
@@ -391,6 +402,9 @@ async fn handle_stream_frames_socket(
                             } // lock dropped
 
                             for frame in sorted {
+                                if active_gen.load(Ordering::SeqCst) != req_generation {
+                                    break;
+                                }
                                 let _ = frame_tx.send(frame).await;
                             }
 
@@ -424,6 +438,7 @@ async fn handle_stream_frames_socket(
                                 let db_backfill = db_clone.clone();
                                 let sent_ids_backfill = sent_ids_clone.clone();
                                 let complete_tx_backfill = complete_tx_recv.clone();
+                                let active_gen_backfill = active_gen.clone();
                                 tokio::spawn(async move {
                                     let mut backfill_count = 0usize;
                                     match db_backfill
@@ -463,6 +478,11 @@ async fn handle_stream_frames_socket(
 
                                             backfill_count = frames_to_send.len();
                                             for frame in frames_to_send {
+                                                if active_gen_backfill.load(Ordering::SeqCst)
+                                                    != req_generation
+                                                {
+                                                    break;
+                                                }
                                                 if frame_tx_db.send(frame).await.is_err() {
                                                     break;
                                                 }
@@ -476,6 +496,7 @@ async fn handle_stream_frames_socket(
                                             start_time: today_start,
                                             end_time: today_end,
                                             frame_count: initial_count + backfill_count,
+                                            generation: req_generation,
                                         })
                                         .await;
                                 });
@@ -488,6 +509,7 @@ async fn handle_stream_frames_socket(
                                         start_time: today_start,
                                         end_time: today_end,
                                         frame_count: initial_count,
+                                        generation: req_generation,
                                     })
                                     .await;
                             }
@@ -498,7 +520,11 @@ async fn handle_stream_frames_socket(
                             let sent_ids = sent_ids_clone.clone();
                             let complete_tx_past = complete_tx_recv.clone();
 
+                            let active_gen_past = active_gen.clone();
                             tokio::spawn(async move {
+                                if active_gen_past.load(Ordering::SeqCst) != req_generation {
+                                    return;
+                                }
                                 let frame_count = match tokio::time::timeout(
                                     std::time::Duration::from_secs(120),
                                     fetch_and_process_frames_with_tracking(
@@ -509,6 +535,8 @@ async fn handle_stream_frames_socket(
                                         is_descending,
                                         limit,
                                         sent_ids,
+                                        active_gen_past,
+                                        req_generation,
                                     ),
                                 )
                                 .await
@@ -523,11 +551,15 @@ async fn handle_stream_frames_socket(
                                         0
                                     }
                                 };
+                                if active_gen_past.load(Ordering::SeqCst) != req_generation {
+                                    return;
+                                }
                                 let _ = complete_tx_past
                                     .send(StreamBatchComplete {
                                         start_time,
                                         end_time,
                                         frame_count,
+                                        generation: req_generation,
                                     })
                                     .await;
                                 info!("Past-day fetch complete ({} frames)", frame_count);
@@ -605,6 +637,7 @@ async fn handle_stream_frames_socket(
                                 "count": c.frame_count,
                                 "start_time": c.start_time.to_rfc3339(),
                                 "end_time": c.end_time.to_rfc3339(),
+                                "generation": c.generation,
                             });
                             if let Err(e) = sender.send(Message::Text(msg.to_string())).await {
                                 warn!("failed to send batch_complete: {}", e);
@@ -778,6 +811,8 @@ async fn fetch_and_process_frames_with_tracking(
     is_descending: bool,
     limit: usize,
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
+    active_generation: Arc<AtomicU64>,
+    req_generation: u64,
 ) -> Result<(Option<DateTime<Utc>>, usize), anyhow::Error> {
     let mut chunks = db.find_video_chunks(start_time, end_time).await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
@@ -812,6 +847,9 @@ async fn fetch_and_process_frames_with_tracking(
 
     let frame_count = frames_to_send.len();
     for (ts, frame) in frames_to_send {
+        if active_generation.load(Ordering::SeqCst) != req_generation {
+            break;
+        }
         if latest_timestamp.is_none() || ts > latest_timestamp.unwrap() {
             latest_timestamp = Some(ts);
         }

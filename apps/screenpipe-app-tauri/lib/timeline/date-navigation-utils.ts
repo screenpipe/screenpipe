@@ -7,15 +7,80 @@ import { endOfDay, isAfter, startOfDay } from "date-fns";
 /** Max calendar-day gap when probing for the nearest day with capture data. */
 export const MAX_DATE_SEARCH_DAYS = 365;
 
-/** Standard calendar/arrow navigation — frames should arrive within this window. */
-export const NAV_TIMEOUT_MS = 10_000;
+/** Today — hot cache path; frames should arrive quickly. */
+export const NAV_TIMEOUT_MS_TODAY = 15_000;
+
+/** Historical days — server past-day fetch can take up to 120s. */
+export const NAV_TIMEOUT_MS_HISTORICAL = 130_000;
+
+/** @deprecated use resolveNavTimeoutMs */
+export const NAV_TIMEOUT_MS = NAV_TIMEOUT_MS_TODAY;
 
 /** Search / narrow-window fetch on large DBs can take much longer. */
 export const SEARCH_NAV_TIMEOUT_MS = 90_000;
 
+/** Progressive loading copy after this delay (no revert). */
+export const NAV_SLOW_LOADING_MS = 10_000;
+
+/** Reject orphaned WS batches for a cancelled swap target day. */
+export const STALE_SWAP_REJECT_MS = 30_000;
+
+/** Partial scroll-prefetch below this coverage ratio triggers full-day refetch. */
+export const PARTIAL_DAY_COVERAGE_THRESHOLD = 0.8;
+
+export type NavigationIntent = "nearest" | "exact";
+
 export interface DateChangeOptions {
 	/** Calendar picks an explicit day — do not redirect to a different nearby day. */
 	preferExactDay?: boolean;
+}
+
+export interface DateSwapTarget {
+	day: string;
+	generation: number;
+}
+
+/** Nav timeout scaled to today vs historical (matches server 120s past-day cap). */
+export function resolveNavTimeoutMs(targetDate: Date, isToday?: boolean): number {
+	const today = isToday ?? isSameLocalDay(targetDate, new Date());
+	return today ? NAV_TIMEOUT_MS_TODAY : NAV_TIMEOUT_MS_HISTORICAL;
+}
+
+function isSameLocalDay(a: Date, b: Date): boolean {
+	return formatLocalDayString(a) === formatLocalDayString(b);
+}
+
+/** ISO range dedupe key — generation prefix invalidates superseded in-flight fetches. */
+export function buildFetchRequestKey(
+	generation: number,
+	startTime: Date,
+	endTime: Date,
+): string {
+	return `${generation}_${startTime.toISOString()}_${endTime.toISOString()}`;
+}
+
+/** Fraction of local calendar day span covered by loaded frames (0–1). */
+export function dayCoverageRatio(
+	frames: TimestampedFrame[],
+	targetDate: Date,
+): number {
+	const dayStart = startOfDay(targetDate).getTime();
+	const dayEnd = endOfDay(targetDate).getTime();
+	const daySpan = dayEnd - dayStart;
+	if (daySpan <= 0) return 1;
+
+	let min = Infinity;
+	let max = -Infinity;
+	let count = 0;
+	for (const frame of frames) {
+		const t = new Date(frame.timestamp).getTime();
+		if (t < dayStart || t > dayEnd) continue;
+		count++;
+		if (t < min) min = t;
+		if (t > max) max = t;
+	}
+	if (count === 0) return 0;
+	return Math.min(1, (max - min) / daySpan);
 }
 
 export interface TimestampedFrame {
@@ -79,9 +144,12 @@ export function shouldBootstrapFetchDay(options: {
 	if (options.isNavigating || options.hasPendingNavigation) {
 		return false;
 	}
-	// Today keeps polling for live frames; historical days skip if already in memory.
+	// Today keeps polling for live frames; historical days skip if fully loaded.
 	if (!options.isToday && hasLoadedFramesForDay(options.frames, options.dateToCheck)) {
-		return false;
+		const coverage = dayCoverageRatio(options.frames, options.dateToCheck);
+		if (coverage >= PARTIAL_DAY_COVERAGE_THRESHOLD) {
+			return false;
+		}
 	}
 	return true;
 }
@@ -156,40 +224,64 @@ export function canResolvePendingNavigation(options: {
 	return options.targetDayMatchesStoreDate && options.hasFramesForTargetDay;
 }
 
+function swapTargetDayString(
+	target: string | DateSwapTarget | null,
+): string | null {
+	if (!target) return null;
+	return typeof target === "string" ? target : target.day;
+}
+
+function swapTargetGeneration(
+	target: string | DateSwapTarget | null,
+): number | null {
+	if (!target || typeof target === "string") return null;
+	return target.generation;
+}
+
 /** Whether incoming WS frames belong to the active date-swap target day. */
 export function frameBatchMatchesSwapTarget(
 	frames: TimestampedFrame[],
-	swapTargetDay: string | null,
+	swapTarget: string | DateSwapTarget | null,
+	expectedGeneration?: number | null,
 ): boolean {
-	if (!swapTargetDay || frames.length === 0) {
+	if (!swapTarget || frames.length === 0) {
 		return true;
 	}
+	const targetGen = expectedGeneration ?? swapTargetGeneration(swapTarget);
+	const activeGen = swapTargetGeneration(swapTarget);
+	if (targetGen != null && activeGen != null && targetGen !== activeGen) {
+		return false;
+	}
+	const day = swapTargetDayString(swapTarget);
 	return frames.some(
-		(f) => formatLocalDayString(new Date(f.timestamp)) === swapTargetDay,
+		(f) => formatLocalDayString(new Date(f.timestamp)) === day,
 	);
 }
 
-/** Whether a batch_complete / fetch range belongs to the active date-swap target. */
+/** Reject batches for a recently cancelled swap (orphaned server responses). */
+export function shouldRejectStaleCancelledBatch(
+	frames: TimestampedFrame[],
+	staleRejectDay: string | null,
+	staleRejectUntil: number,
+): boolean {
+	if (!staleRejectDay || frames.length === 0) return false;
+	if (Date.now() > staleRejectUntil) return false;
+	return frameBatchMatchesSwapTarget(frames, staleRejectDay);
+}
+
 export function fetchRangeMatchesSwapTarget(
 	startTimeIso: string | undefined,
 	endTimeIso: string | undefined,
-	swapTargetDay: string | null,
+	swapTarget: string | DateSwapTarget | null,
 ): boolean {
-	if (!swapTargetDay || !startTimeIso) {
-		return true;
-	}
+	const swapTargetDay = swapTargetDayString(swapTarget);
+	if (!swapTargetDay || !startTimeIso) return true;
 	const startDay = formatLocalDayString(new Date(startTimeIso));
-	if (startDay === swapTargetDay) {
-		return true;
-	}
+	if (startDay === swapTargetDay) return true;
 	if (endTimeIso) {
 		const endDay = formatLocalDayString(new Date(endTimeIso));
-		if (endDay === swapTargetDay) {
-			return true;
-		}
+		if (endDay === swapTargetDay) return true;
 	}
-	// Narrow ±5min search windows can span two local days — accept if target day
-	// falls inside the requested range.
 	const targetStart = parseLocalDayString(swapTargetDay).getTime();
 	const targetEnd = endOfDay(parseLocalDayString(swapTargetDay)).getTime();
 	const rangeStart = new Date(startTimeIso).getTime();
@@ -197,29 +289,40 @@ export function fetchRangeMatchesSwapTarget(
 	return rangeStart <= targetEnd && rangeEnd >= targetStart;
 }
 
-/** Parse `startISO_endISO` keys used by the timeline request deduper. */
 export function parseFetchRequestKey(requestKey: string): {
+	generation?: number;
 	startIso?: string;
 	endIso?: string;
 } {
-	const sep = requestKey.indexOf("_");
-	if (sep <= 0) {
-		return {};
+	const parts = requestKey.split("_");
+	if (parts.length >= 3) {
+		const generation = Number(parts[0]);
+		const startIso = parts[1];
+		const endIso = parts.slice(2).join("_");
+		if (Number.isFinite(generation) && startIso) {
+			return { generation, startIso, endIso };
+		}
 	}
-	return {
-		startIso: requestKey.slice(0, sep),
-		endIso: requestKey.slice(sep + 1),
-	};
+	const sep = requestKey.indexOf("_");
+	if (sep <= 0) return {};
+	return { startIso: requestKey.slice(0, sep), endIso: requestKey.slice(sep + 1) };
 }
 
-/** Ignore fetch timeouts/retries for WS requests that aren't the active date swap. */
 export function isActiveDateSwapRequest(
 	requestKey: string,
-	swapTargetDay: string | null,
+	swapTarget: string | DateSwapTarget | null,
 ): boolean {
-	if (!swapTargetDay) {
-		return true;
-	}
-	const { startIso, endIso } = parseFetchRequestKey(requestKey);
-	return fetchRangeMatchesSwapTarget(startIso, endIso, swapTargetDay);
+	if (!swapTarget) return true;
+	const { generation, startIso, endIso } = parseFetchRequestKey(requestKey);
+	const targetGen = swapTargetGeneration(swapTarget);
+	if (generation != null && targetGen != null && generation !== targetGen) return false;
+	return fetchRangeMatchesSwapTarget(startIso, endIso, swapTarget);
+}
+
+export function batchCompleteMatchesGeneration(
+	messageGeneration: number | undefined,
+	swapTarget: DateSwapTarget | null,
+): boolean {
+	if (!swapTarget || messageGeneration == null) return true;
+	return messageGeneration === swapTarget.generation;
 }

@@ -388,6 +388,14 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **Keyword search logic** — Verify that keyword search SQL correctly uses `OR` instead of `UNION` within `IN()`.
 - [ ] **Search prompt accuracy** — Verify that search prompts are improved to prevent false negatives from over-filtering.
 - [ ] **Past-day timeline navigation** — Navigate the timeline to past days (e.g., using date picker or arrow keys). Verify that data loads correctly and the timeline behaves as expected.
+- [ ] **#4690 calendar picker during WS reconnect** — With timeline WebSocket reconnecting, pick a day from the calendar. Data loads without getting stuck on "loading...".
+- [ ] **#4690 day arrows after scroll prefetch** — Scroll timeline to an older prefetched day, then use calendar/arrows. Playhead day and controls stay in sync.
+- [ ] **#4690 window refocus preserves history** — Browse a past day, switch away, refocus app. Timeline stays on that day (no snap back to today).
+- [ ] **#4690 empty calendar day** — Pick a day with no captures. Shows empty state toast; does not flicker-revert when `preferExactDay`.
+- [ ] **#4690 slow past-day load (>10s)** — Navigate to a dense historical day. No premature timeout toast before data arrives (up to ~130s).
+- [ ] **#4690 rapid calendar clicks** — Click 5+ different days within 2s. Final day wins; no wrong-day frames flash.
+- [ ] **#4690 search near local midnight** — Search/jump near midnight boundary; repeat same result — fetch is not blocked by dedupe.
+- [ ] **#4690 audio-only day** — Day with mic-only captures shows audio placeholder, not black loading screen.
 - [ ] **`content_type=all` search and pagination** — Perform search queries with `content_type=all`. Verify that the result count is accurate and pagination works correctly without missing or duplicating results.
 - [ ] **Search pagination with offset** — Perform paginated searches, particularly beyond the first page. Verify that results are not empty or incorrect due to double-applied offsets.
 - [ ] **`search_ocr()` returns results for event-driven capture** — Verify that `search_ocr()` correctly returns OCR results for event-driven captures and does not return empty when visible text is present on screen.

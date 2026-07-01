@@ -9,6 +9,7 @@ import {
 	hasLoadedFramesForDay,
 	MAX_DATE_SEARCH_DAYS,
 	NAV_TIMEOUT_MS,
+	SEARCH_NAV_TIMEOUT_MS,
 	navigationDirection,
 	parseLocalDayString,
 	formatLocalDayString,
@@ -97,6 +98,7 @@ describe("local day string helpers", () => {
 	});
 
 	it("NAV_TIMEOUT_MS is shorter than search navigation timeout", () => {
-		expect(NAV_TIMEOUT_MS).toBe(10_000);
+		expect(NAV_TIMEOUT_MS).toBe(15_000);
+		expect(NAV_TIMEOUT_MS).toBeLessThan(SEARCH_NAV_TIMEOUT_MS);
 	});
 });

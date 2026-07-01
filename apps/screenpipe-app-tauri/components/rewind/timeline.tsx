@@ -25,6 +25,7 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { MAX_DATE_SEARCH_DAYS, navigationDirection, shouldBootstrapFetchDay, shouldBootstrapProbeNearestDay, getFullDayBackfillRangeIfNeeded } from "@/lib/timeline/date-navigation-utils";
+import { toast } from "@/components/ui/use-toast";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -969,6 +970,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						"— fetching requested day anyway",
 					);
 				} else if (!isSameDay(nearest, dateToCheck)) {
+					toast({
+						title: "Jumped to nearest day with data",
+						description: `No recordings on ${dateToCheck.toLocaleDateString()}.`,
+					});
 					setCurrentDate(startOfDay(nearest));
 					return;
 				}

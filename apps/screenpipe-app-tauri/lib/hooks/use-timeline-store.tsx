@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { hasFramesForDate, findNearestDateWithFrames } from "../actions/has-frames-date";
-import { MAX_DATE_SEARCH_DAYS, formatLocalDayString, frameBatchMatchesSwapTarget, fetchRangeMatchesSwapTarget, isActiveDateSwapRequest } from "../timeline/date-navigation-utils";
+import { MAX_DATE_SEARCH_DAYS, formatLocalDayString, buildFetchRequestKey, frameBatchMatchesSwapTarget, fetchRangeMatchesSwapTarget, isActiveDateSwapRequest, shouldRejectStaleCancelledBatch, batchCompleteMatchesGeneration, parseFetchRequestKey, type DateSwapTarget } from "../timeline/date-navigation-utils";
 import { endOfDay, isSameDay, startOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
@@ -41,7 +41,8 @@ let requestRetryCount = 0;
 const REQUEST_TIMEOUT_BASE_MS = 5000; // Initial timeout: 5 seconds
 const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
 const MAX_REQUEST_RETRIES = 5;
-const TIMELINE_STREAM_FRAME_LIMIT = 2500;
+// Must match MAX_STREAM_FRAME_LIMIT in crates/screenpipe-engine/src/routes/streaming.rs
+const TIMELINE_STREAM_FRAME_LIMIT = 10_000;
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -51,8 +52,35 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 
 let emptyStateMessageTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Local calendar day (YYYY-MM-DD) for the in-flight date swap; stale WS batches are ignored. */
-let dateSwapTargetDay: string | null = null;
+/** Active date-swap target; stale WS batches are ignored by day + generation. */
+let dateSwapTarget: DateSwapTarget | null = null;
+/** Reject orphaned batches for a cancelled swap until this timestamp. */
+let staleRejectDay: string | null = null;
+let staleRejectUntil = 0;
+/** Batches rejected during swap — wait before failing if batch_complete had count>0. */
+let rejectedSwapBatchCount = 0;
+let rejectedSwapBatchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function normalizeIncomingFrame(frame: StreamTimeSeriesResponse): StreamTimeSeriesResponse {
+	for (const device of frame.devices ?? []) {
+		if (device.frame_id != null && typeof device.frame_id !== "number") {
+			const parsed = Number(device.frame_id);
+			if (Number.isFinite(parsed)) {
+				device.frame_id = parsed;
+			}
+		}
+	}
+	return frame;
+}
+
+function normalizeIncomingFrames(frames: StreamTimeSeriesResponse[]): StreamTimeSeriesResponse[] {
+	return frames.map(normalizeIncomingFrame);
+}
+
+function requestKeyOverlapsDay(requestKey: string, targetDay: string): boolean {
+	const { startIso, endIso } = parseFetchRequestKey(requestKey);
+	return fetchRangeMatchesSwapTarget(startIso, endIso, targetDay);
+}
 
 function clearEmptyStateMessageTimer() {
 	if (emptyStateMessageTimer) {
@@ -161,6 +189,8 @@ interface TimelineState {
 	hasCachedData: boolean; // Whether we loaded from cache
 	// When true, next flushFrameBuffer replaces frames instead of merging (date swap)
 	pendingDateSwap: boolean;
+	navigationGeneration: number;
+	navigationIntent: "nearest" | "exact" | null;
 	/** Bumped when a date-swap fetch fails or returns empty — hooks subscribe to abort nav. */
 	navigationFetchFailedAt: number;
 	/** Bumped when batch_complete reports frames for an in-flight date swap — extends nav timeout. */
@@ -184,7 +214,7 @@ interface TimelineState {
 	onWindowFocus: () => void;
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
-	clearFramesForNavigation: (targetDate?: Date) => void; // Clear frames when navigating to new date
+	clearFramesForNavigation: (targetDate?: Date, intent?: "nearest" | "exact") => void;
 	abortPendingDateSwap: (reason: "empty" | "failed") => void;
 	/** Cancel an in-flight date swap without clearing visible frames (nav aborted). */
 	cancelPendingDateSwap: () => void;
@@ -206,6 +236,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	isConnected: false,
 	hasCachedData: false,
 	pendingDateSwap: false,
+	navigationGeneration: 0,
+	navigationIntent: null,
 	navigationFetchFailedAt: 0,
 	navigationFetchConfirmedAt: 0,
 	pendingNavigation: null,
@@ -219,15 +251,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	clearNewFramesCount: () => set({ newFramesCount: 0 }),
 
 	clearSentRequestForDate: (date: Date) => {
-		const targetDay = date.toDateString();
+		const targetDay = formatLocalDayString(date);
 		set((state) => {
 			const newSentRequests = new Set<string>();
 			for (const key of state.sentRequests) {
-				// Key format: "startISO_endISO" — check if start date matches
-				const startIso = key.split('_')[0];
-				try {
-					if (new Date(startIso).toDateString() === targetDay) continue;
-				} catch { /* keep non-matching keys */ }
+				if (requestKeyOverlapsDay(key, targetDay)) continue;
 				newSentRequests.add(key);
 			}
 			return { sentRequests: newSentRequests };
@@ -264,8 +292,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	// Prepare for date navigation — keep old frames visible while new ones load.
 	// Sets pendingDateSwap so flushFrameBuffer replaces frames atomically on first batch.
-	clearFramesForNavigation: (targetDate?: Date) => {
-		dateSwapTargetDay = targetDate ? formatLocalDayString(targetDate) : null;
+	clearFramesForNavigation: (targetDate?: Date, intent: "nearest" | "exact" = "nearest") => {
+		const generation = get().navigationGeneration + 1;
+		dateSwapTarget = targetDate
+			? { day: formatLocalDayString(targetDate), generation }
+			: null;
+		staleRejectDay = null;
+		staleRejectUntil = 0;
+		rejectedSwapBatchCount = 0;
+		if (rejectedSwapBatchTimer) {
+			clearTimeout(rejectedSwapBatchTimer);
+			rejectedSwapBatchTimer = null;
+		}
 		// Clear the frame buffer too
 		frameBuffer = [];
 		if (flushTimer) {
@@ -283,6 +321,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		set(() => ({
 			sentRequests: new Set<string>(),
 			pendingDateSwap: true,
+			navigationGeneration: generation,
+			navigationIntent: intent,
 			isLoading: true,
 			loadingProgress: { loaded: 0, isStreaming: false },
 			error: null,
@@ -291,7 +331,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	abortPendingDateSwap: (reason: "empty" | "failed") => {
-		dateSwapTargetDay = null;
+		if (dateSwapTarget) {
+			staleRejectDay = dateSwapTarget.day;
+			staleRejectUntil = Date.now() + 30_000;
+		}
+		dateSwapTarget = null;
 		frameBuffer = [];
 		if (flushTimer) {
 			clearTimeout(flushTimer);
@@ -322,7 +366,16 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	cancelPendingDateSwap: () => {
-		dateSwapTargetDay = null;
+		if (dateSwapTarget) {
+			staleRejectDay = dateSwapTarget.day;
+			staleRejectUntil = Date.now() + 30_000;
+		}
+		dateSwapTarget = null;
+		rejectedSwapBatchCount = 0;
+		if (rejectedSwapBatchTimer) {
+			clearTimeout(rejectedSwapBatchTimer);
+			rejectedSwapBatchTimer = null;
+		}
 		frameBuffer = [];
 		if (flushTimer) {
 			clearTimeout(flushTimer);
@@ -339,6 +392,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 			return {
 				pendingDateSwap: false,
+				navigationIntent: null,
 				isLoading: false,
 				loadingProgress: { loaded: state.frames.length, isStreaming: state.frames.length > 0 },
 			};
@@ -347,12 +401,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	hasDateBeenFetched: (date: Date) => {
 		const { sentRequests } = get();
-		const targetDay = date.toDateString();
+		const targetDay = formatLocalDayString(date);
 		for (const key of sentRequests) {
-			const startIso = key.split('_')[0];
-			try {
-				if (new Date(startIso).toDateString() === targetDay) return true;
-			} catch { /* skip malformed keys */ }
+			if (requestKeyOverlapsDay(key, targetDay)) return true;
 		}
 		return false;
 	},
@@ -361,18 +412,35 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	flushFrameBuffer: () => {
 		if (frameBuffer.length === 0) return;
 
-		const framesToFlush = frameBuffer;
+		const framesToFlush = normalizeIncomingFrames(frameBuffer);
 		frameBuffer = [];
+
+		if (shouldRejectStaleCancelledBatch(framesToFlush, staleRejectDay, staleRejectUntil)) {
+			console.warn("[timeline] ignoring orphaned batch for cancelled swap", staleRejectDay);
+			return;
+		}
 
 		if (
 			get().pendingDateSwap &&
-			!frameBatchMatchesSwapTarget(framesToFlush, dateSwapTargetDay)
+			!frameBatchMatchesSwapTarget(framesToFlush, dateSwapTarget)
 		) {
-			console.warn(
-				"[timeline] ignoring stale date-swap frame batch for",
-				dateSwapTargetDay,
-			);
+			rejectedSwapBatchCount++;
+			if (!rejectedSwapBatchTimer) {
+				rejectedSwapBatchTimer = setTimeout(() => {
+					rejectedSwapBatchTimer = null;
+					if (get().pendingDateSwap && rejectedSwapBatchCount > 0) {
+						get().abortPendingDateSwap("failed");
+					}
+					rejectedSwapBatchCount = 0;
+				}, 2000);
+			}
+			console.warn("[timeline] ignoring stale date-swap frame batch for", dateSwapTarget?.day);
 			return;
+		}
+		rejectedSwapBatchCount = 0;
+		if (rejectedSwapBatchTimer) {
+			clearTimeout(rejectedSwapBatchTimer);
+			rejectedSwapBatchTimer = null;
 		}
 
 		set((state) => {
@@ -404,6 +472,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					frames: merged.frames,
 					frameTimestamps: merged.timestamps,
 					pendingDateSwap: false,
+					navigationIntent: null,
 					isLoading: false,
 					loadingProgress: { loaded: merged.frames.length, isStreaming: true },
 					message: null,
@@ -645,10 +714,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					}
 					requestRetryCount = 0;
 					const count = typeof data.count === "number" ? data.count : 0;
+					const msgGen = typeof data.generation === "number" ? data.generation : undefined;
+					if (!batchCompleteMatchesGeneration(msgGen, dateSwapTarget)) {
+						return;
+					}
 					const rangeMatches = fetchRangeMatchesSwapTarget(
 						typeof data.start_time === "string" ? data.start_time : undefined,
 						typeof data.end_time === "string" ? data.end_time : undefined,
-						dateSwapTargetDay,
+						dateSwapTarget,
 					);
 					if (!rangeMatches) {
 						return;
@@ -656,7 +729,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					if (count === 0 && get().pendingDateSwap) {
 						get().abortPendingDateSwap("empty");
 					} else if (get().pendingDateSwap && count > 0) {
-						// Frames flush after this signal — extend client nav timeout while batches land.
 						set({ navigationFetchConfirmedAt: Date.now() });
 					}
 					return;
@@ -722,24 +794,23 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				// Handle batched frames - OPTIMIZED: buffer and flush periodically
 				if (Array.isArray(data)) {
 					if (data.length === 0) {
-						// Empty arrays lack range metadata — rely on batch_complete for swap abort.
+						return;
+					}
+					const normalized = normalizeIncomingFrames(data);
+					if (shouldRejectStaleCancelledBatch(normalized, staleRejectDay, staleRejectUntil)) {
 						return;
 					}
 					if (
 						get().pendingDateSwap &&
-						!frameBatchMatchesSwapTarget(data, dateSwapTargetDay)
+						!frameBatchMatchesSwapTarget(normalized, dateSwapTarget)
 					) {
-						console.warn(
-							"[timeline] ignoring stale date-swap WS batch for",
-							dateSwapTargetDay,
-						);
+						rejectedSwapBatchCount++;
 						return;
 					}
-					if (data.length > 0) {
+					if (normalized.length > 0) {
 						requestRetryCount = 0;
 					}
-					// Add to buffer instead of immediate state update
-					frameBuffer.push(...data);
+					frameBuffer.push(...normalized);
 
 					// Schedule flush if not already scheduled
 					if (!flushTimer) {
@@ -768,8 +839,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 				// Handle single frame (legacy support)
 				if (data.timestamp && data.devices) {
+					const normalized = normalizeIncomingFrame(data);
+					if (shouldRejectStaleCancelledBatch([normalized], staleRejectDay, staleRejectUntil)) {
+						return;
+					}
+					if (
+						get().pendingDateSwap &&
+						!frameBatchMatchesSwapTarget([normalized], dateSwapTarget)
+					) {
+						return;
+					}
 					requestRetryCount = 0;
-					frameBuffer.push(data);
+					frameBuffer.push(normalized);
 
 					if (!flushTimer) {
 						flushTimer = setTimeout(() => {
@@ -912,9 +993,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	fetchTimeRange: async (startTime: Date, endTime: Date) => {
 		const sendOrRetry = (attempt: number) => {
-			const { websocket, sentRequests } = get();
-			// Use ISO range as key so narrow-window and full-day fetches get distinct keys
-			const requestKey = `${startTime.toISOString()}_${endTime.toISOString()}`;
+			const { websocket, sentRequests, navigationGeneration } = get();
+			const requestKey = buildFetchRequestKey(navigationGeneration, startTime, endTime);
 
 			if (sentRequests.has(requestKey)) {
 				return;
@@ -927,6 +1007,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						end_time: endTime.toISOString(),
 						order: "descending",
 						limit: TIMELINE_STREAM_FRAME_LIMIT,
+						generation: navigationGeneration,
 					}),
 				);
 
@@ -948,7 +1029,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 					if (
 						stillSwapping &&
-						!isActiveDateSwapRequest(requestKey, dateSwapTargetDay)
+						!isActiveDateSwapRequest(requestKey, dateSwapTarget)
 					) {
 						return;
 					}
@@ -1027,7 +1108,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		}
 
 		const endTime = endOfDay(targetDay);
-		const requestKey = `${targetDay.toISOString()}_${endTime.toISOString()}`;
+		const requestKey = buildFetchRequestKey(
+			get().navigationGeneration,
+			targetDay,
+			endTime,
+		);
 
 		const sendPrefetch = (attempt: number) => {
 			const { websocket, sentRequests } = get();
@@ -1041,6 +1126,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						end_time: endTime.toISOString(),
 						order: "descending",
 						limit: TIMELINE_STREAM_FRAME_LIMIT,
+						generation: get().navigationGeneration,
 					}),
 				);
 				set((state) => ({
@@ -1063,19 +1149,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const { websocket, fetchTimeRange, connectWebSocket, currentDate } = get();
 
 		const today = new Date();
-		const todayStr = today.toDateString();
-		const viewingToday = currentDate.toDateString() === todayStr;
+		const viewingToday = formatLocalDayString(currentDate) === formatLocalDayString(today);
 		const refreshDate = viewingToday ? today : currentDate;
-		const refreshStr = refreshDate.toDateString();
+		const refreshDay = formatLocalDayString(refreshDate);
 
 		set((state) => {
 			const newSentRequests = new Set<string>();
 			for (const key of state.sentRequests) {
-				const startIso = key.split('_')[0];
-				try {
-					const keyDateStr = new Date(startIso).toDateString();
-					if (keyDateStr === refreshStr) continue;
-				} catch { /* keep non-matching keys */ }
+				if (requestKeyOverlapsDay(key, refreshDay)) continue;
 				newSentRequests.add(key);
 			}
 			return {

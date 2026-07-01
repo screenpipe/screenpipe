@@ -16,7 +16,11 @@ import {
 } from "@/lib/timeline/date-navigation-utils";
 import { startOfDay, endOfDay } from "date-fns";
 
-const jun28Frames = [{ timestamp: "2026-06-28T12:00:00.000Z" }];
+const jun28Frames = [
+	{ timestamp: "2026-06-28T00:30:00.000Z" },
+	{ timestamp: "2026-06-28T12:00:00.000Z" },
+	{ timestamp: "2026-06-28T23:30:00.000Z" },
+];
 const jun28 = new Date(2026, 5, 28);
 
 describe("shouldBootstrapFetchDay", () => {
@@ -77,6 +81,22 @@ describe("shouldBootstrapFetchDay", () => {
 				isNavigating: false,
 				hasPendingNavigation: false,
 				frames: jun28Frames,
+			}),
+		).toBe(true);
+	});
+
+	it("refetches partially prefetched historical day", () => {
+		const partialDay = [
+			{ timestamp: "2026-06-28T12:00:00.000Z" },
+			{ timestamp: "2026-06-28T12:05:00.000Z" },
+		];
+		expect(
+			shouldBootstrapFetchDay({
+				dateToCheck: jun28,
+				isToday: false,
+				isNavigating: false,
+				hasPendingNavigation: false,
+				frames: partialDay,
 			}),
 		).toBe(true);
 	});
@@ -261,6 +281,18 @@ describe("parseFetchRequestKey / isActiveDateSwapRequest", () => {
 		});
 	});
 
+	it("parseFetchRequestKey splits generation-prefixed keys", () => {
+		expect(
+			parseFetchRequestKey(
+				"3_2026-06-28T00:00:00.000Z_2026-06-28T23:59:59.999Z",
+			),
+		).toEqual({
+			generation: 3,
+			startIso: "2026-06-28T00:00:00.000Z",
+			endIso: "2026-06-28T23:59:59.999Z",
+		});
+	});
+
 	it("isActiveDateSwapRequest rejects stale retry/timeout targets", () => {
 		expect(
 			isActiveDateSwapRequest(
@@ -270,9 +302,15 @@ describe("parseFetchRequestKey / isActiveDateSwapRequest", () => {
 		).toBe(false);
 		expect(
 			isActiveDateSwapRequest(
-				"2026-06-28T00:00:00.000Z_2026-06-28T23:59:59.999Z",
-				"2026-06-28",
+				"2_2026-06-28T00:00:00.000Z_2026-06-28T23:59:59.999Z",
+				{ day: "2026-06-28", generation: 2 },
 			),
 		).toBe(true);
+		expect(
+			isActiveDateSwapRequest(
+				"1_2026-06-28T00:00:00.000Z_2026-06-28T23:59:59.999Z",
+				{ day: "2026-06-28", generation: 2 },
+			),
+		).toBe(false);
 	});
 });
