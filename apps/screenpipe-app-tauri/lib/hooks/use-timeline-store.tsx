@@ -103,6 +103,8 @@ interface TimelineState {
 	pendingDateSwap: boolean;
 	/** Bumped when a date-swap fetch fails or returns empty — hooks subscribe to abort nav. */
 	navigationFetchFailedAt: number;
+	/** Bumped when batch_complete reports frames for an in-flight date swap — extends nav timeout. */
+	navigationFetchConfirmedAt: number;
 
 	// Deep link navigation — persists across component mounts
 	pendingNavigation: { timestamp: string; frameId?: string } | null;
@@ -145,6 +147,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	hasCachedData: false,
 	pendingDateSwap: false,
 	navigationFetchFailedAt: 0,
+	navigationFetchConfirmedAt: 0,
 	pendingNavigation: null,
 
 	setPendingNavigation: (nav) => set({ pendingNavigation: nav }),
@@ -560,7 +563,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					if (count === 0 && get().pendingDateSwap) {
 						get().abortPendingDateSwap("empty");
 					} else if (get().pendingDateSwap && count > 0) {
-						// Frames will arrive via batched arrays; keep swap pending until flush.
+						// Frames flush after this signal — extend client nav timeout while batches land.
+						set({ navigationFetchConfirmedAt: Date.now() });
 					}
 					return;
 				}

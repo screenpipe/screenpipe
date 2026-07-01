@@ -24,7 +24,7 @@ import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
-import { MAX_DATE_SEARCH_DAYS, navigationDirection, hasLoadedFramesForDay } from "@/lib/timeline/date-navigation-utils";
+import { MAX_DATE_SEARCH_DAYS, navigationDirection, shouldBootstrapFetchDay, shouldBootstrapProbeNearestDay } from "@/lib/timeline/date-navigation-utils";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -49,7 +49,7 @@ export interface StreamTimeSeriesResponse {
 
 export interface DeviceFrameResponse {
 	device_id: string;
-	frame_id: string;
+	frame_id: string | number;
 	frame: string; // base64 encoded image
 	offset_index: number;
 	fps: number;
@@ -642,14 +642,22 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		if (!pendingNavigation) return;
 
 		let cancelled = false;
+		const MAX_CONSUME_ATTEMPTS = 40; // ~20s waiting for in-app nav to finish
 
 		const consume = async (attempt = 0) => {
 			if (cancelled) return;
 			if (isNavigatingRef.current || pendingNavigationRef.current) {
-				// In-app nav in progress — retry until idle (max ~5s).
-				if (attempt < 10) {
+				if (attempt < MAX_CONSUME_ATTEMPTS) {
 					setTimeout(() => consume(attempt + 1), 500);
+					return;
 				}
+				toast({
+					title: "Link navigation delayed",
+					description:
+						"Timeline was busy. Try opening the link again or pick the date from the calendar.",
+					variant: "destructive",
+				});
+				setPendingNavigation(null);
 				return;
 			}
 			if (pendingNavigation.frameId) {
@@ -924,15 +932,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		const findDateWithFrames = async () => {
 			let dateToCheck = startOfDay(new Date(currentDate));
 			const isToday = isSameDay(dateToCheck, new Date());
+			const storeFrames = useTimelineStore.getState().frames;
 
-			// For today, always fetch — live polling will push new frames.
-			// Skip nearest-day redirect when navigation is in progress — handleDateChange
-			// already resolved the target day (including direction-aware nearest lookup).
 			if (
-				!isToday &&
-				!isNavigatingRef.current &&
-				!pendingNavigationRef.current &&
-				!hasLoadedFramesForDay(frames, dateToCheck)
+				shouldBootstrapProbeNearestDay({
+					isToday,
+					isNavigating: isNavigatingRef.current,
+					hasPendingNavigation: !!pendingNavigationRef.current,
+					frames: storeFrames,
+					dateToCheck,
+				})
 			) {
 				if (cancelled) return;
 				const direction = navigationDirection(visibleDayAnchor, dateToCheck);
@@ -961,6 +970,18 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 			if (cancelled) return;
 
+			if (
+				!shouldBootstrapFetchDay({
+					dateToCheck,
+					isToday,
+					isNavigating: isNavigatingRef.current,
+					hasPendingNavigation: !!pendingNavigationRef.current,
+					frames: useTimelineStore.getState().frames,
+				})
+			) {
+				return;
+			}
+
 			// Always fetch full day. For search navigation, the narrow ±5min
 			// fetch was already fired synchronously in navigateDirectToDate().
 			// This full-day fetch acts as backfill to populate the timeline.
@@ -975,7 +996,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			cancelled = true;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentDate, websocket, frames, visibleDayAnchor]); // Re-run when websocket connects or date changes
+	}, [currentDate, websocket, visibleDayAnchor]); // Re-run when websocket connects or date changes
 
 	// Sync currentDate to frame's date - but NOT during intentional navigation
 	// This effect helps when scrolling across day boundaries, but must not fight

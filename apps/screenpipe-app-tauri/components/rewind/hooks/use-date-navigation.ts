@@ -7,10 +7,12 @@ import { isSameDay, isAfter, startOfDay, endOfDay } from "date-fns";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import {
 	findFirstFrameIndexForDay,
+	hasLoadedFramesForDay,
 	MAX_DATE_SEARCH_DAYS,
 	NAV_TIMEOUT_MS,
 	SEARCH_NAV_TIMEOUT_MS,
 	navigationDirection,
+	needsFullDayBackfillAfterPendingNav,
 	type DateChangeOptions,
 } from "@/lib/timeline/date-navigation-utils";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
@@ -96,6 +98,9 @@ export function useDateNavigation(opts: {
 
 	const abortNavigation = useCallback(
 		(options?: { revertDate?: Date; showToast?: boolean; message?: string }) => {
+			if (!isNavigatingRef.current && !pendingNavigationRef.current) {
+				return;
+			}
 			if (options?.revertDate) {
 				setCurrentDate(startOfDay(options.revertDate));
 			}
@@ -109,7 +114,7 @@ export function useDateNavigation(opts: {
 			}
 			finishNavigation();
 		},
-		[finishNavigation, setCurrentDate, setCurrentFrame],
+		[finishNavigation, setCurrentDate, setCurrentFrame, isNavigatingRef, pendingNavigationRef],
 	);
 
 	const scheduleNavTimeout = useCallback(
@@ -147,6 +152,19 @@ export function useDateNavigation(opts: {
 			}
 		});
 	}, [abortNavigation, pendingNavigationRef]);
+
+	// batch_complete with count>0 — server confirmed data; extend timeout while batches flush.
+	useEffect(() => {
+		return useTimelineStore.subscribe((state, prev) => {
+			if (
+				state.navigationFetchConfirmedAt !== prev.navigationFetchConfirmedAt &&
+				state.navigationFetchConfirmedAt > 0 &&
+				pendingNavigationRef.current
+			) {
+				scheduleNavTimeout(NAV_TIMEOUT_MS);
+			}
+		});
+	}, [scheduleNavTimeout, pendingNavigationRef]);
 
 	const searchResults = useKeywordSearchStore((s) => s.searchResults);
 	const highlightTerms = useSearchHighlight((s) => s.highlightTerms);
@@ -312,12 +330,7 @@ export function useDateNavigation(opts: {
 			const snapped = snapToDevice(targetIndex);
 			setCurrentIndex(snapped);
 			setCurrentFrame(frames[snapped]);
-			clearNavTimeout();
-			pendingNavigationRef.current = null;
-			pendingFrameIdRef.current = undefined;
-			isNavigatingRef.current = false;
-			setIsNavigating(false);
-			setSeekingTimestamp(null);
+			finishNavigation();
 			return true;
 		};
 
@@ -445,17 +458,18 @@ export function useDateNavigation(opts: {
 					setSearchNavFrame(true);
 				}
 
-				clearNavTimeout();
-				pendingNavigationRef.current = null;
-				pendingFrameIdRef.current = undefined;
-				setSeekingTimestamp(null);
-				setPendingNavigation(null);
-				setIsNavigating(false);
-				isNavigatingRef.current = false;
+				const shouldBackfill = needsFullDayBackfillAfterPendingNav({
+					seekingTimestamp,
+					pendingFrameId: pendingFrameId ?? undefined,
+				});
+				finishNavigation();
+				if (shouldBackfill) {
+					fetchTimeRange(startOfDay(targetDay), endOfDay(targetDay));
+				}
 			}
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [frames, currentDate, seekingTimestamp, setPendingNavigation, clearNavTimeout]);
+	}, [frames, currentDate, seekingTimestamp, finishNavigation, fetchTimeRange]);
 
 	return {
 		navigateDirectToDate,

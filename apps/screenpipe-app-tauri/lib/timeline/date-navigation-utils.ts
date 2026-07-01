@@ -67,3 +67,53 @@ export function formatLocalDayString(date: Date): string {
 	const day = String(d.getDate()).padStart(2, "0");
 	return `${y}-${m}-${day}`;
 }
+
+/** Whether the websocket bootstrap effect should fetch `dateToCheck`. */
+export function shouldBootstrapFetchDay(options: {
+	dateToCheck: Date;
+	isToday: boolean;
+	isNavigating: boolean;
+	hasPendingNavigation: boolean;
+	frames: TimestampedFrame[];
+}): boolean {
+	if (options.isNavigating || options.hasPendingNavigation) {
+		return false;
+	}
+	// Today keeps polling for live frames; historical days skip if already in memory.
+	if (!options.isToday && hasLoadedFramesForDay(options.frames, options.dateToCheck)) {
+		return false;
+	}
+	return true;
+}
+
+/** Whether bootstrap should probe SQL for a nearest day with capture data. */
+export function shouldBootstrapProbeNearestDay(options: {
+	isToday: boolean;
+	isNavigating: boolean;
+	hasPendingNavigation: boolean;
+	frames: TimestampedFrame[];
+	dateToCheck: Date;
+}): boolean {
+	if (options.isToday || options.isNavigating || options.hasPendingNavigation) {
+		return false;
+	}
+	return !hasLoadedFramesForDay(options.frames, options.dateToCheck);
+}
+
+/**
+ * After a narrow ±5min search fetch lands, backfill the full calendar day
+ * so the timeline scrubber has context. Calendar nav already requests full day.
+ */
+export function needsFullDayBackfillAfterPendingNav(options: {
+	seekingTimestamp: string | null;
+	pendingFrameId?: number;
+}): boolean {
+	if (options.pendingFrameId != null) {
+		return true;
+	}
+	if (!options.seekingTimestamp) {
+		return false;
+	}
+	const seek = new Date(options.seekingTimestamp);
+	return seek.getTime() !== startOfDay(seek).getTime();
+}
