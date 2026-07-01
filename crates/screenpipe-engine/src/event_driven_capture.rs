@@ -1744,6 +1744,10 @@ struct LightweightFocusedMetadata {
     window_name: Option<String>,
 }
 
+fn metadata_value_is_blank(value: &Option<String>) -> bool {
+    value.as_deref().map(str::trim).unwrap_or("").is_empty()
+}
+
 fn resolve_capture_metadata(
     tree_snapshot: Option<&screenpipe_a11y::tree::TreeSnapshot>,
     trigger: &CaptureTrigger,
@@ -1770,15 +1774,17 @@ fn resolve_capture_metadata(
     // Without this, captures triggered by click/visual_change/idle would be
     // stored with null app/window metadata even though the compositor or OS
     // knows the focused target.
-    if app_name.is_none() {
+    if metadata_value_is_blank(&app_name) {
         if let Some(name) = lightweight_metadata.and_then(|m| m.app_name.as_deref()) {
+            let name = name.trim();
             if !name.is_empty() {
                 app_name = Some(name.to_string());
             }
         }
     }
-    if window_name.is_none() {
+    if metadata_value_is_blank(&window_name) {
         if let Some(name) = lightweight_metadata.and_then(|m| m.window_name.as_deref()) {
+            let name = name.trim();
             if !name.is_empty() {
                 window_name = Some(name.to_string());
             }
@@ -2815,6 +2821,36 @@ mod tests {
         assert_eq!(window_name.as_deref(), Some("Lucern Clinic"));
         assert_eq!(browser_url, None);
         assert_eq!(document_path, None);
+    }
+
+    #[test]
+    fn resolve_capture_metadata_uses_lightweight_metadata_when_tree_values_are_blank() {
+        let snapshot = screenpipe_a11y::tree::TreeSnapshot {
+            app_name: "  ".into(),
+            window_name: "".into(),
+            text_content: "visible text".into(),
+            nodes: Vec::new(),
+            browser_url: None,
+            document_path: None,
+            timestamp: Utc::now(),
+            node_count: 0,
+            walk_duration: Duration::from_millis(1),
+            content_hash: 0,
+            simhash: 0,
+            truncated: false,
+            truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            max_depth_reached: 0,
+        };
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some(" org.telegram.desktop ".into()),
+            window_name: Some(" Telegram ".into()),
+        };
+
+        let (app_name, window_name, _, _) =
+            resolve_capture_metadata(Some(&snapshot), &CaptureTrigger::Idle, Some(&metadata));
+
+        assert_eq!(app_name.as_deref(), Some("org.telegram.desktop"));
+        assert_eq!(window_name.as_deref(), Some("Telegram"));
     }
 
     #[test]

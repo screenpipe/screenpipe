@@ -31,10 +31,11 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 /// Permission status for UI capture on Linux.
@@ -991,25 +992,45 @@ fn run_window_observer(
 /// Get active window info: (app_name, window_title, pid).
 /// Uses Hyprland IPC on Hyprland/Wayland, then falls back to xdotool for X11.
 pub fn get_active_window_info() -> Option<(String, String, i32)> {
+    const ACTIVE_WINDOW_CACHE_TTL: Duration = Duration::from_secs(1);
+    static CACHE: OnceLock<Mutex<Option<(Option<(String, String, i32)>, Instant)>>> =
+        OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
+    {
+        let cached = cache.lock();
+        if let Some((value, captured_at)) = &*cached {
+            if now.duration_since(*captured_at) < ACTIVE_WINDOW_CACHE_TTL {
+                return value.clone();
+            }
+        }
+    }
+
+    let fresh = get_active_window_info_uncached();
+    *cache.lock() = Some((fresh.clone(), Instant::now()));
+    fresh
+}
+
+fn get_active_window_info_uncached() -> Option<(String, String, i32)> {
     get_hyprland_active_window_info().or_else(get_x11_active_window_info)
 }
 
 fn get_hyprland_active_window_info() -> Option<(String, String, i32)> {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()
-        && std::env::var_os("XDG_CURRENT_DESKTOP")
-            .and_then(|v| v.into_string().ok())
-            .map_or(true, |desktop| {
-                !desktop.to_ascii_lowercase().contains("hyprland")
-            })
+        && std::env::var("XDG_CURRENT_DESKTOP").map_or(true, |desktop| {
+            !desktop.to_ascii_lowercase().contains("hyprland")
+        })
     {
         return None;
     }
 
-    let output = std::process::Command::new("hyprctl")
-        .args(["-j", "activewindow"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
+    let output = command_output_with_timeout(
+        "hyprctl",
+        &["-j", "activewindow"],
+        Duration::from_millis(200),
+    )
+    .filter(|o| o.status.success())?;
 
     parse_hyprland_active_window_json(&output.stdout)
 }
@@ -1044,10 +1065,10 @@ fn parse_hyprland_active_window_json(raw: &[u8]) -> Option<(String, String, i32)
 fn clean_hyprland_title(title: &str) -> String {
     title
         .chars()
-        .filter(|c| {
+        .filter(|&c| {
             !matches!(
-                *c as u32,
-                0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069
+                c,
+                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
             )
         })
         .collect::<String>()
@@ -1057,11 +1078,9 @@ fn clean_hyprland_title(title: &str) -> String {
 
 fn get_x11_active_window_info() -> Option<(String, String, i32)> {
     // Try xdotool (works on X11 and XWayland)
-    let wid_output = std::process::Command::new("xdotool")
-        .arg("getactivewindow")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
+    let wid_output =
+        command_output_with_timeout("xdotool", &["getactivewindow"], Duration::from_millis(300))
+            .filter(|o| o.status.success())?;
 
     let wid = String::from_utf8_lossy(&wid_output.stdout)
         .trim()
@@ -1071,21 +1090,23 @@ fn get_x11_active_window_info() -> Option<(String, String, i32)> {
     }
 
     // Get window name
-    let name_output = std::process::Command::new("xdotool")
-        .args(["getwindowname", &wid])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
+    let name_output = command_output_with_timeout(
+        "xdotool",
+        &["getwindowname", &wid],
+        Duration::from_millis(300),
+    )
+    .filter(|o| o.status.success())?;
     let title = String::from_utf8_lossy(&name_output.stdout)
         .trim()
         .to_string();
 
     // Get PID
-    let pid_output = std::process::Command::new("xdotool")
-        .args(["getwindowpid", &wid])
-        .output()
-        .ok()
-        .filter(|o| o.status.success());
+    let pid_output = command_output_with_timeout(
+        "xdotool",
+        &["getwindowpid", &wid],
+        Duration::from_millis(300),
+    )
+    .filter(|o| o.status.success());
 
     let pid: i32 = pid_output
         .map(|o| {
@@ -1104,6 +1125,28 @@ fn get_x11_active_window_info() -> Option<(String, String, i32)> {
     };
 
     Some((app_name, title, pid))
+}
+
+fn command_output_with_timeout(command: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let mut child = Command::new(command)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+
+    loop {
+        if child.try_wait().ok()?.is_some() {
+            return child.wait_with_output().ok();
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Get process name from PID by reading /proc/<pid>/comm.
@@ -1464,7 +1507,7 @@ mod tests {
     fn test_parse_hyprland_active_window_json() {
         let raw = br#"{
             "class": "org.telegram.desktop",
-            "title": "\u200e\u2068Lucern Clinic\u2069 \u2013 (106539)",
+            "title": "\u061c\u200e\u2068Lucern Clinic\u2069 \u2013 (106539)",
             "initialClass": "Telegram",
             "pid": 2800,
             "xwayland": false
@@ -1475,6 +1518,13 @@ mod tests {
         assert_eq!(app_name, "org.telegram.desktop");
         assert_eq!(window_title, "Lucern Clinic \u{2013} (106539)");
         assert_eq!(pid, 2800);
+    }
+
+    #[test]
+    fn test_clean_hyprland_title_strips_bidi_controls() {
+        let title = "\u{061c}\u{200e}\u{2068}Telegram\u{2069}\u{202e}";
+
+        assert_eq!(clean_hyprland_title(title), "Telegram");
     }
 
     #[test]
