@@ -84,6 +84,7 @@ export function useDateNavigation(opts: {
 	}, []);
 
 	const finishNavigation = useCallback(() => {
+		useTimelineStore.getState().cancelPendingDateSwap();
 		pendingNavigationRef.current = null;
 		pendingFrameIdRef.current = undefined;
 		setSeekingTimestamp(null);
@@ -302,6 +303,7 @@ export function useDateNavigation(opts: {
 		isNavigatingRef.current = true;
 		setIsNavigating(true);
 		setSeekingTimestamp(requestedDate.toISOString());
+		setPendingNavigation(null);
 
 		const jumpToFirstFrameOfDay = (targetDate: Date): boolean => {
 			const targetIndex = findFirstFrameIndexForDay(frames, targetDate);
@@ -327,7 +329,10 @@ export function useDateNavigation(opts: {
 				const direction = navigationDirection(visibleDayAnchor, requestedDate);
 				const nearest = await findNearestDateWithFrames(requestedDate, direction, MAX_DATE_SEARCH_DAYS);
 
-				if (navGeneration !== navGenerationRef.current) return;
+				if (navGeneration !== navGenerationRef.current) {
+					finishNavigation();
+					return;
+				}
 
 				if (nearest) {
 					targetDate = startOfDay(nearest);
@@ -338,6 +343,11 @@ export function useDateNavigation(opts: {
 					);
 					targetDate = requestedDate;
 				}
+			}
+
+			if (navGeneration !== navGenerationRef.current) {
+				finishNavigation();
+				return;
 			}
 
 			if (jumpToFirstFrameOfDay(targetDate)) {
@@ -381,7 +391,7 @@ export function useDateNavigation(opts: {
 			console.error("[handleDateChange] Error:", error);
 			abortNavigation({ revertDate: revertDateRef.current, showToast: true });
 		}
-	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef, visibleDayAnchor, finishNavigation, clearNavTimeout, scheduleNavTimeout, abortNavigation, onCrossDateNav]);
+	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef, visibleDayAnchor, finishNavigation, clearNavTimeout, scheduleNavTimeout, abortNavigation, onCrossDateNav, setPendingNavigation]);
 
 	const handleJumpToday = useCallback(() => {
 		return handleDateChange(startOfDay(new Date()));

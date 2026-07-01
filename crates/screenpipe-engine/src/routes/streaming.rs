@@ -28,6 +28,13 @@ use crate::{
 
 use super::websocket::{try_acquire_ws_connection, WsConnectionGuard};
 
+#[derive(Clone, Debug)]
+struct StreamBatchComplete {
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    frame_count: usize,
+}
+
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::Instant as TokioInstant;
 
@@ -304,6 +311,8 @@ async fn handle_stream_frames_socket(
 
     // Channel for initial batch results (from cache or DB)
     let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<TimeSeriesFrame>(100);
+    let (complete_tx, mut complete_rx) =
+        tokio::sync::mpsc::channel::<StreamBatchComplete>(32);
 
     // Shared flag: should we subscribe to live cache updates?
     let live_subscribe: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
@@ -312,6 +321,7 @@ async fn handle_stream_frames_socket(
     let live_sub_clone = live_subscribe.clone();
     let cache_clone = cache.clone();
     let db_clone = db.clone();
+    let complete_tx_recv = complete_tx.clone();
 
     // Handle incoming messages for time range requests
     let receive_handle = tokio::spawn(async move {
@@ -384,6 +394,10 @@ async fn handle_stream_frames_socket(
                                 let _ = frame_tx.send(frame).await;
                             }
 
+                            let complete_tx_today = complete_tx_recv.clone();
+                            let today_start = start_time;
+                            let today_end = end_time;
+
                             // Only backfill from DB if the hot cache doesn't
                             // cover the requested range. The cache knows its
                             // earliest coverage timestamp from warm_from_db +
@@ -409,7 +423,9 @@ async fn handle_stream_frames_socket(
                                 let frame_tx_db = frame_tx.clone();
                                 let db_backfill = db_clone.clone();
                                 let sent_ids_backfill = sent_ids_clone.clone();
+                                let complete_tx_backfill = complete_tx_recv.clone();
                                 tokio::spawn(async move {
+                                    let mut backfill_count = 0usize;
                                     match db_backfill
                                         .find_video_chunks(start_time, backfill_end)
                                         .await
@@ -425,12 +441,6 @@ async fn handle_stream_frames_socket(
                                                     .sort_by_key(|a| (a.timestamp, a.offset_index));
                                             }
                                             downsample_in_place(&mut chunks.frames, backfill_limit);
-                                            // Record sent IDs first, then drop lock
-                                            // before sending frames. Previously the
-                                            // lock was held across channel sends,
-                                            // deadlocking with the send_handle which
-                                            // needs the same lock to process live
-                                            // frames (the only channel consumer).
                                             let frames_to_send: Vec<_> = {
                                                 let mut sent = sent_ids_backfill.lock().await;
                                                 chunks
@@ -449,8 +459,9 @@ async fn handle_stream_frames_socket(
                                                         }
                                                     })
                                                     .collect()
-                                            }; // lock dropped
+                                            };
 
+                                            backfill_count = frames_to_send.len();
                                             for frame in frames_to_send {
                                                 if frame_tx_db.send(frame).await.is_err() {
                                                     break;
@@ -460,20 +471,35 @@ async fn handle_stream_frames_socket(
                                         }
                                         Err(e) => warn!("Today DB backfill failed: {}", e),
                                     }
+                                    let _ = complete_tx_backfill
+                                        .send(StreamBatchComplete {
+                                            start_time: today_start,
+                                            end_time: today_end,
+                                            frame_count: initial_count + backfill_count,
+                                        })
+                                        .await;
                                 });
                             } else {
                                 info!(
                                     "skipping DB backfill — hot cache covers full range or stream limit reached"
                                 );
+                                let _ = complete_tx_today
+                                    .send(StreamBatchComplete {
+                                        start_time: today_start,
+                                        end_time: today_end,
+                                        frame_count: initial_count,
+                                    })
+                                    .await;
                             }
                         } else {
                             // Past day — one-shot DB query (acceptable, rare)
                             let frame_tx = frame_tx.clone();
                             let db = db_clone.clone();
                             let sent_ids = sent_ids_clone.clone();
+                            let complete_tx_past = complete_tx_recv.clone();
 
                             tokio::spawn(async move {
-                                let fetch_result = tokio::time::timeout(
+                                let frame_count = match tokio::time::timeout(
                                     std::time::Duration::from_secs(120),
                                     fetch_and_process_frames_with_tracking(
                                         db,
@@ -485,13 +511,26 @@ async fn handle_stream_frames_socket(
                                         sent_ids,
                                     ),
                                 )
-                                .await;
-
-                                match fetch_result {
-                                    Ok(Ok(_)) => info!("Past-day fetch complete"),
-                                    Ok(Err(e)) => error!("Past-day fetch failed: {}", e),
-                                    Err(_) => warn!("Past-day fetch timed out after 120s"),
-                                }
+                                .await
+                                {
+                                    Ok(Ok((_, count))) => count,
+                                    Ok(Err(e)) => {
+                                        error!("Past-day fetch failed: {}", e);
+                                        0
+                                    }
+                                    Err(_) => {
+                                        warn!("Past-day fetch timed out after 120s");
+                                        0
+                                    }
+                                };
+                                let _ = complete_tx_past
+                                    .send(StreamBatchComplete {
+                                        start_time,
+                                        end_time,
+                                        frame_count,
+                                    })
+                                    .await;
+                                info!("Past-day fetch complete ({} frames)", frame_count);
                             });
                         }
                     }
@@ -548,6 +587,32 @@ async fn handle_stream_frames_socket(
                         None => {
                             debug!("initial frame channel closed");
                             frame_rx_channel = None;
+                        }
+                    }
+                }
+
+                // Fetch completion — tells client when a range returned zero frames
+                complete = complete_rx.recv() => {
+                    match complete {
+                        Some(c) => {
+                            if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                                error!("failed to send batch before complete: {}", e);
+                                break;
+                            }
+                            next_batch_flush_at = None;
+                            let msg = serde_json::json!({
+                                "type": "batch_complete",
+                                "count": c.frame_count,
+                                "start_time": c.start_time.to_rfc3339(),
+                                "end_time": c.end_time.to_rfc3339(),
+                            });
+                            if let Err(e) = sender.send(Message::Text(msg.to_string())).await {
+                                warn!("failed to send batch_complete: {}", e);
+                                break;
+                            }
+                        }
+                        None => {
+                            debug!("batch complete channel closed");
                         }
                     }
                 }
@@ -713,7 +778,7 @@ async fn fetch_and_process_frames_with_tracking(
     is_descending: bool,
     limit: usize,
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
-) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
+) -> Result<(Option<DateTime<Utc>>, usize), anyhow::Error> {
     let mut chunks = db.find_video_chunks(start_time, end_time).await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
 
@@ -727,10 +792,6 @@ async fn fetch_and_process_frames_with_tracking(
     }
     downsample_in_place(&mut chunks.frames, limit);
 
-    // Record all sent IDs in one lock acquisition, then drop the lock
-    // before sending frames through the channel. Acquiring the lock per-frame
-    // or holding it across async sends can contend with the send_handle's
-    // live-frame path which also needs this lock.
     let frames_to_send: Vec<_> = {
         let mut sent = sent_frame_ids.lock().await;
         chunks
@@ -747,8 +808,9 @@ async fn fetch_and_process_frames_with_tracking(
                 }
             })
             .collect()
-    }; // lock dropped
+    };
 
+    let frame_count = frames_to_send.len();
     for (ts, frame) in frames_to_send {
         if latest_timestamp.is_none() || ts > latest_timestamp.unwrap() {
             latest_timestamp = Some(ts);
@@ -756,7 +818,7 @@ async fn fetch_and_process_frames_with_tracking(
         frame_tx.send(frame).await?;
     }
 
-    Ok(latest_timestamp)
+    Ok((latest_timestamp, frame_count))
 }
 
 async fn pending_batch_flush(next_flush_at: Option<TokioInstant>) {

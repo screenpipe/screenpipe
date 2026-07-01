@@ -642,6 +642,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		if (!pendingNavigation) return;
 
 		const consume = async () => {
+			if (isNavigatingRef.current || pendingNavigationRef.current) {
+				setPendingNavigation(null);
+				return;
+			}
 			if (pendingNavigation.frameId) {
 				// Frame navigation — emit so listener fetches metadata and navigates
 				// Longer delay for frame: API + websocket may still be initializing
@@ -1233,7 +1237,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	
 					{!currentFrame && !showBlockingLoader && !error && frames.length === 0 && !isLoading ? (
 						<div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-background via-background to-muted/20">
-							{health?.frame_status === "disabled" ? (
+							{message ? (
+								<div className="text-center p-8 max-w-md">
+									<h3 className="text-xl font-semibold text-foreground mb-3 font-mono uppercase tracking-wide">
+										{message}
+									</h3>
+									<p className="text-sm text-muted-foreground">
+										Try another day or check that screenpipe is recording.
+									</p>
+								</div>
+							) : health?.frame_status === "disabled" ? (
 								<div className="text-center p-8 max-w-md">
 									<div className="mx-auto mb-8 w-24 h-24 flex items-center justify-center">
 										<div className="w-16 h-16 rounded-full bg-muted/50 border border-border flex items-center justify-center">

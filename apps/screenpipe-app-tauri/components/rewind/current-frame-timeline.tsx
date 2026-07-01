@@ -12,7 +12,7 @@ import { SelectableTextLayer, getSelectableLayerText, clearSelectableLayerSelect
 import { RegionOcrOverlay } from "@/components/rewind/region-ocr-overlay";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { ImageOff, ChevronLeft, ChevronRight, Copy, ImageIcon, Link2, MessageCircle, Type } from "lucide-react";
+import { ImageOff, ChevronLeft, ChevronRight, Copy, ImageIcon, Link2, MessageCircle, Type, Mic } from "lucide-react";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { toast } from "@/components/ui/use-toast";
 import { useFrameLoading } from "@/components/rewind/hooks/use-frame-loading";
@@ -105,6 +105,9 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 	const device = currentFrame?.devices?.[0];
 	const frameId = device?.frame_id;
+	const isAudioOnlyFrame =
+		device?.device_id === "audio-only" ||
+		device?.metadata?.app_name === "Audio Recording";
 
 	// --- Frame loading hook (debounce, video seek, fallback, snapshot, resize) ---
 	const {
@@ -322,6 +325,36 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 								</div>
 							)}
 						</div>
+					</div>
+				</div>
+			</div>
+		);
+	}
+
+	if (isAudioOnlyFrame) {
+		const transcript =
+			device?.audio?.[0]?.transcription ||
+			device?.metadata?.text ||
+			"";
+		return (
+			<div className="absolute inset-0 overflow-hidden bg-background">
+				<div className="absolute inset-0 flex items-center justify-center">
+					<div className="max-w-md w-full mx-4 text-center space-y-4">
+						<div className="mx-auto w-16 h-16 border border-border flex items-center justify-center">
+							<Mic className="w-8 h-8 text-muted-foreground" />
+						</div>
+						<h3 className="text-lg font-mono font-semibold uppercase tracking-wide">
+							Audio recording
+						</h3>
+						{transcript ? (
+							<p className="text-sm font-mono text-muted-foreground leading-relaxed px-4">
+								{transcript}
+							</p>
+						) : (
+							<p className="text-sm font-mono text-muted-foreground">
+								No screen capture for this moment — audio is available on the timeline.
+							</p>
+						)}
 					</div>
 				</div>
 			</div>

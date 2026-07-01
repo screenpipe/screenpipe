@@ -124,6 +124,8 @@ interface TimelineState {
 	clearSentRequestForDate: (date: Date) => void;
 	clearFramesForNavigation: () => void; // Clear frames when navigating to new date
 	abortPendingDateSwap: (reason: "empty" | "failed") => void;
+	/** Cancel an in-flight date swap without clearing visible frames (nav aborted). */
+	cancelPendingDateSwap: () => void;
 	loadFromCache: () => Promise<void>; // Load cached frames on startup
 }
 
@@ -247,9 +249,32 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				loadingProgress: { loaded: 0, isStreaming: false },
 				message:
 					reason === "empty"
-						? "No screen recordings for this day"
-						: "Couldn't load that day",
+						? "No recordings loaded for this day"
+						: "Couldn't load recordings for this day",
 				navigationFetchFailedAt: Date.now(),
+			};
+		});
+	},
+
+	cancelPendingDateSwap: () => {
+		frameBuffer = [];
+		if (flushTimer) {
+			clearTimeout(flushTimer);
+			flushTimer = null;
+		}
+		if (requestTimeoutTimer) {
+			clearTimeout(requestTimeoutTimer);
+			requestTimeoutTimer = null;
+		}
+		requestRetryCount = 0;
+		set((state) => {
+			if (!state.pendingDateSwap) {
+				return {};
+			}
+			return {
+				pendingDateSwap: false,
+				isLoading: false,
+				loadingProgress: { loaded: state.frames.length, isStreaming: state.frames.length > 0 },
 			};
 		});
 	},
@@ -524,6 +549,22 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					return;
 				}
 
+				// Explicit fetch completion (including zero-frame ranges).
+				if (data.type === "batch_complete") {
+					if (requestTimeoutTimer) {
+						clearTimeout(requestTimeoutTimer);
+						requestTimeoutTimer = null;
+					}
+					requestRetryCount = 0;
+					const count = typeof data.count === "number" ? data.count : 0;
+					if (count === 0 && get().pendingDateSwap) {
+						get().abortPendingDateSwap("empty");
+					} else if (get().pendingDateSwap && count > 0) {
+						// Frames will arrive via batched arrays; keep swap pending until flush.
+					}
+					return;
+				}
+
 				// Handle audio updates from batch/reconciliation — merge
 				// transcription into existing frames near the audio timestamp.
 				// Mutates frames in-place to avoid cloning the entire 40k+ array
@@ -550,12 +591,45 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Trigger re-render with a new timestamp (no array clone needed)
 					if (updated) {
 						set({ lastFlushTimestamp: Date.now() });
+					} else {
+						// No nearby frame — synthesize audio-only entry (live mic-only recording).
+						const synthetic: StreamTimeSeriesResponse = {
+							timestamp: data.timestamp,
+							devices: [{
+								device_id: "audio-only",
+								frame_id: String(data.audio.audio_chunk_id ?? data.timestamp),
+								frame: "",
+								offset_index: 0,
+								fps: 0.5,
+								metadata: {
+									file_path: "",
+									app_name: "Audio Recording",
+									window_name: "",
+									text: data.audio.transcription ?? "",
+									timestamp: data.timestamp,
+								},
+								audio: [data.audio],
+							}],
+						};
+						frameBuffer.push(synthetic);
+						if (!flushTimer) {
+							flushTimer = setTimeout(() => {
+								flushTimer = null;
+								get().flushFrameBuffer();
+							}, FLUSH_INTERVAL_MS);
+						}
 					}
 					return;
 				}
 
 				// Handle batched frames - OPTIMIZED: buffer and flush periodically
 				if (Array.isArray(data)) {
+					if (data.length === 0) {
+						if (get().pendingDateSwap) {
+							get().abortPendingDateSwap("empty");
+						}
+						return;
+					}
 					if (data.length > 0) {
 						requestRetryCount = 0;
 					}

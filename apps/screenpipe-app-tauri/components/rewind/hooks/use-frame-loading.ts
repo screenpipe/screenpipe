@@ -111,6 +111,9 @@ export function useFrameLoading(opts: {
 	const device = currentFrame?.devices?.[0];
 	const frameId = device?.frame_id;
 	const filePath = device?.metadata?.file_path;
+	const isAudioOnlyFrame =
+		device?.device_id === "audio-only" ||
+		device?.metadata?.app_name === "Audio Recording";
 	const offsetIndex = device?.offset_index ?? 0;
 	const fpsFromServer = device?.fps ?? 0.5;
 
@@ -127,8 +130,20 @@ export function useFrameLoading(opts: {
 	// Debounce frame changes — skip debounce for arrow key navigation
 	useEffect(() => {
 		if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-		if (!frameId || !filePath) {
+		if (!frameId) {
 			setDebouncedFrame(null);
+			setIsLoading(false);
+			return;
+		}
+		if (isAudioOnlyFrame) {
+			setDebouncedFrame(null);
+			setIsLoading(false);
+			setHasError(false);
+			return;
+		}
+		if (!filePath) {
+			setDebouncedFrame(null);
+			setIsLoading(false);
 			return;
 		}
 		setIsLoading(true);
@@ -139,7 +154,7 @@ export function useFrameLoading(opts: {
 		return () => {
 			if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
 		};
-	}, [frameId, filePath, offsetIndex, fpsFromServer, isArrowNav]);
+	}, [frameId, filePath, offsetIndex, fpsFromServer, isArrowNav, isAudioOnlyFrame]);
 
 	// Detect snapshot frames (event-driven JPEGs) vs video chunks
 	const isSnapshotFrame = useMemo(() => {

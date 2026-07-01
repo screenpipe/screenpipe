@@ -55,7 +55,7 @@ export function invalidateDaysWithFramesCache(): void {
 	daysCache = null;
 }
 
-export async function listDaysWithFrames(): Promise<Set<string>> {
+export async function listDaysWithFrames(): Promise<Set<string> | null> {
 	if (daysCache && Date.now() - daysCache.at < DAYS_CACHE_TTL_MS) {
 		return daysCache.days;
 	}
@@ -80,7 +80,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		if (!response.ok) {
 			const text = await response.text().catch(() => "");
 			console.error("listDaysWithFrames HTTP error:", response.status, text);
-			return new Set();
+			return null;
 		}
 		const rows = (await response.json()) as Array<{ day: string }>;
 		const set = new Set(rows.map((r) => r.day).filter(Boolean));
@@ -88,7 +88,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		return set;
 	} catch (e) {
 		console.error("listDaysWithFrames failed:", e);
-		return new Set();
+		return null;
 	}
 }
 

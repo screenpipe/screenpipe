@@ -86,16 +86,22 @@ export function TimelineControls({
 	// popover opens, so newly-recorded frames register without a reload.
 	const [daysWithFrames, setDaysWithFrames] = useState<Set<string>>(new Set());
 	const [daysLoading, setDaysLoading] = useState(false);
+	const [daysLoadFailed, setDaysLoadFailed] = useState(false);
 	useEffect(() => {
 		if (!calendarOpen) return;
 		invalidateDaysWithFramesCache();
 		let cancelled = false;
 		setDaysLoading(true);
+		setDaysLoadFailed(false);
 		listDaysWithFrames().then((s) => {
-			if (!cancelled) {
+			if (cancelled) return;
+			if (s === null) {
+				setDaysLoadFailed(true);
+				setDaysWithFrames(new Set());
+			} else {
 				setDaysWithFrames(s);
-				setDaysLoading(false);
 			}
+			setDaysLoading(false);
 		});
 		return () => {
 			cancelled = true;
@@ -214,7 +220,7 @@ export function TimelineControls({
 								if (isAfter(day, startOfDay(new Date()))) return true;
 								if (isAfter(startOfDay(startAndEndDates.start), day)) return true;
 								if (daysLoading) return true;
-								if (daysWithFrames.size === 0) return true;
+								if (daysLoadFailed || daysWithFrames.size === 0) return false;
 								return !daysWithFrames.has(format(date, "yyyy-MM-dd"));
 							}}
 						/>
