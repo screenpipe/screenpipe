@@ -40,7 +40,7 @@ export function toLocalCalendarMidnight(isoTimestamp: string | Date): Date {
  * the UI. Without this, a UTC timestamp just past midnight could land
  * on the wrong calendar day in the picker.
  *
- * Includes audio_chunks because users with audio-only recording days
+ * Includes audio_transcriptions because users with audio-only recording days
  * (mic on, screen recording paused) would otherwise see those days
  * greyed out even though the timeline has audio to play.
  *
@@ -63,9 +63,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		// UNION ALL is fine — duplicates collapse via the outer DISTINCT.
 		// Both branches use the timestamp index (frames + audio_transcriptions
 		// both have one), so the query is sub-millisecond on typical DBs.
-		// audio_chunks has no timestamp column itself; the recording time
-		// lives on audio_transcriptions, which is what the timeline UI also
-		// uses to render the audio track.
+		// audio_transcriptions holds the recording timestamp (not audio_chunks).
 		// LIMIT is required by the /raw_sql validator; bound it to the max so
 		// future heavy users with many recording days don't get clipped.
 		// One row per local-calendar day, so 10000 = ~27 years of headroom.
@@ -103,10 +101,11 @@ export async function hasFramesForDate(date: Date): Promise<boolean> {
 		let endOfDay = new Date(date);
 		endOfDay.setHours(23, 59, 59, 999);
 
-		// For today, use current time minus buffer to avoid querying future
+		// Cap at now for today — no buffer; existence checks must not false-negative
+		// during live recording (used by scroll prefetch).
 		const now = new Date();
-		if (isSameDay(startOfDay, now)) {
-			endOfDay = new Date(now.getTime() - 5 * 60 * 1000); // 5 minutes ago
+		if (isSameDay(startOfDay, now) && endOfDay > now) {
+			endOfDay = now;
 		}
 
 		// Use SELECT 1 ... LIMIT 1 instead of COUNT(*) — short-circuits after first row.

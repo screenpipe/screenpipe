@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { hasFramesForDate, findNearestDateWithFrames } from "../actions/has-frames-date";
+import { MAX_DATE_SEARCH_DAYS } from "../timeline/date-navigation-utils";
 import { endOfDay, isSameDay, startOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
@@ -100,6 +101,8 @@ interface TimelineState {
 	hasCachedData: boolean; // Whether we loaded from cache
 	// When true, next flushFrameBuffer replaces frames instead of merging (date swap)
 	pendingDateSwap: boolean;
+	/** Bumped when a date-swap fetch fails or returns empty — hooks subscribe to abort nav. */
+	navigationFetchFailedAt: number;
 
 	// Deep link navigation — persists across component mounts
 	pendingNavigation: { timestamp: string; frameId?: string } | null;
@@ -120,6 +123,7 @@ interface TimelineState {
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
 	clearFramesForNavigation: () => void; // Clear frames when navigating to new date
+	abortPendingDateSwap: (reason: "empty" | "failed") => void;
 	loadFromCache: () => Promise<void>; // Load cached frames on startup
 }
 
@@ -138,6 +142,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	isConnected: false,
 	hasCachedData: false,
 	pendingDateSwap: false,
+	navigationFetchFailedAt: 0,
 	pendingNavigation: null,
 
 	setPendingNavigation: (nav) => set({ pendingNavigation: nav }),
@@ -217,6 +222,36 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			error: null,
 			message: "loading...",
 		}));
+	},
+
+	abortPendingDateSwap: (reason: "empty" | "failed") => {
+		frameBuffer = [];
+		if (flushTimer) {
+			clearTimeout(flushTimer);
+			flushTimer = null;
+		}
+		if (requestTimeoutTimer) {
+			clearTimeout(requestTimeoutTimer);
+			requestTimeoutTimer = null;
+		}
+		requestRetryCount = 0;
+		set((state) => {
+			if (!state.pendingDateSwap) {
+				return { navigationFetchFailedAt: Date.now() };
+			}
+			return {
+				frames: reason === "empty" ? [] : state.frames,
+				frameTimestamps: reason === "empty" ? new Set<string>() : state.frameTimestamps,
+				pendingDateSwap: false,
+				isLoading: false,
+				loadingProgress: { loaded: 0, isStreaming: false },
+				message:
+					reason === "empty"
+						? "No screen recordings for this day"
+						: "Couldn't load that day",
+				navigationFetchFailedAt: Date.now(),
+			};
+		});
 	},
 
 	hasDateBeenFetched: (date: Date) => {
@@ -737,13 +772,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						requestRetryCount++;
 
 						if (requestRetryCount > MAX_REQUEST_RETRIES) {
-							set({
-								isLoading: false,
-								pendingDateSwap: false,
-								message: currentFrames.length === 0
-									? "Timeline is still warming up. Try again in a moment."
-									: null,
-							});
+							if (stillSwapping) {
+								get().abortPendingDateSwap("empty");
+							} else {
+								set({
+									isLoading: false,
+									pendingDateSwap: false,
+									message: currentFrames.length === 0
+										? "Timeline is still warming up. Try again in a moment."
+										: null,
+								});
+							}
 							return;
 						}
 
@@ -789,7 +828,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			const nearest = await findNearestDateWithFrames(
 				targetDay,
 				direction,
-				7,
+				MAX_DATE_SEARCH_DAYS,
 			);
 			if (!nearest || isSameDay(nearest, targetDay)) {
 				return;

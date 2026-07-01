@@ -199,7 +199,9 @@ export function useFrameLoading(opts: {
 			const maxOffset = Math.floor(duration * candidate);
 			if (offsetIndex < maxOffset) {
 				calibratedFpsCache.set(path, candidate);
-				console.log(`auto-calibrated fps=${candidate} for ${path} (duration=${duration.toFixed(1)}s, offset=${offsetIndex})`);
+				if (process.env.NODE_ENV === "development") {
+					console.log(`auto-calibrated fps=${candidate} for ${path} (duration=${duration.toFixed(1)}s, offset=${offsetIndex})`);
+				}
 				return candidate;
 			}
 		}
@@ -207,7 +209,9 @@ export function useFrameLoading(opts: {
 		// Last resort: derive directly
 		const derived = (offsetIndex + 1) / duration;
 		calibratedFpsCache.set(path, derived);
-		console.log(`derived fps=${derived.toFixed(3)} for ${path} (duration=${duration.toFixed(1)}s, offset=${offsetIndex})`);
+		if (process.env.NODE_ENV === "development") {
+			console.log(`derived fps=${derived.toFixed(3)} for ${path} (duration=${duration.toFixed(1)}s, offset=${offsetIndex})`);
+		}
 		return derived;
 	}, []);
 

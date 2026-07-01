@@ -85,12 +85,17 @@ export function TimelineControls({
 	// click a blank day and see an empty timeline. Refreshes whenever the
 	// popover opens, so newly-recorded frames register without a reload.
 	const [daysWithFrames, setDaysWithFrames] = useState<Set<string>>(new Set());
+	const [daysLoading, setDaysLoading] = useState(false);
 	useEffect(() => {
 		if (!calendarOpen) return;
 		invalidateDaysWithFramesCache();
 		let cancelled = false;
+		setDaysLoading(true);
 		listDaysWithFrames().then((s) => {
-			if (!cancelled) setDaysWithFrames(s);
+			if (!cancelled) {
+				setDaysWithFrames(s);
+				setDaysLoading(false);
+			}
 		});
 		return () => {
 			cancelled = true;
@@ -206,15 +211,10 @@ export function TimelineControls({
 							}}
 							disabled={(date) => {
 								const day = startOfDay(date);
-								// Future dates and dates before the user's earliest
-								// recording always disabled.
 								if (isAfter(day, startOfDay(new Date()))) return true;
 								if (isAfter(startOfDay(startAndEndDates.start), day)) return true;
-								// Empty days disabled IF we've loaded the day set.
-								// Skip the check on first render (set is empty)
-								// so the picker is functional during the brief
-								// fetch window.
-								if (daysWithFrames.size === 0) return false;
+								if (daysLoading) return true;
+								if (daysWithFrames.size === 0) return true;
 								return !daysWithFrames.has(format(date, "yyyy-MM-dd"));
 							}}
 						/>

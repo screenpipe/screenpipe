@@ -280,10 +280,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		clearFramesForNavigation,
 		setSearchNavFrame,
 		fetchTimeRange,
-		hasDateBeenFetched,
-		fetchNextDayData,
 		startAndEndDates,
-		pendingNavigation,
 		setPendingNavigation,
 		clearSentRequestForDate,
 		isNavigatingRef,
@@ -295,6 +292,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		pausePlayback,
 		dateChangesRef,
 		visibleDayAnchor,
+		onCrossDateNav: () => {
+			lastSearchNavRef.current = Date.now();
+		},
 	});
 
 	const { zoomLevel, targetZoom, setTargetZoom, onContainerWheel } = useScrollZoom({
@@ -405,13 +405,12 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					// Don't reset if navigation is in progress — focus refresh must not
 					// cancel cross-date fetches or discard pending jumps.
 					const recentSearchNav = Date.now() - lastSearchNavRef.current < 2000;
-					if (isNavigatingRef.current || isNavigating || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
+					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
 						return;
 					}
 
-					const viewingToday = isSameDay(currentDate, new Date());
+					const viewingToday = isSameDay(visibleDayAnchor, new Date());
 					if (!viewingToday) {
-						// Historical browse — refresh that day without snapping to today.
 						onWindowFocus();
 						return;
 					}
@@ -429,6 +428,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					isNavigatingRef.current = false;
 					setIsNavigating(false);
 					pendingNavigationRef.current = null;
+					setPendingNavigation(null);
 					setSeekingTimestamp(null);
 
 					onWindowFocus();
@@ -443,7 +443,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters, currentDate, isNavigating]);
+	}, [onWindowFocus, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters, visibleDayAnchor, setIsNavigating, setPendingNavigation]);
 
 	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {
@@ -939,11 +939,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						direction,
 						"from",
 						dateToCheck.toISOString(),
+						"— fetching requested day anyway",
 					);
-					return;
-				}
-
-				if (!isSameDay(nearest, dateToCheck)) {
+				} else if (!isSameDay(nearest, dateToCheck)) {
 					setCurrentDate(startOfDay(nearest));
 					return;
 				}
@@ -974,13 +972,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// to break the circular dependency: this effect sets currentDate, which would
 	// re-trigger this effect if currentDate were in the dep array.
 	useEffect(() => {
-		// Skip during intentional navigation or while waiting for frames to arrive.
 		if (
 			isNavigatingRef.current ||
 			pendingNavigationRef.current ||
 			seekingTimestamp ||
 			isNavigating
 		) {
+			return;
+		}
+		const { pendingDateSwap } = useTimelineStore.getState();
+		if (pendingDateSwap) {
 			return;
 		}
 		if (currentFrame) {
@@ -1648,6 +1649,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 									const targetDate = new Date(timestamp);
 									setSeekingTimestamp(timestamp);
 									if (!isSameDay(targetDate, currentDate)) {
+										setSearchNavFrame(true);
 										navigateDirectToDate(targetDate, frameId);
 									} else {
 										pendingNavigationRef.current = targetDate;
