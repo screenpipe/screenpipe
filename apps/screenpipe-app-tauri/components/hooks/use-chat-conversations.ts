@@ -20,6 +20,7 @@ import {
   deriveFallbackConversationTitle,
   isFallbackLikeTitle,
   shouldAcceptTitleSource,
+  stripPromptPlumbing,
 } from "@/lib/utils/chat-title";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import {
@@ -525,8 +526,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       preservedTitleSource ?? "fallback";
 
     // Start AI title generation in background (once per conversation)
-    // Only generate if current title is fallback priority
-    const rawContent = firstUserMsg?.content?.trim() || null;
+    // Only generate if current title is fallback priority.
+    // Prefer the clean display label (e.g. "dbb") when present; otherwise strip
+    // plumbing wrappers (<attached file: ...>, <screenpipe-large-context>, etc.)
+    // so a 68k-char pasted attachment isn't shipped to the title model or
+    // echoed verbatim into the title.
+    const rawContent =
+      firstUserMsg?.displayContent?.trim() ||
+      (firstUserMsg?.content ? stripPromptPlumbing(firstUserMsg.content) : "") ||
+      null;
     // Opt-out: when the user disables auto title generation (to save tokens),
     // skip the extra LLM call entirely — chats keep the fallback title.
     const autoTitleEnabled = settings?.autoGenerateChatTitles !== false;

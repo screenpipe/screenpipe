@@ -38,6 +38,30 @@ describe("stripPromptPlumbing", () => {
     ).toBe("Give me a day recap");
   });
 
+  it("removes a folded <attached file> payload so the title is just the typed text", () => {
+    expect(
+      stripPromptPlumbing(
+        "dbb\n\n<attached file: Pasted text>\nsome very long pasted content here\n</attached file>"
+      )
+    ).toBe("dbb");
+  });
+
+  it("removes an <attached file> payload with no leading text", () => {
+    expect(
+      stripPromptPlumbing(
+        "<attached file: Pasted text>\nlots of content\n</attached file>"
+      )
+    ).toBe("");
+  });
+
+  it("removes the <screenpipe-large-context> offload wrapper", () => {
+    expect(
+      stripPromptPlumbing(
+        "<screenpipe-large-context>\n[INPUT OFFLOADED]\nfull_path: /tmp/full.txt\n</screenpipe-large-context>\n\nSummarize this"
+      )
+    ).toBe("Summarize this");
+  });
+
   it("removes <system> wrapper", () => {
     expect(
       stripPromptPlumbing("<system>Be helpful</system> What time is it?")
