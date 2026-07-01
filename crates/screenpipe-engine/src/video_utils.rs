@@ -104,16 +104,33 @@ pub async fn extract_frame(file_path: &str, offset_index: i64) -> Result<String>
     let offset_seconds = offset_index as f64 / 1000.0;
     let offset_str = format!("{:.3}", offset_seconds);
 
+    // Frames may be stored either as video chunks (seek by offset) or as
+    // individual still images. Input-seeking (`-ss` before `-i`) on a still
+    // image produces zero output ("nothing was encoded"), so only seek when we
+    // have a real, non-zero offset into a non-image source.
+    let is_image = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" | "tiff"
+            )
+        })
+        .unwrap_or(false);
+    let seek = !is_image && offset_seconds > 0.0;
+
     debug!(
-        "extracting frame from {} at offset {}",
-        file_path, offset_str
+        "extracting frame from {} at offset {} (seek={})",
+        file_path, offset_str, seek
     );
 
     let mut command = ffmpeg_cmd_async(ffmpeg_path);
+    if seek {
+        command.args(["-ss", &offset_str]);
+    }
     command
         .args([
-            "-ss",
-            &offset_str,
             "-i",
             file_path,
             "-vf",
