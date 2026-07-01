@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
+import { isInjectedTitle } from "@/lib/chat-utils";
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
 function useMinuteTick(enabled = true): number {
@@ -114,7 +114,7 @@ export function RecentChatSwitcher({
                       onClick={() => onSelect(session)}
                     >
                       <span className="min-w-0 truncate text-[14px] font-normal leading-5">
-                        {(isConversationHistorySyncPrompt(session.title) ? undefined : session.title) ||
+                        {(isInjectedTitle(session.title) ? undefined : session.title) ||
                           "untitled"}
                       </span>
                       <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/65">

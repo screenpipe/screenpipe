@@ -30,6 +30,14 @@ describe("stripPromptPlumbing", () => {
     );
   });
 
+  it("removes <connections_context> wrapper so it never becomes a title", () => {
+    expect(
+      stripPromptPlumbing(
+        "<connections_context>\nCurrent Screenpipe connected integrations context, refreshed for this turn:\n## Gmail\n</connections_context>\n\nGive me a day recap"
+      )
+    ).toBe("Give me a day recap");
+  });
+
   it("removes <system> wrapper", () => {
     expect(
       stripPromptPlumbing("<system>Be helpful</system> What time is it?")

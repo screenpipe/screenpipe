@@ -8,7 +8,7 @@ import { History, Plus } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
 import { ChatTitleMenu } from "@/components/chat/standalone/chat-title-menu";
-import { formatShortcutDisplay, isConversationHistorySyncPrompt, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
+import { formatShortcutDisplay, isInjectedTitle, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
@@ -72,7 +72,7 @@ export function StandaloneChatHeader({
     streamingTitle ||
     (storeTitle &&
       !isPlaceholderConversationTitle(storeTitle) &&
-      !isConversationHistorySyncPrompt(storeTitle)
+      !isInjectedTitle(storeTitle)
         ? storeTitle
         : derivedTitle || (hasMessages ? "untitled" : ""));
   const useCompactHeaderPadding = !className || Boolean(conversationId && visibleTitle);

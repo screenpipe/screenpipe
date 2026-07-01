@@ -36,6 +36,7 @@ export function shouldAcceptTitleSource(
  */
 export function stripPromptPlumbing(content: string): string {
   return content
+    .replace(/^<connections_context>[\s\S]*?<\/connections_context>\s*/i, "")
     .replace(/^<conversation_history>[\s\S]*?<\/conversation_history>\s*/i, "")
     .replace(/^<role>[^<]*<\/role>\s*/i, "")
     .replace(/^<system>[\s\S]*?<\/system>\s*/i, "")

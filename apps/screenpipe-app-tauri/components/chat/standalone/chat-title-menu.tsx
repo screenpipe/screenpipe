@@ -9,7 +9,7 @@ import { ChevronDown, Pencil, Pin, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { isConversationHistorySyncPrompt, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
+import { isInjectedTitle, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import type { Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
@@ -65,7 +65,7 @@ export function ChatTitleMenu({
     streamingTitle ||
     (storeTitle &&
       !isPlaceholderConversationTitle(storeTitle) &&
-      !isConversationHistorySyncPrompt(storeTitle)
+      !isInjectedTitle(storeTitle)
         ? storeTitle
         : derivedTitle || (hasMessages ? "untitled" : ""));
 

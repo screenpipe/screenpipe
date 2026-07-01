@@ -10,7 +10,7 @@ import { mountAgentEventBus, onTerminated as onAgentTerminated } from "@/lib/eve
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
-import { extractConversationHistorySyncUserText } from "@/lib/chat-utils";
+import { extractInjectedUserText } from "@/lib/chat-utils";
 import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
 import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, parseRateLimitWaitSeconds, PI_MAX_RATE_LIMIT_RETRIES } from "@/lib/chat/quota-errors";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
@@ -477,7 +477,7 @@ export function usePiForegroundEvents({
           }
 
           const rawText = textFromMessageContent(data.message?.content);
-          const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
+          const text = extractInjectedUserText(rawText) ?? rawText;
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
           const pendingOptimisticSteer = optimisticSteerRef.current;
           const isPendingOptimisticSteerEcho = Boolean(

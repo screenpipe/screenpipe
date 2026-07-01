@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
+import { isInjectedTitle } from "@/lib/chat-utils";
 import type { ConversationMeta } from "@/lib/chat-storage";
 
 interface InlineChatHistoryProps {
@@ -102,7 +102,7 @@ export function InlineChatHistory({
                       >
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium truncate">
-                            {(isConversationHistorySyncPrompt(conv.title) ? undefined : conv.title) || "untitled"}
+                            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "untitled"}
                           </p>
                           <p className="text-[10px] text-muted-foreground">
                             {conv.messageCount} messages
@@ -128,7 +128,7 @@ export function InlineChatHistory({
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenConvMenuId(null);
-                                setRenameValue(isConversationHistorySyncPrompt(conv.title) ? "" : conv.title);
+                                setRenameValue(isInjectedTitle(conv.title) ? "" : conv.title);
                                 setRenamingConvId(conv.id);
                               }}
                             >
