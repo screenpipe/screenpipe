@@ -55,6 +55,14 @@ fn stream_frame_limit(requested: Option<usize>) -> usize {
         .clamp(1, MAX_STREAM_FRAME_LIMIT)
 }
 
+fn stream_db_fetch_limit(display_limit: usize) -> usize {
+    if display_limit == 0 {
+        0
+    } else {
+        MAX_STREAM_FRAME_LIMIT
+    }
+}
+
 /// Reduce an already-display-ordered list to at most `limit` items by keeping an
 /// evenly-spaced stride across the WHOLE list (both ends included), rather than
 /// `truncate`, which keeps only the head and silently drops the tail.
@@ -323,6 +331,7 @@ async fn handle_stream_frames_socket(
                         let end_time = request.end_time;
                         let is_descending = request.order == Order::Descending;
                         let limit = stream_frame_limit(request.limit);
+                        let db_fetch_limit = stream_db_fetch_limit(limit);
 
                         // Clear sent IDs for new request
                         sent_ids_clone.lock().await.clear();
@@ -337,11 +346,12 @@ async fn handle_stream_frames_socket(
                             && end_time >= now;
 
                         info!(
-                            "WebSocket stream request: {} to {} (source={}, limit={})",
+                            "WebSocket stream request: {} to {} (source={}, limit={}, db_fetch_limit={})",
                             start_time,
                             end_time,
                             if is_today { "hot_cache" } else { "database" },
-                            limit
+                            limit,
+                            db_fetch_limit
                         );
 
                         // Set live subscription flag
@@ -404,6 +414,7 @@ async fn handle_stream_frames_socket(
                             };
 
                             let backfill_limit = limit.saturating_sub(initial_count);
+                            let backfill_fetch_limit = stream_db_fetch_limit(backfill_limit);
                             if backfill_needed && backfill_limit > 0 {
                                 let backfill_end = cache_start.unwrap_or(end_time);
                                 let frame_tx_db = frame_tx.clone();
@@ -414,7 +425,7 @@ async fn handle_stream_frames_socket(
                                         .find_video_chunks_limited(
                                             start_time,
                                             backfill_end,
-                                            backfill_limit,
+                                            backfill_fetch_limit,
                                             request_order(is_descending),
                                         )
                                         .await
@@ -705,7 +716,12 @@ async fn fetch_and_process_frames_with_tracking(
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
 ) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
     let mut chunks = db
-        .find_video_chunks_limited(start_time, end_time, limit, request_order(is_descending))
+        .find_video_chunks_limited(
+            start_time,
+            end_time,
+            stream_db_fetch_limit(limit),
+            request_order(is_descending),
+        )
         .await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
 
@@ -908,6 +924,18 @@ mod tests {
         assert_eq!(stream_frame_limit(Some(500)), 500);
         assert_eq!(
             stream_frame_limit(Some(MAX_STREAM_FRAME_LIMIT + 1)),
+            MAX_STREAM_FRAME_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_stream_db_fetch_limit_uses_memory_cap_not_display_limit() {
+        assert_eq!(stream_db_fetch_limit(0), 0);
+        assert_eq!(stream_db_fetch_limit(1), MAX_STREAM_FRAME_LIMIT);
+        assert_eq!(stream_db_fetch_limit(500), MAX_STREAM_FRAME_LIMIT);
+        assert_eq!(stream_db_fetch_limit(2_500), MAX_STREAM_FRAME_LIMIT);
+        assert_eq!(
+            stream_db_fetch_limit(MAX_STREAM_FRAME_LIMIT),
             MAX_STREAM_FRAME_LIMIT
         );
     }

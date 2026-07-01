@@ -514,14 +514,19 @@ def scenario_timeline_stream(client: ApiClient, state: SharedState, duration_sec
     def work() -> bool:
         hours = random.choice(windows)
         start = end - dt.timedelta(hours=hours)
-        params = {
+        request = {
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
-            "order": random.choice(["asc", "desc"]),
+            "order": random.choice(["ascending", "descending"]),
             "limit": random.choice([100, 500, 2000, 10000]),
         }
-        ok, _, _, _ = client.request("GET", "/stream/frames", params=params)
-        return ok
+        return ws_once(
+            client.base_url,
+            "/stream/frames",
+            hold_sec=random.uniform(1.0, 5.0),
+            api_key=client.api_key,
+            first_message=json.dumps(request),
+        )
 
     fanout(state, "timeline_stream", duration_sec, max(1, min(concurrency, 4)), work)
 
@@ -650,7 +655,28 @@ def scenario_audio_readonly(client: ApiClient, state: SharedState, duration_sec:
     fanout(state, "audio_readonly", duration_sec, max(1, min(concurrency, 4)), work)
 
 
-def ws_once(base_url: str, path: str, hold_sec: float, api_key: str | None) -> bool:
+def ws_text_frame(payload: str) -> bytes:
+    data = payload.encode("utf-8")
+    mask_key = os.urandom(4)
+    header = bytearray([0x81])
+    if len(data) < 126:
+        header.append(0x80 | len(data))
+    elif len(data) < 65536:
+        header.extend((0x80 | 126, (len(data) >> 8) & 0xFF, len(data) & 0xFF))
+    else:
+        header.append(0x80 | 127)
+        header.extend(len(data).to_bytes(8, "big"))
+    masked = bytes(byte ^ mask_key[index % 4] for index, byte in enumerate(data))
+    return bytes(header) + mask_key + masked
+
+
+def ws_once(
+    base_url: str,
+    path: str,
+    hold_sec: float,
+    api_key: str | None,
+    first_message: str | None = None,
+) -> bool:
     parsed = parse_base_url(base_url)
     if parsed.scheme == "https":
         return False
@@ -677,11 +703,15 @@ def ws_once(base_url: str, path: str, hold_sec: float, api_key: str | None) -> b
         resp = sock.recv(4096)
         if b" 101 " not in resp.split(b"\r\n", 1)[0]:
             return False
+        if first_message is not None:
+            sock.sendall(ws_text_frame(first_message))
         sock.settimeout(0.5)
         end = time.monotonic() + hold_sec
         while time.monotonic() < end:
             try:
-                sock.recv(4096)
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return False
             except socket.timeout:
                 pass
         return True
