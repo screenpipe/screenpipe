@@ -1516,6 +1516,29 @@ fn parse_error_type_from_output(stderr: &str, stdout: &str) -> (Option<String>, 
     parse_error_type(stdout)
 }
 
+/// Specific tokens that mean a terminal provider quota/billing gate (no point
+/// retrying or falling back). Deliberately NOT a bare "quota"/"billing" match:
+/// transient rate-limit messages often mention those words (e.g. "rate limited —
+/// see your quota/billing dashboard"), and since quota is classified before
+/// rate_limit, a loose match would suppress a legitimate retry.
+pub(crate) const QUOTA_EXHAUSTED_TOKENS: &[&str] = &[
+    "insufficient_quota",
+    "quota_exhausted",
+    "quota exceeded",
+    "exceeded your current quota",
+    "billing_hard_limit",
+    "billing_not_active",
+    "check your plan and billing",
+    "credit balance is too low",
+];
+
+/// `text` must already be lowercased.
+pub(crate) fn has_quota_exhausted_token(text: &str) -> bool {
+    QUOTA_EXHAUSTED_TOKENS
+        .iter()
+        .any(|token| text.contains(token))
+}
+
 /// Parse structured error types from a single output string.
 fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     let lower = stderr.to_lowercase();
@@ -1540,12 +1563,7 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
             Some("model not available on current tier".to_string()),
         );
     }
-    if lower.contains("insufficient_quota")
-        || lower.contains("quota_exhausted")
-        || lower.contains("quota exceeded")
-        || lower.contains("exceeded your current quota")
-        || lower.contains("billing")
-    {
+    if has_quota_exhausted_token(&lower) {
         return (
             Some("quota_exhausted".to_string()),
             Some("provider quota or billing limit reached".to_string()),
@@ -1667,10 +1685,7 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
             Some(message.unwrap_or_else(|| "model not available on current tier".to_string())),
         ));
     }
-    if combined.contains("insufficient_quota")
-        || combined.contains("quota")
-        || combined.contains("billing")
-    {
+    if has_quota_exhausted_token(&combined) {
         return Some((
             Some("quota_exhausted".to_string()),
             Some(message.unwrap_or_else(|| "provider quota or billing limit reached".to_string())),
@@ -6821,6 +6836,28 @@ mod tests {
         );
         assert_eq!(etype.as_deref(), Some("rate_limited"));
         assert_eq!(msg.as_deref(), Some("Your account has hit a rate limit."));
+    }
+
+    #[test]
+    fn test_parse_error_type_rate_limit_mentioning_quota_billing_stays_rate_limited() {
+        // quota is classified before rate_limit, so a bare "quota"/"billing"
+        // substring match would wrongly mark this terminal and suppress retry.
+        let (etype, _) = parse_error_type(
+            r#"429 {"error":{"type":"rate_limit_error","message":"Rate limited — see your quota and billing dashboard for details."}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("rate_limited"));
+
+        let (etype, _) =
+            parse_error_type("Error: rate limit reached — check your quota/billing dashboard");
+        assert_eq!(etype.as_deref(), Some("rate_limited"));
+    }
+
+    #[test]
+    fn test_parse_error_type_billing_hard_limit_is_quota_exhausted() {
+        let (etype, _) = parse_error_type(
+            r#"429 {"error":{"type":"billing_hard_limit","message":"billing_hard_limit reached"}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("quota_exhausted"));
     }
 
     #[test]

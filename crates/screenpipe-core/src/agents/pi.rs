@@ -60,9 +60,8 @@ fn is_rate_limit_error(text: &str) -> bool {
     if lower.contains("daily_cost_limit_exceeded")
         || lower.contains("daily_limit_exceeded")
         || lower.contains("credits_exhausted")
-        || lower.contains("insufficient_quota")
-        || lower.contains("quota_exhausted")
         || lower.contains("model_not_allowed")
+        || crate::pipes::has_quota_exhausted_token(&lower)
     {
         return false;
     }

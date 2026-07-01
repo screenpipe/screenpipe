@@ -334,12 +334,13 @@ impl PresetFallbackRegistry {
     pub fn record_failure_from_output(&self, preset_id: &str, stderr: &str, stdout: &str) -> bool {
         let combined = format!("{} {}", stderr, stdout).to_lowercase();
 
+        // Bare "quota"/"billing" is deliberately avoided here: a transient rate
+        // limit that merely mentions those words (checked below) must still fall
+        // back rather than being treated as a terminal, non-retryable gate.
         if combined.contains("daily_cost_limit_exceeded")
             || combined.contains("daily_limit_exceeded")
             || combined.contains("credits_exhausted")
-            || combined.contains("insufficient_quota")
-            || combined.contains("quota")
-            || combined.contains("billing")
+            || super::has_quota_exhausted_token(&combined)
         {
             return false;
         }

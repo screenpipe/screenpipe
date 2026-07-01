@@ -25,6 +25,28 @@ export interface ParsedPipeError {
   credits_remaining?: number;
 }
 
+/**
+ * Specific tokens that mean a terminal provider quota/billing gate (no point
+ * retrying or falling back). Deliberately NOT a bare "quota"/"billing" match:
+ * transient rate-limit messages often mention those words (e.g. "rate limited —
+ * see your quota/billing dashboard"), and since quota is classified before
+ * rate_limit, a loose match would suppress a legitimate retry.
+ */
+const QUOTA_EXHAUSTED_TOKENS = [
+  "insufficient_quota",
+  "quota_exhausted",
+  "quota exceeded",
+  "exceeded your current quota",
+  "billing_hard_limit",
+  "billing_not_active",
+  "check your plan and billing",
+  "credit balance is too low",
+] as const;
+
+function hasQuotaExhaustedToken(text: string): boolean {
+  return QUOTA_EXHAUSTED_TOKENS.some((token) => text.includes(token));
+}
+
 export function parsePipeError(stderr: string): ParsedPipeError {
   for (const parsed of parseErrorJsonCandidates(stderr)) {
     const classified = classifyStructuredPipeError(parsed);
@@ -53,12 +75,7 @@ export function parsePipeError(stderr: string): ParsedPipeError {
       message: "uses a model that needs business — switch to a free model (auto) or upgrade",
     };
   }
-  if (
-    normalized.includes("insufficient_quota") ||
-    normalized.includes("quota_exhausted") ||
-    normalized.includes("exceeded your current quota") ||
-    normalized.includes("billing")
-  ) {
+  if (hasQuotaExhaustedToken(normalized)) {
     return {
       type: "quota_exhausted",
       message: "provider quota or billing limit reached",
@@ -145,11 +162,7 @@ function classifyStructuredPipeError(value: unknown): ParsedPipeError | null {
       message: "uses a model that needs business — switch to a free model (auto) or upgrade",
     };
   }
-  if (
-    combined.includes("insufficient_quota") ||
-    combined.includes("quota") ||
-    combined.includes("billing")
-  ) {
+  if (hasQuotaExhaustedToken(combined)) {
     return {
       type: "quota_exhausted",
       message: message || "provider quota or billing limit reached",

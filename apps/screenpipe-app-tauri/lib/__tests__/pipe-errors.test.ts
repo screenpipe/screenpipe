@@ -68,6 +68,29 @@ describe("parsePipeError", () => {
     expect(parsePipeError(stderr(429, { error: "rate limit exceeded" })).type).toBe("rate_limit");
   });
 
+  it("keeps a transient rate limit that merely mentions quota/billing as rate_limit", () => {
+    // quota is classified before rate_limit, so a bare "quota"/"billing"
+    // substring match here would wrongly suppress the retry.
+    const r = parsePipeError(
+      `429 ${JSON.stringify({
+        error: {
+          type: "rate_limit_error",
+          message: "Rate limited — see your quota and billing dashboard for details.",
+        },
+      })}`,
+    );
+    expect(r.type).toBe("rate_limit");
+  });
+
+  it("still classifies a terminal billing hard limit as quota_exhausted", () => {
+    const r = parsePipeError(
+      `429 ${JSON.stringify({
+        error: { type: "billing_hard_limit", message: "billing_hard_limit reached" },
+      })}`,
+    );
+    expect(r.type).toBe("quota_exhausted");
+  });
+
   it("falls back to unknown for non-gateway stderr", () => {
     expect(parsePipeError("TypeError: undefined is not a function").type).toBe("unknown");
   });
