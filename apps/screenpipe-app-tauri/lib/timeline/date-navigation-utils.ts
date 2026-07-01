@@ -155,3 +155,44 @@ export function canResolvePendingNavigation(options: {
 	}
 	return options.targetDayMatchesStoreDate && options.hasFramesForTargetDay;
 }
+
+/** Whether incoming WS frames belong to the active date-swap target day. */
+export function frameBatchMatchesSwapTarget(
+	frames: TimestampedFrame[],
+	swapTargetDay: string | null,
+): boolean {
+	if (!swapTargetDay || frames.length === 0) {
+		return true;
+	}
+	return frames.some(
+		(f) => formatLocalDayString(new Date(f.timestamp)) === swapTargetDay,
+	);
+}
+
+/** Whether a batch_complete / fetch range belongs to the active date-swap target. */
+export function fetchRangeMatchesSwapTarget(
+	startTimeIso: string | undefined,
+	endTimeIso: string | undefined,
+	swapTargetDay: string | null,
+): boolean {
+	if (!swapTargetDay || !startTimeIso) {
+		return true;
+	}
+	const startDay = formatLocalDayString(new Date(startTimeIso));
+	if (startDay === swapTargetDay) {
+		return true;
+	}
+	if (endTimeIso) {
+		const endDay = formatLocalDayString(new Date(endTimeIso));
+		if (endDay === swapTargetDay) {
+			return true;
+		}
+	}
+	// Narrow ±5min search windows can span two local days — accept if target day
+	// falls inside the requested range.
+	const targetStart = parseLocalDayString(swapTargetDay).getTime();
+	const targetEnd = endOfDay(parseLocalDayString(swapTargetDay)).getTime();
+	const rangeStart = new Date(startTimeIso).getTime();
+	const rangeEnd = endTimeIso ? new Date(endTimeIso).getTime() : rangeStart;
+	return rangeStart <= targetEnd && rangeEnd >= targetStart;
+}

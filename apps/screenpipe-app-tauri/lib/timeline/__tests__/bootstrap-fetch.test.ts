@@ -9,6 +9,8 @@ import {
 	needsFullDayBackfillAfterPendingNav,
 	canResolvePendingNavigation,
 	getFullDayBackfillRangeIfNeeded,
+	frameBatchMatchesSwapTarget,
+	fetchRangeMatchesSwapTarget,
 } from "@/lib/timeline/date-navigation-utils";
 import { startOfDay, endOfDay } from "date-fns";
 
@@ -203,5 +205,44 @@ describe("getFullDayBackfillRangeIfNeeded", () => {
 				seekingTimestamp: day.toISOString(),
 			}),
 		).toBeNull();
+	});
+});
+
+describe("stale date-swap batch guards", () => {
+	const jun28 = "2026-06-28";
+	const jun27Frame = [{ timestamp: "2026-06-27T12:00:00.000Z" }];
+	const jun28Frame = [{ timestamp: "2026-06-28T14:00:00.000Z" }];
+
+	it("frameBatchMatchesSwapTarget rejects wrong-day batches", () => {
+		expect(frameBatchMatchesSwapTarget(jun27Frame, jun28)).toBe(false);
+		expect(frameBatchMatchesSwapTarget(jun28Frame, jun28)).toBe(true);
+		expect(frameBatchMatchesSwapTarget([], jun28)).toBe(true);
+	});
+
+	it("fetchRangeMatchesSwapTarget rejects stale batch_complete ranges", () => {
+		expect(
+			fetchRangeMatchesSwapTarget(
+				"2026-06-27T00:00:00.000Z",
+				"2026-06-27T23:59:59.999Z",
+				jun28,
+			),
+		).toBe(false);
+		expect(
+			fetchRangeMatchesSwapTarget(
+				"2026-06-28T00:00:00.000Z",
+				"2026-06-28T23:59:59.999Z",
+				jun28,
+			),
+		).toBe(true);
+	});
+
+	it("fetchRangeMatchesSwapTarget accepts narrow search windows covering target day", () => {
+		expect(
+			fetchRangeMatchesSwapTarget(
+				"2026-06-28T14:25:00.000Z",
+				"2026-06-28T14:35:00.000Z",
+				jun28,
+			),
+		).toBe(true);
 	});
 });

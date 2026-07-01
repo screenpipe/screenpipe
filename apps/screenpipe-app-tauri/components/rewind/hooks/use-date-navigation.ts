@@ -31,7 +31,7 @@ export function useDateNavigation(opts: {
 	currentIndex: number;
 	setCurrentIndex: (i: number) => void;
 	setCurrentFrame: (f: StreamTimeSeriesResponse | null) => void;
-	clearFramesForNavigation: () => void;
+	clearFramesForNavigation: (targetDate?: Date) => void;
 	setSearchNavFrame: (v: boolean) => void;
 	fetchTimeRange: (start: Date, end: Date) => void;
 	startAndEndDates: { start: Date; end: Date };
@@ -79,6 +79,7 @@ export function useDateNavigation(opts: {
 	const [isNavigating, setIsNavigating] = useState(false);
 	const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const navTimeoutMsRef = useRef(NAV_TIMEOUT_MS);
+	const lastFlushTimestamp = useTimelineStore((s) => s.lastFlushTimestamp);
 
 	const clearNavTimeout = useCallback(() => {
 		if (navTimeoutRef.current) {
@@ -268,7 +269,7 @@ export function useDateNavigation(opts: {
 			to_date: targetDate.toISOString(),
 		});
 
-		clearFramesForNavigation();
+		clearFramesForNavigation(normalized);
 		clearSentRequestForDate(normalized);
 
 		// Keep full instant for pending resolution (search jumps land on exact moment).
@@ -408,7 +409,7 @@ export function useDateNavigation(opts: {
 				to_date: targetDate.toISOString(),
 			});
 
-			clearFramesForNavigation();
+			clearFramesForNavigation(startOfDay(targetDate));
 			clearSentRequestForDate(targetDate);
 
 			pendingNavigationRef.current = startOfDay(targetDate);
@@ -502,7 +503,7 @@ export function useDateNavigation(opts: {
 			fetchTimeRange(startOfDay(targetDay), endOfDay(targetDay));
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [frames, currentDate, seekingTimestamp, finishNavigation, fetchTimeRange]);
+	}, [frames, currentDate, seekingTimestamp, finishNavigation, fetchTimeRange, lastFlushTimestamp]);
 
 	return {
 		navigateDirectToDate,

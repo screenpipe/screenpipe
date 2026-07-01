@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { hasFramesForDate, findNearestDateWithFrames } from "../actions/has-frames-date";
-import { MAX_DATE_SEARCH_DAYS } from "../timeline/date-navigation-utils";
+import { MAX_DATE_SEARCH_DAYS, formatLocalDayString, frameBatchMatchesSwapTarget, fetchRangeMatchesSwapTarget } from "../timeline/date-navigation-utils";
 import { endOfDay, isSameDay, startOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
@@ -50,6 +50,9 @@ const RECONNECT_BASE_DELAY_MS = 2000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 
 let emptyStateMessageTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Local calendar day (YYYY-MM-DD) for the in-flight date swap; stale WS batches are ignored. */
+let dateSwapTargetDay: string | null = null;
 
 function clearEmptyStateMessageTimer() {
 	if (emptyStateMessageTimer) {
@@ -181,7 +184,7 @@ interface TimelineState {
 	onWindowFocus: () => void;
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
-	clearFramesForNavigation: () => void; // Clear frames when navigating to new date
+	clearFramesForNavigation: (targetDate?: Date) => void; // Clear frames when navigating to new date
 	abortPendingDateSwap: (reason: "empty" | "failed") => void;
 	/** Cancel an in-flight date swap without clearing visible frames (nav aborted). */
 	cancelPendingDateSwap: () => void;
@@ -261,7 +264,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	// Prepare for date navigation — keep old frames visible while new ones load.
 	// Sets pendingDateSwap so flushFrameBuffer replaces frames atomically on first batch.
-	clearFramesForNavigation: () => {
+	clearFramesForNavigation: (targetDate?: Date) => {
+		dateSwapTargetDay = targetDate ? formatLocalDayString(targetDate) : null;
 		// Clear the frame buffer too
 		frameBuffer = [];
 		if (flushTimer) {
@@ -287,6 +291,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	abortPendingDateSwap: (reason: "empty" | "failed") => {
+		dateSwapTargetDay = null;
 		frameBuffer = [];
 		if (flushTimer) {
 			clearTimeout(flushTimer);
@@ -317,6 +322,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	cancelPendingDateSwap: () => {
+		dateSwapTargetDay = null;
 		frameBuffer = [];
 		if (flushTimer) {
 			clearTimeout(flushTimer);
@@ -357,6 +363,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 		const framesToFlush = frameBuffer;
 		frameBuffer = [];
+
+		if (
+			get().pendingDateSwap &&
+			!frameBatchMatchesSwapTarget(framesToFlush, dateSwapTargetDay)
+		) {
+			console.warn(
+				"[timeline] ignoring stale date-swap frame batch for",
+				dateSwapTargetDay,
+			);
+			return;
+		}
 
 		set((state) => {
 			const merged = mergeTimelineFrames({
@@ -569,7 +586,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// After successful connection/reconnection, trigger a fetch for current date
 			// This ensures data is requested even after reconnection
 			setTimeout(() => {
-				const { currentDate, fetchTimeRange } = get();
+				const { currentDate, fetchTimeRange, pendingDateSwap } = get();
+				if (pendingDateSwap) {
+					return;
+				}
 				const startTime = new Date(currentDate);
 				startTime.setHours(0, 0, 0, 0);
 				const endTime = new Date(currentDate);
@@ -625,6 +645,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					}
 					requestRetryCount = 0;
 					const count = typeof data.count === "number" ? data.count : 0;
+					const rangeMatches = fetchRangeMatchesSwapTarget(
+						typeof data.start_time === "string" ? data.start_time : undefined,
+						typeof data.end_time === "string" ? data.end_time : undefined,
+						dateSwapTargetDay,
+					);
+					if (!rangeMatches) {
+						return;
+					}
 					if (count === 0 && get().pendingDateSwap) {
 						get().abortPendingDateSwap("empty");
 					} else if (get().pendingDateSwap && count > 0) {
@@ -694,9 +722,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				// Handle batched frames - OPTIMIZED: buffer and flush periodically
 				if (Array.isArray(data)) {
 					if (data.length === 0) {
-						if (get().pendingDateSwap) {
-							get().abortPendingDateSwap("empty");
-						}
+						// Empty arrays lack range metadata — rely on batch_complete for swap abort.
+						return;
+					}
+					if (
+						get().pendingDateSwap &&
+						!frameBatchMatchesSwapTarget(data, dateSwapTargetDay)
+					) {
+						console.warn(
+							"[timeline] ignoring stale date-swap WS batch for",
+							dateSwapTargetDay,
+						);
 						return;
 					}
 					if (data.length > 0) {
