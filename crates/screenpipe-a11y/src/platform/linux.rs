@@ -1001,18 +1001,21 @@ pub fn get_active_window_info() -> Option<(String, String, i32)> {
     {
         let cached = cache.lock();
         if let Some((value, captured_at)) = &*cached {
-            if now.duration_since(*captured_at) < ACTIVE_WINDOW_CACHE_TTL {
+            if now.saturating_duration_since(*captured_at) < ACTIVE_WINDOW_CACHE_TTL {
                 return value.clone();
             }
         }
     }
 
-    let fresh = get_active_window_info_uncached();
+    let fresh = get_active_window_info_fresh();
     *cache.lock() = Some((fresh.clone(), Instant::now()));
     fresh
 }
 
-fn get_active_window_info_uncached() -> Option<(String, String, i32)> {
+/// Get active window info without using the shared observer cache.
+///
+/// Use this when stale focused-window metadata would affect privacy gates.
+pub fn get_active_window_info_fresh() -> Option<(String, String, i32)> {
     get_hyprland_active_window_info().or_else(get_x11_active_window_info)
 }
 
@@ -1137,8 +1140,14 @@ fn command_output_with_timeout(command: &str, args: &[&str], timeout: Duration) 
     let start = Instant::now();
 
     loop {
-        if child.try_wait().ok()?.is_some() {
-            return child.wait_with_output().ok();
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
         if start.elapsed() >= timeout {
             let _ = child.kill();

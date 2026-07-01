@@ -1744,8 +1744,11 @@ struct LightweightFocusedMetadata {
     window_name: Option<String>,
 }
 
-fn metadata_value_is_blank(value: &Option<String>) -> bool {
-    value.as_deref().map(str::trim).unwrap_or("").is_empty()
+fn normalize_metadata_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn resolve_capture_metadata(
@@ -1768,26 +1771,18 @@ fn resolve_capture_metadata(
         None => (None, None, None, None),
     };
 
-    // Fallback to lightweight focused-window metadata when the tree walk returned
-    // nothing (focused_window AX query failed, e.g. Zoom during meetings, or
-    // native Wayland apps where AT-SPI did not identify the frontmost window).
-    // Without this, captures triggered by click/visual_change/idle would be
-    // stored with null app/window metadata even though the compositor or OS
-    // knows the focused target.
-    if metadata_value_is_blank(&app_name) {
-        if let Some(name) = lightweight_metadata.and_then(|m| m.app_name.as_deref()) {
-            let name = name.trim();
-            if !name.is_empty() {
-                app_name = Some(name.to_string());
-            }
+    app_name = normalize_metadata_value(app_name.as_deref());
+    window_name = normalize_metadata_value(window_name.as_deref());
+
+    // Prefer lightweight focused-window metadata when available. On Linux
+    // Wayland, AT-SPI can return stale or generic app names (for example
+    // "electron") while Hyprland knows the actual focused app/window.
+    if let Some(metadata) = lightweight_metadata {
+        if let Some(name) = normalize_metadata_value(metadata.app_name.as_deref()) {
+            app_name = Some(name);
         }
-    }
-    if metadata_value_is_blank(&window_name) {
-        if let Some(name) = lightweight_metadata.and_then(|m| m.window_name.as_deref()) {
-            let name = name.trim();
-            if !name.is_empty() {
-                window_name = Some(name.to_string());
-            }
+        if let Some(name) = normalize_metadata_value(metadata.window_name.as_deref()) {
+            window_name = Some(name);
         }
     }
 
@@ -2129,7 +2124,22 @@ async fn do_capture(
     // to ALL captures, not just app switches.
     let lightweight_focused_metadata = match trigger {
         CaptureTrigger::AppSwitch { .. } => None,
-        _ => get_focused_metadata_lightweight(),
+        _ => match tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(get_focused_metadata_lightweight),
+        )
+        .await
+        {
+            Ok(Ok(metadata)) => metadata,
+            Ok(Err(err)) => {
+                debug!("focused metadata lookup task failed: {}", err);
+                None
+            }
+            Err(_) => {
+                debug!("focused metadata lookup timed out");
+                None
+            }
+        },
     };
     let trigger_app = match trigger {
         CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
@@ -2522,7 +2532,8 @@ fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
 
 #[cfg(target_os = "linux")]
 fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
-    let (app_name, window_name, _) = screenpipe_a11y::platform::linux::get_active_window_info()?;
+    let (app_name, window_name, _) =
+        screenpipe_a11y::platform::linux::get_active_window_info_fresh()?;
     Some(LightweightFocusedMetadata {
         app_name: if app_name.is_empty() {
             None
@@ -2851,6 +2862,62 @@ mod tests {
 
         assert_eq!(app_name.as_deref(), Some("org.telegram.desktop"));
         assert_eq!(window_name.as_deref(), Some("Telegram"));
+    }
+
+    #[test]
+    fn resolve_capture_metadata_prefers_lightweight_metadata_over_stale_tree_values() {
+        let snapshot = screenpipe_a11y::tree::TreeSnapshot {
+            app_name: "electron".into(),
+            window_name: "stale browser title".into(),
+            text_content: "visible text".into(),
+            nodes: Vec::new(),
+            browser_url: None,
+            document_path: None,
+            timestamp: Utc::now(),
+            node_count: 0,
+            walk_duration: Duration::from_millis(1),
+            content_hash: 0,
+            simhash: 0,
+            truncated: false,
+            truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            max_depth_reached: 0,
+        };
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("Alacritty".into()),
+            window_name: Some("screenpipe-wayland-fix".into()),
+        };
+
+        let (app_name, window_name, _, _) =
+            resolve_capture_metadata(Some(&snapshot), &CaptureTrigger::Idle, Some(&metadata));
+
+        assert_eq!(app_name.as_deref(), Some("Alacritty"));
+        assert_eq!(window_name.as_deref(), Some("screenpipe-wayland-fix"));
+    }
+
+    #[test]
+    fn resolve_capture_metadata_normalizes_blank_tree_values_without_lightweight_metadata() {
+        let snapshot = screenpipe_a11y::tree::TreeSnapshot {
+            app_name: "  ".into(),
+            window_name: "".into(),
+            text_content: "visible text".into(),
+            nodes: Vec::new(),
+            browser_url: None,
+            document_path: None,
+            timestamp: Utc::now(),
+            node_count: 0,
+            walk_duration: Duration::from_millis(1),
+            content_hash: 0,
+            simhash: 0,
+            truncated: false,
+            truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            max_depth_reached: 0,
+        };
+
+        let (app_name, window_name, _, _) =
+            resolve_capture_metadata(Some(&snapshot), &CaptureTrigger::Idle, None);
+
+        assert_eq!(app_name, None);
+        assert_eq!(window_name, None);
     }
 
     #[test]
