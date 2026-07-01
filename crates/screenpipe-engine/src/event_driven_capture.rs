@@ -2881,8 +2881,12 @@ mod tests {
             window_name: Some(" Telegram ".into()),
         };
 
-        let (app_name, window_name, _, _) =
-            resolve_capture_metadata(Some(&snapshot), &CaptureTrigger::Idle, Some(&metadata));
+        let (app_name, window_name, _, _) = resolve_capture_metadata_with_policy(
+            Some(&snapshot),
+            &CaptureTrigger::Idle,
+            Some(&metadata),
+            true,
+        );
 
         assert_eq!(app_name.as_deref(), Some("org.telegram.desktop"));
         assert_eq!(window_name.as_deref(), Some("Telegram"));
