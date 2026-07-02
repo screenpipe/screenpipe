@@ -41,7 +41,7 @@ jobs:
         bun-version: 1.3.10
 
     - name: Install Scream on Windows
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
         $screamUrl = "https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip"
@@ -63,7 +63,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Sign and Install Scream Driver on Windows
-      shell: powershell
+      shell: pwsh
       run: |
         signtool sign /v /fd SHA256 /f ScreamCertificate.pfx Scream\Install\driver\x64\Scream.cat
         Import-Certificate -FilePath ScreamCertificate.cer -CertStoreLocation Cert:\LocalMachine\root
@@ -72,7 +72,7 @@ jobs:
       timeout-minutes: 5
 
     - name: Start Windows Audio Service
-      shell: powershell
+      shell: pwsh
       run: |
         $service = Get-Service -Name audiosrv
         if ($service.Status -ne 'Running') {

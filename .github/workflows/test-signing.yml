@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Create dummy exe
-        shell: powershell
+        shell: pwsh
         run: |
           # Create a minimal valid PE exe to test signing
           $exePath = "$env:RUNNER_TEMP\test-signing.exe"
@@ -23,7 +23,7 @@ jobs:
           Write-Host "Test exe: $exePath"
 
       - name: Sign with SSL.com EV certificate
-        shell: powershell
+        shell: pwsh
         env:
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
