@@ -231,14 +231,86 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const connections = await fetchConnections(signal).catch(() => []);
-      const rawConnection = connections.find((item) => item.id === connectionId);
-      const connection = rawConnection
-        ? await enrichConnection(rawConnection, signal)
-        : undefined;
-      const name = connectionLabel(connection, connectionId);
-      if (connection?.connected === true) {
-        const payload = connectionPayload(connection, connectionId);
+      // Anything below can throw (enrichConnection, ctx.ui.confirm, the refresh
+      // fetch). If we let it propagate, the inline connect card never gets a
+      // result and ctx.ui.confirm hangs until timeout — so always answer with a
+      // formed status instead.
+      let name = connectionId;
+      try {
+        const connections = await fetchConnections(signal).catch(() => []);
+        const rawConnection = connections.find((item) => item.id === connectionId);
+        const connection = rawConnection
+          ? await enrichConnection(rawConnection, signal)
+          : undefined;
+        name = connectionLabel(connection, connectionId);
+        if (connection?.connected === true) {
+          const payload = connectionPayload(connection, connectionId);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ status: "connected", connectionId, ...payload }),
+              },
+            ],
+            details: { status: "connected", connectionId, ...payload },
+          };
+        }
+
+        if (!ctx.hasUI || !ctx.ui) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `${name} is not connected. Connect ${name} in Screenpipe to continue.`,
+              },
+            ],
+            details: { status: "declined", connectionId, name },
+          };
+        }
+
+        onUpdate?.({
+          content: [{ type: "text" as const, text: `Waiting for ${name} connection...` }],
+          details: { status: "waiting", connectionId, name },
+        });
+
+        const title = `screenpipe:connect:${connectionId}:${name}`;
+        const reason = params.reason?.trim() || `Connect ${name} to continue this task.`;
+        const requiredFor = params.requiredFor?.trim();
+        const message = requiredFor ? `${reason}\n\nAfter connecting, I will continue: ${requiredFor}` : reason;
+        const confirmed = await ctx.ui.confirm(title, message, { signal });
+
+        if (!confirmed) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ status: "declined", connectionId, name }),
+              },
+            ],
+            details: { status: "declined", connectionId, name },
+          };
+        }
+
+        const refreshed = await fetchConnections(signal).catch(() => []);
+        const refreshedConnection = refreshed.find((item) => item.id === connectionId);
+        const enrichedConnection = refreshedConnection
+          ? await enrichConnection(refreshedConnection, signal)
+          : undefined;
+        const nowConnected = enrichedConnection?.connected === true;
+        if (!nowConnected) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ status: "failed", connectionId, name }),
+              },
+            ],
+            details: { status: "failed", connectionId, name },
+            isError: true,
+          };
+        }
+
+        const payload = connectionPayload(enrichedConnection!, connectionId);
         return {
           content: [
             {
@@ -248,72 +320,33 @@ export default function (pi: ExtensionAPI) {
           ],
           details: { status: "connected", connectionId, ...payload },
         };
-      }
-
-      if (!ctx.hasUI || !ctx.ui) {
+      } catch (error) {
+        // An aborted run (user cancelled / host tore down) is a clean decline,
+        // not a failure. Everything else is a real error — report it, but still
+        // return so the Pi UI request is answered.
+        if (signal.aborted) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ status: "declined", connectionId, name }),
+              },
+            ],
+            details: { status: "declined", connectionId, name },
+          };
+        }
+        const errorMessage = error instanceof Error ? error.message : String(error);
         return {
           content: [
             {
               type: "text" as const,
-              text: `${name} is not connected. Connect ${name} in Screenpipe to continue.`,
+              text: JSON.stringify({ status: "failed", connectionId, name, error: errorMessage }),
             },
           ],
-          details: { status: "declined", connectionId, name },
-        };
-      }
-
-      onUpdate?.({
-        content: [{ type: "text" as const, text: `Waiting for ${name} connection...` }],
-        details: { status: "waiting", connectionId, name },
-      });
-
-      const title = `screenpipe:connect:${connectionId}:${name}`;
-      const reason = params.reason?.trim() || `Connect ${name} to continue this task.`;
-      const requiredFor = params.requiredFor?.trim();
-      const message = requiredFor ? `${reason}\n\nAfter connecting, I will continue: ${requiredFor}` : reason;
-      const confirmed = await ctx.ui.confirm(title, message, { signal });
-
-      if (!confirmed) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ status: "declined", connectionId, name }),
-            },
-          ],
-          details: { status: "declined", connectionId, name },
-        };
-      }
-
-      const refreshed = await fetchConnections(signal).catch(() => []);
-      const refreshedConnection = refreshed.find((item) => item.id === connectionId);
-      const enrichedConnection = refreshedConnection
-        ? await enrichConnection(refreshedConnection, signal)
-        : undefined;
-      const nowConnected = enrichedConnection?.connected === true;
-      if (!nowConnected) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ status: "failed", connectionId, name }),
-            },
-          ],
-          details: { status: "failed", connectionId, name },
+          details: { status: "failed", connectionId, name, error: errorMessage },
           isError: true,
         };
       }
-
-      const payload = connectionPayload(enrichedConnection!, connectionId);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ status: "connected", connectionId, ...payload }),
-          },
-        ],
-        details: { status: "connected", connectionId, ...payload },
-      };
     },
   });
 }
