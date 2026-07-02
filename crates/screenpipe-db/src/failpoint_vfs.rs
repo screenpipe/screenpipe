@@ -412,6 +412,7 @@ mod tests {
                 reopen_every: 2,
                 degraded_after: 2,
                 persistent_after: 4,
+                ..Default::default()
             },
         );
 

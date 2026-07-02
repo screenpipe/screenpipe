@@ -4,6 +4,7 @@
 
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
+import { usePiModels } from "@/lib/hooks/use-pi-models";
 import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   Command,
@@ -192,39 +193,7 @@ export function AIProviderConfig({
   const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const [piAvailable, setPiAvailable] = useState(false);
-  const [piModels, setPiModels] = useState<{ id: string; name: string; free?: boolean; cost_tier?: string; recommended_for?: string[]; warning?: string; locked?: boolean; health?: { status: string; error_rate_5m: number } }[]>([]);
-
-  // Fetch PI models from gateway (single source of truth)
-  useEffect(() => {
-    if (selectedProvider !== "screenpipe-cloud") return;
-    const fetchPiModels = async () => {
-      try {
-        const token = settings?.user?.token || "";
-        const resp = await fetch("https://api.screenpipe.com/v1/models", {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const models = (data.data || [])
-            .map((m: any) => ({
-            id: m.id,
-            name: m.name || m.id,
-            free: m.free,
-            cost_tier: m.cost_tier,
-            recommended_for: m.recommended_for,
-            warning: m.warning,
-            locked: m.locked,
-            health: m.health,
-            }))
-            .filter((m: { id: string }, idx: number, arr: { id: string }[]) => arr.findIndex((x) => x.id === m.id) === idx);
-          setPiModels(models);
-        }
-      } catch {
-        // gateway down — model list stays empty, user sees empty dropdown
-      }
-    };
-    fetchPiModels();
-  }, [selectedProvider, settings?.user?.token]);
+  const { piModels, isLoading: loadingPiModels } = usePiModels();
 
   // Check Pi availability (installed at app startup by Rust background thread)
   useEffect(() => {
@@ -1084,6 +1053,9 @@ export const AIPresetsSelector = ({
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const canManageEmployeePresets = !isEnterprise || aiPresetPolicy.allow_employee_custom_presets;
 
+  const showUpsell = useModelUpsellGating();
+  const { piModels } = usePiModels();
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
     const presets = (settings?.aiPresets || []) as AIPreset[];
@@ -1600,13 +1572,20 @@ export const AIPresetsSelector = ({
                   </CommandGroup>
                 )}
                 <CommandGroup>
-                  {aiPresets.map((preset) => (
+                  {aiPresets.map((preset) => {
+                    const isCloud = preset.provider === "screenpipe-cloud";
+                    const piModel = isCloud ? piModels.find(m => m.id === preset.model) : null;
+                    const isGated = showUpsell && piModel?.locked;
+
+                    return (
                     <CommandItem
                       key={preset.id}
                       value={preset.id}
+                      disabled={isGated}
                       onSelect={() => {
                         // Use preset from closure — cmdk lowercases the value
                         // so string comparison against preset.id would fail
+                        if (isGated) return;
                         if (isControlled) {
                           onControlledSelect(preset.id);
                         } else if (preset.id !== selectedPreset && !aiPresetPolicy.lock_default_preset) {
@@ -1642,6 +1621,11 @@ export const AIPresetsSelector = ({
                           <span className="font-medium truncate max-w-[120px]" title={preset.id}>
                             {formatPresetName(preset.id)}
                           </span>
+                          {isGated && (
+                            <span className="rounded bg-muted text-muted-foreground px-1.5 py-0.5 text-[10px] font-medium shrink-0 ml-1 border border-border/50">
+                              business plan only
+                            </span>
+                          )}
                           {preset.defaultPreset && (
                             <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium shrink-0">
                               default
@@ -1714,7 +1698,8 @@ export const AIPresetsSelector = ({
                         </div>
                       </div>
                     </CommandItem>
-                  ))}
+                    );
+                  })}
                 </CommandGroup>
                 {canManageEmployeePresets && (
                   <CommandGroup>

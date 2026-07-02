@@ -151,11 +151,9 @@ export function ThinkingLevelSelector({ streaming = false, sessionId = null }: T
             </PopoverTrigger>
           </span>
         </TooltipTrigger>
-        {disabledReason && (
-          <TooltipContent side="top" className="text-xs">
-            {disabledReason}
-          </TooltipContent>
-        )}
+        <TooltipContent side="top" className="text-xs">
+          {disabledReason || "Thinking Level: Controls reasoning depth of the model"}
+        </TooltipContent>
       </Tooltip>
       <PopoverContent className="w-44 p-0" align="end" sideOffset={5}>
         <div className="px-3 py-2 border-b border-border/50">

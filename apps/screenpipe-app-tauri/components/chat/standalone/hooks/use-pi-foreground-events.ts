@@ -10,7 +10,7 @@ import { mountAgentEventBus, onTerminated as onAgentTerminated } from "@/lib/eve
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
-import { extractConversationHistorySyncUserText } from "@/lib/chat-utils";
+import { extractInjectedUserText } from "@/lib/chat-utils";
 import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
 import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, parseRateLimitWaitSeconds, PI_MAX_RATE_LIMIT_RETRIES } from "@/lib/chat/quota-errors";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
@@ -334,6 +334,7 @@ export function usePiForegroundEvents({
               toolName: stringValue(data.toolName, "unknown"),
               args: isRecord(data.args) ? data.args : {},
               isRunning: true,
+              startedAtMs: Date.now(),
             };
             // Add tool block (text before it is already its own block)
             piContentBlocksRef.current.push({ type: "tool", toolCall });
@@ -356,6 +357,7 @@ export function usePiForegroundEvents({
                 block.toolCall.isRunning = false;
                 block.toolCall.result = truncated;
                 block.toolCall.isError = data.isError === true;
+                block.toolCall.endedAtMs = Date.now();
               }
             }
             const contentBlocks = [...piContentBlocksRef.current];
@@ -480,7 +482,7 @@ export function usePiForegroundEvents({
           }
 
           const rawText = textFromMessageContent(data.message?.content);
-          const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
+          const text = extractInjectedUserText(rawText) ?? rawText;
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
           const pendingOptimisticSteer = optimisticSteerRef.current;
           const isPendingOptimisticSteerEcho = Boolean(
@@ -752,7 +754,18 @@ export function usePiForegroundEvents({
                 contentBlocks.push({ type: "text", text: content });
               }
               return prev.map((m) => m.id === msgId
-                ? { ...m, content, contentBlocks, ...(emptyResponseRetryPrompt ? { retryPrompt: emptyResponseRetryPrompt } : {}) }
+                ? {
+                    ...m,
+                    content,
+                    contentBlocks,
+                    ...(wasStoppedByUser
+                      ? {
+                          workDurationMs: Math.max(1, Date.now() - m.timestamp),
+                          stoppedByUser: true,
+                        }
+                      : {}),
+                    ...(emptyResponseRetryPrompt ? { retryPrompt: emptyResponseRetryPrompt } : {}),
+                  }
                 : m);
             });
             if (!isPipeWatch) {

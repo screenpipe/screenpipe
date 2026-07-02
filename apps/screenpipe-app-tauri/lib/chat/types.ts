@@ -20,6 +20,8 @@ export interface ToolCall {
   result?: string;
   isError?: boolean;
   isRunning: boolean;
+  startedAtMs?: number;
+  endedAtMs?: number;
 }
 
 export type ContentBlock =
@@ -56,6 +58,7 @@ export interface Message {
   interruptedBySteer?: boolean;
   steeredResponse?: boolean;
   workDurationMs?: number;
+  stoppedByUser?: boolean;
 }
 
 export type QueuedDisplayPayload = {

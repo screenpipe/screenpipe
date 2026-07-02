@@ -580,14 +580,22 @@ fn respawn_engine_if_crashed(
     *last_restart_triggered = Some(now);
     let app_for_respawn = app.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::recording::spawn_screenpipe(
+        match crate::recording::spawn_screenpipe(
             app_for_respawn.state::<crate::recording::RecordingState>(),
             app_for_respawn.clone(),
             None,
         )
         .await
         {
-            warn!("engine auto-respawn failed: {}", e);
+            Ok(()) => crate::db_relaunch::reset_db_boot_failures(),
+            Err(e) => {
+                warn!("engine auto-respawn failed: {}", e);
+                // Repeated DB-init failures mean a poisoned WAL-index pinned
+                // by a leaked connection — unrecoverable in-process. Escalate
+                // to a (rate-limited) app self-relaunch instead of looping a
+                // doomed respawn every 5 minutes forever (2026-07-02).
+                crate::db_relaunch::note_respawn_failure(&app_for_respawn, &e).await;
+            }
         }
     });
 }

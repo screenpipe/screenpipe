@@ -36,7 +36,7 @@
     },
     {
       "name": "list-meetings",
-      "description": "List detected meetings with duration, app, and attendees"
+      "description": "List detected meetings with id, duration, app, attendees, and note; q searches all history"
     },
     {
       "name": "activity-summary",

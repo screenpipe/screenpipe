@@ -58,7 +58,7 @@ jobs:
         echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     - name: Install Scream on Windows
-      shell: powershell
+      shell: pwsh
       run: |
         Invoke-WebRequest https://github.com/duncanthrax/scream/releases/download/4.0/Scream4.0.zip -OutFile Scream4.0.zip
         Expand-Archive -Path Scream4.0.zip -DestinationPath Scream
@@ -69,7 +69,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Sign and Install Scream Driver on Windows
-      shell: powershell
+      shell: pwsh
       run: |
         signtool sign /v /fd SHA256 /f ScreamCertificate.pfx Scream\Install\driver\x64\Scream.cat
         Import-Certificate -FilePath ScreamCertificate.cer -CertStoreLocation Cert:\LocalMachine\root
@@ -78,7 +78,7 @@ jobs:
       timeout-minutes: 5
 
     - name: Start Windows Audio Service
-      shell: powershell
+      shell: pwsh
       run: |
         $service = Get-Service -Name audiosrv
         if ($service.Status -ne 'Running') {
@@ -88,7 +88,7 @@ jobs:
         }
 
     - name: Ensure 7-Zip is available
-      shell: powershell
+      shell: pwsh
       run: |
         # GitHub-hosted windows runners ship 7-Zip pre-installed, so this is
         # normally a no-op. Only download when it's genuinely missing, and

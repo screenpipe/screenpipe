@@ -553,6 +553,18 @@ async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Resolve the chat-conversations directory under the *active* screenpipe data
+ * dir (honors `SCREENPIPE_DATA_DIR` / a relocated data dir), creating it if
+ * needed. The frontend previously hardcoded `~/.screenpipe/chats` via
+ * `homeDir()`, which (a) ignored a relocated data dir and (b) leaked the
+ * developer's real chats into isolated e2e runs.
+ *
+ * One-time migration: for a relocated data dir whose `chats/` is still empty,
+ * copy conversations from the legacy `~/.screenpipe/chats` so history isn't
+ * orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) so isolated runs
+ * stay empty.
+ */
 async getChatsDir() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_chats_dir") };
@@ -698,6 +710,20 @@ async getOnboardingStatus() : Promise<Result<OnboardingStore, string>> {
 async getPendingUpdate() : Promise<Result<PendingUpdateSnapshot | null, null>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_pending_update") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Tauri command: absolute path of the screenpipe base dir (where store.bin
+ * lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
+ * hardcoding ~/.screenpipe, or it reads/writes a different settings file
+ * than the Rust side whenever the override is set.
+ */
+async getScreenpipeBaseDir() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_screenpipe_base_dir") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2680,7 +2706,7 @@ macosInputVpioEnabled?: boolean;
  */
 screenpipeAecEnabled?: boolean;
 /**
- * Durable AEC engine choice. Missing legacy values intentionally migrate to Screenpipe AEC.
+ * Durable AEC engine choice. Missing values default to off so AEC remains opt-in.
  */
 aecMode?: AecMode;
 /**

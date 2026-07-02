@@ -8,7 +8,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { Archive, CheckSquare, FolderOpen, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
+import { isInjectedTitle } from "@/lib/chat-utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -413,7 +413,7 @@ export function ChatHistoryView({
               conv.hidden ? "text-muted-foreground" : "text-foreground"
             )}
           >
-            {(isConversationHistorySyncPrompt(conv.title) ? undefined : conv.title) || "untitled"}
+            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "untitled"}
           </p>
         </div>
 

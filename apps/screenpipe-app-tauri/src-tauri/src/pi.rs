@@ -2444,13 +2444,31 @@ async fn foreground_connections_context(app: &AppHandle) -> String {
     screenpipe_connect::connections::render_context(&data_dir, api.port, store.as_ref()).await
 }
 
-async fn attach_foreground_connections_context(app: &AppHandle, message: String) -> String {
+async fn attach_foreground_connections_context(
+    app: &AppHandle,
+    sid: &str,
+    message: String,
+) -> String {
+    // Internal title-generation sessions (`__title:` prefix) must not receive
+    // the connections context: it wastes tokens on a throwaway title prompt
+    // and, if it ever reached the store, would title the chat after the blob.
+    if sid.starts_with("__title:") {
+        return message;
+    }
     let ctx = foreground_connections_context(app).await;
     if ctx.trim().is_empty() {
         return message;
     }
+    // Wrap the per-turn context in a tag so the frontend can strip it back
+    // out before persisting/titling the user turn (mirrors the
+    // `<conversation_history>` plumbing). A free-text prefix here leaked into
+    // chat titles and spawned a duplicate "Current Screenpipe connected
+    // integrations context" chat via the background router — the tag makes the
+    // wrapper unambiguously removable end-to-end. Keep the tag name in sync
+    // with `stripPromptPlumbing` / `extractConnectionsContextUserText` on the
+    // TypeScript side.
     format!(
-        "Current Screenpipe connected integrations context, refreshed for this turn:\n{}\n\nUser request:\n{}",
+        "<connections_context>\nCurrent Screenpipe connected integrations context, refreshed for this turn:\n{}\n</connections_context>\n\n{}",
         ctx, message
     )
 }
@@ -2499,7 +2517,7 @@ pub async fn pi_prompt(
     };
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
-    let message = attach_foreground_connections_context(&app, message).await;
+    let message = attach_foreground_connections_context(&app, &sid, message).await;
     let cmd = build_prompt_command(message, images)?;
     let (queue_id, rx) = queue
         .send_prompt(
@@ -2541,7 +2559,7 @@ pub async fn pi_queue_prompt(
     };
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
-    let message = attach_foreground_connections_context(&app, message).await;
+    let message = attach_foreground_connections_context(&app, &sid, message).await;
     let cmd = build_prompt_command(message, images)?;
     let (queue_id, _rx) = queue
         .send_prompt(
@@ -2579,7 +2597,7 @@ pub async fn pi_steer(
             .ok_or("Pi command queue not initialized")?
     };
 
-    let message = attach_foreground_connections_context(&app, message).await;
+    let message = attach_foreground_connections_context(&app, &sid, message).await;
     let mut cmd = json!({
         "type": "steer",
         "message": message,
@@ -3275,7 +3293,7 @@ mod tests {
     #[cfg(windows)]
     use super::parse_where_output;
     #[cfg(not(windows))]
-    use super::{find_bun_executable, find_pi_executable};
+    use super::{bun_command, find_bun_executable, find_pi_executable};
     use serde_json::{json, Value};
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};

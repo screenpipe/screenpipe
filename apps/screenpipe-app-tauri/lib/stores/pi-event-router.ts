@@ -65,7 +65,7 @@ import {
 } from "@/lib/browser-state-cache";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
-  extractConversationHistorySyncUserText,
+  extractInjectedUserText,
   isInjectedTitleSourcePrompt,
 } from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
@@ -498,7 +498,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   // assistant replies and the user turns appear to vanish from history.
   if (t === "message_start" && payload.message?.role === "user") {
     const rawText = textFromPiMessageContent(payload.message?.content);
-    const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
+    const text = extractInjectedUserText(rawText) ?? rawText;
     const images = imageDataUrlsFromPiContent(payload.message?.content);
     if (!text && images.length === 0) return;
 
@@ -609,6 +609,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
       toolName: (payload as any).toolName || "unknown",
       args: (payload as any).args || {},
       isRunning: true,
+      startedAtMs: Date.now(),
     };
     const blocks = [...((cur.contentBlocks as any[]) ?? []), { type: "tool", toolCall: tool }];
     store.actions.setStreaming(sid, { contentBlocks: blocks });
@@ -641,6 +642,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
               isRunning: false,
               result: truncated,
               isError: (payload as any).isError,
+              endedAtMs: Date.now(),
             },
           }
         : b
@@ -827,6 +829,8 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.provider ? { provider: m.provider } : {}),
             ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
             ...(m.steeredResponse ? { steeredResponse: true } : {}),
+            ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
+            ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),

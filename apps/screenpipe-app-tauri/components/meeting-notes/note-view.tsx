@@ -194,6 +194,8 @@ export function NoteView({
   const noteEditorRef = useRef<NoteEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const canSummarizeMeeting =
+    !isLive && !stopping && !savingBeforeStop && Boolean(meeting.meeting_end);
 
   // Drag-and-drop images straight into the note. Tauri delivers OS file drops
   // at the webview level (they never surface as DOM drop events), and the event
@@ -573,6 +575,15 @@ export function NoteView({
       was_live: isLive,
       pipe_slug: settings.meetingSummaryPipeSlug || "meeting-summary",
     });
+    if (!canSummarizeMeeting) {
+      toast({
+        title: "stop the meeting first",
+        description:
+          "summaries run on the saved transcript after the meeting ends.",
+      });
+      return;
+    }
+
     setSummarizing(true);
     try {
       const last = lastSavedRef.current;
@@ -1093,9 +1104,17 @@ export function NoteView({
                   variant="ghost"
                   size="sm"
                   onClick={handleSummarize}
-                  disabled={summarizing}
-                  title="summarize meeting"
-                  aria-label="summarize meeting"
+                  disabled={summarizing || !canSummarizeMeeting}
+                  title={
+                    canSummarizeMeeting
+                      ? "summarize meeting"
+                      : "stop the meeting first"
+                  }
+                  aria-label={
+                    canSummarizeMeeting
+                      ? "summarize meeting"
+                      : "stop the meeting first"
+                  }
                   className="h-8 w-8 rounded-none p-0"
                 >
                   {summarizing ? (
@@ -1303,9 +1322,17 @@ export function NoteView({
                 variant="ghost"
                 size="sm"
                 onClick={handleSummarize}
-                disabled={summarizing}
-                title="summarize meeting"
-                aria-label="summarize meeting"
+                disabled={summarizing || !canSummarizeMeeting}
+                title={
+                  canSummarizeMeeting
+                    ? "summarize meeting"
+                    : "stop the meeting first"
+                }
+                aria-label={
+                  canSummarizeMeeting
+                    ? "summarize meeting"
+                    : "stop the meeting first"
+                }
                 className="h-9 w-9 rounded-none p-0"
               >
                 {summarizing ? (

@@ -348,16 +348,19 @@ const TOOLS: Tool[] = [
   {
     name: "list-meetings",
     description:
-      "List detected meetings (Zoom, Teams, Meet, etc.) with duration, app, and attendees. " +
-      "Only available when screenpipe runs in smart transcription mode. " +
-      "Pass `q` to filter by substring match against title, attendees, and notes (e.g. an email or name).",
+      "List detected meetings (Zoom, Teams, Meet, etc.) with id, duration, app, attendees, and note status. " +
+      "Pass `q` to substring-match title, attendee names/emails, and notes — `q` searches ALL meeting history, so when " +
+      "looking for a meeting with a person or on a topic ('when did I last talk to Noah?'), pass `q` and OMIT start_time. " +
+      "Only constrain the time range when the question itself is time-bound. Results are newest-first; without `q`, old " +
+      "meetings only surface via time range or offset pagination. Follow up with get-meeting (id from results) for the " +
+      "full note and transcript.",
     annotations: { title: "List Meetings", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '1d ago')" },
+        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '1d ago'). Omit when searching by q — it filters all history." },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        q: { type: "string", description: "Case-insensitive substring filter on title, attendees, and note" },
+        q: { type: "string", description: "Case-insensitive substring filter on title, attendees (names/emails), and note. Searches all history." },
         limit: { type: "integer", description: "Max results (default 20)", default: 20 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
       },
@@ -608,12 +611,25 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get-meeting",
-    description: "Get details of a specific meeting by ID, including transcription and attendees.",
+    description:
+      "Get a meeting by ID: title, attendees, times, and the full note. " +
+      "Pass include_transcript=true to also get the speaker-attributed transcript segments — do this when the note is " +
+      "empty and you need to reconstruct what was said (much better than searching raw audio by time range).",
     annotations: { title: "Get Meeting", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "integer", description: "Meeting ID" },
+        id: { type: "integer", description: "Meeting ID (from list-meetings results)" },
+        include_transcript: {
+          type: "boolean",
+          description: "Also return the meeting's transcript segments with speaker names and timestamps.",
+          default: false,
+        },
+        transcript_offset: {
+          type: "integer",
+          description: "Skip this many transcript segments (pagination for long meetings).",
+          default: 0,
+        },
       },
       required: ["id"],
     },
@@ -967,7 +983,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 ## Common Patterns
 
 - "What was I doing for the last 2 hours?" → activity-summary with start_time='2h ago'
-- "What did I discuss in my meeting?" → list-meetings to find it, then search-content with audio + that time range
+- "What did I discuss in my meeting?" → list-meetings to find it, then get-meeting with include_transcript=true
+- "When did I last talk to <person>?" → list-meetings with q=<name or email>, NO start_time (q searches all history)
 - "Find when I was on Twitter" → search-content with app_name='Arc' (or the browser name), q='twitter'
 - "Remember that I prefer X" → update-memory with content describing the preference
 - "What do you remember about X?" → search-content with content_type='memory', q='X'
@@ -1481,8 +1498,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const meetings = await response.json();
 
         if (!Array.isArray(meetings) || meetings.length === 0) {
+          const hadTimeFilter = normalized.start_time || normalized.end_time;
+          const hint = normalized.q
+            ? hadTimeFilter
+              ? " Retry the same q WITHOUT start_time/end_time — q searches all meeting history."
+              : " Try a shorter substring (single first name, email fragment) — matching is exact-substring, not fuzzy."
+            : " Pass q (name/email/topic, searches all history) or widen the time range.";
           return {
-            content: [{ type: "text", text: "No meetings found in the given time range." }],
+            content: [{ type: "text", text: `No meetings matched.${hint}` }],
           };
         }
 
@@ -1492,7 +1515,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const app = m.meeting_app as string;
           const title = m.title ? ` — ${m.title}` : "";
           const attendees = m.attendees ? `\nAttendees: ${m.attendees}` : "";
-          return `[${m.detection_source}] ${app}${title}\n  ${start} → ${end}${attendees}`;
+          const noteStr = typeof m.note === "string" ? m.note.trim() : "";
+          const note = noteStr
+            ? `\nNote: ${noteStr.length > 200 ? `${noteStr.slice(0, 200)}…` : noteStr}`
+            : "\nNote: (none — use get-meeting with include_transcript to reconstruct)";
+          return `[id ${m.id}] [${m.detection_source}] ${app}${title}\n  ${start} → ${end}${attendees}${note}`;
         });
 
         return {
@@ -1940,8 +1967,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const response = await callAPI(`/meetings/${meetingId}`);
         const meeting = await response.json();
+        let text = JSON.stringify(meeting, null, 2);
+
+        if (args.include_transcript) {
+          const tRes = await callAPI(`/meetings/${meetingId}/transcript`);
+          const segments = await tRes.json();
+          if (!Array.isArray(segments) || segments.length === 0) {
+            text += "\n\nTranscript: (no segments recorded for this meeting)";
+          } else {
+            // Cap the payload: long meetings can have hundreds of segments.
+            const offset = Math.max(0, (args.transcript_offset as number) || 0);
+            const MAX_SEGMENTS = 200;
+            const MAX_CHARS = 40_000;
+            const page = segments.slice(offset, offset + MAX_SEGMENTS);
+            const lines: string[] = [];
+            let chars = 0;
+            let shown = 0;
+            for (const s of page as Array<Record<string, unknown>>) {
+              // MeetingTranscriptSegment serializes camelCase (unlike MeetingRecord)
+              const capturedAt = (s.capturedAt ?? s.captured_at) as string | undefined;
+              const when = typeof capturedAt === "string" ? capturedAt.slice(11, 19) : "";
+              const speaker =
+                ((s.speakerName ?? s.speaker_name) as string) ||
+                ((s.deviceType ?? s.device_type) as string) ||
+                "unknown";
+              const line = `[${when}] ${speaker}: ${s.transcript}`;
+              if (chars + line.length > MAX_CHARS) break;
+              lines.push(line);
+              chars += line.length;
+              shown++;
+            }
+            const remaining = segments.length - offset - shown;
+            const more =
+              remaining > 0
+                ? `\n… ${remaining} more segments — call again with transcript_offset=${offset + shown}.`
+                : "";
+            text += `\n\nTranscript (${segments.length} segments, showing ${offset + 1}-${offset + shown}):\n${lines.join("\n")}${more}`;
+          }
+        }
+
         return {
-          content: [{ type: "text", text: JSON.stringify(meeting, null, 2) }],
+          content: [{ type: "text", text }],
         };
       }
 

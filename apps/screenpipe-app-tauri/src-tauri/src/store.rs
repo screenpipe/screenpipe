@@ -230,6 +230,7 @@ fn restore_snapshot_over(store_path: &Path, why: &str) -> bool {
     // Keep the bad file for forensics before overwriting it
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let pre_restore = store_path.with_extension(format!("bin.pre-restore-{}", ts));
+    let mut pre_restore_note = String::from("no pre-restore copy (store.bin was absent)");
     if store_path.exists() {
         if let Err(e) = std::fs::copy(store_path, &pre_restore) {
             tracing::warn!(
@@ -240,6 +241,7 @@ fn restore_snapshot_over(store_path: &Path, why: &str) -> bool {
             );
             return false;
         }
+        pre_restore_note = format!("pre-restore copy at {}", pre_restore.display());
     }
 
     if let Err(e) = durable_write(store_path, &data) {
@@ -252,19 +254,20 @@ fn restore_snapshot_over(store_path: &Path, why: &str) -> bool {
         return false;
     }
     tracing::warn!(
-        "settings recovery: {} — restored {} from {}; pre-restore copy at {}",
+        "settings recovery: {} — restored {} from {}; {}",
         why,
         store_path.display(),
         src.display(),
-        pre_restore.display()
+        pre_restore_note
     );
     true
 }
 
-/// L2 — if `store.bin` is degraded (parses but missing aiPresets) and a
-/// snapshot is healthy, restore it before anything else touches the file.
-/// The bad current file is preserved as `.pre-restore-<UTC ts>` so we have
-/// forensics if a user reports the restore was wrong.
+/// L2 — if `store.bin` is degraded (parses but missing aiPresets) or missing
+/// entirely and a snapshot is healthy, restore it before anything else
+/// touches the file. The bad current file (when one exists) is preserved as
+/// `.pre-restore-<UTC ts>` so we have forensics if a user reports the
+/// restore was wrong.
 ///
 /// Returns `true` when a restore happened (telemetry hook).
 pub fn auto_restore_if_wiped(store_path: &Path) -> bool {
@@ -273,6 +276,17 @@ pub fn auto_restore_if_wiped(store_path: &Path) -> bool {
     // keychain key could still open.
     let cur = match std::fs::read(store_path) {
         Ok(d) => d,
+        // Missing entirely (user/cleaner delete, chkdsk quarantining a torn
+        // file to found.000 after an unclean shutdown) is the worst wipe.
+        // A healthy snapshot distinguishes it from a fresh install, which
+        // has no snapshot and must stay quiet. Other errors (permissions,
+        // I/O) are not evidence of a wipe — leave the file alone.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if read_healthy_snapshot(store_path).is_none() {
+                return false;
+            }
+            return restore_snapshot_over(store_path, "store.bin is missing");
+        }
         Err(_) => return false,
     };
     if is_encrypted_bytes(&cur) {
@@ -558,13 +572,13 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
         }
     }
 
-    // L2 — if the file is degraded (parses but has no aiPresets), restore
-    // from .last-good before the plugin reads it. Runs after decrypt so
-    // we operate on the plain-JSON form. No-op if the current state is
-    // already healthy or no .last-good exists yet.
-    if store_path.exists() {
-        let _ = auto_restore_if_wiped(&store_path);
-    }
+    // L2 — if the file is degraded (parses but has no aiPresets) or missing
+    // entirely (deleted, or quarantined by e.g. chkdsk after an unclean
+    // shutdown), restore from .last-good before the plugin reads it. Runs
+    // after decrypt so we operate on the plain-JSON form. No-op if the
+    // current state is already healthy or no snapshot exists yet (fresh
+    // install).
+    let _ = auto_restore_if_wiped(&store_path);
 
     // L5 precondition — note whether the disk file holds a parseable
     // `settings` key right before the plugin reads it. Compared against the
@@ -2209,6 +2223,54 @@ mod tests {
             1,
             "expected 1 pre-restore backup, got {entries:?}"
         );
+    }
+
+    #[test]
+    fn auto_restore_recovers_missing_store_from_last_good() {
+        // store.bin deleted/quarantined entirely (user/cleaner delete, chkdsk
+        // moving a torn file to found.000) while a healthy snapshot sits next
+        // to it — must restore, not boot as a fresh install.
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        write_last_good(
+            tmp.path(),
+            &json!({"settings": {"aiPresets": presets_n(5)}}),
+        );
+
+        let restored = auto_restore_if_wiped(&store_path);
+        assert!(
+            restored,
+            "missing store.bin with a healthy last-good must restore"
+        );
+
+        let now = std::fs::read(&store_path).unwrap();
+        assert!(
+            store_json_has_presets(&now),
+            "store must be healthy after restore"
+        );
+
+        // Nothing existed to back up, so no pre-restore forensic copy
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().into_string().unwrap_or_default())
+            .filter(|n| n.contains("pre-restore-"))
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "no pre-restore backup expected when store.bin was missing, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn auto_restore_noop_on_fresh_install() {
+        // No store.bin and no snapshot — a genuinely fresh install. Must not
+        // restore and must not create anything the plugin would read as state.
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let restored = auto_restore_if_wiped(&store_path);
+        assert!(!restored, "fresh install must not trigger a restore");
+        assert!(!store_path.exists(), "must not create store.bin");
     }
 
     #[test]

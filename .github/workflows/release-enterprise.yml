@@ -25,13 +25,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Enable Git long paths on Windows
-        shell: powershell
+        shell: pwsh
         run: |
           git config --global core.longpaths true
           if ((git config --global --get core.longpaths) -ne "true") { throw "Failed to enable git long paths" }
 
       - name: Shorten target dir to avoid MAX_PATH
-        shell: powershell
+        shell: pwsh
         run: |
           $targetDir = "apps\screenpipe-app-tauri\src-tauri\target"
           $shortDir = "C:\t"
@@ -67,7 +67,7 @@ jobs:
           .\rustup-init.exe -y
 
       - name: Setup Rust path and MSVC target
-        shell: powershell
+        shell: pwsh
         run: |
           $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
           echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -114,7 +114,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install 7zip
-        shell: powershell
+        shell: pwsh
         run: |
           if (-not (Test-Path "C:\Program Files\7-Zip\7z.exe")) {
             Invoke-WebRequest -Uri "https://7-zip.org/a/7z2301-x64.exe" -OutFile "7z-installer.exe"
@@ -124,7 +124,7 @@ jobs:
           echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install wget (Windows)
-        shell: powershell
+        shell: pwsh
         run: |
           $wgetDir = "C:\wget"
           if (-not (Test-Path "$wgetDir\wget.exe")) {
@@ -179,7 +179,7 @@ jobs:
         run: cp apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
 
       - name: Install CodeSignTool for binary signing
-        shell: powershell
+        shell: pwsh
         run: |
           $cstDest = "$env:RUNNER_TEMP\CodeSignTool"
           Write-Host "Downloading CodeSignTool..."
@@ -225,7 +225,7 @@ jobs:
         # backoff logic against transient SSL.com / CSC API failures
         # (the "Unexpected character (<) at position 0" HTML-instead-of-JSON
         # symptom that took out enterprise build 25196389570 on 2026-05-01).
-        shell: powershell
+        shell: pwsh
         env:
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
@@ -261,7 +261,7 @@ jobs:
           }
 
       - name: Create .intunewin and upload to R2
-        shell: powershell
+        shell: pwsh
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

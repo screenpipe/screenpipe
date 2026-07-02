@@ -223,6 +223,16 @@
       "notes": "Parallel auto-send prefill dedupe regression."
     },
     {
+      "spec": "chat-connections-context-duplicate.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Connections-context wrapper stripping regression: echoed user turns must persist and title chats from the real request, not the injected integrations blob. Skipped on Linux: the background persist never lands on WebKitGTK."
+    },
+    {
       "spec": "chat-prefill-duplicate.spec.ts",
       "platforms": ["macos"],
       "layers": ["chat-ai"],

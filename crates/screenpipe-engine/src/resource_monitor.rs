@@ -75,6 +75,102 @@ fn macos_phys_footprint_bytes() -> Option<u64> {
     }
 }
 
+// --- memory-leak sentinel -------------------------------------------------
+// A leak that users actually feel ("screenpipe ate 10GB overnight") is slow
+// and steady — hundreds of MB per hour for hours — which per-sample telemetry
+// hides and nobody notices until a complaint. The sentinel keeps a rolling
+// window of (runtime, RSS) samples, fits a least-squares line, and when the
+// fit says "sustained linear growth" it raises ONE Sentry error with pure
+// numbers (slope, r², window) — no user content, no new infra. The current
+// slope/r² also ride on every `resource_usage` event so PostHog can trend
+// fleet leak-rate per release.
+
+/// Ignore the first 30 min: model loading + cache warmup legitimately grow.
+const LEAK_WARMUP_SECS: f64 = 30.0 * 60.0;
+/// Rolling window the regression runs over (samples older than this drop off).
+const LEAK_WINDOW_SECS: f64 = 6.0 * 3600.0;
+/// Don't judge until the window spans at least this much wall time.
+const LEAK_MIN_SPAN_SECS: f64 = 3.0 * 3600.0;
+/// ...and has enough points for the fit to mean anything (30s cadence → 3h ≈ 360).
+const LEAK_MIN_SAMPLES: usize = 30;
+/// Alert thresholds: steady (r²) climb of ≥150 MB/h that has already added
+/// ≥0.5 GB and pushed us past 1.5 GB — i.e. on its way to a user-visible blowup.
+const LEAK_MIN_SLOPE_MB_PER_H: f64 = 150.0;
+const LEAK_MIN_R2: f64 = 0.8;
+const LEAK_MIN_FITTED_GROWTH_GB: f64 = 0.5;
+const LEAK_MIN_END_GB: f64 = 1.5;
+/// Hard cap on stored samples (paranoia against a misconfigured tiny interval).
+const LEAK_MAX_SAMPLES: usize = 4096;
+
+/// Least-squares fit of the memory trend over the rolling window.
+#[derive(Debug, Clone, PartialEq)]
+struct LeakStats {
+    slope_mb_per_h: f64,
+    r2: f64,
+    span_hours: f64,
+    start_gb: f64,
+    end_gb: f64,
+}
+
+impl LeakStats {
+    /// Growth the *fit* predicts over the window — robust to endpoint noise,
+    /// unlike `end_gb - start_gb`.
+    fn fitted_growth_gb(&self) -> f64 {
+        self.slope_mb_per_h * self.span_hours / 1024.0
+    }
+
+    fn is_leak(&self) -> bool {
+        self.span_hours * 3600.0 >= LEAK_MIN_SPAN_SECS
+            && self.slope_mb_per_h >= LEAK_MIN_SLOPE_MB_PER_H
+            && self.r2 >= LEAK_MIN_R2
+            && self.fitted_growth_gb() >= LEAK_MIN_FITTED_GROWTH_GB
+            && self.end_gb >= LEAK_MIN_END_GB
+    }
+}
+
+/// Fit `mem_gb = a + b*t` over `(runtime_secs, mem_gb)` samples.
+/// Returns `None` when the window is still too short/sparse to judge.
+/// Pure function — unit-tested against leak/flat/spike/sawtooth shapes.
+fn analyze_memory_trend(samples: &[(f64, f64)]) -> Option<LeakStats> {
+    if samples.len() < LEAK_MIN_SAMPLES {
+        return None;
+    }
+    let (t0, start_gb) = *samples.first()?;
+    let (tn, end_gb) = *samples.last()?;
+    let span = tn - t0;
+    if span < LEAK_MIN_SPAN_SECS {
+        return None;
+    }
+    let n = samples.len() as f64;
+    let mean_t = samples.iter().map(|(t, _)| t).sum::<f64>() / n;
+    let mean_m = samples.iter().map(|(_, m)| m).sum::<f64>() / n;
+    let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
+    for &(t, m) in samples {
+        let dt = t - mean_t;
+        let dm = m - mean_m;
+        sxx += dt * dt;
+        sxy += dt * dm;
+        syy += dm * dm;
+    }
+    if sxx <= 0.0 {
+        return None;
+    }
+    let slope_gb_per_sec = sxy / sxx;
+    // Perfectly flat memory → syy≈0 → define r²=0 (slope is ~0 anyway).
+    let r2 = if syy <= f64::EPSILON {
+        0.0
+    } else {
+        (sxy * sxy) / (sxx * syy)
+    };
+    Some(LeakStats {
+        slope_mb_per_h: slope_gb_per_sec * 1024.0 * 3600.0,
+        r2,
+        span_hours: span / 3600.0,
+        start_gb,
+        end_gb,
+    })
+}
+
 pub struct ResourceMonitor {
     start_time: Instant,
     resource_log_file: Option<String>, // analyse output here: https://colab.research.google.com/drive/1zELlGdzGdjChWKikSqZTHekm5XRxY-1r?usp=sharing
@@ -83,6 +179,11 @@ pub struct ResourceMonitor {
     distinct_id: String,
     /// Cached host info (collected once at startup, never changes)
     hw_info: HardwareInfo,
+    /// Rolling (runtime_secs, rss_gb) window for the leak sentinel.
+    leak_window: std::sync::Mutex<std::collections::VecDeque<(f64, f64)>>,
+    /// One leak alert per process lifetime — a leaking process keeps leaking;
+    /// re-alerting every tick would just flood Sentry with the same issue.
+    leak_alerted: std::sync::atomic::AtomicBool,
 }
 
 /// Static host info collected once at startup.
@@ -369,7 +470,70 @@ impl ResourceMonitor {
             posthog_enabled: telemetry_enabled,
             distinct_id,
             hw_info,
+            leak_window: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            leak_alerted: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Feed one (runtime, RSS) sample to the leak sentinel and return the
+    /// current trend fit. Fires the one-shot Sentry alert when the fit first
+    /// crosses the leak thresholds. Called once per monitor tick (~30s);
+    /// the regression over ≤`LEAK_MAX_SAMPLES` points is microseconds.
+    fn record_leak_sample(&self, runtime_secs: f64, mem_gb: f64) -> Option<LeakStats> {
+        if runtime_secs < LEAK_WARMUP_SECS {
+            return None;
+        }
+        let samples: Vec<(f64, f64)> = {
+            let mut w = self.leak_window.lock().ok()?;
+            w.push_back((runtime_secs, mem_gb));
+            while let Some(&(t, _)) = w.front() {
+                if runtime_secs - t > LEAK_WINDOW_SECS || w.len() > LEAK_MAX_SAMPLES {
+                    w.pop_front();
+                } else {
+                    break;
+                }
+            }
+            w.iter().copied().collect()
+        };
+        let stats = analyze_memory_trend(&samples)?;
+        if stats.is_leak()
+            && !self
+                .leak_alerted
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            // Shows up in device logs (and thus enterprise log pulls) even
+            // when telemetry is off.
+            warn!(
+                "memory leak suspected: +{:.0} MB/h over {:.1}h (r²={:.2}, {:.2}→{:.2} GB)",
+                stats.slope_mb_per_h, stats.span_hours, stats.r2, stats.start_gb, stats.end_gb
+            );
+            // Same opt-out as the rest of telemetry. Numbers only — no user
+            // content. capture_message is a no-op when Sentry isn't initialized.
+            if self.posthog_enabled {
+                let msg = format!(
+                    "memory leak suspected: +{:.0} MB/h over {:.1}h (r²={:.2}, {:.2} GB → {:.2} GB)",
+                    stats.slope_mb_per_h, stats.span_hours, stats.r2, stats.start_gb, stats.end_gb
+                );
+                sentry::with_scope(
+                    |scope| {
+                        // One Sentry issue for all leak reports; release/os
+                        // tags (set at init) split it per version in the UI.
+                        scope.set_fingerprint(Some(["memory-leak-suspected"].as_slice()));
+                        scope.set_tag(
+                            "leak.slope_mb_per_h",
+                            format!("{:.0}", stats.slope_mb_per_h),
+                        );
+                        scope.set_tag("leak.r2", format!("{:.2}", stats.r2));
+                        scope.set_tag("leak.window_h", format!("{:.1}", stats.span_hours));
+                        scope.set_extra("leak.start_gb", stats.start_gb.into());
+                        scope.set_extra("leak.end_gb", stats.end_gb.into());
+                        scope.set_extra("leak.fitted_growth_gb", stats.fitted_growth_gb().into());
+                    },
+                    || sentry::capture_message(&msg, sentry::Level::Error),
+                );
+            }
+        }
+        Some(stats)
     }
 
     async fn send_to_posthog(
@@ -378,6 +542,7 @@ impl ResourceMonitor {
         system_total_memory: f64,
         total_cpu: f32,
         phys_footprint_gb: f64,
+        mem_trend: Option<&LeakStats>,
     ) {
         let Some(client) = &self.posthog_client else {
             return;
@@ -417,6 +582,24 @@ impl ResourceMonitor {
         properties.insert("gpu_count".to_string(), json!(self.hw_info.gpu_names.len()));
         properties.insert("gpu_names".to_string(), json!(&self.hw_info.gpu_names));
         properties.insert("release".to_string(), json!(env!("CARGO_PKG_VERSION")));
+        // Memory-trend fit from the leak sentinel — lets PostHog chart fleet
+        // leak-slope per release (p90 of mem_slope_mb_per_h regressing =
+        // a leak shipped). Absent until the rolling window spans ≥3h.
+        if let Some(trend) = mem_trend {
+            properties.insert(
+                "mem_slope_mb_per_h".to_string(),
+                json!((trend.slope_mb_per_h * 10.0).round() / 10.0),
+            );
+            properties.insert(
+                "mem_slope_r2".to_string(),
+                json!((trend.r2 * 1000.0).round() / 1000.0),
+            );
+            properties.insert(
+                "mem_trend_window_h".to_string(),
+                json!((trend.span_hours * 100.0).round() / 100.0),
+            );
+            properties.insert("leak_suspected".to_string(), json!(trend.is_leak()));
+        }
         TelemetryContext::from_env().insert_posthog_properties(&mut properties);
 
         let payload = json!({
@@ -573,10 +756,12 @@ impl ResourceMonitor {
         // Log to file
         self.log_to_file(metrics).await;
 
+        let mem_trend = self.record_leak_sample(runtime.as_secs_f64(), total_memory_gb);
+
         // Send to PostHog if enabled
         if self.posthog_enabled {
             tokio::select! {
-                _ = self.send_to_posthog(total_memory_gb, system_total_memory, total_cpu, phys_footprint_gb) => {},
+                _ = self.send_to_posthog(total_memory_gb, system_total_memory, total_cpu, phys_footprint_gb, mem_trend.as_ref()) => {},
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {
                     warn!("PostHog request timed out");
                 }
@@ -691,6 +876,10 @@ impl ResourceMonitor {
 
         // Log to file
         self.log_to_file(metrics).await;
+
+        // Every tick feeds the leak sentinel — alerting must not depend on
+        // the (less frequent) PostHog cadence.
+        let _ = self.record_leak_sample(runtime.as_secs_f64(), total_memory_gb);
     }
 
     pub async fn shutdown(&self) {
@@ -708,6 +897,99 @@ impl ResourceMonitor {
 
 #[cfg(test)]
 mod tests {
+    use super::{analyze_memory_trend, LEAK_WARMUP_SECS};
+
+    /// (runtime_secs, mem_gb) samples at 30s cadence starting after warmup.
+    fn samples_over(hours: f64, mem_at: impl Fn(f64) -> f64) -> Vec<(f64, f64)> {
+        let n = (hours * 3600.0 / 30.0) as usize;
+        (0..=n)
+            .map(|i| {
+                let t = LEAK_WARMUP_SECS + i as f64 * 30.0;
+                (t, mem_at(i as f64 * 30.0))
+            })
+            .collect()
+    }
+
+    /// Steady +200 MB/h from 1 GB over 4h — the textbook leak. Must trigger,
+    /// and the fitted slope must match the injected one.
+    #[test]
+    fn linear_leak_is_detected() {
+        let s = samples_over(4.0, |dt| 1.0 + (200.0 / 1024.0) * (dt / 3600.0));
+        let stats = analyze_memory_trend(&s).expect("4h window should be judged");
+        assert!(
+            (stats.slope_mb_per_h - 200.0).abs() < 5.0,
+            "slope {:.1} MB/h, expected ~200",
+            stats.slope_mb_per_h
+        );
+        assert!(stats.r2 > 0.99, "perfect line should fit, r²={}", stats.r2);
+        assert!(stats.is_leak());
+    }
+
+    /// Flat memory with sampling jitter — healthy steady state. No alert.
+    #[test]
+    fn flat_memory_is_not_a_leak() {
+        let s = samples_over(4.0, |dt| {
+            1.8 + if (dt / 30.0) as u64 % 2 == 0 {
+                0.005
+            } else {
+                -0.005
+            }
+        });
+        let stats = analyze_memory_trend(&s).expect("4h window should be judged");
+        assert!(
+            stats.slope_mb_per_h.abs() < 1.0,
+            "flat data fitted slope {:.2} MB/h",
+            stats.slope_mb_per_h
+        );
+        assert!(!stats.is_leak());
+    }
+
+    /// A transient spike that recovers (big transcription job, then freed).
+    /// Slope over the window is ~0 — must not alert.
+    #[test]
+    fn transient_spike_is_not_a_leak() {
+        let s = samples_over(4.0, |dt| {
+            let h = dt / 3600.0;
+            if (1.9..2.1).contains(&h) {
+                6.0
+            } else {
+                1.0
+            }
+        });
+        let stats = analyze_memory_trend(&s).expect("4h window should be judged");
+        assert!(!stats.is_leak(), "spike-and-recover flagged: {:?}", stats);
+    }
+
+    /// Sawtooth (grow, GC/flush back down, repeat) — high churn, no net leak.
+    /// The regression sees a poor linear fit (low r²) — must not alert.
+    #[test]
+    fn sawtooth_is_not_a_leak() {
+        let s = samples_over(4.0, |dt| 1.0 + ((dt / 3600.0) % 1.0) * 1.5);
+        let stats = analyze_memory_trend(&s).expect("4h window should be judged");
+        assert!(!stats.is_leak(), "sawtooth flagged: {:?}", stats);
+    }
+
+    /// Too little data to judge: short span or too few points → None.
+    #[test]
+    fn short_window_is_not_judged() {
+        let one_hour = samples_over(1.0, |_| 2.0);
+        assert!(analyze_memory_trend(&one_hour).is_none());
+        let sparse: Vec<(f64, f64)> = (0..10)
+            .map(|i| (LEAK_WARMUP_SECS + i as f64 * 1800.0, 1.0 + i as f64 * 0.2))
+            .collect();
+        assert!(analyze_memory_trend(&sparse).is_none());
+    }
+
+    /// Growth that is steady but tiny (30 MB/h) — below the alert bar even
+    /// though it's perfectly linear. Avoids crying wolf on slow cache growth.
+    #[test]
+    fn slow_growth_below_threshold_is_not_a_leak() {
+        let s = samples_over(5.0, |dt| 1.6 + (30.0 / 1024.0) * (dt / 3600.0));
+        let stats = analyze_memory_trend(&s).expect("5h window should be judged");
+        assert!(stats.r2 > 0.99);
+        assert!(!stats.is_leak(), "30 MB/h flagged: {:?}", stats);
+    }
+
     /// Validates the `proc_pid_rusage` FFI: a live process always has a
     /// non-zero physical footprint. Guards against a wrong `rusage_info_v0`
     /// struct layout (which would silently read garbage / the wrong field).

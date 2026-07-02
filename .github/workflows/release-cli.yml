@@ -259,7 +259,7 @@ jobs:
           .\rustup-init.exe -y
 
       - name: Install 7zip
-        shell: powershell
+        shell: pwsh
         run: |
           $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
           $7zipInstaller = "7z-installer.exe"
@@ -308,7 +308,7 @@ jobs:
           Get-ChildItem "$extractDir/lib" | ForEach-Object { Write-Host $_.Name }
 
       - name: Install wget (Windows)
-        shell: powershell
+        shell: pwsh
         run: |
           $wgetDir = "C:\wget"
           if (-not (Test-Path "$wgetDir\wget.exe")) {
@@ -329,7 +329,7 @@ jobs:
           "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Shorten target dir to avoid MAX_PATH
-        shell: powershell
+        shell: pwsh
         run: |
           $targetDir = "target"
           $shortDir = "C:\t"
@@ -370,7 +370,7 @@ jobs:
           cargo build --release -p screenpipe-engine --bin screenpipe --features directml,redact-onnx-directml --target x86_64-pc-windows-msvc
 
       - name: Upload debug symbols to Sentry
-        shell: powershell
+        shell: pwsh
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: mediar
@@ -379,7 +379,7 @@ jobs:
           .\sentry-cli.exe debug-files upload --org $env:SENTRY_ORG --project screenpipe-cli target/x86_64-pc-windows-msvc/release/
 
       - name: Install CodeSignTool for SSL.com EV signing (Windows)
-        shell: powershell
+        shell: pwsh
         run: |
           # Same SSL.com eSigner cert + tool the desktop app uses (release-app.yml).
           $cstDest = "$env:RUNNER_TEMP\CodeSignTool"
@@ -390,7 +390,7 @@ jobs:
           Write-Host "CodeSignTool installed at $cstDest"
 
       - name: Sign screenpipe.exe with SSL.com EV (Windows)
-        shell: powershell
+        shell: pwsh
         env:
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}

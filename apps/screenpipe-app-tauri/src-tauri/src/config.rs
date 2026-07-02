@@ -24,6 +24,18 @@ pub fn get_base_dir(
     Ok(local_data_dir)
 }
 
+/// Tauri command: absolute path of the screenpipe base dir (where store.bin
+/// lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
+/// hardcoding ~/.screenpipe, or it reads/writes a different settings file
+/// than the Rust side whenever the override is set.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_screenpipe_base_dir(app: tauri::AppHandle) -> Result<String, String> {
+    get_base_dir(&app, None)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
 /// Resolve the recording data directory from the store's `data_dir` setting.
 ///
 /// Returns `(resolved_path, fell_back)` where `fell_back` is true when the

@@ -12,22 +12,26 @@ import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/
 export function usePiLiveSendControls({
   abortControllerRef,
   activePipeExecution,
+  cancelStreamingMessageRender,
   piActiveStopRequestedRef,
   piContentBlocksRef,
   piMessageIdRef,
   piSessionIdRef,
   piStreamingTextRef,
+  setMessages,
   setIsLoading,
   setIsStreaming,
 }: Pick<
   PiSendTransportOptions,
   | "abortControllerRef"
   | "activePipeExecution"
+  | "cancelStreamingMessageRender"
   | "piActiveStopRequestedRef"
   | "piContentBlocksRef"
   | "piMessageIdRef"
   | "piSessionIdRef"
   | "piStreamingTextRef"
+  | "setMessages"
   | "setIsLoading"
   | "setIsStreaming"
 >) {
@@ -45,6 +49,48 @@ export function usePiLiveSendControls({
   const handleStop = async () => {
     if (!activePipeExecution) {
       piActiveStopRequestedRef.current = true;
+      cancelStreamingMessageRender();
+      const stoppedAtMs = Date.now();
+      const stoppedMessageId = piMessageIdRef.current;
+      const stoppedText = piStreamingTextRef.current;
+      const stoppedBlocks = [...piContentBlocksRef.current];
+
+      if (stoppedMessageId) {
+        setMessages((prev) => prev.map((message) => {
+          if (message.id !== stoppedMessageId || message.role !== "assistant") return message;
+
+          const contentBlocks = (stoppedBlocks.length > 0 ? stoppedBlocks : (message.contentBlocks ?? []))
+            .map((block) => {
+              if (block.type === "tool") {
+                return {
+                  ...block,
+                  toolCall: {
+                    ...block.toolCall,
+                    isRunning: false,
+                    endedAtMs: block.toolCall.endedAtMs ?? stoppedAtMs,
+                  },
+                };
+              }
+              if (block.type === "thinking") {
+                return {
+                  ...block,
+                  isThinking: false,
+                  durationMs: block.durationMs ?? Math.max(1, stoppedAtMs - message.timestamp),
+                };
+              }
+              return block;
+            });
+          const content = stoppedText || (message.content === "Processing..." ? "" : message.content);
+
+          return {
+            ...message,
+            content,
+            ...(contentBlocks.length > 0 ? { contentBlocks } : {}),
+            workDurationMs: Math.max(1, stoppedAtMs - message.timestamp),
+            stoppedByUser: true,
+          };
+        }));
+      }
     }
     let stopAction;
     try {

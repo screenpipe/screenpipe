@@ -8,8 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Sparkles, Save } from "lucide-react";
+import { Sparkles, Save, CalendarIcon } from "lucide-react";
 import { type CustomTemplate } from "@/lib/summary-templates";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { format } from "date-fns";
+import { type DateRange } from "react-day-picker";
 
 const TIME_RANGES = [
   { label: "Last 5 min", value: "5 minutes" },
@@ -47,6 +51,8 @@ export function CustomSummaryBuilder({
   const [instructions, setInstructions] = useState("");
   const [templateTitle, setTemplateTitle] = useState("");
   const [showSave, setShowSave] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange | undefined>();
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   const getTimeLabel = () => {
     return TIME_RANGES.find((r) => r.value === selectedTime)?.label || selectedTime;
@@ -86,6 +92,19 @@ export function CustomSummaryBuilder({
     setInstructions(prompt);
   };
 
+  const handleDateSelect = (range: DateRange | undefined) => {
+    setDateRange(range);
+    if (range?.from) {
+      if (range.to && range.from.getTime() !== range.to.getTime()) {
+        setSelectedTime(
+          `${format(range.from, "MMMM d, yyyy")} to ${format(range.to, "MMMM d, yyyy")}`
+        );
+      } else {
+        setSelectedTime(format(range.from, "MMMM d, yyyy"));
+      }
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
@@ -108,7 +127,7 @@ export function CustomSummaryBuilder({
               {TIME_RANGES.map((range) => (
                 <button
                   key={range.value}
-                  onClick={() => setSelectedTime(range.value)}
+                  onClick={() => { setSelectedTime(range.value); setDateRange(undefined); }}
                   className={`w-full text-left px-3 py-1.5 text-[12px] rounded-lg transition-colors ${
                     selectedTime === range.value
                       ? "bg-primary/15 text-primary border border-primary/30 font-medium"
@@ -118,6 +137,32 @@ export function CustomSummaryBuilder({
                   {range.label}
                 </button>
               ))}
+            </div>
+            <div className="mt-2 pt-2 border-t border-border/20">
+              <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    className={`w-full text-left px-3 py-1.5 text-[12px] rounded-lg transition-colors flex items-center gap-2 ${
+                      dateRange?.from
+                        ? "bg-primary/15 text-primary border border-primary/30 font-medium"
+                        : "hover:bg-muted/50 text-muted-foreground border border-transparent"
+                    }`}
+                  >
+                    <CalendarIcon className="w-3.5 h-3.5" />
+                    {dateRange?.from ? getTimeLabel() : "Pick a date..."}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="range"
+                    selected={dateRange}
+                    onSelect={handleDateSelect}
+                    disabled={{ after: new Date() }}
+                    numberOfMonths={1}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 

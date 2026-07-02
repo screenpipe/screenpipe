@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 60
-- Declared test blocks: 197
-- Weighted coverage points: 153.2
+- Mapped specs: 61
+- Declared test blocks: 198
+- Weighted coverage points: 153.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,8 +19,8 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 51 | 184 | 148.3 | 15 | 57 | 92% |
-| macos | 57 | 163 | 125.8 | 17 | 59 | 89% |
+| windows | 52 | 185 | 148.7 | 15 | 57 | 92% |
+| macos | 58 | 164 | 126.3 | 17 | 59 | 89% |
 | linux | 44 | 149 | 120.7 | 13 | 54 | 86% |
 
 ## Runtime Results
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 4 tests / 3.7 pts | 4 specs / 4 tests / 3.7 pts | 4 specs / 4 tests / 3.7 pts |
 | capture-ocr | 2 specs / 14 tests / 5.6 pts | 2 specs / 4 tests / 1.6 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 10 specs / 18 tests / 11.9 pts | 13 specs / 22 tests / 13.3 pts | 10 specs / 18 tests / 11.9 pts |
+| chat-ai | 11 specs / 19 tests / 12.4 pts | 14 specs / 23 tests / 13.8 pts | 10 specs / 18 tests / 11.9 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 14 specs / 92 tests / 76.6 pts | 13 specs / 67 tests / 57.6 pts | 11 specs / 66 tests / 57.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
@@ -100,6 +100,7 @@ pass/fail/skip counts.
 | audio-fallback.spec.ts | macos | audio-device, settings, notifications | audio-device-health, settings-recording, notifications | medium | conditional | real-user-flow | 1 | Opt-in macOS cloud audio fallback seed. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
+| chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Connections-context wrapper stripping regression: echoed user turns must persist and title chats from the real request, not the injected integrations blob. Skipped on Linux: the background persist never lands on WebKitGTK. |
 | chat-newchat-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Synthetic chat event regression for duplicate sidebar rows. |
 | chat-parallel-jobs-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Parallel auto-send prefill dedupe regression. |
 | chat-prefill-context-leak.spec.ts | windows, macos, linux | chat-ai | chat, chat-prefill | medium | partial | synthetic | 1 | Pending auto-send prefill must render only the clean prompt, not the internal model context, as the user message. |

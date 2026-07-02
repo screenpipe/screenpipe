@@ -4,12 +4,25 @@
 
 import type { Message } from "@/lib/chat/types";
 
+export function formatDurationParts(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const minutePart = `${minutes} min`;
+  if (seconds === 0) return minutePart;
+  return `${minutePart} ${seconds} sec`;
+}
+
 export function formatWorkDuration(durationMs: number): string {
   if (!durationMs || durationMs <= 0) return "Worked";
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  if (seconds < 60) return "Worked for <1 min";
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  return `Worked for ${minutes} min${minutes === 1 ? "" : "s"}`;
+  return `Worked for ${formatDurationParts(durationMs)}`;
+}
+
+export function formatStoppedWorkDuration(durationMs?: number): string {
+  if (!durationMs || durationMs <= 0) return "You stopped";
+  return `You stopped after ${formatDurationParts(durationMs)}`;
 }
 
 export function getMessageIntentLabel(message: Message): string | null {
@@ -31,6 +44,7 @@ export function isSteeredAssistantMessage(message: Message): boolean {
 
 export function hasRenderableAssistantBody(message: Message): boolean {
   if (message.role !== "assistant") return false;
+  if (message.stoppedByUser) return true;
   if (message.content && message.content !== "Processing...") return true;
   return Boolean(message.contentBlocks?.length);
 }
@@ -161,9 +175,5 @@ export function collapsedSteerWorkDuration(item: Extract<ChatRenderItem, { type:
     .filter((timestamp) => Number.isFinite(timestamp));
   if (timestamps.length < 2) return "Worked";
   const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
-  if (durationMs <= 0) return "Worked";
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  if (seconds < 60) return `Worked for ${seconds}s`;
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  return `Worked for ${minutes} min${minutes === 1 ? "" : "s"}`;
+  return formatWorkDuration(durationMs);
 }

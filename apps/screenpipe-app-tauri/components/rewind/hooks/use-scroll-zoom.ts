@@ -286,16 +286,26 @@ export function useScrollZoom(opts: {
 		}>("native-scroll", (event) => {
 			const { deltaX, deltaY, ctrlKey, metaKey } = event.payload;
 
+			// Ignore native-scroll from other windows — the Rust side emits
+			// app-wide so scrolling in the chat window would otherwise
+			// navigate the timeline.
+			if (!document.hasFocus()) return;
+
 			// Don't intercept scroll when a modal/panel is open
 			if (showSearchModal) return;
 
-			// Check if cursor is over a panel/dialog — let those scroll natively
+			// Check if cursor is over a panel/dialog/sidebar — let those scroll natively
 			const target = document.elementFromPoint(lastMouseX.current, lastMouseY.current);
 			if (target) {
+				// If cursor is outside the timeline container, don't hijack scroll
+				if (containerRef.current && !containerRef.current.contains(target)) return;
+
 				const isOverExcluded =
 					document.querySelector(".audio-transcript-panel")?.contains(target) ||
 					document.querySelector(".ai-panel")?.contains(target) ||
-					document.querySelector('[role="dialog"]')?.contains(target);
+					document.querySelector('[role="dialog"]')?.contains(target) ||
+					document.querySelector('[data-settings-dialog]')?.contains(target) ||
+					document.querySelector('[data-search-modal]')?.contains(target);
 				if (isOverExcluded) return;
 			}
 

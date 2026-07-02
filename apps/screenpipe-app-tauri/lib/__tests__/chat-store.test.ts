@@ -553,6 +553,55 @@ describe("chat-store: cross-window duplicate row collapsing", () => {
     expect(rows[0].id).toBe("real");
   });
 
+  it("collapses twins whose first message differs only by a plumbing wrapper", () => {
+    // The reported #4689 signature: one copy stores the clean prompt, the twin
+    // stores the same prompt wrapped in <connections_context> (or another
+    // wrapper). Keying on the raw string diverged the keys, so both rows
+    // showed. The dedup key must strip the wrapper so they collapse.
+    useChatStore.getState().actions.upsert(
+      withMessages("clean", "give me a day recap", "here you go", { createdAt: 1_000 }),
+    );
+    useChatStore.getState().actions.upsert(
+      withMessages(
+        "wrapped",
+        "<connections_context>\nintegrations blob\n</connections_context>\n\ngive me a day recap",
+        "Processing...",
+        { createdAt: 1_300, title: "connections blob" },
+      ),
+    );
+    const rows = selectOrderedSessions(useChatStore.getState());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("clean");
+  });
+
+  it("collapses an attached-file twin via displayContent / stripped content", () => {
+    // Pasted large text folds "<attached file: ...>" into content; the bubble
+    // shows the short displayContent ("dbb"). A twin that stored the folded
+    // blob must still match the copy keyed off the clean label.
+    useChatStore.getState().actions.upsert(
+      baseRecord({
+        id: "labelled",
+        createdAt: 1_000,
+        messageCount: 2,
+        messages: [
+          { id: "l-u", role: "user", content: "dbb", displayContent: "dbb", timestamp: 1 },
+          { id: "l-a", role: "assistant", content: "answer", timestamp: 2 },
+        ] as any,
+      }),
+    );
+    useChatStore.getState().actions.upsert(
+      withMessages(
+        "folded",
+        "dbb\n\n<attached file: Pasted text>\nlots of pasted content\n</attached file>",
+        "Processing...",
+        { createdAt: 1_200 },
+      ),
+    );
+    const rows = selectOrderedSessions(useChatStore.getState());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("labelled");
+  });
+
   it("collapses a stub row after disk sync patches its dedupKey", () => {
     // Listener ordering bug: home/page's saved-title listener can create a
     // metadata-only stub before chat-sidebar's disk sync runs. If the later

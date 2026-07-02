@@ -835,6 +835,68 @@ fn sanitize_ts(ts: &str) -> String {
 // Background cleanup loop
 // ============================================================================
 
+/// Whether an upload error is the server reporting the storage quota is full.
+///
+/// Generic over `Display` so it accepts both the `anyhow::Error` from media
+/// uploads and the `SyncError` from metadata uploads.
+fn is_quota_error<E: std::fmt::Display>(e: &E) -> bool {
+    let s = e.to_string();
+    s.contains("quota exceeded") || s.contains("QuotaExceeded")
+}
+
+/// Exponential backoff gate for `quota exceeded` errors in the archive loop.
+///
+/// When the storage quota is full, retrying uploads on the normal 5-min archive
+/// cadence is pointless — the quota won't free up that fast, and every cycle
+/// re-uploads and re-fails, burning CPU/network and spamming logs (observed:
+/// ~214 identical "quota exceeded" archive warnings/day, one per cycle). This
+/// gate suppresses *scheduled* cycles for an exponentially growing window after
+/// a quota error (30m → 60m → … capped at 6h). A successful cycle — or a manual
+/// run trigger — resets it. Mirrors the `QuotaBackoff` in
+/// `screenpipe-core`'s sync service.
+#[derive(Debug)]
+struct QuotaBackoff {
+    strikes: u32,
+    skip_until: Option<std::time::Instant>,
+}
+
+impl QuotaBackoff {
+    const BASE_SECS: u64 = 30 * 60; // 30 min
+    const MAX_SECS: u64 = 6 * 60 * 60; // 6 h
+
+    fn new() -> Self {
+        Self {
+            strikes: 0,
+            skip_until: None,
+        }
+    }
+
+    /// Arm/grow the backoff window after a quota-exceeded cycle.
+    fn record_exceeded(&mut self, now: std::time::Instant) {
+        self.strikes = self.strikes.saturating_add(1);
+        let exp = self.strikes.saturating_sub(1).min(16);
+        let mult = 2u64.saturating_pow(exp);
+        let secs = Self::BASE_SECS.saturating_mul(mult).min(Self::MAX_SECS);
+        self.skip_until = Some(now + std::time::Duration::from_secs(secs));
+    }
+
+    fn reset(&mut self) {
+        self.strikes = 0;
+        self.skip_until = None;
+    }
+
+    fn should_skip(&self, now: std::time::Instant) -> bool {
+        matches!(self.skip_until, Some(until) if now < until)
+    }
+
+    fn remaining(&self, now: std::time::Instant) -> std::time::Duration {
+        match self.skip_until {
+            Some(until) if until > now => until - now,
+            _ => std::time::Duration::ZERO,
+        }
+    }
+}
+
 fn spawn_archive_loop(
     db: Arc<DatabaseManager>,
     manager: Arc<SyncManager>,
@@ -850,13 +912,27 @@ fn spawn_archive_loop(
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         interval.tick().await; // consume immediate tick
 
+        let mut quota_backoff = QuotaBackoff::new();
+
         loop {
             // Wait for either the interval or a manual trigger
+            let mut manual = false;
             tokio::select! {
                 _ = interval.tick() => {}
                 _ = run_now.notified() => {
                     info!("archive: manual run triggered, starting now");
+                    manual = true;
                 }
+            }
+
+            // Manual runs are user-initiated: clear any quota backoff and try.
+            // Otherwise, skip scheduled cycles while backing off from a
+            // quota-exceeded error to avoid re-uploading and re-failing every
+            // 5 min.
+            if manual {
+                quota_backoff.reset();
+            } else if quota_backoff.should_skip(std::time::Instant::now()) {
+                continue;
             }
 
             let retention_days = {
@@ -911,9 +987,13 @@ fn spawn_archive_loop(
                 }
             }
 
+            // Tracks whether any upload in this cycle failed with "quota exceeded".
+            let mut hit_quota = false;
+
             let media_result = upload_media_files(&db, &manager, cutoff, state.clone()).await;
 
             if let Err(ref e) = media_result {
+                hit_quota |= is_quota_error(e);
                 warn!("archive: media upload error (non-fatal): {}", e);
                 let mut guard = state.write().await;
                 if let Some(rt) = guard.as_mut() {
@@ -999,6 +1079,7 @@ fn spawn_archive_loop(
                         }
                     }
                     Err(e) => {
+                        hit_quota |= is_quota_error(&e);
                         warn!("archive: upload failed: {}", e);
                         let mut guard = state.write().await;
                         if let Some(rt) = guard.as_mut() {
@@ -1042,6 +1123,19 @@ fn spawn_archive_loop(
                     }
                     info!("archive: cleanup complete");
                 }
+            }
+
+            // Arm/grow the quota backoff if any upload hit the storage limit;
+            // otherwise clear it so the next real failure starts fresh.
+            if hit_quota {
+                quota_backoff.record_exceeded(std::time::Instant::now());
+                warn!(
+                    "archive: quota exceeded (strike {}) — pausing scheduled archive uploads for ~{} min",
+                    quota_backoff.strikes,
+                    quota_backoff.remaining(std::time::Instant::now()).as_secs() / 60,
+                );
+            } else {
+                quota_backoff.reset();
             }
         }
     })
@@ -1516,8 +1610,7 @@ async fn upload_media_files(
             }
             Err(e) => {
                 // Check for quota exceeded — stop uploading if we hit the limit
-                let err_str = format!("{}", e);
-                if err_str.contains("quota exceeded") || err_str.contains("QuotaExceeded") {
+                if is_quota_error(&e) {
                     warn!("archive: quota exceeded, stopping media upload");
                     let mut guard = state.write().await;
                     if let Some(rt) = guard.as_mut() {
@@ -1554,8 +1647,7 @@ async fn upload_media_files(
                 }
             }
             Err(e) => {
-                let err_str = format!("{}", e);
-                if err_str.contains("quota exceeded") || err_str.contains("QuotaExceeded") {
+                if is_quota_error(&e) {
                     warn!("archive: quota exceeded, stopping media upload");
                     return Err(e);
                 }
@@ -1795,5 +1887,70 @@ mod tests {
         let base = Utc.timestamp_opt(0, 0).unwrap();
         let mut w = WindowWalker::new(base + Duration::seconds(10), base, 10);
         assert!(w.next_window().is_none());
+    }
+
+    #[test]
+    fn is_quota_error_matches_both_spellings() {
+        assert!(is_quota_error(&anyhow::anyhow!(
+            "quota exceeded: storage quota exceeded"
+        )));
+        assert!(is_quota_error(&anyhow::anyhow!(
+            "server error: QuotaExceeded"
+        )));
+        assert!(!is_quota_error(&anyhow::anyhow!("network error: timeout")));
+    }
+
+    #[test]
+    fn quota_backoff_arms_grows_and_resets() {
+        let t0 = std::time::Instant::now();
+        let mut b = QuotaBackoff::new();
+        assert!(!b.should_skip(t0));
+
+        b.record_exceeded(t0); // 30 min
+        assert!(b.should_skip(t0));
+        assert_eq!(b.remaining(t0).as_secs(), 30 * 60);
+        b.record_exceeded(t0); // 60 min
+        assert_eq!(b.remaining(t0).as_secs(), 60 * 60);
+
+        // Escalate past the ceiling; must clamp at MAX_SECS (6 h).
+        for _ in 0..20 {
+            b.record_exceeded(t0);
+        }
+        assert_eq!(b.remaining(t0).as_secs(), QuotaBackoff::MAX_SECS);
+
+        b.reset();
+        assert!(!b.should_skip(t0));
+        assert_eq!(b.strikes, 0);
+    }
+
+    /// Reproduces the observed archive storm: a day of scheduled 5-min cycles
+    /// where every upload hits quota. Without backoff that's 288 cycles/day
+    /// (matching the ~214 identical "quota exceeded" archive logs seen in
+    /// production). With the gate it collapses to a handful.
+    #[test]
+    fn quota_backoff_bounds_archive_storm() {
+        let interval = std::time::Duration::from_secs(300); // 5 min
+        let ticks_per_day = 24 * 60 / 5; // 288
+        let mut b = QuotaBackoff::new();
+        let start = std::time::Instant::now();
+        let mut cycles_run = 0u32;
+
+        for i in 0..ticks_per_day {
+            let now = start + interval * i;
+            if b.should_skip(now) {
+                continue;
+            }
+            cycles_run += 1;
+            b.record_exceeded(now);
+        }
+
+        assert!(
+            cycles_run <= 8,
+            "archive quota storm not contained: {cycles_run} cycles/day (want ≤ 8, was 288 unbounded)"
+        );
+        assert!(
+            cycles_run >= 4,
+            "backoff too aggressive: only {cycles_run} retries across a day"
+        );
     }
 }

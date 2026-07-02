@@ -112,7 +112,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Ensure 7-Zip is available
-        shell: powershell
+        shell: pwsh
         run: |
           # GitHub-hosted windows runners ship 7-Zip pre-installed, so this is
           # normally a no-op. Only download when it's genuinely missing, and

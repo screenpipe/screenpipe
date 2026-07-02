@@ -10927,7 +10927,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.85"
+version = "2.5.87"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11091,6 +11091,7 @@ dependencies = [
  "screenpipe-events",
  "serde",
  "serde_json",
+ "sonora",
  "symphonia",
  "sysinfo",
  "tokio",
@@ -11246,6 +11247,7 @@ dependencies = [
  "sqlite-vec",
  "sqlx",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "zerocopy 0.7.35",
@@ -12413,6 +12415,72 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "sonora"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "sonora-aec3",
+ "sonora-agc2",
+ "sonora-common-audio",
+ "sonora-ns",
+ "sonora-simd",
+ "tracing",
+]
+
+[[package]]
+name = "sonora-aec3"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "sonora-common-audio",
+ "sonora-fft",
+ "sonora-simd",
+]
+
+[[package]]
+name = "sonora-agc2"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "bytemuck",
+ "derive_more 2.1.1",
+ "sonora-common-audio",
+ "sonora-fft",
+ "sonora-simd",
+ "tracing",
+]
+
+[[package]]
+name = "sonora-common-audio"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "derive_more 2.1.1",
+ "sonora-simd",
+]
+
+[[package]]
+name = "sonora-fft"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+
+[[package]]
+name = "sonora-ns"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "sonora-fft",
+]
+
+[[package]]
+name = "sonora-simd"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "cpufeatures 0.3.0",
 ]
 
 [[package]]

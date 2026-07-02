@@ -202,7 +202,7 @@ jobs:
     steps:
       - name: Enable Git long paths on Windows
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         run: |
           Write-Host "Enabling git core.longpaths..."
           # Use --global instead of --system to avoid permission issues on self-hosted runners
@@ -224,7 +224,7 @@ jobs:
 
       - name: Shorten target dir to avoid MAX_PATH (Windows)
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         run: |
           # vulkan-shaders-gen ExternalProject creates deeply nested paths
           # that exceed the 260-char Windows MAX_PATH limit when built under
@@ -272,21 +272,21 @@ jobs:
 
       - name: Install Rust (Windows x64)
         if: matrix.os_type == 'windows' && matrix.target == 'x86_64-pc-windows-msvc'
-        shell: powershell
+        shell: pwsh
         run: |
           Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile rustup-init.exe
           .\rustup-init.exe -y
 
       - name: Install Rust (Windows ARM64 native)
         if: matrix.os_type == 'windows' && matrix.target == 'aarch64-pc-windows-msvc'
-        shell: powershell
+        shell: pwsh
         run: |
           Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile rustup-init.exe
           .\rustup-init.exe -y
 
       - name: setup rust path
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         run: |
           $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
           echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -499,7 +499,7 @@ jobs:
 
       - name: Install Ninja (ARM64)
         if: matrix.os_type == 'windows' && matrix.target == 'aarch64-pc-windows-msvc'
-        shell: powershell
+        shell: pwsh
         run: |
           # The windows-11-arm runner image pre-installs Ninja at C:\Tools\Ninja
           # but winget is NOT on PATH by default - so blindly calling
@@ -534,7 +534,7 @@ jobs:
 
       - name: Verify Windows download support
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         env:
           SKIP_SCREENPIPE_SETUP: true
         run: |
@@ -807,7 +807,7 @@ jobs:
 
       - name: Install CodeSignTool for SSL.com EV signing (Windows)
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         run: |
           # 1. CodeSignTool: signs the inner binaries + final NSIS installer
           #    via SSL.com eSigner (called by Tauri's signCommand wrapper).
@@ -846,7 +846,7 @@ jobs:
       - name: Build (Windows)
         if: matrix.os_type == 'windows'
         working-directory: apps/screenpipe-app-tauri
-        shell: powershell
+        shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -903,7 +903,7 @@ jobs:
         # transient SSL.com CSC API failures (HTML-instead-of-JSON,
         # "Unexpected character (<) at position 0").
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         env:
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
@@ -1554,7 +1554,7 @@ jobs:
 
       - name: Upload to Cloudflare R2 (Windows)
         if: matrix.os_type == 'windows'
-        shell: powershell
+        shell: pwsh
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -1641,7 +1641,7 @@ jobs:
       - name: Upload debug symbols to Sentry (Windows)
         if: matrix.os_type == 'windows'
         continue-on-error: true
-        shell: powershell
+        shell: pwsh
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: mediar

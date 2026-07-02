@@ -96,6 +96,20 @@ export function buildProviderErrorMessage(
     return null;
   }
 
+  if (isHostedScreenpipeProvider(provider)) {
+    if (normalized.includes("not allowed")) {
+      return `Model is restricted on your current plan. Please switch to a free model or upgrade your account.`;
+    }
+    if (
+      normalized.includes("rate-limited") ||
+      normalized.includes("rate limit") ||
+      normalized.includes("too many requests") ||
+      normalized.includes("unavailable")
+    ) {
+      return `You are currently rate-limited or the service is temporarily unavailable. Please wait a moment before trying again, or upgrade your plan for higher limits.`;
+    }
+  }
+
   // Hosted/remote providers: a connection-like failure means we never reached
   // the gateway (TLS dropped, DNS, offline). The raw "Connection error." reads
   // like the app is broken — surface a clearer, retryable message instead.
