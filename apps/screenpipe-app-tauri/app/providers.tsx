@@ -18,6 +18,8 @@ import { AppEntitlementGate } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId } from "@/lib/analytics-id";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "@/lib/query-client";
 
 /// Global mount point for the updater event listener. Lives here (not in
 /// per-page hooks) so the listener is registered for the lifetime of the
@@ -90,6 +92,7 @@ export const Providers = forwardRef<
   return (
     <Suspense>
     <NuqsAdapter>
+      <QueryClientProvider client={queryClient}>
       <SettingsProvider>
         <AuthGuard>
           <ThemeProvider defaultTheme="system" storageKey="screenpipe-ui-theme">
@@ -109,6 +112,7 @@ export const Providers = forwardRef<
           </ThemeProvider>
         </AuthGuard>
       </SettingsProvider>
+      </QueryClientProvider>
     </NuqsAdapter>
     </Suspense>
   );
