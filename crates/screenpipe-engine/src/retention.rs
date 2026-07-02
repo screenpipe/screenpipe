@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::server::AppState;
 
@@ -381,6 +381,24 @@ fn retention_cutoff(retention_days: u32, now: DateTime<Utc>) -> Option<DateTime<
     Duration::try_days(retention_days as i64).and_then(|d| now.checked_sub_signed(d))
 }
 
+/// Remove a media file the DB has already marked evicted.
+///
+/// The DB row is cleared inside `evict_media_in_range`'s transaction *before*
+/// we touch the disk, so a missing file here means the on-disk goal (file gone)
+/// is already met — usually because it was compacted away, deleted by a prior
+/// run, or the data dir was pruned by hand. Log that at debug, not warn, so the
+/// backend log isn't flooded with alarming "failed to evict" lines for a
+/// perfectly healthy outcome. Any other error (permissions, I/O) still warns.
+async fn remove_evicted_file(path: &str) {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            debug!("retention: file already gone, nothing to evict: {}", path);
+        }
+        Err(e) => warn!("retention: failed to evict file {}: {}", path, e),
+    }
+}
+
 async fn do_local_cleanup(
     db: &Arc<DatabaseManager>,
     cutoff: DateTime<Utc>,
@@ -437,9 +455,7 @@ async fn do_local_cleanup(
                             .chain(result.audio_files.iter())
                             .chain(result.snapshot_files.iter())
                         {
-                            if let Err(e) = tokio::fs::remove_file(path).await {
-                                warn!("retention: failed to delete file {}: {}", path, e);
-                            }
+                            remove_evicted_file(path).await;
                         }
                     }
                     Err(e) => {
@@ -478,9 +494,7 @@ async fn do_local_cleanup(
                         .chain(result.audio_files.iter())
                         .chain(result.snapshot_files.iter())
                     {
-                        if let Err(e) = tokio::fs::remove_file(path).await {
-                            warn!("retention: failed to evict file {}: {}", path, e);
-                        }
+                        remove_evicted_file(path).await;
                     }
                 }
                 Err(e) => {
@@ -508,9 +522,7 @@ async fn do_local_cleanup(
                             .chain(result.audio_files.iter())
                             .chain(result.snapshot_files.iter())
                         {
-                            if let Err(e) = tokio::fs::remove_file(path).await {
-                                warn!("retention: failed to evict file {}: {}", path, e);
-                            }
+                            remove_evicted_file(path).await;
                         }
                     }
                     Err(e) => warn!(

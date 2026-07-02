@@ -574,6 +574,72 @@ mod query_plan_tests {
     // Dedup query (runs before every audio insert)
     // ──────────────────────────────────────────────────────────
 
+    // ──────────────────────────────────────────────────────────
+    // Snapshot compaction / media retention "find pending JPEGs" query.
+    //
+    // Scalability guard: on a mature DB almost every frame is already
+    // compacted (snapshot_path = NULL), so this query must stay bound to the
+    // small pending set via the partial index idx_frames_snapshot_pending —
+    // NOT scan the whole frames table. Regressing to a scan makes the query
+    // O(total frames), which grew to a 10–20s stall in the field and starved
+    // the pool enough to trip the "audio capture may be stalled" watchdog.
+    // ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_snapshot_compaction_query_uses_partial_index() {
+        let db = setup_test_db().await;
+        seed_data(&db, 500).await;
+
+        // Simulate a mature DB: only a small tail of frames still carry an
+        // un-compacted JPEG; the rest have already been compacted to NULL.
+        sqlx::query("UPDATE frames SET snapshot_path = NULL")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE frames SET snapshot_path = '/tmp/f_' || id || '.jpg' \
+             WHERE id IN (SELECT id FROM frames ORDER BY id DESC LIMIT 20)",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Verbatim query from snapshot_compaction::run_compaction_cycle.
+        let plan = explain(
+            &db,
+            r#"SELECT id, snapshot_path, device_name, timestamp
+               FROM frames
+               WHERE snapshot_path IS NOT NULL
+                 AND timestamp < '2030-01-01'
+               ORDER BY device_name, timestamp ASC
+               LIMIT 5000"#,
+        )
+        .await;
+
+        // Must ride the partial index, not scan the frames table. Note the plan
+        // is "SCAN frames USING INDEX idx_frames_snapshot_pending" — a *full
+        // scan of the partial index*, which is optimal: with no bound on the
+        // leading device_name column SQLite walks the whole index in order, but
+        // that index holds only the tiny pending set, not every frame. What we
+        // must never see is a scan of the frames *table* (O(total frames)).
+        assert_no_table_scan(&plan, "snapshot_compaction_pending");
+        assert!(
+            plan.iter()
+                .any(|l| l.contains("idx_frames_snapshot_pending")),
+            "compaction query must use idx_frames_snapshot_pending.\nPlan:\n{}",
+            plan.join("\n")
+        );
+        // The index key order (device_name, timestamp) satisfies ORDER BY, so
+        // there must be no separate sort step.
+        assert!(
+            !plan
+                .iter()
+                .any(|l| l.contains("USE TEMP B-TREE FOR ORDER BY")),
+            "compaction query should not need a temp-btree sort.\nPlan:\n{}",
+            plan.join("\n")
+        );
+    }
+
     #[tokio::test]
     async fn test_audio_dedup_query_uses_index() {
         let db = setup_test_db().await;
