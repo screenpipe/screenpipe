@@ -140,6 +140,7 @@ commits: `28e5c247`
 - [ ] **dead System Audio auto-reconnect** — Simulate a dead system audio stream. Verify it auto-reconnects and resumes capture. (`0f287761d`)
 - [ ] **SCK System Audio dead-display recovery (clamshell)** — Mid-call, close the MacBook lid with an external display attached → remote-participant (System Audio) audio resumes within ~1 min via auto re-anchor, mic unaffected. AND: leave the machine idle (nothing playing) for 10 min with stable displays → NO System Audio rebuild/churn (guards the reverted output recv-timeout `0f287761d` / `357e4dfcc`). Watchdog: `core::sck_output_watchdog` (#3901).
 - [ ] **per-device audio toggle** — In the tray menu, verify you can toggle recording for individual audio devices. (`3ee3defcb`)
+- [ ] **per-monitor tray toggle** — With 2+ displays, open the tray recording section and uncheck one monitor. Verify only that display stops screen capture; re-check resumes it. Pause one display individually, then global pause/resume — the individually paused display stays off. (`4685`)
 - [ ] **stable audio device order** — Verify that audio devices listed in the tray menu maintain a stable order across refreshes. (`4577ac8a6`)
 - [ ] **Mic disconnect false-positives on sleep/wake** — Put the computer to sleep and wake it up. Verify that no false-positive mic disconnect notifications or logs are generated. (`796baa619`)
 

@@ -571,7 +571,11 @@ jobs:
 
   macos-e2e-test:
     name: macOS E2E Tests
-    runs-on: macos-latest
+    # Keep this pinned off macos-latest until GitHub's latest image has a
+    # complete clang runtime again. macos-14 is too old for permission-flow's
+    # Swift 6 package, while the current latest image advertises an Xcode 26.5
+    # toolchain path but is missing clang_rt.osx.
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4

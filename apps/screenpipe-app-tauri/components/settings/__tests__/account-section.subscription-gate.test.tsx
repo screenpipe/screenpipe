@@ -17,7 +17,7 @@
 // header and the active-plan card can never contradict each other.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   state: { user: null as any },
@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   openLoginWindow: vi.fn().mockResolvedValue(undefined),
   piUpdateConfig: vi.fn().mockResolvedValue(undefined),
   capture: vi.fn(),
+  openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
 // AccountSection reads everything through useSettings + the tauri `commands`
@@ -60,7 +61,7 @@ vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 
 // Tauri plugins the effect wires up on mount — keep them inert.
-vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.openUrl }));
 vi.mock("@tauri-apps/plugin-deep-link", () => ({
   onOpenUrl: vi.fn().mockResolvedValue(() => {}),
 }));
@@ -83,6 +84,7 @@ describe("AccountSection subscription/login gating", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
     mocks.state.user = null;
   });
 
@@ -141,6 +143,33 @@ describe("AccountSection subscription/login gating", () => {
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     // Branch-3 named-plan badge still renders for the paying Basic user.
     expect(screen.getByText("active")).toBeInTheDocument();
+  });
+
+  it("sends existing Basic subscribers to billing instead of creating a second checkout", () => {
+    const checkoutFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ url: "https://checkout.stripe.test/session" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", checkoutFetch);
+    mocks.state.user = {
+      id: "u1",
+      email: "basic@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: false,
+      app_entitled: true,
+      subscription_plan: "standard",
+    };
+
+    render(<AccountSection />);
+    fireEvent.click(screen.getByRole("button", { name: /upgrade to business/i }));
+
+    expect(checkoutFetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/subscription/checkout"),
+      expect.anything(),
+    );
+    expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account/billing");
   });
 
   it("shows the login-first layout for a signed-out free user", () => {

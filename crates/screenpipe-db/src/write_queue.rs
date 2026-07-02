@@ -83,7 +83,111 @@ const DEGRADED_AFTER: u64 = 3;
 /// fatal batches. Each fatal batch takes ~150ms+ (3 retries with backoff), so this
 /// is ~6s+ of uninterrupted total write failure — long enough to rule out a
 /// transient blip, short enough to bound data loss.
+///
+/// NOTE this count-based rule alone is far too slow in production: batches only
+/// form when writes ARRIVE, and under normal desktop load that's one batch every
+/// ~30s — 40 consecutive fatal batches is ~20 MINUTES of lost writes, not ~6s
+/// (2026-07-02 incident: 522 storm at 07:03Z, first hook fire 09:39Z). The
+/// wall-clock rule below is the real production trigger; this stays as the fast
+/// path for write-heavy bursts and for tests.
 const PERSISTENT_FAILURE_AFTER: u64 = 40;
+/// Wall-clock escalation: fire the hook once a fatal run has spanned this long,
+/// regardless of how few batches formed in that window.
+const PERSISTENT_FAILURE_AFTER_WALL: Duration = Duration::from_secs(120);
+/// The wall-clock rule needs at least this many fatal batches in the current run
+/// so a single blip followed by idle time can't trigger an engine restart.
+const PERSISTENT_FAILURE_MIN_FATALS: u64 = 3;
+/// A fatal run (and the hook's once-per-outage latch) only clears after this many
+/// consecutive healthy batches. One lucky commit mid-outage must not reset a
+/// 15-minute-old failure clock back to zero (2026-07-02: intermittent single
+/// successes kept deferring escalation for 2.5 hours).
+const FATAL_RUN_CLEAR_AFTER: u64 = 3;
+/// While the same fatal run persists AFTER the hook fired (i.e. the requested
+/// engine restart did not cure the wedge), refire the hook at most this often so
+/// the app can escalate further instead of wedging silently forever.
+const PERSISTENT_FAILURE_REFIRE_EVERY: Duration = Duration::from_secs(600);
+
+/// Pure escalation state for a fatal run — decides when the persistent-failure
+/// hook fires. Extracted from the drain loop so the count/wall-clock/refire
+/// rules are unit-testable with injected time.
+///
+/// A "run" starts at the first fatal batch and only clears after
+/// `clear_after` consecutive healthy batches, so one lucky commit mid-outage
+/// can't reset the clock. The hook fires on the count rule OR the wall-clock
+/// rule, and refires at most every `refire_every` while the run persists.
+#[derive(Debug)]
+pub(crate) struct FatalRunEscalation {
+    persistent_after: u64,
+    wall: Duration,
+    min_fatals_for_wall: u64,
+    clear_after: u64,
+    refire_every: Duration,
+    run_started: Option<std::time::Instant>,
+    fatal_in_run: u64,
+    consecutive_fatal: u64,
+    healthy_streak: u64,
+    last_fire: Option<std::time::Instant>,
+}
+
+impl FatalRunEscalation {
+    fn new(persistent_after: u64) -> Self {
+        Self {
+            persistent_after,
+            wall: PERSISTENT_FAILURE_AFTER_WALL,
+            min_fatals_for_wall: PERSISTENT_FAILURE_MIN_FATALS,
+            clear_after: FATAL_RUN_CLEAR_AFTER,
+            refire_every: PERSISTENT_FAILURE_REFIRE_EVERY,
+            run_started: None,
+            fatal_in_run: 0,
+            consecutive_fatal: 0,
+            healthy_streak: 0,
+            last_fire: None,
+        }
+    }
+
+    /// Record a healthy batch. Returns true when this batch ended the fatal run.
+    fn on_healthy(&mut self) -> bool {
+        self.consecutive_fatal = 0;
+        if self.run_started.is_none() {
+            return false;
+        }
+        self.healthy_streak += 1;
+        if self.healthy_streak >= self.clear_after {
+            self.run_started = None;
+            self.fatal_in_run = 0;
+            self.healthy_streak = 0;
+            self.last_fire = None;
+            return true;
+        }
+        false
+    }
+
+    /// Record a fatal batch at `now`. Returns true when the hook should fire.
+    fn on_fatal(&mut self, now: std::time::Instant) -> bool {
+        self.healthy_streak = 0;
+        self.consecutive_fatal += 1;
+        let started = *self.run_started.get_or_insert(now);
+        self.fatal_in_run += 1;
+
+        let count_rule = self.consecutive_fatal >= self.persistent_after;
+        let wall_rule = self.fatal_in_run >= self.min_fatals_for_wall
+            && now.duration_since(started) >= self.wall;
+        let refire_ok = self
+            .last_fire
+            .is_none_or(|t| now.duration_since(t) >= self.refire_every);
+        if (count_rule || wall_rule) && refire_ok {
+            self.last_fire = Some(now);
+            return true;
+        }
+        false
+    }
+
+    fn run_elapsed(&self, now: std::time::Instant) -> Duration {
+        self.run_started
+            .map(|t| now.duration_since(t))
+            .unwrap_or_default()
+    }
+}
 
 /// Outcome of draining one batch, used by the drain loop to drive recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +329,10 @@ pub(crate) struct WriteDrainOpts {
     pub degraded_after: u64,
     /// Fire the persistent-failure hook after this many consecutive fatal batches.
     pub persistent_after: u64,
+    /// Cancelled on `DatabaseManager::close()`. The drain loop exits and closes
+    /// its current write pool (which may be a rebuilt one only it holds) so no
+    /// SQLite connection survives teardown.
+    pub shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl Default for WriteDrainOpts {
@@ -236,6 +344,7 @@ impl Default for WriteDrainOpts {
             reopen_every: WRITE_POOL_REOPEN_EVERY,
             degraded_after: DEGRADED_AFTER,
             persistent_after: PERSISTENT_FAILURE_AFTER,
+            shutdown: tokio_util::sync::CancellationToken::new(),
         }
     }
 }
@@ -606,17 +715,29 @@ async fn drain_loop(
         reopen_every,
         degraded_after,
         persistent_after,
+        shutdown,
     } = opts;
     let mut batch: Vec<PendingWrite> = Vec::with_capacity(MAX_BATCH_SIZE);
-    let mut consecutive_fatal: u64 = 0;
-    let mut hook_fired = false;
+    // Count + wall-clock + refire escalation rules (see FatalRunEscalation).
+    let mut escalation = FatalRunEscalation::new(persistent_after);
 
     loop {
         // Block until at least one write arrives, then take up to MAX_BATCH_SIZE
         // in a single atomic call. No periodic wake-ups — the previous
         // `tokio::select!` + 100ms interval added nothing under load (recv
         // usually won the race anyway) and cost idle wake-ups otherwise.
-        let n = rx.recv_many(&mut batch, MAX_BATCH_SIZE).await;
+        let n = tokio::select! {
+            n = rx.recv_many(&mut batch, MAX_BATCH_SIZE) => n,
+            // DatabaseManager::close(): exit WITHOUT flushing — the pools are
+            // being closed right now, and this loop may hold a rebuilt pool
+            // only it can close. Leaked-writer data loss is bounded by the
+            // caller having already decided to tear the engine down.
+            _ = shutdown.cancelled() => {
+                write_pool.close().await;
+                debug!("write_queue: drain loop shut down via close token");
+                return;
+            }
+        };
         if n == 0 {
             // Channel closed — all senders dropped.
             break;
@@ -651,18 +772,22 @@ async fn drain_loop(
 
         match outcome {
             BatchOutcome::Healthy => {
-                if consecutive_fatal > 0 {
+                if escalation.consecutive_fatal > 0 {
                     info!(
                         "write_queue: write path recovered after {} consecutive fatal batch(es)",
-                        consecutive_fatal
+                        escalation.consecutive_fatal
                     );
                 }
-                consecutive_fatal = 0;
-                hook_fired = false;
                 health.record_success();
+                if escalation.on_healthy() {
+                    info!("write_queue: fatal run cleared");
+                }
             }
             BatchOutcome::FatalConnection => {
-                consecutive_fatal = health.record_fatal();
+                let now = std::time::Instant::now();
+                let fire_hook = escalation.on_fatal(now);
+                let consecutive_fatal = health.record_fatal();
+                debug_assert_eq!(consecutive_fatal, escalation.consecutive_fatal);
 
                 // Tier 2: reopen our write pool in-process every N fatal batches.
                 // Drops poisoned write connections without a full restart. Cheap
@@ -691,15 +816,21 @@ async fn drain_loop(
                     health.set_degraded();
                 }
 
-                // Tier 3b: fire the engine-restart hook once per outage. A restart is
-                // the only thing that rebuilds the shared WAL-index + read pool — the
-                // cure for a process-wide desync that an in-process reopen can't fix.
-                if consecutive_fatal >= persistent_after && !hook_fired {
-                    hook_fired = true;
+                // Tier 3b: fire the engine-restart hook. A restart is the only thing
+                // that rebuilds the shared WAL-index + read pool — the cure for a
+                // process-wide desync that an in-process reopen can't fix. Two
+                // triggers (see FatalRunEscalation): the count rule (fast under
+                // write-heavy load) and the wall-clock rule (batches arrive ~every
+                // 30s on an idle desktop, so counting alone takes ~20 min to
+                // notice). Refires at most every PERSISTENT_FAILURE_REFIRE_EVERY
+                // while the same run persists, so a restart that did NOT cure the
+                // wedge gets escalated again instead of wedging silently forever.
+                if fire_hook {
                     health.note_persistent_signal();
                     error!(
-                        "write_queue: persistent write failure ({} consecutive fatal batches) — requesting engine restart to rebuild all pools + WAL-index",
-                        consecutive_fatal
+                        "write_queue: persistent write failure ({} fatal batches over {:?}) — requesting engine restart to rebuild all pools + WAL-index",
+                        escalation.fatal_in_run,
+                        escalation.run_elapsed(now)
                     );
                     let hook = on_persistent_failure.lock().unwrap().clone();
                     if let Some(hook) = hook {
@@ -1948,6 +2079,97 @@ async fn ensure_db_openable(db_path: &str) -> bool {
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    // ── FatalRunEscalation (count / wall-clock / refire rules) ──────────
+
+    fn esc() -> FatalRunEscalation {
+        FatalRunEscalation::new(PERSISTENT_FAILURE_AFTER)
+    }
+
+    #[test]
+    fn escalation_count_rule_fires_at_threshold() {
+        let mut e = esc();
+        let t0 = std::time::Instant::now();
+        for i in 1..PERSISTENT_FAILURE_AFTER {
+            assert!(!e.on_fatal(t0), "must not fire at {i}");
+        }
+        assert!(e.on_fatal(t0), "fires at the count threshold");
+        assert!(!e.on_fatal(t0), "latched — no immediate refire");
+    }
+
+    #[test]
+    fn escalation_wall_clock_fires_on_sparse_batches() {
+        // Production shape: one batch every ~30s. The old count-only rule
+        // needed ~20 minutes; the wall rule fires after ~2 minutes.
+        let mut e = esc();
+        let t0 = std::time::Instant::now();
+        assert!(!e.on_fatal(t0));
+        assert!(!e.on_fatal(t0 + Duration::from_secs(30)));
+        assert!(
+            !e.on_fatal(t0 + Duration::from_secs(60)),
+            "min-fatals met but wall not elapsed"
+        );
+        assert!(
+            e.on_fatal(t0 + PERSISTENT_FAILURE_AFTER_WALL),
+            "fires once the run spans the wall threshold"
+        );
+    }
+
+    #[test]
+    fn escalation_single_success_does_not_reset_the_run() {
+        // 2026-07-02: intermittent lucky commits deferred escalation for 2.5h.
+        let mut e = esc();
+        let t0 = std::time::Instant::now();
+        assert!(!e.on_fatal(t0));
+        assert!(!e.on_fatal(t0 + Duration::from_secs(30)));
+        assert!(!e.on_healthy(), "one healthy batch must not clear the run");
+        assert!(
+            e.on_fatal(t0 + PERSISTENT_FAILURE_AFTER_WALL),
+            "run clock survives a single healthy batch"
+        );
+    }
+
+    #[test]
+    fn escalation_healthy_streak_clears_and_rearms() {
+        let mut e = esc();
+        let t0 = std::time::Instant::now();
+        for _ in 0..PERSISTENT_FAILURE_MIN_FATALS {
+            e.on_fatal(t0);
+        }
+        assert!(e.on_fatal(t0 + PERSISTENT_FAILURE_AFTER_WALL), "first fire");
+        for i in 0..FATAL_RUN_CLEAR_AFTER - 1 {
+            assert!(!e.on_healthy(), "streak {i} must not clear yet");
+        }
+        assert!(e.on_healthy(), "streak reaches clear_after → run over");
+        // Fresh run after real recovery: rules re-arm from zero.
+        let t1 = t0 + Duration::from_secs(3600);
+        assert!(!e.on_fatal(t1), "fresh run does not fire immediately");
+        for _ in 0..PERSISTENT_FAILURE_MIN_FATALS {
+            e.on_fatal(t1);
+        }
+        assert!(
+            e.on_fatal(t1 + PERSISTENT_FAILURE_AFTER_WALL),
+            "re-armed hook fires for the new run"
+        );
+    }
+
+    #[test]
+    fn escalation_refires_while_run_persists() {
+        // The requested engine restart may not cure the wedge (leaked
+        // connection pinning the WAL-index) — the hook must refire so the app
+        // can escalate further, instead of one-shot latching forever.
+        let mut e = esc();
+        let t0 = std::time::Instant::now();
+        for _ in 0..PERSISTENT_FAILURE_MIN_FATALS {
+            e.on_fatal(t0);
+        }
+        assert!(e.on_fatal(t0 + PERSISTENT_FAILURE_AFTER_WALL), "first fire");
+        let just_before = t0 + PERSISTENT_FAILURE_AFTER_WALL + PERSISTENT_FAILURE_REFIRE_EVERY
+            - Duration::from_secs(1);
+        assert!(!e.on_fatal(just_before), "paced — not yet");
+        let after = t0 + PERSISTENT_FAILURE_AFTER_WALL + PERSISTENT_FAILURE_REFIRE_EVERY;
+        assert!(e.on_fatal(after), "refires after the pacing interval");
+    }
 
     #[test]
     fn ensure_db_parent_dir_creates_and_is_mountpoint_safe() {

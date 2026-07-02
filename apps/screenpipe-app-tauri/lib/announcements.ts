@@ -107,6 +107,41 @@ export const DISMISSED_STORAGE_KEY = "screenpipe-announcements-dismissed-v1";
  *  the UI without touching PostHog. Cleared has no effect. */
 export const PREVIEW_STORAGE_KEY = "screenpipe-announcement-preview";
 
+export function areRemoteAnnouncementsDisabled(
+  env: Record<string, string | undefined> =
+    typeof process !== "undefined" ? process.env : {},
+  hostname: string | undefined =
+    typeof window !== "undefined" ? window.location.hostname : undefined,
+): boolean {
+  const isLocalDevHost =
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+  return (
+    env.TAURI_ENV_DEBUG === "true" ||
+    env.NODE_ENV === "development" ||
+    env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" ||
+    env.NEXT_PUBLIC_SCREENPIPE_DISABLE_REMOTE_ANNOUNCEMENTS === "true" ||
+    (env.NODE_ENV !== "test" && isLocalDevHost)
+  );
+}
+
+export function isDevOrE2EAppIdentity(
+  name: string | null | undefined,
+  identifier: string | null | undefined,
+): boolean {
+  const normalizedName = (name ?? "").trim().toLowerCase();
+  const normalizedIdentifier = (identifier ?? "").trim().toLowerCase();
+
+  return (
+    normalizedIdentifier === "screenpi.pe.dev" ||
+    normalizedIdentifier.endsWith(".dev") ||
+    normalizedIdentifier.includes("e2e") ||
+    normalizedName === "screenpipe-app" ||
+    normalizedName.includes("development") ||
+    normalizedName.includes("e2e")
+  );
+}
+
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }

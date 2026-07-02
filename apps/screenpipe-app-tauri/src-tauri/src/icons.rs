@@ -7,12 +7,71 @@ pub struct AppIcon {
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn encode_nsimage_as_small_png(icon: cocoa::base::id) -> Option<Vec<u8>> {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSData, NSPoint, NSRect, NSSize};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        if icon == nil {
+            return None;
+        }
+
+        let target_size = NSSize::new(32.0, 32.0);
+        let target_rect = NSRect::new(NSPoint::new(0.0, 0.0), target_size);
+        let zero_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+        let resized: id = msg_send![class!(NSImage), alloc];
+        let resized: id = msg_send![resized, initWithSize: target_size];
+        if resized == nil {
+            return None;
+        }
+
+        let _: () = msg_send![resized, lockFocus];
+        // NSCompositingOperationSourceOver = 2.
+        let _: () = msg_send![
+            icon,
+            drawInRect: target_rect
+            fromRect: zero_rect
+            operation: 2usize
+            fraction: 1.0f64
+        ];
+        let _: () = msg_send![resized, unlockFocus];
+
+        let tiff_data: id = msg_send![resized, TIFFRepresentation];
+        if tiff_data == nil {
+            let _: () = msg_send![resized, release];
+            return None;
+        }
+
+        let image_rep: id = msg_send![class!(NSBitmapImageRep), imageRepWithData: tiff_data];
+        if image_rep == nil {
+            let _: () = msg_send![resized, release];
+            return None;
+        }
+
+        // NSBitmapImageFileTypePNG = 4.
+        let png_data: id = msg_send![image_rep, representationUsingType: 4usize properties:nil];
+        if png_data == nil {
+            let _: () = msg_send![resized, release];
+            return None;
+        }
+
+        let length = NSData::length(png_data);
+        let bytes = NSData::bytes(png_data);
+        let data = std::slice::from_raw_parts(bytes as *const u8, length as usize).to_vec();
+        let _: () = msg_send![resized, release];
+
+        Some(data)
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub async fn get_app_icon(
     app_name: &str,
     app_path: Option<String>,
 ) -> Result<Option<AppIcon>, String> {
     use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSAutoreleasePool, NSData, NSString};
+    use cocoa::foundation::{NSAutoreleasePool, NSString};
     use objc::{class, msg_send, sel, sel_impl};
 
     unsafe {
@@ -45,13 +104,9 @@ pub async fn get_app_icon(
                 return Ok(None);
             }
 
-            let tiff_data: id = msg_send![icon, TIFFRepresentation];
-            let image_rep: id = msg_send![class!(NSBitmapImageRep), imageRepWithData: tiff_data];
-            let png_data: id = msg_send![image_rep, representationUsingType:0 properties:nil]; // Type 0 is PNG (supports transparency)
-
-            let length = NSData::length(png_data);
-            let bytes = NSData::bytes(png_data);
-            let data = std::slice::from_raw_parts(bytes as *const u8, length as usize).to_vec();
+            let Some(data) = encode_nsimage_as_small_png(icon) else {
+                return Ok(None);
+            };
 
             Ok(Some(AppIcon {
                 data,
@@ -751,6 +806,55 @@ pub fn list_installed_apps() -> Vec<String> {
     }
 
     names.into_iter().collect()
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::encode_nsimage_as_small_png;
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSAutoreleasePool, NSString};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    fn first_available_system_icon() -> Option<id> {
+        unsafe {
+            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            for app_name in ["Safari", "TextEdit", "Finder"] {
+                let ns_app_name = NSString::alloc(nil).init_str(app_name);
+                let path: id = msg_send![workspace, fullPathForApplication: ns_app_name];
+                let _: () = msg_send![ns_app_name, release];
+                if path == nil {
+                    continue;
+                }
+
+                let icon: id = msg_send![workspace, iconForFile: path];
+                if icon != nil {
+                    return Some(icon);
+                }
+            }
+            None
+        }
+    }
+
+    #[test]
+    fn macos_icon_encoder_returns_small_png() {
+        unsafe {
+            let pool = NSAutoreleasePool::new(nil);
+            let icon = first_available_system_icon().expect("expected a system app icon on macOS");
+            let data = encode_nsimage_as_small_png(icon).expect("expected encoded app icon");
+            let _: () = msg_send![pool, drain];
+
+            assert!(
+                data.starts_with(b"\x89PNG\r\n\x1a\n"),
+                "app icon should be encoded as PNG, got first bytes: {:02x?}",
+                &data[..data.len().min(8)]
+            );
+            assert!(
+                data.len() < 128 * 1024,
+                "downsampled app icon should stay small, got {} bytes",
+                data.len()
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]

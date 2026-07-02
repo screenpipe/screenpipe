@@ -82,7 +82,7 @@ export function getAppPath(): string {
   return resolve(base, name);
 }
 
-async function waitForServer(port: number, timeoutMs = 30000): Promise<void> {
+async function waitForServerStatus(port: number, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -94,6 +94,48 @@ async function waitForServer(port: number, timeoutMs = 30000): Promise<void> {
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(`WebDriver server did not start on port ${port} within ${timeoutMs}ms`);
+}
+
+async function waitForSessionLifecycle(port: number, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  const body = JSON.stringify({
+    capabilities: {
+      alwaysMatch: { browserName: 'chrome' },
+      firstMatch: [{}],
+    },
+  });
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (res.ok) {
+        const payload = (await res.json()) as {
+          value?: { sessionId?: string };
+          sessionId?: string;
+        };
+        const sessionId = payload.value?.sessionId ?? payload.sessionId;
+        if (sessionId) {
+          await fetch(`http://127.0.0.1:${port}/session/${sessionId}`, {
+            method: 'DELETE',
+          }).catch(() => {});
+        }
+        return;
+      }
+    } catch {
+      // not ready
+    }
+    await new Promise((r) => setTimeout(r, 750));
+  }
+  throw new Error(`WebDriver session did not start on port ${port} within ${timeoutMs}ms`);
+}
+
+async function waitForServer(port: number, timeoutMs = 60000): Promise<void> {
+  await waitForServerStatus(port, timeoutMs);
+  await waitForSessionLifecycle(port, timeoutMs);
 }
 
 let appProcess: ReturnType<typeof spawn> | null = null;

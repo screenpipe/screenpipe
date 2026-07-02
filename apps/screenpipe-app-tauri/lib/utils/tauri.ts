@@ -2303,6 +2303,7 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
+export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type BootPhaseSnapshot = {
 /**
@@ -2662,6 +2663,14 @@ windowsInputAecEnabled?: boolean;
  * Ignored on non-macOS platforms. Only the system default input uses VPIO; other devices use HAL.
  */
 macosInputVpioEnabled?: boolean;
+/**
+ * Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3).
+ */
+screenpipeAecEnabled?: boolean;
+/**
+ * Durable AEC engine choice. Missing legacy values intentionally migrate to Screenpipe AEC.
+ */
+aecMode?: AecMode;
 /**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).

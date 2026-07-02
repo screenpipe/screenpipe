@@ -681,10 +681,16 @@ impl VisionManager {
     }
 
     /// Resume recording on a monitor the user previously paused. Clears the
-    /// paused flag first so `start_monitor`'s guard lets it through.
+    /// paused flag first so `start_monitor`'s guard lets it through. When the
+    /// manager isn't running (global capture paused), records resume intent only.
     pub async fn resume_monitor(&self, monitor_id: u32) -> Result<()> {
         self.user_disabled.remove(&monitor_id);
         info!("user resumed vision recording for monitor {}", monitor_id);
+
+        if self.status().await != VisionManagerStatus::Running {
+            return Ok(());
+        }
+
         self.start_monitor(monitor_id).await
     }
 
@@ -818,9 +824,30 @@ mod tests {
 
         // Resuming clears the flag (the actual start then fails only because the
         // fake id has no monitor — the flag clear is what we assert here).
-        vm.user_disabled.remove(&id);
+        vm.resume_monitor(id).await.expect("resume clears intent");
         assert!(!vm.is_monitor_user_disabled(id));
         assert!(vm.user_disabled_monitors().is_empty());
+    }
+
+    /// Resuming while the manager is stopped clears user pause intent but does
+    /// not spawn capture — mirrors audio `resume_device` when capture is off.
+    #[tokio::test]
+    async fn resume_while_stopped_clears_intent_without_starting() {
+        let vm = make_vm_with_monitor_ids(vec!["default".to_string()]).await;
+        let id = 4242;
+
+        vm.pause_monitor(id).await.expect("pause records intent");
+        assert!(vm.is_monitor_user_disabled(id));
+        assert_eq!(vm.status().await, VisionManagerStatus::Stopped);
+
+        vm.resume_monitor(id)
+            .await
+            .expect("resume while stopped is Ok");
+        assert!(!vm.is_monitor_user_disabled(id));
+        assert!(
+            !vm.recording_tasks.contains_key(&id),
+            "stopped manager must not start capture on resume"
+        );
     }
 
     /// Verify that stop_monitor completes promptly when the task finishes normally.

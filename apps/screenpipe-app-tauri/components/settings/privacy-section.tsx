@@ -783,6 +783,9 @@ export function PrivacySection() {
   // lives. Kept OUT of CORE so the user can still uncheck it — it only
   // seeds the default. Keep in sync with the Rust defaults
   // (`RedactColumns::default` / `default_pii_redaction_columns`).
+  // (Per-word OCR `text_json` is NOT a column here — it's a structured copy
+  // of on-screen text, always redacted with full_text on the engine side;
+  // issue #4117.)
   const DEFAULT_OPTIONAL_COLUMNS = ["element_properties"];
   const PII_COLUMN_OPTIONS: {
     value: string;

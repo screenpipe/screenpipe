@@ -45,6 +45,10 @@ pub struct CaptureSession {
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
     audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
     audio_disabled: bool,
+    /// Cleared on stop so `/vision/device/*` stops pointing at a shut-down manager.
+    vision_manager_handle: Option<
+        Arc<arc_swap::ArcSwap<Option<Arc<screenpipe_engine::vision_manager::VisionManager>>>>,
+    >,
 }
 
 impl CaptureSession {
@@ -74,6 +78,7 @@ impl CaptureSession {
         // --- Frame-linker sender (set by VisionManager, consumed by UI recorder + capture loops) ---
         let mut linker_tx: Option<screenpipe_engine::frame_linker_actor::LinkerSender> = None;
         let mut vision_task = None;
+        let mut vision_manager_handle = None;
 
         // --- Vision ---
         // Gate on screen recording permission before calling any ScreenCaptureKit API.
@@ -119,6 +124,14 @@ impl CaptureSession {
                     .with_power_profile(server.power_manager.subscribe())
                     .with_high_fps_controller(server.high_fps_controller.clone()),
             );
+
+            // Wire the live manager into AppState so tray/popover `/vision/device/*`
+            // calls hit the instance that is actually capturing (mirrors how
+            // high_fps_controller is shared across HTTP and capture).
+            server
+                .vision_manager_handle
+                .store(Arc::new(Some(vision_manager.clone())));
+            vision_manager_handle = Some(server.vision_manager_handle.clone());
 
             capture_trigger_tx = Some(vision_manager.trigger_sender());
             linker_tx = Some(vision_manager.linker_sender());
@@ -275,6 +288,7 @@ impl CaptureSession {
             ui_recorder_handle,
             audio_manager: server.audio_manager.clone(),
             audio_disabled: config.disable_audio,
+            vision_manager_handle,
         })
     }
 
@@ -316,6 +330,10 @@ impl CaptureSession {
                     let _ = vision_task.await;
                 }
             }
+        }
+
+        if let Some(handle) = self.vision_manager_handle.take() {
+            handle.store(Arc::new(None));
         }
 
         invalidate_macos_screen_streams("capture session stop").await;

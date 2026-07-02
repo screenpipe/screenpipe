@@ -2385,6 +2385,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn 2.0.117",
+ "unicode-xid",
+]
+
+[[package]]
 name = "dhat"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8172,6 +8194,7 @@ dependencies = [
  "screenpipe-events",
  "serde",
  "serde_json",
+ "sonora",
  "strsim 0.10.0",
  "symphonia",
  "sysinfo",
@@ -8357,6 +8380,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "zerocopy 0.7.35",
@@ -9219,6 +9243,72 @@ dependencies = [
  "byteorder",
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "sonora"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "sonora-aec3",
+ "sonora-agc2",
+ "sonora-common-audio",
+ "sonora-ns",
+ "sonora-simd",
+ "tracing",
+]
+
+[[package]]
+name = "sonora-aec3"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "sonora-common-audio",
+ "sonora-fft",
+ "sonora-simd",
+]
+
+[[package]]
+name = "sonora-agc2"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "bytemuck",
+ "derive_more",
+ "sonora-common-audio",
+ "sonora-fft",
+ "sonora-simd",
+ "tracing",
+]
+
+[[package]]
+name = "sonora-common-audio"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "derive_more",
+ "sonora-simd",
+]
+
+[[package]]
+name = "sonora-fft"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+
+[[package]]
+name = "sonora-ns"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "sonora-fft",
+]
+
+[[package]]
+name = "sonora-simd"
+version = "0.1.0"
+source = "git+https://github.com/dignifiedquire/sonora.git?rev=70c673606e1db8442a8ba20659b2bc7355555274#70c673606e1db8442a8ba20659b2bc7355555274"
+dependencies = [
+ "cpufeatures 0.3.0",
 ]
 
 [[package]]

@@ -57,6 +57,7 @@ tokio = { workspace = true }
 
 # Detect speech/silence
 webrtc-vad = "0.4.0"
+sonora = { git = "https://github.com/dignifiedquire/sonora.git", rev = "70c673606e1db8442a8ba20659b2bc7355555274" }
 
 # Deepgram
 reqwest = { workspace = true }

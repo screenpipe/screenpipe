@@ -59,6 +59,7 @@ mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod db_recovery_notifications;
+mod db_relaunch;
 mod meeting_export;
 mod meeting_live_notes;
 mod meeting_stall_notifications;

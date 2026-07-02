@@ -36,7 +36,13 @@ export function shouldAcceptTitleSource(
  */
 export function stripPromptPlumbing(content: string): string {
   return content
+    .replace(/^<connections_context>[\s\S]*?<\/connections_context>\s*/i, "")
     .replace(/^<conversation_history>[\s\S]*?<\/conversation_history>\s*/i, "")
+    .replace(/^<screenpipe-large-context>[\s\S]*?<\/screenpipe-large-context>\s*/i, "")
+    // Attached-file payloads are folded AFTER the user's typed text
+    // ("dbb\n\n<attached file: ...>...</attached file>"), so strip anywhere,
+    // not just at the start — otherwise the title becomes "dbb <attached file…".
+    .replace(/<attached file:[^>]*>[\s\S]*?<\/attached file>/gi, "")
     .replace(/^<role>[^<]*<\/role>\s*/i, "")
     .replace(/^<system>[\s\S]*?<\/system>\s*/i, "")
     .replace(/^<instructions>[\s\S]*?<\/instructions>\s*/i, "")

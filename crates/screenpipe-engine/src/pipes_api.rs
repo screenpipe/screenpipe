@@ -9,7 +9,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use screenpipe_connect::connections::render_context;
+use screenpipe_connect::{connections, mcp_servers};
 use screenpipe_core::pipes::{
     describe_schedule_config, next_occurrences, PipeManager, ScheduleConfig,
 };
@@ -197,7 +197,7 @@ pub async fn run_pipe_now(
     }
 
     // Refresh connections context so the pipe system prompt includes currently
-    // connected integrations (Google Calendar, Google Docs, etc.).
+    // connected integrations (Google Calendar, Google Docs, MCP servers, etc.).
     let screenpipe_dir = mgr
         .pipes_dir()
         .parent()
@@ -205,7 +205,10 @@ pub async fn run_pipe_now(
         .to_path_buf();
     let api_port = mgr.api_port();
     let ss = secret_store.as_ref().map(|e| e.0.as_ref());
-    let conn_ctx = render_context(&screenpipe_dir, api_port, ss).await;
+    let conn_ctx = join_context_blocks([
+        connections::render_context(&screenpipe_dir, api_port, ss).await,
+        mcp_servers::render_context(&screenpipe_dir, api_port).await,
+    ]);
     mgr.set_connections_context(conn_ctx);
 
     let result = mgr.start_pipe_background(&id).await;
@@ -220,6 +223,15 @@ pub async fn run_pipe_now(
         Ok(()) => Json(json!({ "success": true })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
+}
+
+fn join_context_blocks(contexts: impl IntoIterator<Item = String>) -> String {
+    contexts
+        .into_iter()
+        .map(|ctx| ctx.trim().to_string())
+        .filter(|ctx| !ctx.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// POST /pipes/:id/stop — stop a running pipe.
@@ -423,6 +435,17 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::Notify;
     use tower::ServiceExt;
+
+    #[test]
+    fn joins_non_empty_connection_context_blocks() {
+        let out = join_context_blocks([
+            "  built-in connection context  ".to_string(),
+            "".to_string(),
+            "\nuser mcp context\n".to_string(),
+        ]);
+
+        assert_eq!(out, "built-in connection context\n\nuser mcp context");
+    }
 
     #[derive(Clone, Copy)]
     enum FakePublishMode {

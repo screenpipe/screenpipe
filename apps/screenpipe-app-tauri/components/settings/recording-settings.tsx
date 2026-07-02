@@ -24,7 +24,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
   // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
-  { label: "Microphone echo cancellation", keywords: ["echo", "voiceprocessingio"], conditional: true },
+  { label: "Echo cancellation mode", keywords: ["echo", "aec", "voiceprocessingio", "wasapi"], conditional: true },
   { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
   { label: "Screen recording", keywords: ["screen", "video"] },
   { label: "Use all monitors", keywords: ["monitor", "display"] },
@@ -206,6 +206,8 @@ type AudioEngineResolution = {
   fallbackReason: AudioEngineFallbackReason | null;
 };
 
+type AecMode = "off" | "screenpipe" | "macos" | "windows";
+
 type AudioEngineResolutionSettings = Pick<
   Settings,
   "audioTranscriptionEngine" | "deepgramApiKey" | "user"
@@ -213,6 +215,43 @@ type AudioEngineResolutionSettings = Pick<
 
 const getTranscriptionEngineLabel = (engine: string) =>
   TRANSCRIPTION_ENGINE_LABELS[engine] ?? engine;
+
+const getAecMode = (
+  settings: Pick<Settings, "aecMode">,
+  isMacOS: boolean,
+  isWindows: boolean
+): AecMode => {
+  if (settings.aecMode === "screenpipe") return "screenpipe";
+  if (settings.aecMode === "macos" && isMacOS) return "macos";
+  if (settings.aecMode === "windows" && isWindows) return "windows";
+  return "off";
+};
+
+const getAecModeSettings = (mode: AecMode) => ({
+  aecMode: mode,
+  screenpipeAecEnabled: mode === "screenpipe",
+  macosInputVpioEnabled: mode === "macos",
+  windowsInputAecEnabled: mode === "windows",
+});
+
+const AEC_MODE_DETAILS: Record<AecMode, { label: string; description: string }> = {
+  off: {
+    label: "Off",
+    description: "Echo cancellation is disabled",
+  },
+  screenpipe: {
+    label: "Screenpipe software AEC",
+    description: "Uses software AEC3 to remove speaker bleed from microphone transcripts",
+  },
+  macos: {
+    label: "Apple VoiceProcessingIO",
+    description: "Uses Apple's microphone AEC on the default macOS input",
+  },
+  windows: {
+    label: "Windows WASAPI AEC",
+    description: "Uses Windows microphone AEC when the input endpoint supports it",
+  },
+};
 
 const getAudioEngineResolution = (
   settings: AudioEngineResolutionSettings
@@ -1857,6 +1896,7 @@ export function RecordingSettings() {
   const audioPipeline = health?.audio_pipeline ?? null;
   const [isMacOS, setIsMacOS] = useState(false);
   const [isWindows, setIsWindows] = useState(false);
+  const [platformReady, setPlatformReady] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
@@ -2004,11 +2044,42 @@ export function RecordingSettings() {
     }
   }, [settings, updateSettings, debouncedValidateSettings]);
 
+  const aecMode = getAecMode(settings, isMacOS, isWindows);
+  const aecDetails = AEC_MODE_DETAILS[aecMode];
+
+  const handleAecModeChange = useCallback((mode: AecMode) => {
+    handleSettingsChange(getAecModeSettings(mode), true);
+  }, [handleSettingsChange]);
+
+  useEffect(() => {
+    if (!platformReady) return;
+
+    const expectedSettings = getAecModeSettings(aecMode);
+    const needsAecSync =
+      settings.aecMode !== expectedSettings.aecMode ||
+      Boolean(settings.screenpipeAecEnabled) !== expectedSettings.screenpipeAecEnabled ||
+      Boolean(settings.macosInputVpioEnabled) !== expectedSettings.macosInputVpioEnabled ||
+      Boolean(settings.windowsInputAecEnabled) !== expectedSettings.windowsInputAecEnabled;
+
+    if (!needsAecSync) return;
+
+    handleSettingsChange(expectedSettings, true);
+  }, [
+    aecMode,
+    handleSettingsChange,
+    platformReady,
+    settings.aecMode,
+    settings.macosInputVpioEnabled,
+    settings.screenpipeAecEnabled,
+    settings.windowsInputAecEnabled,
+  ]);
+
   useEffect(() => {
     const checkPlatform = async () => {
       const currentPlatform = platform();
       setIsMacOS(currentPlatform === "macos");
       setIsWindows(currentPlatform === "windows");
+      setPlatformReady(true);
       // Auto-migrate macOS users off qwen3-asr (CPU-only, no Metal support)
       if (currentPlatform === "macos" && settings.audioTranscriptionEngine === "qwen3-asr") {
         handleSettingsChange({ audioTranscriptionEngine: "whisper-large-v3-turbo-quantized" }, true);
@@ -3414,55 +3485,40 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           );
         })()}
 
-        {/* Windows microphone AEC */}
-        {!settings.disableAudio && isWindows && (
+        {/* Echo cancellation */}
+        {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center space-x-2.5">
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Microphone echo cancellation
-                  </h3>
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-1.5">
+                    <h3 className="text-sm font-medium text-foreground">
+                      Echo cancellation
+                    </h3>
+                    <HelpTooltip text="Reduces speaker audio leaking into microphone transcripts during calls and screen recordings." />
+                  </div>
                   <p className="text-xs text-muted-foreground">
-                    Use Windows WASAPI AEC for supported input devices
+                    {aecDetails.description}
                   </p>
                 </div>
               </div>
-              <Switch
-                id="windowsInputAecEnabled"
-                checked={Boolean(settings.windowsInputAecEnabled ?? false)}
-                onCheckedChange={(checked) => handleSettingsChange({ windowsInputAecEnabled: checked }, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* macOS microphone AEC (VoiceProcessingIO on default input) */}
-        {!settings.disableAudio && isMacOS && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Microphone echo cancellation
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Use Apple VoiceProcessingIO on the default microphone
-                  </p>
-                </div>
-              </div>
-              <Switch
-                id="macosInputVpioEnabled"
-                checked={Boolean(settings.macosInputVpioEnabled ?? false)}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({ macosInputVpioEnabled: checked }, true)
-                }
-              />
+              <Select value={aecMode} onValueChange={(value) => handleAecModeChange(value as AecMode)}>
+                <SelectTrigger id="aecMode" className="h-8 w-full text-xs sm:w-[300px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">{AEC_MODE_DETAILS.off.label}</SelectItem>
+                  <SelectItem value="screenpipe">{AEC_MODE_DETAILS.screenpipe.label}</SelectItem>
+                  {isMacOS && (
+                    <SelectItem value="macos">{AEC_MODE_DETAILS.macos.label}</SelectItem>
+                  )}
+                  {isWindows && (
+                    <SelectItem value="windows">{AEC_MODE_DETAILS.windows.label}</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>

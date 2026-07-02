@@ -422,6 +422,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub macos_input_vpio_enabled: bool,
 
+    /// Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3).
+    #[arg(long, default_value_t = false)]
+    pub screenpipe_aec_enabled: bool,
+
     /// Data directory. Default to $HOME/.screenpipe
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub data_dir: Option<String>,
@@ -504,9 +508,11 @@ pub struct RecordArgs {
     /// browser_url, audio_transcription, ui_text_content, ui_element_value,
     /// ui_window_title, ui_element_name, ui_element_description, element_text,
     /// element_properties, a11y_url_field. The list is exact (key present →
-    /// on, absent → off); `full_text` is always redacted. Default scrubs the
-    /// clear surfaces plus element_properties (form-field values — the real
-    /// PII surface); leaves browser_url / ui_element_name /
+    /// on, absent → off); `full_text` is always redacted, and so is
+    /// `frames.text_json` (the per-word OCR boxes — a structured copy of the
+    /// same on-screen text, scrubbed alongside full_text, issue #4117). Default
+    /// scrubs the clear surfaces plus element_properties (form-field values —
+    /// the real PII surface); leaves browser_url / ui_element_name /
     /// ui_element_description / a11y_url_field OFF (opt-in).
     #[arg(
         long,
@@ -778,6 +784,7 @@ pub struct RecordArgSources {
     pub experimental_coreaudio_system_audio: bool,
     pub windows_input_aec_enabled: bool,
     pub macos_input_vpio_enabled: bool,
+    pub screenpipe_aec_enabled: bool,
     pub audio_transcription_engine: bool,
     pub monitor_id: bool,
     pub use_all_monitors: bool,
@@ -832,6 +839,7 @@ impl RecordArgSources {
             ),
             windows_input_aec_enabled: from_command_line(record, "windows_input_aec_enabled"),
             macos_input_vpio_enabled: from_command_line(record, "macos_input_vpio_enabled"),
+            screenpipe_aec_enabled: from_command_line(record, "screenpipe_aec_enabled"),
             audio_transcription_engine: from_command_line(record, "audio_transcription_engine"),
             monitor_id: from_command_line(record, "monitor_id"),
             use_all_monitors: from_command_line(record, "use_all_monitors"),
@@ -878,6 +886,7 @@ impl RecordArgSources {
             || self.experimental_coreaudio_system_audio
             || self.windows_input_aec_enabled
             || self.macos_input_vpio_enabled
+            || self.screenpipe_aec_enabled
             || self.audio_transcription_engine
             || self.monitor_id
             || self.use_all_monitors
@@ -1020,6 +1029,15 @@ impl RecordArgs {
             CliTranscriptionMode::Realtime => "realtime",
             CliTranscriptionMode::Batch => "batch",
         };
+        let aec_mode = if self.screenpipe_aec_enabled {
+            screenpipe_config::AecMode::Screenpipe
+        } else if self.windows_input_aec_enabled {
+            screenpipe_config::AecMode::Windows
+        } else if self.macos_input_vpio_enabled {
+            screenpipe_config::AecMode::Macos
+        } else {
+            screenpipe_config::AecMode::Off
+        };
 
         screenpipe_config::RecordingSettings {
             audio_chunk_duration: self.audio_chunk_duration as i32,
@@ -1043,8 +1061,10 @@ impl RecordArgs {
             audio_devices: self.audio_device.clone(),
             use_system_default_audio: self.use_system_default_audio,
             experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
-            windows_input_aec_enabled: self.windows_input_aec_enabled,
-            macos_input_vpio_enabled: self.macos_input_vpio_enabled,
+            windows_input_aec_enabled: aec_mode == screenpipe_config::AecMode::Windows,
+            macos_input_vpio_enabled: aec_mode == screenpipe_config::AecMode::Macos,
+            screenpipe_aec_enabled: aec_mode == screenpipe_config::AecMode::Screenpipe,
+            aec_mode,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
             // Explicit `--monitor-id` implies opting out of `--use-all-monitors`.
             // `use_all_monitors` has `default_value_t = true`, so without this
@@ -1271,11 +1291,21 @@ impl RecordArgs {
         if sources.experimental_coreaudio_system_audio {
             settings.experimental_coreaudio_system_audio = self.experimental_coreaudio_system_audio;
         }
-        if sources.windows_input_aec_enabled {
-            settings.windows_input_aec_enabled = self.windows_input_aec_enabled;
-        }
-        if sources.macos_input_vpio_enabled {
-            settings.macos_input_vpio_enabled = self.macos_input_vpio_enabled;
+        if sources.screenpipe_aec_enabled && self.screenpipe_aec_enabled {
+            settings.aec_mode = screenpipe_config::AecMode::Screenpipe;
+            settings.screenpipe_aec_enabled = true;
+            settings.windows_input_aec_enabled = false;
+            settings.macos_input_vpio_enabled = false;
+        } else if sources.windows_input_aec_enabled && self.windows_input_aec_enabled {
+            settings.aec_mode = screenpipe_config::AecMode::Windows;
+            settings.screenpipe_aec_enabled = false;
+            settings.windows_input_aec_enabled = true;
+            settings.macos_input_vpio_enabled = false;
+        } else if sources.macos_input_vpio_enabled && self.macos_input_vpio_enabled {
+            settings.aec_mode = screenpipe_config::AecMode::Macos;
+            settings.screenpipe_aec_enabled = false;
+            settings.windows_input_aec_enabled = false;
+            settings.macos_input_vpio_enabled = true;
         }
         if sources.audio_transcription_engine {
             settings.audio_transcription_engine =

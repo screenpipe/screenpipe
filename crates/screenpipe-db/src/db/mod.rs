@@ -237,6 +237,13 @@ pub struct DatabaseManager {
     /// Slot for the persistent-failure hook, wired by the app after construction.
     /// Shared with the drain loop so a late `set_persistent_failure_hook` takes effect.
     persistent_failure_hook: crate::write_queue::PersistentFailureSlot,
+    /// Cancelled by [`DatabaseManager::close`]. Stops the WAL-maintenance task and
+    /// the write-queue drain loop so no background task keeps a SQLite connection
+    /// (and the shared `-shm` WAL-index mapping) alive after teardown — a leaked
+    /// connection with a poisoned WAL-index makes every later open of the same
+    /// db in this process fail with SQLITE_IOERR (code 522) until a full process
+    /// restart (2026-07-02 incident).
+    close_token: tokio_util::sync::CancellationToken,
 }
 
 /// One level-0 OCR element row, buffered for bulk insertion.

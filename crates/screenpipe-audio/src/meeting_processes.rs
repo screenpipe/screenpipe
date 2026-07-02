@@ -80,7 +80,7 @@ fn is_screenpipe_app_name(name: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{AudioInputProcess, AudioProcessSnapshot, is_screenpipe_process};
+    use super::{is_screenpipe_process, AudioInputProcess, AudioProcessSnapshot};
     use cidre::{core_audio as ca, ns};
     use tracing::debug;
 
@@ -110,7 +110,7 @@ mod platform {
                 continue;
             }
 
-            let audio_object_id = Some(process.0.0);
+            let audio_object_id = Some(process.0 .0);
             let audio_session_id = audio_session_id(&process);
             let pid = process.pid().ok().map(|pid| pid as i32);
             let bundle_id = process.bundle_id().ok().map(|s| s.to_string());
@@ -149,7 +149,7 @@ mod platform {
     }
 
     fn audio_session_id(process: &ca::Process) -> Option<String> {
-        let object_id = process.0.0;
+        let object_id = process.0 .0;
         if object_id == 0 {
             return None;
         }
@@ -165,7 +165,7 @@ mod platform {
                     .ok()
                     .map(|uid| uid.to_string())
                     .filter(|uid| !uid.trim().is_empty())
-                    .unwrap_or_else(|| device.0.0.to_string())
+                    .unwrap_or_else(|| device.0 .0.to_string())
             })
             .collect();
         input_devices.sort();
@@ -215,27 +215,27 @@ mod platform {
     //! That case can be served by a WTS Dynamic Virtual Channel to a client-side
     //! proxy; [`select_provider`] is where that proxy gets wired in once it exists.
 
-    use super::{AudioInputProcess, AudioProcessSnapshot, is_screenpipe_process};
+    use super::{is_screenpipe_process, AudioInputProcess, AudioProcessSnapshot};
     use std::collections::HashSet;
     use std::path::Path;
     use tracing::{debug, warn};
 
+    use windows::core::{Interface, PWSTR};
     use windows::Win32::Foundation::{CloseHandle, FALSE, RPC_E_CHANGED_MODE};
     use windows::Win32::Media::Audio::{
-        AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2,
-        IAudioSessionEnumerator, IAudioSessionManager2, IMMDevice, IMMDeviceCollection,
-        IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+        eCapture, AudioSessionStateActive, IAudioSessionControl2, IAudioSessionEnumerator,
+        IAudioSessionManager2, IMMDevice, IMMDeviceCollection, IMMDeviceEnumerator,
+        MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
     };
     use windows::Win32::System::Com::{
-        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
-        CoUninitialize,
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+        COINIT_MULTITHREADED,
     };
     use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION};
-    use windows::core::{Interface, PWSTR};
 
     /// A source of "processes currently capturing the microphone".
     ///

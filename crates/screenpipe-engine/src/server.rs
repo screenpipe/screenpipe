@@ -119,7 +119,7 @@ pub async fn bind_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
 // Re-export types from route modules for backward compatibility
 pub use crate::routes::content::{ContentItem, PaginatedResponse};
 pub use crate::routes::health::{HealthCheckResponse, MonitorInfo};
-pub use crate::routes::search::SearchResponse;
+pub use crate::routes::search::{SearchCacheEntry, SearchResponse};
 
 // Re-export handlers that are referenced from lib.rs
 pub use crate::routes::health::{
@@ -129,7 +129,7 @@ pub use crate::routes::health::{
 pub type FrameImageCache = LruCache<i64, (String, std::time::Instant)>;
 
 /// Cache key for search results (hash of query parameters)
-pub type SearchCache = MokaCache<u64, Arc<SearchResponse>>;
+pub type SearchCache = MokaCache<u64, Arc<SearchCacheEntry>>;
 
 pub struct AppState {
     pub db: Arc<DatabaseManager>,
@@ -211,9 +211,9 @@ pub struct AppState {
     /// `--disable-vision`).
     pub high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
     /// Shared VisionManager so the `/vision/device/*` routes can pause/resume
-    /// individual monitors from the recording popover. `None` when vision is
-    /// disabled or on headless configs that run no capture.
-    pub vision_manager: Option<Arc<crate::vision_manager::VisionManager>>,
+    /// individual monitors. Updated at runtime when the desktop app's
+    /// CaptureSession starts/stops; set once at boot for the CLI engine.
+    pub vision_manager: Arc<ArcSwap<Option<Arc<crate::vision_manager::VisionManager>>>>,
 }
 
 pub struct SCServer {
@@ -266,10 +266,10 @@ pub struct SCServer {
     /// Shared high-FPS controller. Set before `start()` so AppState and
     /// the per-monitor capture loops point at the same instance.
     pub high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
-    /// Shared VisionManager. Set before `start()` so the `/vision/device/*`
-    /// routes can pause/resume individual monitors. `None` on vision-disabled
-    /// or headless configs that run no capture.
-    pub vision_manager: Option<Arc<crate::vision_manager::VisionManager>>,
+    /// Handle to the active VisionManager. CaptureSession registers its
+    /// instance here on start and clears on stop so `/vision/device/*` hits
+    /// the manager that is actually capturing.
+    pub vision_manager: Arc<ArcSwap<Option<Arc<crate::vision_manager::VisionManager>>>>,
     /// When true, the timeline / rewind feature is disabled. The server skips
     /// warming the hot frame cache from the DB at startup (the cache is only
     /// read by the timeline streaming endpoint). Set before `start()`.
@@ -361,7 +361,7 @@ impl SCServer {
             oauth_refresher: None,
             external_memory_sync: None,
             high_fps_controller: None,
-            vision_manager: None,
+            vision_manager: Arc::new(ArcSwap::from_pointee(None)),
             timeline_disabled: false,
             advertise_mdns: should_advertise_mdns(addr),
         }

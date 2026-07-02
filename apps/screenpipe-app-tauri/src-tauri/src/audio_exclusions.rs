@@ -161,7 +161,7 @@ fn bundle_name_from_plist(plist: &plist::Value, app_path: &Path) -> String {
 #[cfg(target_os = "macos")]
 fn icon_data_url_for_app(app_path: &str) -> Option<String> {
     use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSAutoreleasePool, NSData, NSSize, NSString};
+    use cocoa::foundation::{NSAutoreleasePool, NSString};
     use objc::{class, msg_send, sel, sel_impl};
 
     unsafe {
@@ -174,27 +174,9 @@ fn icon_data_url_for_app(app_path: &str) -> Option<String> {
             return None;
         }
 
-        let size = NSSize::new(32.0, 32.0);
-        let _: () = msg_send![icon, setSize: size];
-
-        let tiff_data: id = msg_send![icon, TIFFRepresentation];
-        if tiff_data == nil {
-            return None;
-        }
-        let image_rep: id = msg_send![class!(NSBitmapImageRep), imageRepWithData: tiff_data];
-        if image_rep == nil {
-            return None;
-        }
-        // NSBitmapImageFileTypePNG = 0
-        let png_data: id = msg_send![image_rep, representationUsingType: 0 properties: nil];
-        if png_data == nil {
-            return None;
-        }
-
-        let length = NSData::length(png_data);
-        let bytes = NSData::bytes(png_data);
-        let data = std::slice::from_raw_parts(bytes as *const u8, length as usize);
-        Some(format!("data:image/png;base64,{}", BASE64.encode(data)))
+        let data = crate::icons::encode_nsimage_as_small_png(icon)?;
+        let encoded = BASE64.encode(&data);
+        Some(format!("data:image/png;base64,{}", encoded))
     }
 }
 

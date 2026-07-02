@@ -499,6 +499,18 @@ this FAQ is organized around the questions people ask support most often: what t
   if you see only short phrases instead of a full transcript, increase the audio chunk duration in **settings → recording** and confirm both your microphone *and* system audio are selected.
 </Expandable>
 
+<Expandable title="how do I chat with or ask questions about a specific meeting?">
+  open the meetings list in screenpipe, find the meeting you want to ask about, and reference it in the chat box. you can either:
+
+  1. **direct mention**: type `@audio` in chat, then describe what you want to know — screenpipe will search your meeting transcript to answer questions like "what was said about pricing?" or "what action items came out of this call?"
+  2. **search first, then chat**: use the timeline to find the meeting, click on the transcript or screen section to focus the time window, then ask the chat anything about that meeting moment. the AI will read the transcript and screen context from that window.
+  3. **summarize the meeting**: click the **Summarize** button on the meeting transcript (in the note dock at top or bottom) to generate a summary, action items, and decisions — this uses your default AI or a custom pipe for repeatable formats.
+
+  for programmatic access, use the meetings API: `curl "http://localhost:3030/meetings?q=customer+sync&limit=10"` to search by title, attendees, or notes, then query the transcript via the search API with the meeting's time window.
+
+  see [meeting intelligence](/meeting-intelligence) and [search screen history](/search-screen-history) for more details.
+</Expandable>
+
 <Expandable title="can screenpipe transcribe multiple languages in one meeting?">
   partially. whisper auto-detects the dominant language per audio chunk, so short multilingual exchanges may be tagged as one language. for accurate code-switching, set the primary language explicitly in **settings → AI models → language**, or use deepgram / screenpipe-cloud which handle mixed-language audio better than local whisper-tiny.
 </Expandable>

@@ -123,6 +123,8 @@ pub struct AudioManagerOptions {
     pub windows_input_aec_enabled: bool,
     /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
     pub macos_input_vpio_enabled: bool,
+    /// Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3).
+    pub screenpipe_aec_enabled: bool,
     /// Controls when local Whisper transcription runs.
     /// `Realtime` = immediate (default), `Batch` = accumulate longer chunks for quality.
     pub transcription_mode: TranscriptionMode,
@@ -173,6 +175,7 @@ impl Default for AudioManagerOptions {
             experimental_coreaudio_system_audio: false,
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
+            screenpipe_aec_enabled: true,
             transcription_mode: TranscriptionMode::default(),
             audio_capture_mode: AudioCaptureMode::default(),
             meeting_detector: None,
@@ -281,6 +284,11 @@ impl AudioManagerBuilder {
 
     pub fn macos_input_vpio_enabled(mut self, enabled: bool) -> Self {
         self.options.macos_input_vpio_enabled = enabled;
+        self
+    }
+
+    pub fn screenpipe_aec_enabled(mut self, enabled: bool) -> Self {
+        self.options.screenpipe_aec_enabled = enabled;
         self
     }
 

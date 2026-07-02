@@ -206,6 +206,9 @@ pub struct DeviceInfo {
     pub kind: DeviceKind,
     pub active: bool,
     pub last_seen_secs_ago: u64,
+    /// Numeric monitor id from `/vision/device/status`. Present only when the
+    /// sidecar exposes per-display pause; absent on older engines (display-only).
+    pub monitor_id: Option<u32>,
 }
 
 /// Full recording info including per-device status
@@ -256,6 +259,32 @@ pub fn get_audio_device_status() -> Vec<AudioDeviceEntry> {
 
 pub fn set_audio_device_status(devices: Vec<AudioDeviceEntry>) {
     let mut guard = AUDIO_DEVICE_STATUS
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = devices;
+}
+
+/// Cached vision/monitor device status from `/vision/device/status`.
+/// Updated by the health polling loop so the tray can toggle displays without blocking.
+#[derive(Clone, Debug)]
+pub struct VisionDeviceEntry {
+    pub id: u32,
+    pub name: String,
+    pub user_disabled: bool,
+}
+
+static VISION_DEVICE_STATUS: Lazy<RwLock<Vec<VisionDeviceEntry>>> =
+    Lazy::new(|| RwLock::new(Vec::new()));
+
+pub fn get_vision_device_status() -> Vec<VisionDeviceEntry> {
+    VISION_DEVICE_STATUS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+pub fn set_vision_device_status(devices: Vec<VisionDeviceEntry>) {
+    let mut guard = VISION_DEVICE_STATUS
         .write()
         .unwrap_or_else(|e| e.into_inner());
     *guard = devices;
@@ -551,14 +580,22 @@ fn respawn_engine_if_crashed(
     *last_restart_triggered = Some(now);
     let app_for_respawn = app.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::recording::spawn_screenpipe(
+        match crate::recording::spawn_screenpipe(
             app_for_respawn.state::<crate::recording::RecordingState>(),
             app_for_respawn.clone(),
             None,
         )
         .await
         {
-            warn!("engine auto-respawn failed: {}", e);
+            Ok(()) => crate::db_relaunch::reset_db_boot_failures(),
+            Err(e) => {
+                warn!("engine auto-respawn failed: {}", e);
+                // Repeated DB-init failures mean a poisoned WAL-index pinned
+                // by a leaked connection — unrecoverable in-process. Escalate
+                // to a (rate-limited) app self-relaunch instead of looping a
+                // doomed respawn every 5 minutes forever (2026-07-02).
+                crate::db_relaunch::note_respawn_failure(&app_for_respawn, &e).await;
+            }
         }
     });
 }
@@ -666,6 +703,7 @@ fn parse_devices_from_health(health_result: &Result<HealthCheckResponse>) -> Vec
                 kind: DeviceKind::Monitor,
                 active: health.frame_status.as_deref() == Some("ok"),
                 last_seen_secs_ago: 0,
+                monitor_id: None,
             });
         }
     }
@@ -711,6 +749,7 @@ fn parse_devices_from_health(health_result: &Result<HealthCheckResponse>) -> Vec
                 kind,
                 active,
                 last_seen_secs_ago: last_seen,
+                monitor_id: None,
             });
         }
     }
@@ -873,38 +912,9 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             // returns stale results. The app now subscribes to `permission_lost`
             // / `permission_restored` events via /ws/events (see engine_events.rs).
 
-            // Parse device info from health response, filtered by monitor settings
+            // Parse device info from health response; monitor allowlist applied
+            // after vision status replaces monitor rows (below).
             let mut devices = parse_devices_from_health(&health_result);
-
-            // Filter monitors to only show actively recording ones
-            if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
-                if !store.recording.use_all_monitors
-                    && !store.recording.monitor_ids.is_empty()
-                    && store.recording.monitor_ids != vec!["default".to_string()]
-                {
-                    devices.retain(|d| {
-                        if d.kind != DeviceKind::Monitor {
-                            return true;
-                        }
-                        store.recording.monitor_ids.iter().any(|allowed| {
-                            // Stable ID format: "Display 3_1920x1080_0,0"
-                            // Extract name prefix before last '_' (position coords)
-                            let allowed_name = allowed.rsplitn(2, '_').last().unwrap_or(allowed);
-                            // Health monitor format: "Display 3 (1920x1080)"
-                            // Extract just the display name
-                            let health_name = d.name.split(" (").next().unwrap_or(&d.name);
-                            let allowed_short =
-                                allowed_name.split('_').next().unwrap_or(allowed_name);
-                            // Also match numeric monitor IDs from CLI -m flag
-                            // e.g. allowed="3" should match health_name="Display 3"
-                            let numeric_match = health_name
-                                .strip_prefix("Display ")
-                                .map_or(false, |id| id == *allowed);
-                            health_name == allowed_short || numeric_match
-                        })
-                    });
-                }
-            }
 
             // Fetch all audio devices (including user-disabled) for tray display
             let api = local_api_context_from_app(&app);
@@ -954,12 +964,88 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                                     kind,
                                     active: false,
                                     last_seen_secs_ago: 0,
+                                    monitor_id: None,
                                 });
                             }
                         }
                     }
 
                     set_audio_device_status(entries);
+                }
+            }
+
+            // Per-monitor vision status — replaces health-derived monitor rows when
+            // available so the tray can toggle individual displays.
+            match api
+                .apply_auth(
+                    reqwest::Client::new().get(api.url("/vision/device/status")),
+                )
+                .send()
+                .await
+            {
+                Ok(res) if res.status().is_success() => {
+                    if let Ok(devs) = res.json::<Vec<serde_json::Value>>().await {
+                        if devs.is_empty() {
+                            set_vision_device_status(Vec::new());
+                        } else {
+                            devices.retain(|d| d.kind != DeviceKind::Monitor);
+                            let mut vision_entries = Vec::new();
+                            for d in &devs {
+                                let id = d["id"].as_u64().unwrap_or(0) as u32;
+                                let name = d["name"].as_str().unwrap_or("").to_string();
+                                let user_disabled =
+                                    d["user_disabled"].as_bool().unwrap_or(false);
+                                vision_entries.push(VisionDeviceEntry {
+                                    id,
+                                    name: name.clone(),
+                                    user_disabled,
+                                });
+                                devices.push(DeviceInfo {
+                                    name,
+                                    kind: DeviceKind::Monitor,
+                                    active: !user_disabled,
+                                    last_seen_secs_ago: 0,
+                                    monitor_id: Some(id),
+                                });
+                            }
+                            set_vision_device_status(vision_entries);
+                        }
+                    } else {
+                        set_vision_device_status(Vec::new());
+                    }
+                }
+                _ => {
+                    set_vision_device_status(Vec::new());
+                }
+            }
+
+            // Filter monitors to only show those selected in recording settings.
+            if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
+                if !store.recording.use_all_monitors
+                    && !store.recording.monitor_ids.is_empty()
+                    && store.recording.monitor_ids != vec!["default".to_string()]
+                {
+                    devices.retain(|d| {
+                        if d.kind != DeviceKind::Monitor {
+                            return true;
+                        }
+                        store.recording.monitor_ids.iter().any(|allowed| {
+                            // Stable ID format: "Display 3_1920x1080_0,0"
+                            // Extract name prefix before last '_' (position coords)
+                            let allowed_name = allowed.rsplitn(2, '_').last().unwrap_or(allowed);
+                            // Health monitor format: "Display 3 (1920x1080)"
+                            // Extract just the display name
+                            let health_name = d.name.split(" (").next().unwrap_or(&d.name);
+                            let allowed_short =
+                                allowed_name.split('_').next().unwrap_or(allowed_name);
+                            // Also match numeric monitor IDs from CLI -m flag
+                            // e.g. allowed="3" should match health_name="Display 3"
+                            let numeric_match = health_name
+                                .strip_prefix("Display ")
+                                .map_or(false, |id| id == *allowed);
+                            health_name == allowed_short || numeric_match
+                        })
+                    });
                 }
             }
 

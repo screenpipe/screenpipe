@@ -1263,10 +1263,20 @@ impl DatabaseManager {
     /// This prevents unbounded WAL growth when long-running readers block auto-checkpoint.
     pub fn start_wal_maintenance(&self) {
         let pool = self.pool.clone();
+        let shutdown = self.close_token.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(300));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    // Exit on DatabaseManager::close() — this task's pool clone
+                    // would otherwise keep SQLite connections (and the shared
+                    // -shm WAL-index) alive across an engine restart.
+                    _ = shutdown.cancelled() => {
+                        debug!("wal maintenance: shutting down");
+                        return;
+                    }
+                }
                 match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
                     .fetch_one(&pool)
                     .await

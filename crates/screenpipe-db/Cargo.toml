@@ -24,6 +24,7 @@ screenpipe-config = { path = "../screenpipe-config" }
 zerocopy = { version = "0.7.32" }
 
 tokio = { workspace = true }
+tokio-util = "0.7"
 
 tracing = { workspace = true }
 anyhow = { workspace = true }

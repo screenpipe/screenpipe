@@ -14,6 +14,7 @@ import {
   type ConnectedIntegration,
   type ConnectionListItem,
 } from "@/lib/chat/connection-suggestions";
+import { fetchMcpConnections } from "@/lib/chat/mcp-connections";
 import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
 import {
   CONNECTION_CATEGORY_BY_ID,
@@ -41,49 +42,76 @@ export function useChatConnections({
   refreshSuggestions,
 }: UseChatConnectionsOptions) {
   const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
-  const [allConnectionItems, setAllConnectionItems] = useState<ConnectionListItem[]>([]);
-  const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
+  const [allConnectionItems, setAllConnectionItems] = useState<
+    ConnectionListItem[]
+  >([]);
+  const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] =
+    useState<Suggestion[]>([]);
   const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
 
   const connectionSetupSuggestions = React.useMemo(
     () => buildConnectionSetupSuggestions(allConnectionItems, appItems),
-    [allConnectionItems, appItems]
+    [allConnectionItems, appItems],
   );
 
   const suggestedConnectionTiles = React.useMemo(() => {
-    const apiById = new Map(allConnectionItems.map((connection) => [connection.id, connection]));
-    const hardcodedIds = new Set(hardcodedConnectionTiles.map((connection) => connection.id));
+    const apiById = new Map(
+      allConnectionItems.map((connection) => [connection.id, connection]),
+    );
+    const hardcodedIds = new Set(
+      hardcodedConnectionTiles.map((connection) => connection.id),
+    );
     const hardcodedTiles = hardcodedConnectionTiles.map((connection) => {
       const apiConnection = apiById.get(connection.id);
       return {
         ...connection,
         icon: connection.icon || apiConnection?.icon || connection.id,
         connected: apiConnection?.connected ?? connection.connected,
-        category: CONNECTION_CATEGORY_BY_ID[connection.id] ?? normalizeConnectionCategory(apiConnection?.category),
-        description: apiConnection?.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[connection.id],
+        category:
+          CONNECTION_CATEGORY_BY_ID[connection.id] ??
+          normalizeConnectionCategory(apiConnection?.category),
+        description:
+          apiConnection?.description ??
+          CONNECTION_HARDCODED_DESCRIPTIONS[connection.id],
       };
     });
     const apiTiles = allConnectionItems
-      .filter((connection) => !hardcodedIds.has(connection.id) && connection.id !== "owned-default")
+      .filter(
+        (connection) =>
+          !hardcodedIds.has(connection.id) && connection.id !== "owned-default",
+      )
       .map((connection) => ({
         ...connection,
         icon: connection.icon || connection.id,
-        category: CONNECTION_CATEGORY_BY_ID[connection.id] ?? normalizeConnectionCategory(connection.category),
-        description: connection.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[connection.id],
+        category:
+          CONNECTION_CATEGORY_BY_ID[connection.id] ??
+          normalizeConnectionCategory(connection.category),
+        description:
+          connection.description ??
+          CONNECTION_HARDCODED_DESCRIPTIONS[connection.id],
       }));
 
-    return getSuggestedConnectionsForDevice([...hardcodedTiles, ...apiTiles], 8);
+    return getSuggestedConnectionsForDevice(
+      [...hardcodedTiles, ...apiTiles],
+      8,
+    );
   }, [allConnectionItems, hardcodedConnectionTiles]);
 
   const refreshConnectionState = useCallback(async () => {
     if (isPlatformLoading) return;
     try {
-      const res = await localFetch("/connections");
-      if (!res.ok) return;
-      const json = (await res.json()) as { data?: ConnectionListItem[] };
-      const allConnections = (json.data ?? []).map((connection) =>
-        normalizeConnectionForPlatform(connection, isWindows)
+      const [connectionsRes, mcpConnections] = await Promise.all([
+        localFetch("/connections"),
+        fetchMcpConnections().catch(() => []),
+      ]);
+      if (!connectionsRes.ok) return;
+      const json = (await connectionsRes.json()) as {
+        data?: ConnectionListItem[];
+      };
+      const apiConnections = (json.data ?? []).map((connection) =>
+        normalizeConnectionForPlatform(connection, isWindows),
       );
+      const allConnections = [...apiConnections, ...mcpConnections];
       const connectedConnections = allConnections
         .filter((connection) => connection.connected)
         .map((connection) => ({
@@ -104,14 +132,28 @@ export function useChatConnections({
   const visibleSuggestionSignature = React.useMemo(
     () =>
       [...autoSuggestions, ...connectionPreviewSuggestions]
-        .map((s) => `${s.text}|${s.preview ?? ""}|${s.connectionIcon ?? ""}|${s.priority ?? ""}`)
+        .map(
+          (s) =>
+            `${s.text}|${s.preview ?? ""}|${s.connectionIcon ?? ""}|${s.priority ?? ""}`,
+        )
         .join("\n"),
-    [autoSuggestions, connectionPreviewSuggestions]
+    [autoSuggestions, connectionPreviewSuggestions],
   );
 
   const connectionAwareSuggestions = React.useMemo(
-    () => mergeConnectionSuggestions(autoSuggestions, connections, connectionPreviewSuggestions, suggestionRefreshSeed),
-    [autoSuggestions, connections, connectionPreviewSuggestions, suggestionRefreshSeed]
+    () =>
+      mergeConnectionSuggestions(
+        autoSuggestions,
+        connections,
+        connectionPreviewSuggestions,
+        suggestionRefreshSeed,
+      ),
+    [
+      autoSuggestions,
+      connections,
+      connectionPreviewSuggestions,
+      suggestionRefreshSeed,
+    ],
   );
 
   useEffect(() => {

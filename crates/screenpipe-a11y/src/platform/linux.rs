@@ -16,7 +16,7 @@
 //!
 //! ## Window Tracking
 //!
-//! Uses `xdotool` (X11) or D-Bus (Wayland) to track the active window.
+//! Uses Hyprland IPC (Wayland) or `xdotool` (X11) to track the active window.
 //!
 //! ## Clipboard
 //!
@@ -31,10 +31,11 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 /// Permission status for UI capture on Linux.
@@ -202,7 +203,7 @@ impl UiRecorder {
             );
         }
 
-        // Thread 2: App/window observer (always runs — uses xdotool, no evdev needed)
+        // Thread 2: App/window observer (always runs — uses compositor/X11 metadata, no evdev needed)
         let tx2 = tx.clone();
         let stop2 = stop.clone();
         let config2 = self.config.clone();
@@ -989,14 +990,100 @@ fn run_window_observer(
 }
 
 /// Get active window info: (app_name, window_title, pid).
-/// Tries xdotool (X11) first, falls back to D-Bus.
-fn get_active_window_info() -> Option<(String, String, i32)> {
+/// Uses Hyprland IPC on Hyprland/Wayland, then falls back to xdotool for X11.
+pub fn get_active_window_info() -> Option<(String, String, i32)> {
+    const ACTIVE_WINDOW_CACHE_TTL: Duration = Duration::from_secs(1);
+    static CACHE: OnceLock<Mutex<Option<(Option<(String, String, i32)>, Instant)>>> =
+        OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
+    {
+        let cached = cache.lock();
+        if let Some((value, captured_at)) = &*cached {
+            if now.saturating_duration_since(*captured_at) < ACTIVE_WINDOW_CACHE_TTL {
+                return value.clone();
+            }
+        }
+    }
+
+    let fresh = get_active_window_info_fresh();
+    *cache.lock() = Some((fresh.clone(), Instant::now()));
+    fresh
+}
+
+/// Get active window info without using the shared observer cache.
+///
+/// Use this when stale focused-window metadata would affect privacy gates.
+pub fn get_active_window_info_fresh() -> Option<(String, String, i32)> {
+    get_hyprland_active_window_info().or_else(get_x11_active_window_info)
+}
+
+fn get_hyprland_active_window_info() -> Option<(String, String, i32)> {
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()
+        && std::env::var("XDG_CURRENT_DESKTOP").map_or(true, |desktop| {
+            !desktop.to_ascii_lowercase().contains("hyprland")
+        })
+    {
+        return None;
+    }
+
+    let output = command_output_with_timeout(
+        "hyprctl",
+        &["-j", "activewindow"],
+        Duration::from_millis(200),
+    )
+    .filter(|o| o.status.success())?;
+
+    parse_hyprland_active_window_json(&output.stdout)
+}
+
+fn parse_hyprland_active_window_json(raw: &[u8]) -> Option<(String, String, i32)> {
+    let value: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    let app_name = value
+        .get("class")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            value
+                .get("initialClass")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })?
+        .to_string();
+
+    let window_title = value
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(clean_hyprland_title)
+        .unwrap_or_default();
+
+    let pid = value.get("pid").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+    Some((app_name, window_title, pid))
+}
+
+fn clean_hyprland_title(title: &str) -> String {
+    title
+        .chars()
+        .filter(|&c| {
+            !matches!(
+                c,
+                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn get_x11_active_window_info() -> Option<(String, String, i32)> {
     // Try xdotool (works on X11 and XWayland)
-    let wid_output = std::process::Command::new("xdotool")
-        .arg("getactivewindow")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
+    let wid_output =
+        command_output_with_timeout("xdotool", &["getactivewindow"], Duration::from_millis(300))
+            .filter(|o| o.status.success())?;
 
     let wid = String::from_utf8_lossy(&wid_output.stdout)
         .trim()
@@ -1006,21 +1093,23 @@ fn get_active_window_info() -> Option<(String, String, i32)> {
     }
 
     // Get window name
-    let name_output = std::process::Command::new("xdotool")
-        .args(["getwindowname", &wid])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
+    let name_output = command_output_with_timeout(
+        "xdotool",
+        &["getwindowname", &wid],
+        Duration::from_millis(300),
+    )
+    .filter(|o| o.status.success())?;
     let title = String::from_utf8_lossy(&name_output.stdout)
         .trim()
         .to_string();
 
     // Get PID
-    let pid_output = std::process::Command::new("xdotool")
-        .args(["getwindowpid", &wid])
-        .output()
-        .ok()
-        .filter(|o| o.status.success());
+    let pid_output = command_output_with_timeout(
+        "xdotool",
+        &["getwindowpid", &wid],
+        Duration::from_millis(300),
+    )
+    .filter(|o| o.status.success());
 
     let pid: i32 = pid_output
         .map(|o| {
@@ -1039,6 +1128,34 @@ fn get_active_window_info() -> Option<(String, String, i32)> {
     };
 
     Some((app_name, title, pid))
+}
+
+fn command_output_with_timeout(command: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let mut child = Command::new(command)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Get process name from PID by reading /proc/<pid>/comm.
@@ -1393,6 +1510,46 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_parse_hyprland_active_window_json() {
+        let raw = br#"{
+            "class": "org.telegram.desktop",
+            "title": "\u061c\u200e\u2068Lucern Clinic\u2069 \u2013 (106539)",
+            "initialClass": "Telegram",
+            "pid": 2800,
+            "xwayland": false
+        }"#;
+
+        let (app_name, window_title, pid) = parse_hyprland_active_window_json(raw).unwrap();
+
+        assert_eq!(app_name, "org.telegram.desktop");
+        assert_eq!(window_title, "Lucern Clinic \u{2013} (106539)");
+        assert_eq!(pid, 2800);
+    }
+
+    #[test]
+    fn test_clean_hyprland_title_strips_bidi_controls() {
+        let title = "\u{061c}\u{200e}\u{2068}Telegram\u{2069}\u{202e}";
+
+        assert_eq!(clean_hyprland_title(title), "Telegram");
+    }
+
+    #[test]
+    fn test_parse_hyprland_active_window_json_falls_back_to_initial_class() {
+        let raw = br#"{
+            "class": "",
+            "title": "Terminal",
+            "initialClass": "Alacritty",
+            "pid": 123
+        }"#;
+
+        let (app_name, window_title, pid) = parse_hyprland_active_window_json(raw).unwrap();
+
+        assert_eq!(app_name, "Alacritty");
+        assert_eq!(window_title, "Terminal");
+        assert_eq!(pid, 123);
     }
 
     #[test]

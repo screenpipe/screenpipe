@@ -16,6 +16,11 @@
 //! `full_text` is intentionally NOT a key: it is the per-frame DETECTION
 //! source (and the primary search index), so it is always redacted — there
 //! is no coherent "redact everything else but leave the search text raw".
+//! `frames.text_json` (the per-word OCR boxes) is likewise NOT a key: it is a
+//! structured copy of the same on-screen text as `full_text`, so it is always
+//! scrubbed alongside it — leaving the raw OCR words while `full_text` is
+//! redacted is exactly the #4117 overlay leak (see the worker's derived-copy
+//! arms). The bounding-box geometry is preserved either way.
 
 use std::collections::HashSet;
 

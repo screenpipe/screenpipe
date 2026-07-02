@@ -48,6 +48,8 @@ function OptionIcon({
         src={iconUrl}
         alt=""
         className={cn("rounded-sm object-contain", className)}
+        loading="lazy"
+        decoding="async"
         onLoad={(e) => {
           const img = e.target as HTMLImageElement;
           if (img.naturalWidth <= 2) setImgFailed(true);

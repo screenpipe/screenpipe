@@ -41,6 +41,11 @@ pub struct ServerCore {
     /// toggles. Handed to both the HTTP server and the VisionManager so HTTP
     /// toggles and the capture loop see the same session state.
     pub high_fps_controller: Arc<screenpipe_engine::high_fps_controller::HighFpsController>,
+    /// Runtime handle to the active VisionManager. CaptureSession registers
+    /// its instance on start and clears on stop so `/vision/device/*` routes
+    /// hit the manager that is actually capturing.
+    pub vision_manager_handle:
+        Arc<arc_swap::ArcSwap<Option<Arc<screenpipe_engine::vision_manager::VisionManager>>>>,
     pub data_dir: PathBuf,
     pub data_path: PathBuf,
     pub port: u16,
@@ -53,6 +58,18 @@ pub struct ServerCore {
     /// `tokio::time::timeout` internally) panic with "A Tokio 1.x context
     /// was found, but it is being shutdown."
     redact_shutdown: Arc<Notify>,
+    /// Background schedulers that hold DB/secret-pool references. Stopped in
+    /// `shutdown()` — before this they survived engine restarts, kept SQLite
+    /// connections (and the shared -shm WAL-index) alive, and made every
+    /// post-wedge respawn fail with SQLITE_IOERR 522 (2026-07-02 incident).
+    oauth_refresher:
+        Option<Arc<screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler>>,
+    external_memory_sync:
+        Option<Arc<screenpipe_engine::external_memory_sync::ExternalMemorySyncScheduler>>,
+    /// Tasks spawned by `start()` that would otherwise outlive the engine:
+    /// the HTTP serve task (whose `Server` owns a `db` clone + secret store)
+    /// and the HD meeting-event listeners. Aborted in `shutdown()`.
+    owned_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl ServerCore {
@@ -349,6 +366,12 @@ impl ServerCore {
         }
         server.owned_browser = owned_browser;
 
+        // Handles to the background schedulers created below, kept on Self so
+        // `shutdown()` can stop them (they hold DB / secret-pool references).
+        let mut oauth_refresher_handle = None;
+        let mut external_memory_sync_handle = None;
+        let mut owned_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
         // Secret store — read-only keychain access on startup.
         // Never create a key automatically (that triggers a macOS modal).
         // Users opt in via onboarding or Settings > Privacy.
@@ -404,6 +427,7 @@ impl ServerCore {
                         screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler::new(),
                     );
                     refresher.start(store_arc.clone());
+                    oauth_refresher_handle = Some(refresher.clone());
                     server.oauth_refresher = Some(refresher);
 
                     // Background sync of memories → Claude Code's CLAUDE.md
@@ -414,6 +438,7 @@ impl ServerCore {
                         screenpipe_engine::external_memory_sync::ExternalMemorySyncScheduler::new(),
                     );
                     memory_sync.start(db.clone(), Some(store_arc.clone()), local_data_dir.clone());
+                    external_memory_sync_handle = Some(memory_sync.clone());
                     server.external_memory_sync = Some(memory_sync);
 
                     server.secret_store = Some(store_arc);
@@ -572,7 +597,7 @@ impl ServerCore {
         // ends. Without this the only safety net is the 4-hour hard cap.
         {
             let controller = high_fps_controller.clone();
-            tokio::spawn(async move {
+            owned_tasks.push(tokio::spawn(async move {
                 use futures::StreamExt;
                 let mut sub =
                     screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
@@ -591,7 +616,7 @@ impl ServerCore {
                         controller.handle_meeting_ended(id);
                     }
                 }
-            });
+            }));
         }
 
         // meeting_started → (1) upgrade any prewarm-pending session to a
@@ -600,7 +625,7 @@ impl ServerCore {
         // which adds a "+ HD" action to the meeting notification.
         {
             let controller = high_fps_controller.clone();
-            tokio::spawn(async move {
+            owned_tasks.push(tokio::spawn(async move {
                 use futures::StreamExt;
                 let mut sub =
                     screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
@@ -634,7 +659,7 @@ impl ServerCore {
                         controller.start_meeting_session(id);
                     }
                 }
-            });
+            }));
         }
 
         let server = server
@@ -664,12 +689,19 @@ impl ServerCore {
 
         info!("HTTP server bound to port {}", config.port);
 
-        // Start serving in background
-        tokio::spawn(async move {
+        let vision_manager_handle = server.vision_manager.clone();
+
+        // Start serving in background. The handle is kept on Self and aborted
+        // in `shutdown()`: the `Server` moved into this task owns a `db` clone
+        // + the secret store, so a task that outlives the engine restart keeps
+        // old SQLite connections (and the shared -shm WAL-index) alive — the
+        // core of the 2026-07-02 unrecoverable-522 wedge. Aborting also frees
+        // the listener so the next spawn can rebind the port.
+        owned_tasks.push(tokio::spawn(async move {
             if let Err(e) = server.start_with_listener(listener).await {
                 error!("Server error: {:?}", e);
             }
-        });
+        }));
 
         info!("Server core started successfully");
         crate::health::set_boot_phase("ready", None);
@@ -983,11 +1015,15 @@ impl ServerCore {
             pipe_manager: shared_pipe_manager,
             manual_meeting,
             high_fps_controller,
+            vision_manager_handle,
             data_dir: local_data_dir,
             data_path,
             port: config.port,
             local_api_key: config.api_auth_key.clone(),
             redact_shutdown,
+            oauth_refresher: oauth_refresher_handle,
+            external_memory_sync: external_memory_sync_handle,
+            owned_tasks,
         })
     }
 
@@ -1013,6 +1049,26 @@ impl ServerCore {
             info!("Pipe scheduler stopped");
         }
 
+        // Stop the background schedulers that hold DB / secret-pool references.
+        // Left running, they survive the engine restart, keep SQLite
+        // connections (and the shared -shm WAL-index) open, and turn a
+        // recoverable disk-I/O wedge into a permanent one: every respawn's DB
+        // init fails with SQLITE_IOERR 522 until the whole process restarts
+        // (2026-07-02 incident, hours of lost recording).
+        if let Some(refresher) = &self.oauth_refresher {
+            refresher.stop().await;
+        }
+        if let Some(sync) = &self.external_memory_sync {
+            sync.stop();
+        }
+
+        // Abort the HTTP serve task (its `Server` owns a db clone + secret
+        // store and the bound listener) and the HD meeting-event listeners.
+        for task in &self.owned_tasks {
+            task.abort();
+        }
+        info!("Stopped background schedulers + HTTP server task");
+
         // Shut down audio manager (releases ggml Metal resources)
         info!("Shutting down audio manager...");
         match tokio::time::timeout(Duration::from_secs(15), self.audio_manager.shutdown()).await {
@@ -1020,5 +1076,15 @@ impl ServerCore {
             Ok(Err(e)) => warn!("Audio manager shutdown error: {:?}", e),
             Err(_) => warn!("Audio manager shutdown timed out after 15s"),
         }
+
+        // LAST: sever every SQLite connection this engine instance created.
+        // `SqlitePool::close()` closes the pool for every clone, so even a
+        // worker that leaked an Arc loses its connections (next query fails
+        // fast with PoolClosed) instead of pinning the poisoned WAL-index.
+        // The secret-store pools are process-global (lazily recreated on next
+        // access), so close them here too rather than only in the wedge path.
+        self.db.close().await;
+        screenpipe_secrets::close_all_secret_pools().await;
+        info!("Closed all SQLite pools");
     }
 }

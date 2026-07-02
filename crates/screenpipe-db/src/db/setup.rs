@@ -100,6 +100,7 @@ impl DatabaseManager {
             Duration::from_secs(10),
         );
         let persistent_failure_hook = crate::write_queue::persistent_failure_slot(None);
+        let close_token = tokio_util::sync::CancellationToken::new();
         let write_queue = crate::write_queue::spawn_write_drain_with(
             write_pool.clone(),
             Arc::clone(&write_semaphore),
@@ -108,6 +109,7 @@ impl DatabaseManager {
                 rebuilder: Some(write_pool_rebuilder),
                 on_persistent_failure: persistent_failure_hook.clone(),
                 health: write_queue_health.clone(),
+                shutdown: close_token.clone(),
                 ..Default::default()
             },
         );
@@ -119,6 +121,7 @@ impl DatabaseManager {
             write_queue,
             write_queue_health,
             persistent_failure_hook,
+            close_token,
         };
 
         // Checkpoint any stale WAL before running migrations or starting captures.
@@ -161,6 +164,23 @@ impl DatabaseManager {
         db_manager.start_wal_maintenance();
 
         Ok(db_manager)
+    }
+
+    /// Sever every SQLite connection this manager owns: stop the WAL-maintenance
+    /// task and the write-queue drain loop, then close both pools.
+    ///
+    /// `SqlitePool::close()` closes the pool for **every clone**, so even a
+    /// background task that leaked an `Arc<DatabaseManager>` loses its
+    /// connections — its next query fails fast with PoolClosed instead of
+    /// keeping the shared `-shm` WAL-index mapped. Without this, an engine
+    /// restart after a disk-I/O wedge reopens the db against a WAL-index still
+    /// pinned by the old (leaked) connections, and every open fails with
+    /// SQLITE_IOERR (code 522) until the whole process restarts — the exact
+    /// failure that kept recording down for hours on 2026-07-02.
+    pub async fn close(&self) {
+        self.close_token.cancel();
+        self.write_pool.close().await;
+        self.pool.close().await;
     }
 
     async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {

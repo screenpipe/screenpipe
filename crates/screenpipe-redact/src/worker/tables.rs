@@ -278,8 +278,9 @@ pub async fn fetch_unredacted(
 
 /// A frame's `full_text` plus the sibling DERIVED copies the worker
 /// redacts from the SAME detection pass (screenpipe/website#291):
-/// `accessibility_text`, `accessibility_tree_json` (issue #4116) and
-/// `window_name`. `full_text` is the union of accessibility + OCR text
+/// `accessibility_text`, `accessibility_tree_json` (issue #4116),
+/// `window_name`, `browser_url`, and the per-word OCR `text_json`
+/// (issue #4117). `full_text` is the union of accessibility + OCR text
 /// (migration `20260312000000_consolidate_search_to_frames_full_text.sql`),
 /// so every PII value in those derived copies is present in `full_text` —
 /// detect once on `full_text`, propagate the resulting map to each. Each
@@ -309,6 +310,13 @@ pub struct FrameTextRow {
     /// are tolerable here (URLs in the timeline are for context, not fetch).
     pub browser_url: Option<String>,
     pub browser_url_redacted_at: Option<i64>,
+    /// Per-word OCR bounding boxes (`OcrTextBlock[]`) — each block's `text`
+    /// is a substring of `full_text`, so it's scrubbed via the propagated map
+    /// (only the `text` field; geometry preserved) and served raw by the
+    /// text-overlay endpoints if left alone (issue #4117). `None` if the frame
+    /// had no OCR boxes (e.g. accessibility-only capture).
+    pub text_json: Option<String>,
+    pub text_json_redacted_at: Option<i64>,
 }
 
 /// Fetch up to `limit` frames whose `full_text` needs redaction
@@ -321,7 +329,8 @@ pub async fn fetch_unredacted_frames_fulltext(
     let q = "SELECT id, full_text, accessibility_text, accessibility_redacted_at, \
                     accessibility_tree_json, accessibility_tree_redacted_at, \
                     window_name, window_name_redacted_at, \
-                    browser_url, browser_url_redacted_at \
+                    browser_url, browser_url_redacted_at, \
+                    text_json, text_json_redacted_at \
              FROM frames \
              WHERE full_text IS NOT NULL AND full_text != '' \
                AND full_text_redacted_at IS NULL \
@@ -352,6 +361,10 @@ pub async fn fetch_unredacted_frames_fulltext(
                 .get::<Option<Vec<u8>>, _>("browser_url")
                 .map(|b| String::from_utf8_lossy(&b).into_owned()),
             browser_url_redacted_at: r.get::<Option<i64>, _>("browser_url_redacted_at"),
+            text_json: r
+                .get::<Option<Vec<u8>>, _>("text_json")
+                .map(|b| String::from_utf8_lossy(&b).into_owned()),
+            text_json_redacted_at: r.get::<Option<i64>, _>("text_json_redacted_at"),
         })
         .collect();
     Ok(out)
@@ -371,6 +384,30 @@ pub async fn write_redacted_tree(
         "UPDATE frames SET \
             accessibility_tree_json = ?, \
             accessibility_tree_redacted_at = strftime('%s', 'now') \
+         WHERE id = ?",
+    )
+    .bind(redacted_json)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Overwrite `frames.text_json` (per-word OCR boxes) with its redacted form
+/// and stamp `text_json_redacted_at` (issue #4117). Separate from
+/// [`write_redacted`] because `text_json` is JSON — never redacted via plain
+/// string redaction (that would mangle the structure); only ever scrubbed
+/// field-wise (each block's `text`, geometry preserved) via a propagated map.
+/// `text_json` is NOT a `frames_fts` column, so no search-index trigger fires.
+pub async fn write_redacted_text_json(
+    pool: &SqlitePool,
+    id: i64,
+    redacted_json: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE frames SET \
+            text_json = ?, \
+            text_json_redacted_at = strftime('%s', 'now') \
          WHERE id = ?",
     )
     .bind(redacted_json)
@@ -722,7 +759,11 @@ mod tests {
                 window_name TEXT,
                 window_name_redacted_at INTEGER,
                 browser_url TEXT,
-                browser_url_redacted_at INTEGER
+                browser_url_redacted_at INTEGER,
+                -- Per-word OCR boxes (issue #4117); scrubbed via full_text
+                -- propagation (only each block's `text`, geometry preserved).
+                text_json TEXT,
+                text_json_redacted_at INTEGER
             );
             CREATE TABLE ui_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1256,8 +1297,9 @@ mod tests {
         let pool = setup().await;
         sqlx::query(
             "INSERT INTO frames \
-                (full_text, accessibility_tree_json, window_name) \
-             VALUES ('mail bob@x.io', '[{\"text\":\"bob@x.io\"}]', 'Inbox bob@x.io')",
+                (full_text, accessibility_tree_json, window_name, text_json) \
+             VALUES ('mail bob@x.io', '[{\"text\":\"bob@x.io\"}]', 'Inbox bob@x.io', \
+                     '[{\"text\":\"bob@x.io\",\"left\":\"5\"}]')",
         )
         .execute(&pool)
         .await
@@ -1271,8 +1313,46 @@ mod tests {
             Some("[{\"text\":\"bob@x.io\"}]")
         );
         assert_eq!(r.window_name.as_deref(), Some("Inbox bob@x.io"));
+        assert_eq!(
+            r.text_json.as_deref(),
+            Some("[{\"text\":\"bob@x.io\",\"left\":\"5\"}]")
+        );
         assert!(r.accessibility_tree_redacted_at.is_none());
         assert!(r.window_name_redacted_at.is_none());
+        assert!(r.text_json_redacted_at.is_none());
+    }
+
+    /// `write_redacted_text_json` overwrites `text_json` and stamps only
+    /// `text_json_redacted_at`, leaving `full_text`'s watermark untouched.
+    #[tokio::test]
+    async fn write_redacted_text_json_overwrites_and_stamps_independently() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO frames (id, full_text, text_json) \
+             VALUES (1, 'x', '[{\"text\":\"a@x.io\",\"left\":\"5\"}]')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        write_redacted_text_json(&pool, 1, "[{\"text\":\"[EMAIL]\",\"left\":\"5\"}]")
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT text_json, text_json_redacted_at, full_text_redacted_at \
+             FROM frames WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row.get::<String, _>(0),
+            "[{\"text\":\"[EMAIL]\",\"left\":\"5\"}]"
+        );
+        assert!(row.get::<Option<i64>, _>(1).is_some());
+        // Must not touch full_text's watermark.
+        assert!(row.get::<Option<i64>, _>(2).is_none());
     }
 
     /// Each derived-copy writer overwrites only its own column + stamps only

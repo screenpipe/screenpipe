@@ -49,10 +49,14 @@ pub(crate) struct VisionDeviceStatusEntry {
 
 /// Resolve the shared VisionManager or return a 409 when vision capture isn't
 /// running (vision disabled in settings, or a headless config with no manager).
+fn load_vision_manager(state: &Arc<AppState>) -> Option<Arc<crate::vision_manager::VisionManager>> {
+    state.vision_manager.load().as_ref().clone()
+}
+
 fn require_vision_manager(
     state: &Arc<AppState>,
-) -> Result<&Arc<crate::vision_manager::VisionManager>, (StatusCode, JsonResponse<Value>)> {
-    state.vision_manager.as_ref().ok_or_else(|| {
+) -> Result<Arc<crate::vision_manager::VisionManager>, (StatusCode, JsonResponse<Value>)> {
+    load_vision_manager(state).ok_or_else(|| {
         (
             StatusCode::CONFLICT,
             JsonResponse(json!({
@@ -71,7 +75,7 @@ pub(crate) async fn start_vision_device(
     let vision_manager = require_vision_manager(&state)?;
     let monitor_id = payload.monitor_id;
 
-    if let Err(e) = vision_manager.resume_monitor(monitor_id).await {
+    if let Err(e) = vision_manager.clone().resume_monitor(monitor_id).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             JsonResponse(json!({
@@ -95,7 +99,7 @@ pub(crate) async fn stop_vision_device(
     let vision_manager = require_vision_manager(&state)?;
     let monitor_id = payload.monitor_id;
 
-    if let Err(e) = vision_manager.pause_monitor(monitor_id).await {
+    if let Err(e) = vision_manager.clone().pause_monitor(monitor_id).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             JsonResponse(json!({
@@ -115,8 +119,8 @@ pub(crate) async fn stop_vision_device(
 pub(crate) async fn vision_device_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Vec<VisionDeviceStatusEntry>>, (StatusCode, JsonResponse<Value>)> {
-    // Vision disabled or no manager wired (headless): nothing to report.
-    let Some(vision_manager) = state.vision_manager.as_ref() else {
+    // Vision disabled or no manager wired (capture stopped): nothing to report.
+    let Some(vision_manager) = load_vision_manager(&state) else {
         return Ok(JsonResponse(Vec::new()));
     };
 

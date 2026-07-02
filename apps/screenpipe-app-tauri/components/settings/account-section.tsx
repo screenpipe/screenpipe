@@ -43,6 +43,42 @@ import { listen } from "@tauri-apps/api/event";
 import { ReferralCard } from "./referral-card";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import posthog from "posthog-js";
+import { screenpipeWebUrl } from "@/lib/web-url";
+
+const ACCOUNT_URL = screenpipeWebUrl("/account", "https://screenpipe.com");
+const BILLING_URL = screenpipeWebUrl("/account/billing", "https://screenpipe.com");
+const SUBSCRIPTION_CHECKOUT_URL = screenpipeWebUrl(
+  "/api/subscription/checkout",
+  "https://screenpipe.com",
+);
+const CLOUD_SUBSCRIPTION_STATUS_URL = screenpipeWebUrl(
+  "/api/cloud-sync/subscription",
+  "https://screenpipe.com",
+);
+
+function hasExistingStripeSubscriptionPlan(plan: string | null | undefined): boolean {
+  if (!plan) return false;
+  const normalized = plan.toLowerCase();
+  return normalized !== "none" && normalized !== "lifetime";
+}
+
+async function openExternalUrl(url: string): Promise<void> {
+  const e2eWindow =
+    typeof window !== "undefined"
+      ? (window as Window & {
+          __SCREENPIPE_E2E_OPEN_URLS?: string[];
+          __SCREENPIPE_E2E_INTERCEPT_OPEN_URLS?: boolean;
+        })
+      : null;
+
+  if (Array.isArray(e2eWindow?.__SCREENPIPE_E2E_OPEN_URLS)) {
+    e2eWindow.__SCREENPIPE_E2E_OPEN_URLS.push(url);
+  }
+  if (e2eWindow?.__SCREENPIPE_E2E_INTERCEPT_OPEN_URLS) {
+    return;
+  }
+  await openUrl(url);
+}
 
 /**
  * Map a thrown fetch error into a user-readable description.
@@ -70,6 +106,8 @@ export function AccountSection() {
   const [pipeSyncing, setPipeSyncing] = useState(false);
   const [memoriesSyncing, setMemoriesSyncing] = useState(false);
   const [connectionsSyncing, setConnectionsSyncing] = useState(false);
+  const subscriptionPlan = settings.user?.subscription_plan ?? null;
+  const hasNamedPlan = !!subscriptionPlan && subscriptionPlan !== "none";
 
   useEffect(() => {
     if (!settings.user?.email) {
@@ -127,13 +165,26 @@ export function AccountSection() {
       await commands.openLoginWindow(null);
       return;
     }
+    if (
+      settings.user?.token &&
+      hasExistingStripeSubscriptionPlan(subscriptionPlan) &&
+      !settings.user?.cloud_subscribed
+    ) {
+      posthog.capture("cloud_plan_upgrade_billing_opened", {
+        from_plan: subscriptionPlan,
+        target_plan: "pro",
+        interval: annual ? "year" : "month",
+      });
+      await openExternalUrl(BILLING_URL);
+      return;
+    }
     if (!settings.user?.cloud_subscribed) {
       posthog.capture("cloud_plan_selected", { plan: "pro", interval: annual ? "year" : "month" });
       try {
         // New subscription checkout ($50/mo Pro). Pass the Clerk token so the
         // session pins customer_email + metadata.user_id to this account — the
         // webhook then links the sub even if a different email is used at Stripe.
-        const response = await fetch("https://screenpipe.com/api/subscription/checkout", {
+        const response = await fetch(SUBSCRIPTION_CHECKOUT_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -142,13 +193,13 @@ export function AccountSection() {
             plan: "pro",
             interval: annual ? "year" : "month",
             token: settings.user?.token,
-            returnUrl: "https://screenpipe.com/account",
+            returnUrl: ACCOUNT_URL,
             origin: "app-account-section",
           }),
         });
         const data = await response.json();
         if (data.url) {
-          openUrl(data.url);
+          openExternalUrl(data.url);
 
           // Poll for subscription status with exponential backoff after checkout
           let pollCount = 0;
@@ -159,7 +210,7 @@ export function AccountSection() {
             pollCount++;
             try {
               const subResponse = await fetch(
-                `https://screenpipe.com/api/cloud-sync/subscription?userId=${settings.user?.id}&email=${encodeURIComponent(settings.user?.email || "")}`,
+                `${CLOUD_SUBSCRIPTION_STATUS_URL}?userId=${settings.user?.id}&email=${encodeURIComponent(settings.user?.email || "")}`,
                 {
                   headers: { Authorization: `Bearer ${settings.user?.token}` },
                 }
@@ -222,8 +273,6 @@ export function AccountSection() {
     };
   }, []);
 
-  const subscriptionPlan = settings.user?.subscription_plan ?? null;
-  const hasNamedPlan = !!subscriptionPlan && subscriptionPlan !== "none";
   // Consumer build collapses org/license-derived team/enterprise → "Business";
   // only the enterprise build shows the real org label. Mirrors plan_display_name
   // in src-tauri/src/tray.rs.
@@ -244,7 +293,7 @@ export function AccountSection() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openUrl("https://screenpipe.com/account")}
+                onClick={() => openExternalUrl(ACCOUNT_URL)}
               >
                 <UserCog className="w-4 h-4 mr-1.5" />
                 manage
@@ -583,6 +632,7 @@ export function AccountSection() {
               <Button
                 className="w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
                 size="lg"
+                data-testid="account-upgrade-business-button"
                 onClick={handleCheckout}
               >
                 login & upgrade to business
@@ -692,6 +742,7 @@ export function AccountSection() {
               <Button
                 className="w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
                 size="lg"
+                data-testid="account-upgrade-business-button"
                 onClick={handleCheckout}
               >
                 upgrade to business

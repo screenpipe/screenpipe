@@ -6,7 +6,7 @@ use crate::commands::{hide_main_window, show_main_window};
 use crate::enterprise_policy::{is_app_ui_hidden, is_tray_item_hidden};
 use crate::health::{
     get_audio_device_status, get_high_fps_status, get_recording_info, get_recording_status,
-    set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
+    get_vision_device_status, set_high_fps_status, DeviceKind, HighFpsCacheEntry, RecordingStatus,
 };
 use crate::process_exit;
 use crate::recording::{local_api_context_from_app, RecordingState};
@@ -799,19 +799,39 @@ fn create_dynamic_menu(
     {
         let info = get_recording_info();
 
-        // Show monitors (non-clickable)
-        for device in info
+        // Monitors: CheckMenuItem when the sidecar reports a numeric id (per-display
+        // pause via /vision/device/*). Older sidecars stay display-only.
+        let vision_status = get_vision_device_status();
+        let mut monitors: Vec<_> = info
             .devices
             .iter()
             .filter(|d| d.kind == DeviceKind::Monitor)
-        {
-            let dot = if device.active { "●" } else { "○" };
-            let label = format!("  {} ▣ {}", dot, device.name);
-            menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id(format!("monitor_{}", device.name), label)
-                    .enabled(false)
-                    .build(app)?,
-            );
+            .collect();
+        monitors.sort_by(|a, b| a.name.cmp(&b.name));
+        for device in monitors {
+            let label = format!("  ▣ {}", device.name);
+            if let Some(monitor_id) = device.monitor_id {
+                let is_active = vision_status
+                    .iter()
+                    .find(|d| d.id == monitor_id)
+                    .map(|d| !d.user_disabled)
+                    .unwrap_or(device.active);
+                let toggle = CheckMenuItemBuilder::with_id(
+                    format!("toggle_vision_device_{}", monitor_id),
+                    label,
+                )
+                .checked(is_active)
+                .build(app)?;
+                menu_builder = menu_builder.item(&toggle);
+            } else {
+                let dot = if device.active { "●" } else { "○" };
+                let fallback_label = format!("  {} ▣ {}", dot, device.name);
+                menu_builder = menu_builder.item(
+                    &MenuItemBuilder::with_id(format!("monitor_{}", device.name), fallback_label)
+                        .enabled(false)
+                        .build(app)?,
+                );
+            }
         }
 
         // Show only the audio devices from get_recording_info (the ones
@@ -1302,6 +1322,36 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                         set_high_fps_status(cached);
                     }
                 }
+            });
+        }
+        id if id.starts_with("toggle_vision_device_") => {
+            let monitor_id: u32 = id
+                .strip_prefix("toggle_vision_device_")
+                .unwrap()
+                .parse()
+                .unwrap_or(0);
+
+            let cached = get_vision_device_status();
+            let is_active = cached
+                .iter()
+                .find(|d| d.id == monitor_id)
+                .map(|d| !d.user_disabled)
+                .unwrap_or(true);
+
+            let api = local_api_context_from_app(&app_handle);
+            let endpoint = if is_active {
+                api.url("/vision/device/stop")
+            } else {
+                api.url("/vision/device/start")
+            };
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                let _ = api
+                    .apply_auth(client.post(endpoint))
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::json!({"monitor_id": monitor_id}).to_string())
+                    .send()
+                    .await;
             });
         }
         id if id.starts_with("toggle_audio_device_") => {

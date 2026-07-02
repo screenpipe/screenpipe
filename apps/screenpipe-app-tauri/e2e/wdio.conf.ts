@@ -6,9 +6,17 @@ import type { Options } from '@wdio/types';
 import { mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Agent, setGlobalDispatcher } from 'undici';
 import { startApp, stopApp, WEBDRIVER_PORT } from './helpers/app-launcher.js';
 import { getReporters, getMochaTimeout } from './helpers/reporter-utils.js';
 import { TestRecorder } from './helpers/test-recorder.js';
+
+// Codex/Desktop can install a wrapped undici dispatcher in the parent process.
+// WebdriverIO passes the current dispatcher explicitly into every WebDriver
+// fetch; that wrapper rejects the explicit `dispatcher` option with
+// UND_ERR_INVALID_ARG. E2E only talks to the local Tauri WebDriver server, so use
+// a plain Agent here.
+setGlobalDispatcher(new Agent());
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +27,11 @@ const sessionRecorder = shouldRecordDesktopSession ? new TestRecorder() : null;
 const sessionVideoDir = resolve(__dirname, 'videos', 'session');
 const isCi = Boolean(process.env.CI);
 const isWindowsCi = isCi && process.platform === 'win32';
+const allSpecs = [resolve(__dirname, 'specs', '**', '*.spec.ts')];
+const windowsCiSpecs = [
+  'windows-system-integration.spec.ts',
+  'windows-user-journey.spec.ts',
+].map((spec) => resolve(__dirname, 'specs', spec));
 
 type TestrunnerConfig = Options.Testrunner & Record<string, unknown> & {
   autoCompileOpts?: {
@@ -41,8 +54,11 @@ export const config: TestrunnerConfig = {
     },
   },
 
-  // Recursive: top-level specs plus grouped subfolders (e.g. specs/search/).
-  specs: [resolve(__dirname, 'specs', '**', '*.spec.ts')],
+  // Recursive on macOS/Linux. Windows CI repeatedly loses the WebDriver session
+  // in generic cross-platform window specs and can burn the full E2E timeout;
+  // keep broad coverage on macOS/Linux while Windows runs its focused Windows
+  // journey/system specs plus the workflow's separate core-recording spec.
+  specs: isWindowsCi ? windowsCiSpecs : allSpecs,
   maxInstances: 1,
   capabilities: [{ browserName: 'chrome' }],
   hostname: '127.0.0.1',

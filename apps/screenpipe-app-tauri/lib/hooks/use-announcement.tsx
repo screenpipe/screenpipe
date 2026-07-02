@@ -8,8 +8,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { useRouter } from "next/navigation";
 import { listen } from "@tauri-apps/api/event";
+import { getIdentifier, getName } from "@tauri-apps/api/app";
 import {
   type Announcement,
+  areRemoteAnnouncementsDisabled,
+  isDevOrE2EAppIdentity,
   loadDismissedIds,
   loadPreviewAnnouncement,
   markDismissed,
@@ -79,21 +82,50 @@ export function useAnnouncement(): UseAnnouncementResult {
   // propagates without a restart. No-ops cleanly when PostHog is disabled
   // (debug builds skip init).
   useEffect(() => {
+    if (areRemoteAnnouncementsDisabled()) {
+      setPayload(null);
+      return;
+    }
+
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
     const read = () => {
+      if (cancelled) return;
       try {
         setPayload(posthog.getFeatureFlagPayload(ANNOUNCEMENT_FLAG_KEY) ?? null);
       } catch {
         setPayload(null);
       }
     };
-    read();
-    let unsubscribe: (() => void) | undefined;
-    try {
-      unsubscribe = posthog.onFeatureFlags(read);
-    } catch {
-      // posthog not ready / disabled — the one-shot read above is enough.
-    }
-    return () => unsubscribe?.();
+
+    const start = async () => {
+      const [name, identifier] = await Promise.all([
+        getName().catch(() => null),
+        getIdentifier().catch(() => null),
+      ]);
+      if (cancelled) return;
+      if (isDevOrE2EAppIdentity(name, identifier)) {
+        setPayload(null);
+        return;
+      }
+
+      read();
+      try {
+        unsubscribe = posthog.onFeatureFlags(read);
+      } catch {
+        // posthog not ready / disabled — the one-shot read above is enough.
+      }
+    };
+
+    start().catch(() => {
+      read();
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // Listen for runtime pushes from `POST /notify` (announcement surface). The

@@ -63,7 +63,11 @@ async fn setup_db() -> sqlx::SqlitePool {
             window_name TEXT,
             window_name_redacted_at INTEGER,
             browser_url TEXT,
-            browser_url_redacted_at INTEGER
+            browser_url_redacted_at INTEGER,
+            -- Per-word OCR boxes (issue #4117); scrubbed via full_text
+            -- propagation (only each block's `text`, geometry preserved).
+            text_json TEXT,
+            text_json_redacted_at INTEGER
         );
         -- ui_events: text_content plus the accessibility element context
         -- + window_title + element_name/description, all redacted together.
@@ -629,15 +633,21 @@ async fn frame_fulltext_propagates_to_all_derived_copies_once() {
     );
     let window = format!("Dashboard — {secret}");
     let url = format!("https://app.example.com/u/{secret}/settings");
+    // Per-word OCR boxes: one block embeds the secret in its `text`; geometry
+    // fields are present so we can assert they survive verbatim.
+    let text_json = format!(
+        r#"[{{"block_num":"1","conf":"95","left":"10","top":"40","width":"120","height":"22","level":"5","page_num":"1","par_num":"1","line_num":"1","word_num":"1","text":"login {secret}"}}]"#
+    );
     let full = format!("login {secret}\nocr dashboard {secret}");
     sqlx::query(
-        "INSERT INTO frames (id, full_text, accessibility_tree_json, window_name, browser_url) \
-         VALUES (1, ?, ?, ?, ?)",
+        "INSERT INTO frames (id, full_text, accessibility_tree_json, window_name, browser_url, text_json) \
+         VALUES (1, ?, ?, ?, ?, ?)",
     )
     .bind(&full)
     .bind(&tree)
     .bind(&window)
     .bind(&url)
+    .bind(&text_json)
     .execute(&pool)
     .await
     .unwrap();
@@ -662,7 +672,8 @@ async fn frame_fulltext_propagates_to_all_derived_copies_once() {
     let row = sqlx::query(
         "SELECT accessibility_tree_json, accessibility_tree_redacted_at, \
                 window_name, window_name_redacted_at, \
-                browser_url, browser_url_redacted_at \
+                browser_url, browser_url_redacted_at, \
+                text_json, text_json_redacted_at \
          FROM frames WHERE id = 1",
     )
     .fetch_one(&pool)
@@ -674,6 +685,8 @@ async fn frame_fulltext_propagates_to_all_derived_copies_once() {
     let win_when: Option<i64> = row.get(3);
     let url_red: String = row.get(4);
     let url_when: Option<i64> = row.get(5);
+    let text_json_red: String = row.get(6);
+    let text_json_when: Option<i64> = row.get(7);
 
     // Secret gone from every derived copy; watermarks stamped.
     assert!(
@@ -700,8 +713,17 @@ async fn frame_fulltext_propagates_to_all_derived_copies_once() {
         url_red.contains("[SECRET]"),
         "browser_url not redacted: {url_red:?}"
     );
+    // Per-word OCR text scrubbed; the bounding-box geometry survives verbatim.
     assert!(
-        tree_when.is_some() && win_when.is_some() && url_when.is_some(),
+        !text_json_red.contains(secret),
+        "secret survived in text_json: {text_json_red:?}"
+    );
+    assert!(
+        text_json_red.contains("[SECRET]"),
+        "text_json not redacted: {text_json_red:?}"
+    );
+    assert!(
+        tree_when.is_some() && win_when.is_some() && url_when.is_some() && text_json_when.is_some(),
         "all derived watermarks must be stamped"
     );
 
@@ -709,6 +731,14 @@ async fn frame_fulltext_propagates_to_all_derived_copies_once() {
     let tree_parsed: serde_json::Value = serde_json::from_str(&tree_red).unwrap();
     assert_eq!(tree_parsed[0]["role"], "AXStaticText");
     assert_eq!(tree_parsed[1]["automation_id"], "f1");
+    // OCR geometry preserved byte-for-byte on the scrubbed block.
+    let tj_parsed: serde_json::Value = serde_json::from_str(&text_json_red).unwrap();
+    assert_eq!(tj_parsed[0]["text"], "login [SECRET]");
+    assert_eq!(tj_parsed[0]["left"], "10");
+    assert_eq!(tj_parsed[0]["top"], "40");
+    assert_eq!(tj_parsed[0]["width"], "120");
+    assert_eq!(tj_parsed[0]["height"], "22");
+    assert_eq!(tj_parsed[0]["conf"], "95");
 
     // ONE detection, propagated to the derived copies — never re-run.
     assert_eq!(
@@ -1023,7 +1053,11 @@ async fn worker_disables_missing_table_and_keeps_reconciling_others() {
             window_name TEXT,
             window_name_redacted_at INTEGER,
             browser_url TEXT,
-            browser_url_redacted_at INTEGER
+            browser_url_redacted_at INTEGER,
+            -- Per-word OCR boxes (issue #4117); scrubbed via full_text
+            -- propagation (only each block's `text`, geometry preserved).
+            text_json TEXT,
+            text_json_redacted_at INTEGER
         );
         "#,
     )

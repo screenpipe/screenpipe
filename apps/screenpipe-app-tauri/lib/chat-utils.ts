@@ -63,6 +63,50 @@ export function extractConversationHistorySyncUserText(value?: string | null): s
   return value.slice(closingTagIndex + closingTag.length).replace(/^\s+/, "");
 }
 
+const CONNECTIONS_CONTEXT_CLOSE = "</connections_context>";
+
+/**
+ * Detect the `<connections_context>` wrapper that the Pi backend prepends to
+ * every foreground user turn (see `attach_foreground_connections_context` in
+ * `pi.rs`). Pi echoes this wrapped message back as a user event; without
+ * stripping it the blob leaks into the sidebar title and spawns a duplicate
+ * "Current Screenpipe connected integrations context" chat.
+ */
+export function isConnectionsContextPrompt(value?: string | null): value is string {
+  return typeof value === "string" && value.trimStart().startsWith("<connections_context>");
+}
+
+/** Return the original user text that follows the `</connections_context>`
+ *  tag, or null when the value isn't a connections-context prompt. */
+export function extractConnectionsContextUserText(value?: string | null): string | null {
+  if (!isConnectionsContextPrompt(value)) return null;
+  const closingTagIndex = value.indexOf(CONNECTIONS_CONTEXT_CLOSE);
+  if (closingTagIndex === -1) return "";
+  return value.slice(closingTagIndex + CONNECTIONS_CONTEXT_CLOSE.length).replace(/^\s+/, "");
+}
+
+/**
+ * Recover the original user text from a message Pi echoed back, peeling off
+ * any injected wrappers. The connections-context wrapper is the outermost
+ * (applied last, in `pi_prompt`), so strip it before the conversation-history
+ * wrapper it may enclose.
+ */
+export function extractInjectedUserText(value?: string | null): string | null {
+  if (typeof value !== "string") return null;
+  const connStripped = extractConnectionsContextUserText(value) ?? value;
+  return extractConversationHistorySyncUserText(connStripped) ?? connStripped;
+}
+
+/**
+ * True when a stored title is actually an injected-plumbing wrapper rather
+ * than a real title. Display-time safety net for conversations persisted by
+ * older builds (before the wrapper was stripped at materialization) so they
+ * render as "untitled" instead of leaking the raw blob into the sidebar.
+ */
+export function isInjectedTitle(value?: string | null): value is string {
+  return isConversationHistorySyncPrompt(value) || isConnectionsContextPrompt(value);
+}
+
 // ============================================================================
 // CHAT PREFILL - Reliable cross-window event delivery
 // ============================================================================

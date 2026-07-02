@@ -30,6 +30,9 @@ import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { commands } from "@/lib/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
+const E2E_ACCOUNT_USER_EVENT = "screenpipe-e2e-seed-account-user";
+
 // Drive the resume from exactly ONE window — the main CONTENT window — so
 // multiple webviews don't fire overlapping spawns that race each other (and a
 // reconnect teardown) and wedge the recorder at "Starting capture session".
@@ -114,6 +117,7 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   const [devError, setDevError] = useState<string | null>(null);
   const stoppedForGateRef = useRef(false);
   const prevEntitledRef = useRef<boolean | null>(null);
+  const skipNextResumeForE2ESeedRef = useRef(false);
   const resumingRef = useRef(false);
   const everEntitledRef = useRef(false);
   const gateReportedRef = useRef(false);
@@ -182,6 +186,27 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
     () => normalizePlanLabel(user?.subscription_plan),
     [user?.subscription_plan],
   );
+
+  useEffect(() => {
+    if (!isSettingsLoaded || typeof window === "undefined") return;
+
+    const seedUser = () => {
+      const raw = window.localStorage?.getItem(E2E_ACCOUNT_USER_KEY);
+      if (!raw) return;
+      try {
+        const seededUser = JSON.parse(raw) as AppUser;
+        window.localStorage.removeItem(E2E_ACCOUNT_USER_KEY);
+        skipNextResumeForE2ESeedRef.current = true;
+        void updateSettings({ user: seededUser as any });
+      } catch (err) {
+        console.warn("failed to apply e2e account user seed:", err);
+      }
+    };
+
+    seedUser();
+    window.addEventListener(E2E_ACCOUNT_USER_EVENT, seedUser);
+    return () => window.removeEventListener(E2E_ACCOUNT_USER_EVENT, seedUser);
+  }, [isSettingsLoaded, updateSettings]);
 
   // Report the gate at most once per continuous gated period. A corrupt secret
   // store makes the token flap (hydrate → fail → strip → retry), which used to
@@ -399,6 +424,11 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
   // "Apply & Restart" path for the canonical sequence.
   useEffect(() => {
     if (!isSettingsLoaded || devBypass) return;
+    if (skipNextResumeForE2ESeedRef.current) {
+      prevEntitledRef.current = isEntitled;
+      if (isEntitled) skipNextResumeForE2ESeedRef.current = false;
+      return;
+    }
     const previouslyEntitled = prevEntitledRef.current;
     prevEntitledRef.current = isEntitled;
     if (previouslyEntitled !== false || !isEntitled) return;

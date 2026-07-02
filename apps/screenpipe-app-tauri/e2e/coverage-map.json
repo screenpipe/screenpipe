@@ -223,6 +223,16 @@
       "notes": "Parallel auto-send prefill dedupe regression."
     },
     {
+      "spec": "chat-connections-context-duplicate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Connections-context wrapper stripping regression: echoed user turns must persist and title chats from the real request, not the injected integrations blob."
+    },
+    {
       "spec": "chat-prefill-duplicate.spec.ts",
       "platforms": ["macos"],
       "layers": ["chat-ai"],
@@ -663,6 +673,16 @@
       "notes": "Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared."
     },
     {
+      "spec": "zz-enterprise-license-prompt.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings", "billing", "real-ui-e2e"],
+      "features": ["app-entitlement-gate", "billing-gate"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Enterprise license prompt handles invalid keys, full-seat errors, and retry success after seats are added without staying stuck in validating state."
+    },
+    {
       "spec": "zz-logout-resurrect.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "settings"],
@@ -671,6 +691,16 @@
       "confidence": "strong",
       "ux": "synthetic",
       "notes": "Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx."
+    },
+    {
+      "spec": "zz-account-basic-upgrade-billing.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "settings", "billing"],
+      "features": ["account-upgrade", "billing-proration", "checkout-duplication"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Basic paid user clicking Account upgrade opens account billing for subscription changes/proration and does not call the fresh subscription checkout endpoint."
     },
     {
       "spec": "zz-account-stale-subscription.spec.ts",

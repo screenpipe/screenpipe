@@ -1282,7 +1282,9 @@ async fn main() -> anyhow::Result<()> {
     server.timeline_disabled = config.disable_timeline;
     server.power_manager = Some(power_manager);
     // Share the VisionManager so /vision/device/* can pause/resume monitors.
-    server.vision_manager = vision_manager_for_server;
+    if let Some(vm) = vision_manager_for_server {
+        server.vision_manager.store(Arc::new(Some(vm)));
+    }
     server.manual_meeting = Some(manual_meeting.clone());
     server.api_auth = config.api_auth;
     server.api_auth_key = config.api_auth_key.clone();

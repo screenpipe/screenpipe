@@ -65,7 +65,7 @@ import {
 } from "@/lib/browser-state-cache";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
-  extractConversationHistorySyncUserText,
+  extractInjectedUserText,
   isInjectedTitleSourcePrompt,
 } from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
@@ -498,7 +498,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   // assistant replies and the user turns appear to vanish from history.
   if (t === "message_start" && payload.message?.role === "user") {
     const rawText = textFromPiMessageContent(payload.message?.content);
-    const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
+    const text = extractInjectedUserText(rawText) ?? rawText;
     const images = imageDataUrlsFromPiContent(payload.message?.content);
     if (!text && images.length === 0) return;
 
