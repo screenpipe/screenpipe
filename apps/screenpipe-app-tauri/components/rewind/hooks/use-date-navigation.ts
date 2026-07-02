@@ -8,7 +8,7 @@ import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
 import posthog from "posthog-js";
-import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
+import { fallbackStartDate, type StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 
 // How far the arrow keys walk past empty days. The underlying SQL uses
 // the timestamp index (O(log n)) so a wider window costs nothing. 7 was
@@ -28,7 +28,7 @@ export function useDateNavigation(opts: {
 	fetchTimeRange: (start: Date, end: Date) => void;
 	hasDateBeenFetched: any;
 	fetchNextDayData: any;
-	startAndEndDates: { start: Date; end: Date };
+	startAndEndDates: { start: Date | null; end: Date };
 	pendingNavigation: any;
 	setPendingNavigation: (v: any) => void;
 	clearSentRequestForDate: (d: Date) => void;
@@ -271,7 +271,7 @@ export function useDateNavigation(opts: {
 			}
 
 			// Don't go before start date
-			if (isAfter(startAndEndDates.start, targetDate)) {
+			if (isAfter(startAndEndDates.start ?? fallbackStartDate(new Date()), targetDate)) {
 				isNavigatingRef.current = false;
 				setIsNavigating(false);
 				setSeekingTimestamp(null);

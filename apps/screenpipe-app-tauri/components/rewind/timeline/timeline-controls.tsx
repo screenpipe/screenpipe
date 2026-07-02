@@ -20,6 +20,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { Calendar } from "@/components/ui/calendar";
 import { listDaysWithFrames } from "@/lib/actions/has-frames-date";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
+import { fallbackStartDate } from "@/components/rewind/timeline";
 import {
 	Popover,
 	PopoverContent,
@@ -27,7 +28,7 @@ import {
 } from "@/components/ui/popover";
 
 interface TimeRange {
-	start: Date;
+	start: Date | null;
 	end: Date;
 }
 
@@ -138,8 +139,9 @@ export function TimelineControls({
 	// Disable back button if we're at or before the earliest recorded date
 	const isAtEarliestDate = useMemo(() => {
 		const previousDay = subDays(currentDate, 1);
+		const start = startAndEndDates.start ?? fallbackStartDate(new Date());
 		// Disabled if previous day would be before the start date
-		return isAfter(startOfDay(startAndEndDates.start), startOfDay(previousDay));
+		return isAfter(startOfDay(start), startOfDay(previousDay));
 	}, [startAndEndDates.start, currentDate]);
 
 	return (
@@ -191,7 +193,7 @@ export function TimelineControls({
 						<Calendar
 							mode="single"
 							selected={currentDate}
-							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} onSelect={(date) => {
+							fromMonth={startOfDay(startAndEndDates.start ?? fallbackStartDate(new Date()))} toMonth={new Date()} onSelect={(date) => {
 								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
 								if (date) {
 									onDateChange(date);
@@ -203,7 +205,7 @@ export function TimelineControls({
 								// Future dates and dates before the user's earliest
 								// recording always disabled.
 								if (isAfter(day, startOfDay(new Date()))) return true;
-								if (isAfter(startOfDay(startAndEndDates.start), day)) return true;
+								if (isAfter(startOfDay(startAndEndDates.start ?? fallbackStartDate(new Date())), day)) return true;
 								// Empty days disabled IF we've loaded the day set.
 								// Skip the check on first render (set is empty)
 								// so the picker is functional during the brief

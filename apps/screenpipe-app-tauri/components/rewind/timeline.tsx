@@ -82,26 +82,27 @@ export interface AudioData {
 }
 
 export interface TimeRange {
-	start: Date;
+	/** null = earliest-recording date not yet resolved (fetched async). */
+	start: Date | null;
 	end: Date;
 }
 
-// Sentinel lower bound used only until getStartDate() resolves the real
-// earliest-recording date. Must not impose any real restriction — a "1 year
-// ago" fallback here would lock out older recordings until the async fetch
-// (which may itself fail) completes. Exported for tests.
-export const UNRESOLVED_START_DATE = new Date(0);
-
 /**
- * Computes the initial (pre-load) timeline bounds. `start` is a permissive
- * placeholder until the real earliest-recording date is fetched — it must
- * never be treated as a real lower bound.
+ * Computes the initial (pre-load) timeline bounds. `start` is null until the
+ * real earliest-recording date is fetched — consumers must treat null as
+ * unresolved and stay conservative, never as a real lower bound.
  */
 export function getInitialStartAndEndDates(now: Date): TimeRange {
 	return {
-		start: UNRESOLVED_START_DATE,
+		start: null,
 		end: now,
 	};
+}
+
+// Conservative lower bound used by UI affordances while the real earliest
+// recording date is unresolved (start === null).
+export function fallbackStartDate(now: Date): Date {
+	return new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
 }
 
 // Retry delays (ms) between getStartDate() attempts. Exported so tests can

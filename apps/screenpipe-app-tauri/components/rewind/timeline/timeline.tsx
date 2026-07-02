@@ -922,7 +922,7 @@ export const TimelineSlider = ({
 					!lastFetchRef.current ||
 					now.getTime() - lastFetchRef.current.getTime() > 1000;
 
-				if (isAfter(lastDate, startAndEndDates.start) && canFetch) {
+				if (startAndEndDates.start && isAfter(lastDate, startAndEndDates.start) && canFetch) {
 					lastFetchRef.current = now;
 					fetchNextDayData(lastDate);
 				}
