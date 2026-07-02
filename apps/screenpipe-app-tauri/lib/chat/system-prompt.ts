@@ -56,12 +56,6 @@ When summarizing what the user did, write like a friend recapping their day. Con
 
 Never POST, PUT, or PATCH to a connection proxy unless the user explicitly asks you to create, write, or modify something in that service. For ambiguous requests, read first. Ask before writing.
 
-# Connection gating
-
-When a user asks you to push, send, create, update, or otherwise perform an action in an external app, first verify that app is connected. Use screenpipe_list_connections when you need the current connection state. If the required app is not connected, call screenpipe_connect_app with the app's connection id and a short reason, then wait. Do not continue the app-dependent task while that tool is waiting. If it returns connected, continue the original task. If the user declines or connection fails, say the app needs to be connected to continue that specific action. Do not send the user to Settings when screenpipe_connect_app is available.
-
-If screenpipe_list_connections or screenpipe_connect_app says a connection is connected via MCP (\`mcp: true\`, \`connected_via: "mcp"\`, or includes \`mcp_server_id\`), use \`sp_mcp_list_tools\` with that \`mcp_server_id\`, then \`sp_mcp_call\` to perform the action. Do not use \`/connections/<id>/proxy\` for MCP-connected apps; that legacy proxy needs a different credential store and will fail even though the MCP OAuth connection is valid.
-
 # Tool selection
 
 - "upcoming meetings / calendar events / what's on my calendar / schedule" → if a calendar integration is connected (google-calendar, apple-calendar), call its events endpoint first; only fall back to audio search if no calendar is connected
@@ -201,15 +195,13 @@ export function buildAppAwarenessContext({
 
   if (normalizedApps.length === 0) return "";
 
+  // keep this lean: just the app + its connection id. live connected state and
+  // the mcp-proxy caveat come from the tools, so we don't restate (or stale) it here.
   const entries = normalizedApps.map((app) => {
     const connection = app.matchingConnection;
-    if (!connection) return `- ${app.displayName}: no matching connection known`;
-    if (connection.connected && connection.mcp) {
-      const serverHint = connection.mcp_server_id ? ` via MCP server ${connection.mcp_server_id}` : " via MCP";
-      return `- ${app.displayName}: connection ${connection.name} (${connection.id}) is connected${serverHint}; use sp_mcp_list_tools/sp_mcp_call, not /connections/${connection.id}/proxy`;
-    }
-    return `- ${app.displayName}: connection ${connection.name} (${connection.id}) is ${connection.connected ? "connected" : "not connected"}`;
+    if (!connection) return `- ${app.displayName}`;
+    return `- ${app.displayName} (connection id: ${connection.id})`;
   });
 
-  return `\n\n# User app context\n\nThe user recently used these apps. Treat this as first-class context when answering, summarizing work, or deciding where an action could go. Do not claim an app is connected unless it says connected here. If an app is not connected, mention it as connectable instead of silently dropping it.\n\n${entries.join("\n")}`;
+  return `\n\n# User app context\n\nThe user recently used these apps. Treat this as first-class context when summarizing work or deciding where an action could go. Apps tagged with a connection id can be acted on through that connection — call screenpipe_list_connections to check its live connected status before claiming it is connected, and screenpipe_connect_app to connect it if it isn't. Do not infer connection state from this list.\n\n${entries.join("\n")}`;
 }
