@@ -40,23 +40,13 @@ import {
   ChevronDown,
   ChevronRight,
   MessageSquare,
-  X,
   MoreVertical,
   Pencil,
-  Square,
   FolderOpen,
 } from "lucide-react";
-import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
-import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { localFetch } from "@/lib/api";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
-import {
-  PipeActivityIndicator,
-  formatPipeCountdown,
-  formatPipeElapsed,
-} from "@/components/pipe-activity-indicator";
 import { LiveSignal } from "@/components/live-signal";
 import {
   useChatStore,
@@ -71,7 +61,6 @@ import {
   loadConversationFile,
   updateConversationFlags,
 } from "@/lib/chat-storage";
-import { pipeSessionId } from "@/lib/events/types";
 import { commands } from "@/lib/utils/tauri";
 import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -111,7 +100,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
-import { requestPipeStop } from "@/lib/pipe-stop";
 import {
   applySidebarRecentsCap,
   buildSidebarRecentsSections,
@@ -156,23 +144,12 @@ function useVisibleChatSections(): {
   archived: SessionRecord[];
 } {
   const sessions = useOrderedSessions();
-  const runningPipes = useRunningPipes();
-
-  const liveScheduledSids = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of runningPipes) {
-      if (p.executionId !== undefined) set.add(pipeSessionId(p.pipeName, p.executionId));
-    }
-    return set;
-  }, [runningPipes]);
 
   return useMemo(() => {
     const pinned: SessionRecord[] = [];
     const recents: SessionRecord[] = [];
     const archived: SessionRecord[] = [];
     for (const s of sessions) {
-      const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
-      if (isPipeKind && liveScheduledSids.has(s.id)) continue;
       // Hide drafts (no user message sent yet)
       // Once a message is sent, draft is cleared and the chat becomes visible
       if (s.draft) continue;
@@ -183,7 +160,7 @@ function useVisibleChatSections(): {
       (s.pinned ? pinned : recents).push(s);
     }
     return { pinned, recents, archived };
-  }, [sessions, liveScheduledSids]);
+  }, [sessions]);
 }
 
 /**
@@ -419,31 +396,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     };
   }, [actions]);
 
-  const runningPipes = useRunningPipes();
-  const {
-    pipes: upcomingPipes,
-    refetch: refetchUpcoming,
-    dismiss: dismissUpcoming,
-  } = useUpcomingPipes();
-
-  // Cancel a one-off pipe before it fires. Optimistically removes the row
-  // (so the click feels instant), then disables on the server, then refetches
-  // to reconcile — if the disable failed, the row reappears on the next
-  // poll/refetch and the user can try again.
-  const handleCancelUpcoming = async (pipeName: string) => {
-    dismissUpcoming(pipeName);
-    try {
-      await localFetch(`/pipes/${encodeURIComponent(pipeName)}/enable`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: false }),
-      });
-    } catch {
-      // best-effort — refetch reconciles either way
-    }
-    void refetchUpcoming();
-  };
-
   const { pinned, recents, archived } = useVisibleChatSections();
   const groupedSections = useMemo(
     () => buildSidebarRecentsSections(recents, Number.POSITIVE_INFINITY),
@@ -581,21 +533,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     [pinned, recents],
   );
 
-  // Resolve each running pipe to its SessionRecord so the Scheduled-row
-  // kebab can offer Pin / Rename / Archive / Delete with the same
-  // semantics as Recents. Subscribes to the raw sessions map (not
-  // useOrderedSessions) so lookups stay O(1) without re-sorting.
-  const sessionsMap = useChatStore((s) => s.sessions);
-  const runningPipeSessions = useMemo(() => {
-    const map = new Map<string, SessionRecord>();
-    for (const p of runningPipes) {
-      if (p.executionId === undefined) continue;
-      const sid = pipeSessionId(p.pipeName, p.executionId);
-      const sess = sessionsMap[sid];
-      if (sess) map.set(p.pipeName, sess);
-    }
-    return map;
-  }, [runningPipes, sessionsMap]);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
@@ -603,7 +540,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const [newGroupSessionId, setNewGroupSessionId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
 
-  const hasScheduledSlice = upcomingPipes.length > 0 || runningPipes.length > 0;
   const [pinnedCollapsed, setPinnedCollapsed] = useCollapsedPref(
     "screenpipe:pinned-collapsed",
     true
@@ -613,8 +549,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     "screenpipe:closed-collapsed",
     true
   );
-  const [scheduledCollapsed, setScheduledCollapsed] = useCollapsedPref("screenpipe:scheduled-collapsed");
-  const [upcomingCollapsed, setUpcomingCollapsed] = useCollapsedPref("screenpipe:upcoming-collapsed");
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
   const recentsLoading = !diskHydrated && recents.length === 0;
@@ -750,35 +684,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   };
 
-  // Stop an in-flight pipe execution. Used by the Scheduled-row kebab so
-  // the user can cancel a run without dropping into Settings → Pipes. We
-  // don't optimistically remove the row — the next `useRunningPipes` poll
-  // (or the rust-side execution-end event) will clear it once the engine
-  // confirms the stop.
-  const handleStopRun = async (pipeName: string) => {
-    try {
-      const result = await requestPipeStop(pipeName);
-      if (!result.ok && result.status !== "not_running") {
-        toast({
-          title: "pipe stop failed",
-          description: result.error,
-          variant: "destructive",
-        });
-      } else if (result.ok) {
-        toast({
-          title: "stopping pipe",
-          description:
-            result.status === "stop_pending"
-              ? `${pipeName} will stop as soon as the agent subprocess finishes spawning`
-              : `${pipeName} is shutting down`,
-        });
-      }
-    } catch {
-      // best-effort — the user can retry; if the pipe already finished
-      // the next poll will remove the row anyway.
-    }
-  };
-
   const handleMoveToGroup = async (id: string, group: string | undefined) => {
     let normalized: string | undefined;
     if (group !== undefined) {
@@ -827,59 +732,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       }}
     >
       <div className="flex flex-col gap-1">
-        {hasScheduledSlice && (
-          <div
-            className="flex flex-col shrink-0"
-          >
-            {upcomingPipes.length > 0 && (
-              <div
-                className="flex flex-col shrink-0"
-              >
-                <Section
-                  title="upcoming"
-                  count={upcomingPipes.length}
-                  collapsed={upcomingCollapsed}
-                  onCollapsedChange={setUpcomingCollapsed}
-                  bodyClassName=""
-                >
-                  {upcomingPipes.map((p) => (
-                    <UpcomingRow key={p.pipeName} pipe={p} onCancel={handleCancelUpcoming} />
-                  ))}
-                </Section>
-              </div>
-            )}
-            {runningPipes.length > 0 && (
-              <div
-                className="flex flex-col shrink-0"
-              >
-                <Section
-                  title="scheduled"
-                  count={runningPipes.length}
-                  collapsed={scheduledCollapsed}
-                  onCollapsedChange={setScheduledCollapsed}
-                  bodyClassName=""
-                >
-                  {runningPipes.map((p) => (
-                    <ScheduledRow
-                      key={p.pipeName}
-                      pipe={p}
-                      session={runningPipeSessions.get(p.pipeName)}
-                      onStopRun={handleStopRun}
-                      onTogglePin={handleTogglePin}
-                      onArchive={handleArchive}
-                      onUnarchive={handleUnarchive}
-                      onDeleteRequest={setDeletingSessionId}
-                      onRenameRequest={handleRenameRequest}
-                      openConversationMenuId={openConversationMenuId}
-                      setOpenConversationMenuId={setOpenConversationMenuId}
-                    />
-                  ))}
-                </Section>
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="min-h-0 flex flex-col flex-1">
           {pinned.length > 0 && (
             <div className="shrink-0">
@@ -1408,336 +1260,6 @@ function ChatRowsSkeleton({ rows }: { rows: number }) {
           />
         </div>
       ))}
-    </div>
-  );
-}
-
-function ScheduledRow({
-  pipe,
-  session,
-  onStopRun,
-  onTogglePin,
-  onArchive,
-  onUnarchive,
-  onDeleteRequest,
-  onRenameRequest,
-  openConversationMenuId,
-  setOpenConversationMenuId,
-}: {
-  pipe: { pipeName: string; title?: string; startedAt?: string; executionId?: number };
-  session?: SessionRecord;
-  onStopRun: (pipeName: string) => void | Promise<void>;
-  onTogglePin: (id: string) => void | Promise<void>;
-  onArchive: (id: string) => void | Promise<void>;
-  onUnarchive: (id: string) => void | Promise<void>;
-  onDeleteRequest: (id: string | null) => void;
-  onRenameRequest: (id: string) => void;
-  openConversationMenuId?: string | null;
-  setOpenConversationMenuId?: (id: string | null) => void;
-}) {
-  // Re-render once a minute so the elapsed badge ticks while the row is
-  // mounted. Cheap — at most one timer per visible scheduled pipe and the
-  // section is collapsed by default for many users.
-  const [, force] = useState(0);
-  useEffect(() => {
-    if (!pipe.startedAt) return;
-    const id = setInterval(() => force((n) => n + 1), 60_000);
-    return () => clearInterval(id);
-  }, [pipe.startedAt]);
-  const elapsed = formatPipeElapsed(pipe.startedAt);
-  // Click → emit watch_pipe so standalone-chat opens the pipe execution
-  // and starts streaming its output. The page-level listener flips the
-  // active section to home if the user is on Pipes/Memories/etc.
-  const onClick = () => {
-    if (pipe.executionId == null) return;
-    void emit("watch_pipe", {
-      pipeName: pipe.pipeName,
-      executionId: pipe.executionId,
-    });
-  };
-  const interactive = pipe.executionId != null;
-  const menuOpen = session ? openConversationMenuId === session.id : false;
-  return (
-    <div
-      className={cn(
-        "group relative flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none",
-        interactive
-          ? "cursor-pointer hover:bg-muted/40"
-          : "cursor-default"
-      )}
-      title={`pipe: ${pipe.pipeName}`}
-      data-testid={`scheduled-row-${pipe.pipeName}`}
-    >
-      <div
-        role={interactive ? "button" : undefined}
-        tabIndex={interactive ? 0 : undefined}
-        onClick={interactive ? onClick : undefined}
-        onKeyDown={
-          interactive
-            ? (e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onClick();
-                }
-              }
-            : undefined
-        }
-        className="min-w-0 flex-1 flex items-center gap-2 text-left"
-      >
-        <span className="truncate flex-1 text-xs">
-          {pipe.title || pipe.pipeName}
-        </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className={cn(
-                "min-w-5 shrink-0 inline-flex justify-end transition-opacity duration-150",
-                // Mirror the recents pattern: kebab overlays the status
-                // slot on hover so the right edge stays aligned with
-                // recents rows whether or not the menu is visible.
-                "group-hover:opacity-0",
-                menuOpen && "opacity-0"
-              )}
-            >
-              <LiveSignal ariaLabel={`running ${elapsed ?? "now"}`} />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 lowercase">
-            {`running ${elapsed ?? "now"}`}
-          </TooltipContent>
-        </Tooltip>
-      </div>
-
-      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
-        <DropdownMenu
-          open={menuOpen}
-          onOpenChange={(open) => {
-            if (!session) return;
-            setOpenConversationMenuId?.(open ? session.id : null);
-          }}
-        >
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              className={cn(
-                "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
-                menuOpen
-                  ? "opacity-100 visible"
-                  : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
-              )}
-              aria-label="pipe actions"
-            >
-              <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            alignOffset={2}
-            side="bottom"
-            sideOffset={4}
-            collisionPadding={8}
-            className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <DropdownMenuItem
-              className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-              onSelect={(e) => {
-                e.stopPropagation();
-                void onStopRun(pipe.pipeName);
-              }}
-            >
-              <Square className="h-3 w-3 text-muted-foreground" />
-              Stop run
-            </DropdownMenuItem>
-            {session && (
-              <>
-                <DropdownMenuSeparator className="my-1 bg-border/70" />
-                <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                  onSelect={(e) => {
-                    e.stopPropagation();
-                    void onTogglePin(session.id);
-                  }}
-                >
-                  <Pin className="h-3 w-3 text-muted-foreground" />
-                  {session.pinned ? "Unpin" : "Pin"}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                  onSelect={(e) => {
-                    e.stopPropagation();
-                    onRenameRequest(session.id);
-                  }}
-                >
-                  <Pencil className="h-3 w-3 text-muted-foreground" />
-                  Rename
-                </DropdownMenuItem>
-                {!session.hidden ? (
-                  <DropdownMenuItem
-                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                    onSelect={(e) => {
-                      e.stopPropagation();
-                      void onArchive(session.id);
-                    }}
-                  >
-                    <Archive className="h-3 w-3 text-muted-foreground" />
-                    Archive
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem
-                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
-                    onSelect={(e) => {
-                      e.stopPropagation();
-                      void onUnarchive(session.id);
-                    }}
-                  >
-                    <Undo2 className="h-3 w-3 text-muted-foreground" />
-                    Unarchive
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator className="my-1 bg-border/70" />
-                <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
-                  onSelect={(e) => {
-                    e.stopPropagation();
-                    onDeleteRequest(session.id);
-                  }}
-                >
-                  <Trash2 className="h-3 w-3 text-destructive" />
-                  Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </div>
-  );
-}
-
-/** Sidebar section for one-off pipes (`schedule: at <iso>`) that haven't
- *  fired yet. Mirrors `CollapsibleScheduled` visually but shows a
- *  countdown ("in 2d 4h") instead of an elapsed badge, and uses a steady
- *  clock icon to differentiate from running pipes. */
-function CollapsibleUpcoming({
-  pipes,
-  onCancel,
-}: {
-  pipes: UpcomingPipe[];
-  onCancel: (pipeName: string) => void | Promise<void>;
-}) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:upcoming-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:upcoming-collapsed", String(v));
-    } catch {
-      // ignore
-    }
-  };
-  return (
-    <div className="flex flex-col mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-upcoming"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-          upcoming
-        </span>
-        <PipeActivityIndicator
-          kind="upcoming"
-          label={pipes.length}
-          className="shrink-0"
-          labelClassName="text-muted-foreground/60"
-          ariaLabel={`${pipes.length} upcoming pipe${pipes.length === 1 ? "" : "s"}`}
-        />
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-upcoming"
-          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          <div className="flex flex-col">
-            {pipes.map((p) => (
-              <UpcomingRow key={p.pipeName} pipe={p} onCancel={onCancel} />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UpcomingRow({
-  pipe,
-  onCancel,
-}: {
-  pipe: UpcomingPipe;
-  onCancel: (pipeName: string) => void | Promise<void>;
-}) {
-  // Re-tick once a minute so the countdown stays fresh while the row is
-  // mounted. Cheap: max one timer per upcoming pipe; users rarely have
-  // more than a handful queued.
-  const [, force] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => force((n) => n + 1), 60_000);
-    return () => clearInterval(id);
-  }, []);
-  const countdown = formatPipeCountdown(pipe.runAt);
-  // Auto-hide rows whose run-time has just passed (next poll will drop
-  // the pipe from the list once the auto-disable kicks in server-side,
-  // but we don't want a visible row showing "in 0s" stuck on screen).
-  if (!countdown) return null;
-  const fireDate = new Date(pipe.runAt);
-  const absLabel = `${fireDate.toLocaleDateString()} ${fireDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-  return (
-    <div
-      className="group flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none cursor-default hover:bg-muted/40"
-      title={`scheduled for ${absLabel} — pipe: ${pipe.pipeName}`}
-      data-testid={`upcoming-row-${pipe.pipeName}`}
-    >
-      <span className="truncate flex-1 text-xs">
-        {pipe.title || pipe.pipeName}
-      </span>
-      {/* Countdown swaps out for the cancel button on hover — keeps the row
-          height stable (no layout shift) and avoids surfacing a destructive
-          action until the user clearly intends to interact. */}
-      <PipeActivityIndicator
-        kind="upcoming"
-        label={countdown}
-        className="shrink-0 group-hover:hidden"
-        ariaLabel={countdown ? `scheduled ${countdown}` : "scheduled"}
-      />
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          void onCancel(pipe.pipeName);
-        }}
-        className="hidden group-hover:inline-flex items-center justify-center p-0.5 rounded hover:bg-muted text-muted-foreground shrink-0"
-        title="cancel"
-        aria-label={`cancel ${pipe.title || pipe.pipeName}`}
-        data-testid={`upcoming-cancel-${pipe.pipeName}`}
-      >
-        <X className="h-3 w-3" />
-      </button>
     </div>
   );
 }
