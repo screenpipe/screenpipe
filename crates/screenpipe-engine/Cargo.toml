@@ -87,9 +87,6 @@ reqwest = { workspace = true }
 # Upstream tinfoilsh/tinfoil-rs main, post-#21 (the ring-backend fix).
 tinfoil = { workspace = true }
 
-# Concurrency
-crossbeam = { workspace = true }
-
 # base64
 base64 = { workspace = true }
 
@@ -139,6 +136,11 @@ env_logger = { workspace = true }
 tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tower = { version = "0.4", features = ["util"] }
+
+# Lock-free queue used by tests/consumer_sleep_test.rs to reproduce the
+# OCR frame-drop bug (see the test's docstring). Not needed by the crate
+# itself — src/, benches/, and examples/ don't import crossbeam.
+crossbeam = { workspace = true }
 
 # Benches
 criterion = { workspace = true }
