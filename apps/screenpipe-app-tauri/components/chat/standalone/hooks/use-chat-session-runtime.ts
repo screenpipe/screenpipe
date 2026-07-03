@@ -17,7 +17,6 @@ import type { ContentBlock, Message } from "@/lib/chat/types";
 
 interface UseChatSessionRuntimeOptions {
   conversationId: string | null;
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setIsStreaming: React.Dispatch<React.SetStateAction<boolean>>;
   isLoading: boolean;
@@ -36,7 +35,6 @@ interface UseChatSessionRuntimeOptions {
 
 export function useChatSessionRuntime({
   conversationId,
-  setMessages,
   setIsLoading,
   setIsStreaming,
   isLoading,
@@ -97,15 +95,8 @@ export function useChatSessionRuntime({
     };
   }, [conversationId, handleAgentEventDataRef, piSessionIdRef]);
 
-  const pipeWatchMessages = useChatStore((state) =>
-    conversationId && state.sessions[conversationId]?.kind === "pipe-watch"
-      ? state.sessions[conversationId]?.messages
-      : undefined,
-  );
-  useEffect(() => {
-    if (!pipeWatchMessages) return;
-    setMessages(pipeWatchMessages as any);
-  }, [pipeWatchMessages, setMessages]);
+  // Pipe-watch messages are now sourced directly from the store in the parent
+  // (standalone-chat.tsx) — no store→local mirror effect needed here.
 
   const pipeWatchIsLoading = useChatStore((state) => {
     if (!conversationId) return undefined;
