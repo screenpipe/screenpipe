@@ -11,7 +11,6 @@ import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
 import { IntegrationIcon } from "@/components/settings/connections-section";
-import { useSettings } from "@/lib/hooks/use-settings";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
@@ -816,12 +815,10 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
   return result;
 }
 
-function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: boolean): GroupedBlock[] {
-  // Run always: collapsing consecutive tool-groups into a single
-  // "Worked for X min" rail is useful regardless of the thinking-block
-  // visibility setting. `hideThinkingBlocks` only controls whether
-  // thinking blocks get absorbed into the work-group (true) or shown
-  // as separate pills (false).
+function collapseHiddenWorkGroups(grouped: GroupedBlock[]): GroupedBlock[] {
+  // Collapse consecutive tool-groups into a single "Worked for X min"
+  // rail. Thinking blocks are always absorbed — their duration folds
+  // into the work-group and they never render as separate pills.
 
   const out: GroupedBlock[] = [];
   let pendingToolCalls: ToolCall[] = [];
@@ -864,15 +861,9 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: b
     }
 
     if (group.type === "thinking") {
-      if (hideThinkingBlocks) {
-        pendingDurationMs += group.durationMs ?? 0;
-        pendingKey ??= group.key;
-        continue;
-      }
-      // Show thinking pills inline — flush pending tool work first so
-      // ordering is preserved and the thinking pill renders separately.
-      flushPending();
-      out.push(group);
+      // Always absorb thinking duration into the pending work-group
+      pendingDurationMs += group.durationMs ?? 0;
+      pendingKey ??= group.key;
       continue;
     }
 
@@ -1239,8 +1230,6 @@ export function MessageContent({
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
 }) {
   const isUser = message.role === "user";
-  const { settings } = useSettings();
-  const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
   const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
     <SourceCitationFooter citations={sourceCitations} onOpenFile={onOpenViewerPath} />
@@ -1367,7 +1356,7 @@ export function MessageContent({
   // Group consecutive tool blocks into collapsible containers
   if (message.contentBlocks && message.contentBlocks.length > 0) {
     const grouped = groupContentBlocks(message.contentBlocks);
-    const displayGroups = collapseHiddenWorkGroups(grouped, hideThinkingBlocks);
+    const displayGroups = collapseHiddenWorkGroups(grouped);
     // When the message has no rendered prose (no text block — common for
     // pipe-run executions whose entire output is thinking + tool calls),
     // expand thinking blocks by default. Otherwise the collapsed
@@ -1403,13 +1392,9 @@ export function MessageContent({
             );
           }
           if (group.type === "thinking") {
-            // Settings → Display → Hide Thinking Blocks (default true). Even
-            // when shown the block starts collapsed: the "thought for Xs"
-            // pill is enough signal that the assistant did chain-of-thought
-            // work — auto-expanding (the c092166e0 behavior) drew the eye
-            // to raw reasoning instead of the response.
-            if (hideThinkingBlocks) return null;
-            return <ThinkingBlock key={`thinking-${group.key}`} text={group.text} isThinking={group.isThinking} durationMs={group.durationMs} />;
+            // Thinking blocks are always hidden — guard until
+            // collapseHiddenWorkGroups absorbs them fully.
+            return null;
           }
           if (group.type === "connection-action") {
             const liveConnection = connectionItems.find((connection) => connection.id === group.block.connectionId);
