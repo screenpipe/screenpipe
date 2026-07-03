@@ -170,9 +170,9 @@ function NoteEditor(
   // whether an incoming `value` originated from the editor itself (skip) vs
   // an external source like the server or AI summary (apply).
   const lastEmittedRef = useRef<string | null>(null);
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
+  // Latest callback mirrored during render (invoked only from the editor's
+  // onUpdate handler).
+  onChangeRef.current = onChange;
 
   const insertImages = useCallback(
     (dataUrls: string[], at?: { clientX: number; clientY: number }) => {

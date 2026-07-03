@@ -84,9 +84,8 @@ export function ChatHistoryView({
   // Increment to invalidate in-flight loads from a previous tab/query.
   const loadTokenRef = React.useRef(0);
 
-  useEffect(() => {
-    conversationsRef.current = conversations;
-  }, [conversations]);
+  // Latest value mirrored during render (read only from the load-more callback).
+  conversationsRef.current = conversations;
 
   const load = useCallback(
     async (mode: "reset" | "append" = "reset") => {

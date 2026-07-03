@@ -149,9 +149,8 @@ export function MeetingNotesSection({
   // depend on `fetchPage` (intentionally stable) and shouldn't re-bind
   // when the query changes, but they still need to reuse it.
   const appliedQueryRef = useRef(appliedQuery);
-  useEffect(() => {
-    appliedQueryRef.current = appliedQuery;
-  }, [appliedQuery]);
+  // Latest value mirrored during render (read only from fetch callbacks).
+  appliedQueryRef.current = appliedQuery;
 
   // Track an in-flight open-meeting-note request so the "selection
   // vanished" effect below doesn't reset selectedId during the brief
@@ -223,9 +222,8 @@ export function MeetingNotesSection({
   // setContent, which re-parses the markdown and visually tightens loose
   // lists and paragraph spacing.
   const selectedIdRef = useRef(selectedId);
-  useEffect(() => {
-    selectedIdRef.current = selectedId;
-  }, [selectedId]);
+  // Latest value mirrored during render (read only from callbacks).
+  selectedIdRef.current = selectedId;
   useEffect(() => {
     const handler = () => {
       if (document.visibilityState !== "visible") return;
@@ -316,9 +314,8 @@ export function MeetingNotesSection({
   // identity changes (e.g. after the user expands the sidebar by hand,
   // which is exactly the wrong moment to re-collapse it).
   const onFocusModeChangeRef = useRef(onFocusModeChange);
-  useEffect(() => {
-    onFocusModeChangeRef.current = onFocusModeChange;
-  }, [onFocusModeChange]);
+  // Latest callback mirrored during render (invoked only from callbacks below).
+  onFocusModeChangeRef.current = onFocusModeChange;
   useEffect(() => {
     onFocusModeChangeRef.current?.(selectedId !== null);
   }, [selectedId]);

@@ -67,9 +67,8 @@ export function useChatComposerShell() {
   const [chipPrefixWidth, setChipPrefixWidth] = useState(0);
   const [chipScrollTop, setChipScrollTop] = useState(0);
 
-  useEffect(() => {
-    inputValueRef.current = input;
-  }, [input]);
+  // Latest value mirrored during render (consumed only from callbacks).
+  inputValueRef.current = input;
 
   useLayoutEffect(() => {
     if (!connectionChip) {
