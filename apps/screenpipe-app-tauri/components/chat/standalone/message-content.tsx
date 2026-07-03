@@ -57,7 +57,7 @@ function MermaidDiagramBlock({ chart }: { chart: string }) {
 }
 
 // Animation phase for the grid dissolve loader.
-export type LoaderPhase = "analyzing" | "thinking" | "tool" | "streaming";
+export type LoaderPhase = "analyzing" | "tool" | "streaming";
 
 // Grid dissolve loading indicator — 5x4 grid of cells with animation patterns
 // that shift based on what the model is doing. Geometric, screen-capture themed.
@@ -65,12 +65,10 @@ export function GridDissolveLoader({
   phase = "analyzing",
   label,
   toolName,
-  thinkingSecs,
 }: {
   phase?: LoaderPhase;
   label?: string;
   toolName?: string;
-  thinkingSecs?: number;
 }) {
   const ROWS = 3;
   const COLS = 5;
@@ -103,7 +101,7 @@ export function GridDissolveLoader({
             const fill = tick % (ROWS + 1);
             return row <= fill || row === scanRow % ROWS;
           }
-          // analyzing / thinking: scan line is bright, other cells flicker
+          // analyzing: scan line is bright, other cells flicker
           if (row === scanRow % ROWS) return true;
           return Math.random() > 0.6;
         });
@@ -114,7 +112,6 @@ export function GridDissolveLoader({
   }, [phase]);
 
   const displayLabel = label ?? (
-    phase === "thinking" ? `thinking${thinkingSecs != null ? ` ${thinkingSecs}s` : ""}...` :
     phase === "tool" ? (toolName ?? "running tool...") :
     phase === "streaming" ? "writing..." :
     "analyzing..."
@@ -522,42 +519,6 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
           )}
         </AnimatePresence>
       </div>
-    </div>
-  );
-}
-
-function ThinkingBlock({ text, isThinking, durationMs, defaultExpanded = false }: { text: string; isThinking: boolean; durationMs?: number; defaultExpanded?: boolean }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(Date.now());
-
-  useEffect(() => {
-    if (!isThinking) return;
-    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
-    return () => window.clearInterval(id);
-  }, [isThinking]);
-
-  const seconds = isThinking ? elapsed : durationMs ? Math.round(durationMs / 1000) : 0;
-
-  return (
-    <div className="rounded-lg border border-border/30 bg-muted/20 text-xs overflow-hidden max-w-full">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted/40 transition-colors text-left"
-      >
-        <div className={cn("h-2 w-2 rounded-full", isThinking ? "bg-foreground/60 animate-pulse" : "bg-foreground/30")} />
-        <span className="font-mono text-muted-foreground">
-          {isThinking ? `thinking... (${seconds}s)` : `thought for ${seconds}s`}
-        </span>
-        <span className="ml-auto text-muted-foreground">{expanded ? "▾" : "▸"}</span>
-      </button>
-      {expanded && text.trim() && (
-        <div className="px-3 py-2 border-t border-border/30">
-          <div className="pl-3 border-l-2 border-border/40 text-muted-foreground font-mono whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto text-[11px] leading-relaxed">
-            {text}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
