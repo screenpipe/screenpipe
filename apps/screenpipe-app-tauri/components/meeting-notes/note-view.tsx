@@ -361,25 +361,13 @@ export function NoteView({
     [meeting.id],
   );
 
-  // Reset draft when meeting changes
-  useEffect(() => {
-    setTitle(meeting.title ?? "");
-    setAttendees(meeting.attendees ?? "");
-    setNote(meeting.note ?? "");
-    setSaveState({ kind: "idle" });
-    setMeetingCtx(null);
-    setTranscriptOpenState(
-      initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
-    );
-    setTranscriptRefreshKey(0);
-    setInactivityPrompt(false);
-    setDismissedJoinUrl(null);
-    lastSavedRef.current = {
-      title: meeting.title ?? "",
-      attendees: meeting.attendees ?? "",
-      note: meeting.note ?? "",
-    };
-  }, [meeting.id, initialTranscriptOpen]);
+  // Draft state resets when the meeting changes because the parent already
+  // remounts this component per meeting: `<NoteView key={selected.id} ... />`
+  // in components/meeting-notes/index.tsx (selected === the `meeting` prop).
+  // A fresh mount re-runs the useState initializers and lastSavedRef above,
+  // which reproduce exactly what a reset effect would set — so no reset effect
+  // is needed. (A dedicated effect below opens the transcript when
+  // initialTranscriptOpen is requested.)
 
   useEffect(() => {
     posthog.capture("meeting_note_opened", {
