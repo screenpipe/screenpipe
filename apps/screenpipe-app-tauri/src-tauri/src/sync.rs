@@ -794,7 +794,9 @@ pub async fn auto_start_retention(app: &AppHandle) {
     // reads `localRetentionEnabled ?? false`, so the toggle visibly shows
     // "off" for those users; defaulting to `true` here would run retention
     // behind their back. Users who want auto-delete enable it via Settings →
-    // Storage, which writes the field to the store.
+    // Storage, which writes the field to the store. New installs get the
+    // field written as `true` by init_store(), so retention is on by default
+    // for them without affecting anyone who installed earlier.
     let enabled = settings
         .extra
         .get("localRetentionEnabled")

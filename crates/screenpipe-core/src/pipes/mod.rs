@@ -1516,6 +1516,139 @@ fn parse_error_type_from_output(stderr: &str, stdout: &str) -> (Option<String>, 
     parse_error_type(stdout)
 }
 
+struct ClassifiedPipeProcessResult {
+    status: &'static str,
+    success: bool,
+    stderr: String,
+    error_type: Option<String>,
+    error_message: Option<String>,
+}
+
+fn classify_pipe_process_result(
+    process_success: bool,
+    was_cancelled: bool,
+    stderr: &str,
+    filtered_stdout: &str,
+) -> ClassifiedPipeProcessResult {
+    if was_cancelled {
+        return ClassifiedPipeProcessResult {
+            status: "cancelled",
+            success: false,
+            stderr: String::new(),
+            error_type: Some("cancelled".to_string()),
+            error_message: None,
+        };
+    }
+
+    if process_success {
+        return ClassifiedPipeProcessResult {
+            status: "completed",
+            success: true,
+            stderr: stderr.to_string(),
+            error_type: None,
+            error_message: None,
+        };
+    }
+
+    if is_post_completion_continue_error(stderr, filtered_stdout) {
+        return ClassifiedPipeProcessResult {
+            status: "completed",
+            success: true,
+            stderr: String::new(),
+            error_type: None,
+            error_message: None,
+        };
+    }
+
+    let (error_type, error_message) = parse_error_type_from_output(stderr, filtered_stdout);
+    ClassifiedPipeProcessResult {
+        status: "failed",
+        success: false,
+        stderr: stderr.to_string(),
+        error_type,
+        error_message,
+    }
+}
+
+fn is_post_completion_continue_error(stderr: &str, stdout: &str) -> bool {
+    if !stderr
+        .to_lowercase()
+        .contains("cannot continue from message role: assistant")
+    {
+        return false;
+    }
+
+    stdout_has_successful_agent_end_before_retry(stdout)
+}
+
+fn stdout_has_successful_agent_end_before_retry(stdout: &str) -> bool {
+    let mut saw_successful_agent_end = false;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+            continue;
+        }
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+
+        match value.get("type").and_then(|v| v.as_str()) {
+            Some("agent_end") => {
+                if agent_end_has_successful_assistant_text(&value) {
+                    saw_successful_agent_end = true;
+                }
+            }
+            Some("compaction_end") if saw_successful_agent_end => {
+                if value
+                    .get("willRetry")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+fn agent_end_has_successful_assistant_text(value: &serde_json::Value) -> bool {
+    let Some(messages) = value.get("messages").and_then(|v| v.as_array()) else {
+        return false;
+    };
+
+    let Some(message) = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("assistant"))
+    else {
+        return false;
+    };
+
+    if message.get("stopReason").and_then(|v| v.as_str()) == Some("error") {
+        return false;
+    }
+
+    message
+        .get("content")
+        .and_then(|v| v.as_array())
+        .map(|blocks| {
+            blocks.iter().any(|block| {
+                block.get("type").and_then(|v| v.as_str()) == Some("text")
+                    && block
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|text| !text.trim().is_empty())
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Specific tokens that mean a terminal provider quota/billing gate (no point
 /// retrying or falling back). Deliberately NOT a bare "quota"/"billing" match:
 /// transient rate-limit messages often mention those words (e.g. "rate limited —
@@ -2826,54 +2959,51 @@ impl PipeManager {
             let (log, cb_error_type): (PipeRunLog, Option<String>) = match run_result {
                 Ok(Ok(output)) => {
                     let filtered_stdout = filter_ndjson_stdout(&output.stdout);
-                    let (error_type, error_message) = if was_cancelled {
-                        (Some("cancelled".to_string()), None)
-                    } else if !output.success {
-                        parse_error_type_from_output(&output.stderr, &filtered_stdout)
-                    } else {
-                        (None, None)
-                    };
-                    let status = if was_cancelled {
-                        "cancelled"
-                    } else if output.success {
-                        "completed"
-                    } else {
-                        "failed"
-                    };
+                    let classified = classify_pipe_process_result(
+                        output.success,
+                        was_cancelled,
+                        &output.stderr,
+                        &filtered_stdout,
+                    );
                     let session_path =
                         find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
-                                status,
+                                classified.status,
                                 &filtered_stdout,
-                                &output.stderr,
+                                &classified.stderr,
                                 None,
-                                error_type.as_deref(),
-                                error_message.as_deref(),
+                                classified.error_type.as_deref(),
+                                classified.error_message.as_deref(),
                                 session_path.as_deref(),
                             )
                             .await;
                     }
                     if let Some(ref store) = store_ref {
                         let _ = store
-                            .upsert_scheduler_state(&pipe_name, output.success && !was_cancelled)
+                            .upsert_scheduler_state(&pipe_name, classified.success)
                             .await;
                     }
-                    let et = if output.success && !was_cancelled {
+                    let et = if classified.success {
                         None
                     } else {
-                        Some(error_type.unwrap_or_else(|| "unknown".to_string()))
+                        Some(
+                            classified
+                                .error_type
+                                .clone()
+                                .unwrap_or_else(|| "unknown".to_string()),
+                        )
                     };
                     (
                         PipeRunLog {
                             pipe_name: pipe_name.clone(),
                             started_at,
                             finished_at,
-                            success: output.success && !was_cancelled,
+                            success: classified.success,
                             stdout: filtered_stdout.clone(),
-                            stderr: output.stderr.clone(),
+                            stderr: classified.stderr.clone(),
                         },
                         et,
                     )
@@ -3355,53 +3485,42 @@ impl PipeManager {
                     // Normal completion
                     let filtered_stdout = filter_ndjson_stdout(&output.stdout);
                     let cancelled = was_cancelled();
-                    let (error_type, error_message) = if cancelled {
-                        (Some("cancelled".to_string()), None)
-                    } else if !output.success {
-                        parse_error_type_from_output(&output.stderr, &filtered_stdout)
-                    } else {
-                        (None, None)
-                    };
-
-                    let status = if cancelled {
-                        "cancelled"
-                    } else if output.success {
-                        "completed"
-                    } else {
-                        "failed"
-                    };
+                    let classified = classify_pipe_process_result(
+                        output.success,
+                        cancelled,
+                        &output.stderr,
+                        &filtered_stdout,
+                    );
                     let session_path =
                         find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
-                                status,
+                                classified.status,
                                 &filtered_stdout,
-                                &output.stderr,
+                                &classified.stderr,
                                 None,
-                                error_type.as_deref(),
-                                error_message.as_deref(),
+                                classified.error_type.as_deref(),
+                                classified.error_message.as_deref(),
                                 session_path.as_deref(),
                             )
                             .await;
                     }
                     if let Some(ref store) = self.store {
-                        let _ = store
-                            .upsert_scheduler_state(name, output.success && !cancelled)
-                            .await;
+                        let _ = store.upsert_scheduler_state(name, classified.success).await;
                     }
 
                     // Update circuit breaker state — always record failures
                     // even with a single preset, so the breaker is pre-tripped
                     // when the user adds a fallback preset later.
                     if let Some(ref pid) = active_preset_id {
-                        if output.success && !cancelled {
+                        if classified.success {
                             self.fallback_registry.record_success(pid);
                         } else if !cancelled {
                             self.fallback_registry.record_failure_from_output(
                                 pid,
-                                &output.stderr,
+                                &classified.stderr,
                                 &filtered_stdout,
                             );
                         }
@@ -3411,9 +3530,9 @@ impl PipeManager {
                         pipe_name: name.to_string(),
                         started_at,
                         finished_at,
-                        success: output.success && !cancelled,
+                        success: classified.success,
                         stdout: filtered_stdout.clone(),
-                        stderr: output.stderr.clone(),
+                        stderr: classified.stderr.clone(),
                     }
                 }
                 Ok(Err(e)) => {
@@ -4709,63 +4828,57 @@ impl PipeManager {
                             Ok(Ok(output)) => {
                                 let filtered_stdout = filter_ndjson_stdout(&output.stdout);
                                 let cancelled = was_cancelled();
-                                let (error_type, error_message) = if cancelled {
-                                    (Some("cancelled".to_string()), None)
-                                } else if !output.success {
-                                    parse_error_type_from_output(&output.stderr, &filtered_stdout)
-                                } else {
-                                    (None, None)
-                                };
-                                let status = if cancelled {
-                                    "cancelled"
-                                } else if output.success {
-                                    "completed"
-                                } else {
-                                    "failed"
-                                };
+                                let classified = classify_pipe_process_result(
+                                    output.success,
+                                    cancelled,
+                                    &output.stderr,
+                                    &filtered_stdout,
+                                );
                                 let session_path = find_latest_pi_session(&pipe_dir)
                                     .map(|p| p.to_string_lossy().to_string());
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
                                         .finish_execution(
                                             id,
-                                            status,
+                                            classified.status,
                                             &filtered_stdout,
-                                            &output.stderr,
+                                            &classified.stderr,
                                             None,
-                                            error_type.as_deref(),
-                                            error_message.as_deref(),
+                                            classified.error_type.as_deref(),
+                                            classified.error_message.as_deref(),
                                             session_path.as_deref(),
                                         )
                                         .await;
                                 }
                                 if let Some(ref store) = store_ref {
                                     let _ = store
-                                        .upsert_scheduler_state(
-                                            &pipe_name,
-                                            output.success && !cancelled,
-                                        )
+                                        .upsert_scheduler_state(&pipe_name, classified.success)
                                         .await;
                                 }
 
-                                if output.success && !cancelled {
+                                if classified.success {
                                     info!("pipe '{}' completed successfully", pipe_name);
                                 } else {
-                                    warn!("pipe '{}' failed: {}", pipe_name, output.stderr);
+                                    warn!("pipe '{}' failed: {}", pipe_name, classified.stderr);
                                 }
-                                let et = if output.success && !cancelled {
+                                let et = if classified.success {
                                     None
                                 } else {
-                                    Some(error_type.unwrap_or_else(|| "unknown".to_string()))
+                                    Some(
+                                        classified
+                                            .error_type
+                                            .clone()
+                                            .unwrap_or_else(|| "unknown".to_string()),
+                                    )
                                 };
                                 (
                                     PipeRunLog {
                                         pipe_name: pipe_name.clone(),
                                         started_at,
                                         finished_at,
-                                        success: output.success && !cancelled,
+                                        success: classified.success,
                                         stdout: filtered_stdout.clone(),
-                                        stderr: output.stderr.clone(),
+                                        stderr: classified.stderr.clone(),
                                     },
                                     et,
                                 )
@@ -6904,6 +7017,69 @@ mod tests {
         let (etype, msg) = parse_error_type("completed successfully, output saved");
         assert_eq!(etype, None);
         assert_eq!(msg, None);
+    }
+
+    fn successful_agent_then_compaction_retry_stdout() -> String {
+        [
+            r#"{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"run the pipe"}]},{"role":"assistant","content":[{"type":"text","text":"SOP_UPDATED: /tmp/sop.md"}],"stopReason":"stop"}]}"#,
+            r#"{"type":"compaction_start","reason":"overflow"}"#,
+            r#"{"type":"compaction_end","reason":"overflow","result":{"summary":"compact"},"aborted":false,"willRetry":true}"#,
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn test_post_completion_continue_error_is_recovered() {
+        let classified = classify_pipe_process_result(
+            false,
+            false,
+            "Cannot continue from message role: assistant\n",
+            &successful_agent_then_compaction_retry_stdout(),
+        );
+
+        assert_eq!(classified.status, "completed");
+        assert!(classified.success);
+        assert_eq!(classified.stderr, "");
+        assert_eq!(classified.error_type, None);
+        assert_eq!(classified.error_message, None);
+    }
+
+    #[test]
+    fn test_post_completion_continue_error_requires_successful_agent_end() {
+        let stdout = [
+            r#"{"type":"agent_end","messages":[{"role":"assistant","content":[],"stopReason":"error","errorMessage":"rate_limit_exceeded"}]}"#,
+            r#"{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":true}"#,
+        ]
+        .join("\n");
+
+        let classified = classify_pipe_process_result(
+            false,
+            false,
+            "Cannot continue from message role: assistant\n",
+            &stdout,
+        );
+
+        assert_eq!(classified.status, "failed");
+        assert!(!classified.success);
+        assert_eq!(
+            classified.stderr,
+            "Cannot continue from message role: assistant\n"
+        );
+    }
+
+    #[test]
+    fn test_post_completion_continue_error_requires_retry_after_success() {
+        let stdout = r#"{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}]}"#;
+
+        let classified = classify_pipe_process_result(
+            false,
+            false,
+            "Cannot continue from message role: assistant\n",
+            stdout,
+        );
+
+        assert_eq!(classified.status, "failed");
+        assert!(!classified.success);
     }
 
     #[test]

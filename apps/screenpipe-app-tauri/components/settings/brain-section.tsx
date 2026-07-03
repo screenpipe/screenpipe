@@ -61,6 +61,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { parseBrainSearchQuery } from "@/lib/utils/brain-search";
 import { getArtifactCardDisplay } from "@/lib/utils/artifact-display";
+import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import {
   resolveArtifactOpenTarget,
   type ArtifactOpenTarget,
@@ -1155,6 +1156,7 @@ export function BrainSection() {
                     }
                     className="h-8 pl-7 text-xs"
                     autoFocus
+                    {...searchInputBehaviorProps}
                   />
                 </div>
               </div>
@@ -1221,6 +1223,7 @@ export function BrainSection() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8 h-8 text-sm"
+            {...searchInputBehaviorProps}
           />
         </div>
         {typeFilter === "memories" && (

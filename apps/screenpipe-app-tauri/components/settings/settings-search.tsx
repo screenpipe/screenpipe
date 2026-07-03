@@ -7,6 +7,7 @@ import React, { forwardRef, useEffect } from "react";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import Fuse, { type IFuseOptions } from "fuse.js";
 
 // Fuzzy match config. Mirrors the WinSTT / MetaMask / KittyCAD desktop patterns:
@@ -414,11 +415,8 @@ export const SettingsSearchInput = forwardRef<HTMLInputElement, InputProps>(
           // (Tauri uses WebKit) renders a "recent search" pill below <input> when it
           // thinks the field is a search box — that was the floating "Gen ×" chip.
           name="settings-filter"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
           enterKeyHint="search"
+          {...searchInputBehaviorProps}
           data-1p-ignore="true"
           data-lpignore="true"
           data-form-type="other"

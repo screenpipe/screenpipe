@@ -1770,6 +1770,37 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         }
     }
 
+    // New installs opt into local data retention (14-day media cleanup; transcripts,
+    // OCR and the searchable timeline are kept). Written as an explicit store field so
+    // the Storage settings toggle shows ON and auto_start_retention() picks it up.
+    // Existing stores are never touched here: flipping the fallback for users who
+    // installed before this default would silently delete their old recordings —
+    // auto_start_retention() in sync.rs deliberately reads `localRetentionEnabled ?? false`.
+    //
+    // A fresh settings store is NOT proof of a fresh install: the store-recovery
+    // paths (unreadable encrypted store.bin with no snapshot, corrupted JSON with
+    // no healthy .last-good) fall back to an empty store for users with years of
+    // recordings, and machine migrations often copy ~/.screenpipe without the
+    // app-config dir. So additionally require that the data dir holds no existing
+    // recordings — retention may only default on when there is nothing to delete.
+    if is_new_store && !store.extra.contains_key("localRetentionEnabled") {
+        let (data_dir, _) = crate::config::resolve_data_dir(&store.data_dir);
+        let has_existing_recordings = data_dir.join("db.sqlite").exists();
+        if has_existing_recordings {
+            tracing::info!(
+                "fresh settings store but existing recordings found at {:?} — \
+                 leaving local retention off (likely store recovery or migration)",
+                data_dir
+            );
+        } else {
+            store.extra.insert(
+                "localRetentionEnabled".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            should_save = true;
+        }
+    }
+
     if should_save {
         if let Err(e) = store.save(app) {
             // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.

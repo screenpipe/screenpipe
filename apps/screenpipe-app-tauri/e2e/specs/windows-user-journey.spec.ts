@@ -847,6 +847,19 @@ describe("Windows user journey", function () {
       "Storage settings did not show the local retention controls",
     );
 
+    // Fresh installs default to media retention, and selecting the already
+    // active mode early-returns without a dialog. Switch to "off" first
+    // (idempotent when already off) so the media click below always opens
+    // the confirmation dialog.
+    const offRetentionMode = await $('[data-testid="retention-mode-off"]');
+    await offRetentionMode.waitForExist({ timeout: t(20_000) });
+    await offRetentionMode.scrollIntoView();
+    await offRetentionMode.click();
+    await waitForBodyText(
+      (bodyText) => bodyText.includes("currently: keeping everything forever."),
+      "Storage settings did not switch retention off before the media preview",
+    );
+
     const mediaRetentionMode = await $('[data-testid="retention-mode-media"]');
     await mediaRetentionMode.waitForExist({ timeout: t(20_000) });
     await mediaRetentionMode.scrollIntoView();

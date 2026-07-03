@@ -17,7 +17,10 @@ jobs:
   apple_ocr_benchmark:
     name: Run Apple OCR benchmark
     runs-on: [self-hosted, macos-test]
-    if: github.ref == 'refs/heads/main'
+    # Self-hosted benchmark runners are not always online. Keep scheduled runs
+    # green by running these platform-specific benchmarks only when triggered
+    # manually by someone who can ensure the runners are available.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -63,7 +66,10 @@ jobs:
   windows_ocr_benchmark:
     name: Run Windows OCR benchmark
     runs-on: [self-hosted, windows-desktop-test]
-    if: github.ref == 'refs/heads/main'
+    # Self-hosted benchmark runners are not always online. Keep scheduled runs
+    # green by running these platform-specific benchmarks only when triggered
+    # manually by someone who can ensure the runners are available.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -103,6 +109,7 @@ jobs:
           path: stt_output.txt
 
   analyze_benchmarks:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs:
       [
         apple_ocr_benchmark,

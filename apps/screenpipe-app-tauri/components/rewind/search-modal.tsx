@@ -23,6 +23,7 @@ import { showChatWithPrefill } from "@/lib/chat-utils";
 import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { buildBoundedFacetSql, sanitizeFts5Query } from "@/lib/search/facet-sql";
+import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 
 interface SpeakerResult {
   id: number;
@@ -2201,10 +2202,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               "flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 outline-none",
               standalone ? "text-base" : "text-sm",
             )}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
+            {...searchInputBehaviorProps}
           />
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (
@@ -2312,10 +2310,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             }}
             placeholder="Search memory & chats... (# tags, @ people)"
             className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground text-sm outline-none"
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
+            {...searchInputBehaviorProps}
           />
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (

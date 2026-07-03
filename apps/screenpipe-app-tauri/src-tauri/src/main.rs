@@ -1315,6 +1315,12 @@ async fn main() {
                     // Determine which whisper model the user's config needs
                     let engine = match store_for_download.recording.audio_transcription_engine.as_str() {
                         "deepgram" | "screenpipe-cloud" => None, // Cloud engines don't need local model
+                        // Non-whisper local engines (parakeet MLX, qwen3) download their own
+                        // models at load time — don't fetch the 834MB whisper file for them.
+                        // If the user later switches to a whisper engine, TranscriptionEngine::new
+                        // downloads it in the background ("will retry at server start").
+                        "disabled" | "parakeet" | "parakeet-tdt-0.6b-v2" | "parakeet-mlx"
+                        | "qwen3-asr" => None,
                         _ => {
                             use screenpipe_audio::core::engine::AudioTranscriptionEngine;
                             Some(std::sync::Arc::new(match store_for_download.recording.audio_transcription_engine.as_str() {

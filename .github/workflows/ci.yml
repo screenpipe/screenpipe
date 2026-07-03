@@ -86,6 +86,11 @@ jobs:
     # image so we keep getting security patches and can pin a stable build
     # toolchain.
     runs-on: windows-2022
+    env:
+      # Single source of truth for the ONNX Runtime version. Referenced by
+      # the download URL, the extract dirname, the DLL staging src path, and
+      # the PATH-append step below. Bump this in one place instead of four.
+      ONNXRUNTIME_VERSION: "1.24.2"
     steps:
       - uses: actions/checkout@v4
 
@@ -164,9 +169,10 @@ jobs:
       - name: Download ONNX Runtime (CPU)
         shell: pwsh
         run: |
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip"
-          $zipFile = "onnxruntime-win-x64-1.24.2.zip"
-          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2"
+          $version = "${{ env.ONNXRUNTIME_VERSION }}"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-x64-$version.zip"
+          $zipFile = "onnxruntime-win-x64-$version.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-$version"
           Invoke-WebRequest -Uri $url -OutFile $zipFile
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
           7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
@@ -196,7 +202,7 @@ jobs:
       - name: Stage ONNX Runtime DLLs next to test binary
         shell: pwsh
         run: |
-          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib"
+          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-${{ env.ONNXRUNTIME_VERSION }}/lib"
           $dst = "${{ github.workspace }}/target/x86_64-pc-windows-msvc/release-dev/deps"
           if (-not (Test-Path $dst)) {
             New-Item -ItemType Directory -Path $dst -Force | Out-Null
@@ -256,7 +262,7 @@ jobs:
       - name: Add ONNX lib dir to PATH for cargo tests
         shell: pwsh
         run: |
-          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib"
+          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-${{ env.ONNXRUNTIME_VERSION }}/lib"
           echo $ortLib | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           Write-Host "PATH appended: $ortLib"
 

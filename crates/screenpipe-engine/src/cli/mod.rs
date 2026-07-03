@@ -735,8 +735,10 @@ pub struct RecordArgs {
     pub encrypt_secrets: bool,
 
     /// Local data retention in days. Old screen/audio data is auto-deleted after this period.
-    /// Set to 0 to disable retention (keep data forever).
-    #[arg(long, default_value_t = 14)]
+    /// Disabled by default (0 = keep data forever); set a positive number of days to opt in.
+    /// CLI deployments must never silently delete data — the desktop app opts new users in
+    /// through its own onboarding default instead.
+    #[arg(long, default_value_t = 0)]
     pub retention_days: u32,
 
     /// What gets cleaned up past the retention cutoff.
