@@ -275,20 +275,36 @@ impl DatabaseManager {
 
     /// Delete multiple audio chunks and their transcriptions in a single transaction.
     /// Much cheaper than N individual delete_audio_chunk calls under write contention.
+    ///
+    /// Uses a single `DELETE ... WHERE id IN (?, ?, ...)` per table per batch
+    /// instead of one round-trip per id — turns a 2N-statement pass into a
+    /// 2-statement one (per batch), which matters when a retention/cleanup
+    /// sweep hands us hundreds of chunks in one call.
     pub async fn delete_audio_chunks_batch(&self, chunk_ids: &[i64]) -> Result<(), sqlx::Error> {
         if chunk_ids.is_empty() {
             return Ok(());
         }
+        // Guard against SQLite's default SQLITE_MAX_VARIABLE_NUMBER (32766 on
+        // modern builds, 999 on very old ones). 500 leaves a big safety
+        // margin and keeps each statement's `?, ?, ?, ...` under a KB.
+        const BATCH: usize = 500;
         let mut tx = self.begin_immediate_with_retry().await?;
-        for &id in chunk_ids {
-            sqlx::query("DELETE FROM audio_transcriptions WHERE audio_chunk_id = ?1")
-                .bind(id)
-                .execute(&mut **tx.conn())
-                .await?;
-            sqlx::query("DELETE FROM audio_chunks WHERE id = ?1")
-                .bind(id)
-                .execute(&mut **tx.conn())
-                .await?;
+        for group in chunk_ids.chunks(BATCH) {
+            let placeholders: String = std::iter::repeat("?").take(group.len()).collect::<Vec<_>>().join(",");
+            let del_transcriptions =
+                format!("DELETE FROM audio_transcriptions WHERE audio_chunk_id IN ({placeholders})");
+            let mut q = sqlx::query(&del_transcriptions);
+            for &id in group {
+                q = q.bind(id);
+            }
+            q.execute(&mut **tx.conn()).await?;
+
+            let del_chunks = format!("DELETE FROM audio_chunks WHERE id IN ({placeholders})");
+            let mut q = sqlx::query(&del_chunks);
+            for &id in group {
+                q = q.bind(id);
+            }
+            q.execute(&mut **tx.conn()).await?;
         }
         tx.commit().await?;
         Ok(())
