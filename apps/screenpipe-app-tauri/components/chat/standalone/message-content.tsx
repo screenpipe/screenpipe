@@ -1196,38 +1196,42 @@ function ToolCallGroup({
     }
   }, [isWorking, runningSummary]);
 
-  // Auto-expand while running, auto-collapse when done (user can override).
-  // `defaultExpanded` keeps the group open even when done — used for
-  // messages whose entire output is tool calls (typical pipe-runs)
-  // where the tool result is the whole story.
-  const isExpanded = manualExpand !== null ? manualExpand : (hasRunningTool || defaultExpanded);
+  // While working → always expanded, no user toggle.
+  // When done → auto-collapse (user can re-expand). `defaultExpanded`
+  // keeps it open even when done for messages whose entire output is
+  // tool calls (typical pipe-runs without a final prose response).
+  const isExpanded = isWorking
+    ? true
+    : manualExpand !== null ? manualExpand : defaultExpanded;
 
   return (
     <div className="w-full min-w-0 self-stretch">
       <div className="mb-2 w-full min-w-full">
-        {/* Header bar — clickable to toggle */}
-        <button
-          onClick={() => setManualExpand(isExpanded ? false : true)}
-          className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer"
-        >
-          {/* Summary text */}
-          <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
-            <WorkSummaryText
-              text={isWorking ? runningSummary : summary || `${total} steps`}
-              animateRunningDuration={isWorking}
-            />
-            {hasError && allDone && (
-              <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+        {/* Header — plain text while working, clickable with chevron when done */}
+        {isWorking ? (
+          <div className="w-full flex items-center gap-1.5 py-1 text-left min-w-0">
+            <span className="truncate text-xs font-mono text-foreground/50">
+              <WorkSummaryText text={runningSummary} animateRunningDuration />
+            </span>
+          </div>
+        ) : (
+          <button
+            onClick={() => setManualExpand(isExpanded ? false : true)}
+            className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer"
+          >
+            <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
+              <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
+              {hasError && (
+                <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+              )}
+            </span>
+            {isExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
             )}
-          </span>
-
-          {/* Expand chevron */}
-          {isExpanded ? (
-            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-          )}
-        </button>
+          </button>
+        )}
         <div className="w-full min-w-full border-t border-border/50" />
       </div>
 
