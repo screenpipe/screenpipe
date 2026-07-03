@@ -143,11 +143,18 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
   return (
     <div className="flex items-center gap-2">
       {permissions && (
-        <span>
+        <span
+          role="img"
+          aria-label={
+            isPermitted(permissionStatus ?? "empty")
+              ? `${type} permission granted`
+              : `${type} permission denied`
+          }
+        >
           {isPermitted(permissionStatus ?? "empty") ? (
-            <Check className="h-4 w-4 text-green-500" />
+            <Check className="h-4 w-4 text-green-500" aria-hidden="true" />
           ) : (
-            <X className="h-4 w-4 text-red-500" />
+            <X className="h-4 w-4 text-red-500" aria-hidden="true" />
           )}
         </span>
       )}
@@ -169,9 +176,10 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         className="h-8 w-8"
         onClick={handleOpenPermissionSettings}
         title={`Open ${type} settings`}
+        aria-label={`Open ${type} permission settings`}
         disabled={isDisabled}
       >
-        <Settings className="h-4 w-4" />
+        <Settings className="h-4 w-4" aria-hidden="true" />
       </Button>
     </div>
   );
