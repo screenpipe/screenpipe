@@ -19,6 +19,13 @@ on:
       - ".github/workflows/sdk.yml"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  # Same rule as ci.yml / style.yml / test-frontend.yml — cancel superseded
+  # PR runs (saves minutes on rapid re-pushes); main pushes use per-commit
+  # groups so they don't queue behind stale commits.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   DEBUG: napi:*
   MACOSX_DEPLOYMENT_TARGET: "11.0"
