@@ -112,6 +112,11 @@ import {
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 
+/** Max top-level rows shown across recents + pipes. */
+const SIDEBAR_CAP = 15;
+/** Minimum slots reserved for pipes when pipe sessions exist. */
+const PIPES_MIN_SLOTS = 5;
+
 interface ChatSidebarProps {
   className?: string;
   onViewAll?: () => void;
@@ -143,7 +148,7 @@ function useCollapsedPref(key: string, defaultValue = false) {
 function useVisibleChatSections(): {
   pinned: SessionRecord[];
   recents: SessionRecord[];
-  automations: SessionRecord[];
+  pipes: SessionRecord[];
   archived: SessionRecord[];
 } {
   const sessions = useOrderedSessions();
@@ -151,7 +156,7 @@ function useVisibleChatSections(): {
   return useMemo(() => {
     const pinned: SessionRecord[] = [];
     const recents: SessionRecord[] = [];
-    const automations: SessionRecord[] = [];
+    const pipes: SessionRecord[] = [];
     const archived: SessionRecord[] = [];
     for (const s of sessions) {
       // Hide drafts (no user message sent yet)
@@ -164,12 +169,12 @@ function useVisibleChatSections(): {
       if (s.pinned) {
         pinned.push(s);
       } else if (s.kind === "pipe-run" || s.kind === "pipe-watch") {
-        automations.push(s);
+        pipes.push(s);
       } else {
         recents.push(s);
       }
     }
-    return { pinned, recents, automations, archived };
+    return { pinned, recents, pipes, archived };
   }, [sessions]);
 }
 
@@ -406,37 +411,37 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     };
   }, [actions]);
 
-  const { pinned, recents, automations, archived } = useVisibleChatSections();
+  const { pinned, recents, pipes, archived } = useVisibleChatSections();
   const groupedSections = useMemo(
     () => buildSidebarRecentsSections(recents, Number.POSITIVE_INFINITY),
     [recents],
   );
 
-  const automationGroupedSections = useMemo(
-    () => buildSidebarRecentsSections(automations, Number.POSITIVE_INFINITY),
-    [automations],
+  const pipeGroupedSections = useMemo(
+    () => buildSidebarRecentsSections(pipes, Number.POSITIVE_INFINITY),
+    [pipes],
   );
-  // Flatten automation grouped sections into a single items list for rendering
-  const automationItems = useMemo(
-    () => automationGroupedSections.flatMap((section) => section.items),
-    [automationGroupedSections],
+  // Flatten pipe grouped sections into a single items list for rendering
+  const pipeItems = useMemo(
+    () => pipeGroupedSections.flatMap((section) => section.items),
+    [pipeGroupedSections],
   );
 
-  const [automationsCollapsed, setAutomationsCollapsed] = useCollapsedPref(
-    "screenpipe:automations-collapsed",
+  const [pipesCollapsed, setPipesCollapsed] = useCollapsedPref(
+    "screenpipe:pipes-collapsed",
     true
   );
 
-  // Auto-expand the automations row when the current session is a pipe run
+  // Auto-expand the pipes section when the current session is a pipe run
   // so the highlighted row is visible. Only depends on currentId and the
-  // automations list — reads collapse state imperatively to avoid re-fire loops.
+  // pipes list — reads collapse state imperatively to avoid re-fire loops.
   useEffect(() => {
     if (!currentId) return;
-    if (automations.some((s) => s.id === currentId)) {
-      setAutomationsCollapsed(false);
+    if (pipes.some((s) => s.id === currentId)) {
+      setPipesCollapsed(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentId, automations]);
+  }, [currentId, pipes]);
 
   // Expand/collapse state for manual recents subsections (e.g. OTHER,
   // named sidebar groups). Stored separately from pipe auto-groups so the
@@ -565,8 +570,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   // auto pipe-groups the user actually sees in the sidebar. Moving a chat
   // into a pipe-group's name folds it into that same group.
   const existingGroups = useMemo(
-    () => listMoveTargetGroups([...pinned, ...recents, ...automations]),
-    [pinned, recents, automations],
+    () => listMoveTargetGroups([...pinned, ...recents, ...pipes]),
+    [pinned, recents, pipes],
   );
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
@@ -587,16 +592,13 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   );
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
-  const recentsLoading = !diskHydrated && recents.length === 0 && automations.length === 0;
+  const recentsLoading = !diskHydrated && recents.length === 0 && pipes.length === 0;
 
-  // Sidebar cap: SIDEBAR_CAP total top-level rows across recents + automations.
-  // When automations exist, recents cap at (SIDEBAR_CAP - AUTOMATIONS_MIN_SLOTS),
-  // reserving at least AUTOMATIONS_MIN_SLOTS for automations. If recents use
-  // fewer slots, automations get the surplus.
-  const SIDEBAR_CAP = 15;
-  const AUTOMATIONS_MIN_SLOTS = 5;
-  const recentsCap = automations.length > 0
-    ? SIDEBAR_CAP - AUTOMATIONS_MIN_SLOTS
+  // When pipes exist, recents cap at (SIDEBAR_CAP - PIPES_MIN_SLOTS),
+  // reserving at least PIPES_MIN_SLOTS for pipes. If recents use
+  // fewer slots, pipes get the surplus.
+  const recentsCap = pipes.length > 0
+    ? SIDEBAR_CAP - PIPES_MIN_SLOTS
     : SIDEBAR_CAP;
   const visibleGroupedSections = useMemo(
     () => applySidebarRecentsCap(groupedSections, collapsedRecentsSections, recentsCap),
@@ -606,12 +608,12 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     () => visibleGroupedSections.reduce((sum, s) => sum + s.items.length, 0),
     [visibleGroupedSections],
   );
-  const automationsCap = automations.length > 0
+  const pipesCap = pipes.length > 0
     ? Math.max(0, SIDEBAR_CAP - recentsRowCount)
     : 0;
-  const visibleAutomationItems = useMemo(
-    () => automationItems.slice(0, automationsCap),
-    [automationItems, automationsCap],
+  const visiblePipeItems = useMemo(
+    () => pipeItems.slice(0, pipesCap),
+    [pipeItems, pipesCap],
   );
 
   const handleSelect = (id: string) => {
@@ -789,7 +791,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       }}
     >
       <div className="flex flex-col gap-1">
-        <div className="min-h-0 flex flex-col flex-1">
+        <div className="min-h-0 flex flex-col">
           {pinned.length > 0 && (
             <div className="shrink-0">
               <Section
@@ -820,7 +822,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             </div>
           )}
 
-          <div className="group/recents min-h-0 flex flex-col flex-1">
+          <div className="group/recents min-h-0 flex flex-col">
             <Section
               title="recents"
               collapsed={recentsCollapsed}
@@ -864,20 +866,15 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : recents.length === 0 && automations.length === 0 ? (
+              ) : recents.length === 0 && pipes.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                <RecentsWithAutomations
+                <RecentsBody
                   sections={visibleGroupedSections}
                   collapsedSections={collapsedRecentsSections}
                   toggleSectionCollapsed={toggleRecentsSectionCollapsed}
-                  automations={automations}
-                  automationsCap={automationsCap}
-                  visibleAutomationItems={visibleAutomationItems}
-                  automationsCollapsed={automationsCollapsed}
-                  onAutomationsCollapsedChange={setAutomationsCollapsed}
                   expandedGroups={expandedGroups}
                   toggleGroupExpanded={toggleGroupExpanded}
                   currentId={currentId}
@@ -897,6 +894,60 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
               )}
             </Section>
           </div>
+
+          {pipes.length > 0 && pipesCap > 0 && (
+            <div className="group/pipes min-h-0 flex flex-col shrink-0">
+              <Section
+                title="pipes"
+                collapsed={pipesCollapsed}
+                onCollapsedChange={setPipesCollapsed}
+                headerAction={
+                  <Timer className="h-3 w-3 text-muted-foreground/60" aria-hidden />
+                }
+                bodyClassName=""
+              >
+                {visiblePipeItems.map((item) =>
+                  item.kind === "single" ? (
+                    <SidebarChatRow
+                      key={item.session.id}
+                      session={item.session}
+                      isCurrent={item.session.id === currentId}
+                      queuedCount={queueDepths.get(item.session.id) ?? 0}
+                      onSelect={handleSelect}
+                      onArchive={handleArchive}
+                      onUnarchive={handleUnarchive}
+                      onDeleteRequest={setDeletingSessionId}
+                      onTogglePin={handleTogglePin}
+                      onRenameRequest={handleRenameRequest}
+                      insideGroup
+                      openConversationMenuId={openConversationMenuId}
+                      setOpenConversationMenuId={setOpenConversationMenuId}
+                    />
+                  ) : (
+                    <PipeGroupRow
+                      key={item.key}
+                      item={item}
+                      expanded={expandedGroups.has(item.key)}
+                      onToggleExpand={() => toggleGroupExpanded(item.key)}
+                      currentId={currentId}
+                      queueDepths={queueDepths}
+                      onSelect={handleSelect}
+                      onArchive={handleArchive}
+                      onUnarchive={handleUnarchive}
+                      onDeleteRequest={setDeletingSessionId}
+                      onTogglePin={handleTogglePin}
+                      onRenameRequest={handleRenameRequest}
+                      onMoveToGroup={handleMoveToGroup}
+                      onNewGroupRequest={setNewGroupSessionId}
+                      existingGroups={existingGroups}
+                      openConversationMenuId={openConversationMenuId}
+                      setOpenConversationMenuId={setOpenConversationMenuId}
+                    />
+                  ),
+                )}
+              </Section>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1374,18 +1425,13 @@ function Section({
 }
 
 /**
- * Renders recents items interleaved with the automations group at its
- * chronological position (determined by the newest automation's timestamp).
+ * Renders recents items (no pipe sessions — those live in the separate
+ * "pipes" Section). Handles subsection headers and collapse state.
  */
-function RecentsWithAutomations({
+function RecentsBody({
   sections,
   collapsedSections,
   toggleSectionCollapsed,
-  automations,
-  automationsCap,
-  visibleAutomationItems,
-  automationsCollapsed,
-  onAutomationsCollapsedChange,
   expandedGroups,
   toggleGroupExpanded,
   currentId,
@@ -1405,11 +1451,6 @@ function RecentsWithAutomations({
   sections: SidebarRecentsSection[];
   collapsedSections: ReadonlySet<string>;
   toggleSectionCollapsed: (key: string) => void;
-  automations: SessionRecord[];
-  automationsCap: number;
-  visibleAutomationItems: SidebarItem[];
-  automationsCollapsed: boolean;
-  onAutomationsCollapsedChange: (v: boolean) => void;
   expandedGroups: ReadonlySet<string>;
   toggleGroupExpanded: (key: string) => void;
   currentId: string | null;
@@ -1426,84 +1467,6 @@ function RecentsWithAutomations({
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
-  const hasAutomations = automations.length > 0 && automationsCap > 0;
-  const newestAutomationAt = hasAutomations ? (automations[0]?.updatedAt ?? 0) : 0;
-
-  const getItemTimestamp = (item: SidebarItem) =>
-    item.kind === "single"
-      ? (item.session.updatedAt ?? item.session.createdAt)
-      : Math.max(...item.sessions.map((s) => s.updatedAt ?? s.createdAt));
-
-  const automationsBlock = (
-    <div key="__automations__" data-testid="automations-group">
-      <button
-        type="button"
-        onClick={() => onAutomationsCollapsedChange(!automationsCollapsed)}
-        className={cn(
-          "group/pipe w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-left select-none",
-          "text-muted-foreground hover:bg-muted/20 transition-colors"
-        )}
-        aria-expanded={!automationsCollapsed}
-      >
-        <span className="truncate flex-1 text-xs">automations</span>
-        <span className="inline-flex items-center gap-1.5 shrink-0">
-          <Timer className="h-3 w-3 text-muted-foreground/60" aria-hidden />
-          <span className="text-[10px] tabular-nums text-muted-foreground/60">
-            {automations.length}
-          </span>
-          {automationsCollapsed ? (
-            <ChevronRight className="h-3 w-3 text-muted-foreground/60" aria-hidden />
-          ) : (
-            <ChevronDown className="h-3 w-3 text-muted-foreground/60" aria-hidden />
-          )}
-        </span>
-      </button>
-      {!automationsCollapsed && (
-        <div className="pl-3">
-          {visibleAutomationItems.map((item) =>
-            item.kind === "single" ? (
-              <SidebarChatRow
-                key={item.session.id}
-                session={item.session}
-                isCurrent={item.session.id === currentId}
-                queuedCount={queueDepths.get(item.session.id) ?? 0}
-                onSelect={onSelect}
-                onArchive={onArchive}
-                onUnarchive={onUnarchive}
-                onDeleteRequest={onDeleteRequest}
-                onTogglePin={onTogglePin}
-                onRenameRequest={onRenameRequest}
-                insideGroup
-                openConversationMenuId={openConversationMenuId}
-                setOpenConversationMenuId={setOpenConversationMenuId}
-              />
-            ) : (
-              <PipeGroupRow
-                key={item.key}
-                item={item}
-                expanded={expandedGroups.has(item.key)}
-                onToggleExpand={() => toggleGroupExpanded(item.key)}
-                currentId={currentId}
-                queueDepths={queueDepths}
-                onSelect={onSelect}
-                onArchive={onArchive}
-                onUnarchive={onUnarchive}
-                onDeleteRequest={onDeleteRequest}
-                onTogglePin={onTogglePin}
-                onRenameRequest={onRenameRequest}
-                onMoveToGroup={onMoveToGroup}
-                onNewGroupRequest={onNewGroupRequest}
-                existingGroups={existingGroups}
-                openConversationMenuId={openConversationMenuId}
-                setOpenConversationMenuId={setOpenConversationMenuId}
-              />
-            ),
-          )}
-        </div>
-      )}
-    </div>
-  );
-
   const renderItem = (item: SidebarItem) =>
     item.kind === "single" ? (
       <SidebarChatRow
@@ -1545,69 +1508,42 @@ function RecentsWithAutomations({
       />
     );
 
-  // Build a flat render list, inserting automations at chronological position
-  let automationsInserted = false;
-  const result: React.ReactNode[] = [];
-
-  for (let si = 0; si < sections.length; si++) {
-    const section = sections[si];
-    const isCollapsed = collapsedSections.has(section.key);
-    const sectionChildren: React.ReactNode[] = [];
-
-    if (section.title) {
-      sectionChildren.push(
-        <button
-          key={`header-${section.key}`}
-          type="button"
-          onClick={() => toggleSectionCollapsed(section.key)}
-          className={cn(
-            "group/subsection w-full px-2.5 pt-1 pb-0.5 flex items-center gap-2 text-left rounded-sm",
-            "hover:bg-muted/10 transition-colors"
-          )}
-          aria-expanded={!isCollapsed}
-        >
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-            {section.title}
-          </span>
-          {isCollapsed ? (
-            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-hidden />
-          ) : (
-            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-hidden />
-          )}
-        </button>,
-      );
-    }
-
-    if (!isCollapsed) {
-      for (const item of section.items) {
-        if (hasAutomations && !automationsInserted) {
-          const itemAt = getItemTimestamp(item);
-          if (newestAutomationAt >= itemAt) {
-            sectionChildren.push(automationsBlock);
-            automationsInserted = true;
-          }
-        }
-        sectionChildren.push(renderItem(item));
-      }
-    }
-
-    result.push(
-      <div
-        key={section.key}
-        className={cn(si > 0 && "mt-1")}
-        data-testid={`chat-sidebar-group-${section.title || "all"}`}
-      >
-        {sectionChildren}
-      </div>,
-    );
-  }
-
-  // If automations wasn't inserted (all recents are newer, or no recents), add at end
-  if (hasAutomations && !automationsInserted) {
-    result.push(automationsBlock);
-  }
-
-  return <>{result}</>;
+  return (
+    <>
+      {sections.map((section, si) => {
+        const isCollapsed = collapsedSections.has(section.key);
+        return (
+          <div
+            key={section.key}
+            className={cn(si > 0 && "mt-1")}
+            data-testid={`chat-sidebar-group-${section.title || "all"}`}
+          >
+            {section.title && (
+              <button
+                type="button"
+                onClick={() => toggleSectionCollapsed(section.key)}
+                className={cn(
+                  "group/subsection w-full px-2.5 pt-1 pb-0.5 flex items-center gap-2 text-left rounded-sm",
+                  "hover:bg-muted/10 transition-colors"
+                )}
+                aria-expanded={!isCollapsed}
+              >
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
+                  {section.title}
+                </span>
+                {isCollapsed ? (
+                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-hidden />
+                ) : (
+                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-hidden />
+                )}
+              </button>
+            )}
+            {!isCollapsed && section.items.map(renderItem)}
+          </div>
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -1663,7 +1599,6 @@ function PipeGroupRow({
       >
         <span className="truncate flex-1 text-xs">{item.title}</span>
         <span className="inline-flex items-center gap-1.5 shrink-0">
-          <Timer className="h-3 w-3 text-muted-foreground/60" aria-hidden />
           <span className="text-[10px] tabular-nums text-muted-foreground/60">
             {item.sessions.length}
           </span>

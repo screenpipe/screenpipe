@@ -377,28 +377,18 @@ export function ChatHistoryView({
         {/* Column 1: Icon (default) / Checkbox (hover or selected) */}
         <div className="h-5 w-5 flex items-center justify-center relative">
           {/* Chat icon (or Timer for pipe sessions) — hidden on hover (unless selected via selection mode) */}
-          {conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? (
-            <Timer
-              className={cn(
+          {React.createElement(
+            conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? Timer : MessageSquare,
+            {
+              className: cn(
                 "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
                 conv.hidden ? "text-muted-foreground/45" : "text-muted-foreground/70",
                 showCheckbox
                   ? "opacity-0 invisible"
                   : "opacity-100 visible group-hover:opacity-0 group-hover:invisible"
-              )}
-              aria-hidden
-            />
-          ) : (
-            <MessageSquare
-              className={cn(
-                "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
-                conv.hidden ? "text-muted-foreground/45" : "text-muted-foreground/70",
-                showCheckbox
-                  ? "opacity-0 invisible"
-                  : "opacity-100 visible group-hover:opacity-0 group-hover:invisible"
-              )}
-              aria-hidden
-            />
+              ),
+              "aria-hidden": true,
+            },
           )}
           {/* Checkbox — visible on hover or when selected */}
           <div
