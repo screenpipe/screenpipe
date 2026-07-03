@@ -176,6 +176,19 @@ fn get_e2e_seed_flags() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Returns true when SCREENPIPE_SKIP_ONBOARDING is set to a truthy value
+/// ("1", "true", "yes" — case-insensitive). Escape hatch for corp VDI,
+/// headless containers, MDM-preseeded deploys, and any environment where
+/// the interactive onboarding cannot complete (sandboxed WebView2, blocked
+/// egress, missing permissions dialog). When set, startup marks onboarding
+/// complete so the app lands on the main view.
+fn should_skip_onboarding() -> bool {
+    std::env::var("SCREENPIPE_SKIP_ONBOARDING")
+        .ok()
+        .map(|s| matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 use tokio::time::{sleep, Duration};
 
 #[tauri::command]
@@ -1278,7 +1291,7 @@ async fn main() {
             app.manage(sync::SyncState::default());
 
             // Initialize onboarding store
-            let onboarding_store = store::init_onboarding_store(&app.handle()).unwrap_or_else(|e| {
+            let mut onboarding_store = store::init_onboarding_store(&app.handle()).unwrap_or_else(|e| {
                 error!("Failed to init onboarding store, using defaults: {}", e);
                 store::OnboardingStore::default()
             });
@@ -1291,6 +1304,20 @@ async fn main() {
                     error!("E2E seed: failed to complete onboarding: {}", e);
                 } else {
                     info!("E2E seed: onboarding marked complete");
+                }
+            }
+
+            // Escape hatch: SCREENPIPE_SKIP_ONBOARDING=1 marks onboarding complete
+            // at startup so corp/VDI/headless environments (where the interactive
+            // flow can't run) land at the main view. Persists to store so downstream
+            // consumers (show.rs re-reads from disk) see the same state.
+            if should_skip_onboarding() && !onboarding_store.is_completed {
+                match store::OnboardingStore::update(&app.handle(), |o| o.complete()) {
+                    Ok(_) => {
+                        info!("SCREENPIPE_SKIP_ONBOARDING: onboarding marked complete");
+                        onboarding_store.is_completed = true;
+                    }
+                    Err(e) => error!("SCREENPIPE_SKIP_ONBOARDING: failed to complete onboarding: {}", e),
                 }
             }
 
