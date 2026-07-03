@@ -164,6 +164,42 @@ The whole element tree for one frame, as the same compact outline.
 ### frame-context
 Get accessibility text, parsed tree nodes, and extracted URLs for a specific frame.
 
+### keyword-search
+Fast FTS5 keyword search across OCR + audio combined. Returns matches with `frame_id`, app, timestamp, and text positions.
+
+### list-meetings / get-meeting / update-meeting / start-meeting / stop-meeting
+Manage the meeting store. `list-meetings` filters by substring; `get-meeting` returns title/attendees/times/full note (add `include_transcript: true` for the speaker-attributed transcript). `update-meeting` writes only the fields you pass. `start-meeting` and `stop-meeting` drive manual meeting recording sessions.
+
+### search-speakers / list-unnamed-speakers / update-speaker / merge-speakers
+Speaker identification workflow. Search by name prefix, list speakers that haven't been named yet, rename a speaker, or merge two speakers when the same person was detected as different ones.
+
+### add-tags
+Tag a screen frame (vision) or audio chunk (audio) so it can be retrieved later.
+
+### update-memory
+Create, update, or delete a persistent memory (facts, preferences, decisions the user wants to remember).
+
+### send-notification
+Send a notification to the screenpipe desktop UI.
+
+### control-recording
+Start or stop audio/screen recording. Use to pause/resume capture.
+
+### health-check
+Check if screenpipe is running and healthy. Returns recording status, frame/audio stats, and timestamps.
+
+### list-audio-devices
+List available audio input/output devices for recording.
+
+### list-monitors
+List available monitors/screens for capture.
+
+### list-pipes / create-pipe / run-pipe / pipe-logs
+Manage pipes — scheduled AI automations that run a markdown prompt on a schedule (e.g. "every day at 9am"). `list-pipes` shows enabled state + schedule; `create-pipe` creates one; `run-pipe` triggers a one-off test run; `pipe-logs` fetches recent execution output.
+
+### team-search / team-devices / team-records
+Team-tier tools (require an org license). `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), `team-records` dumps chronological org data for a time window.
+
 ## Example Queries in Claude
 
 - "Search for any mentions of 'rust' in my screen recordings"
