@@ -803,8 +803,10 @@ function HomeContent() {
   }, [setActiveSection]);
 
   const openSettings = useCallback((section: string = "general") => {
-    router.push(`/settings?section=${section}`);
-  }, [router]);
+    const chatId = activeSection === "home" ? useChatStore.getState().currentId : null;
+    const fromParam = chatId ? `home:${chatId}` : activeSection;
+    router.push(`/settings?section=${section}&from=${fromParam}`);
+  }, [router, activeSection]);
   const clearConnectionFocusRequest = useCallback(() => {
     setConnectionFocusRequest(null);
   }, []);
