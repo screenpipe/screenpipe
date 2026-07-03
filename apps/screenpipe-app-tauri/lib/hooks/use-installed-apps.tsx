@@ -24,12 +24,19 @@ import { useQuery } from "@tanstack/react-query";
 const INSTALLED_APPS_URL = "http://localhost:11435/installed-apps";
 
 async function fetchInstalledApps(): Promise<string[]> {
-  const res = await fetch(INSTALLED_APPS_URL);
-  if (!res.ok) return [];
-  const data: unknown = await res.json();
-  return Array.isArray(data)
-    ? data.filter((x): x is string => typeof x === "string")
-    : [];
+  try {
+    const res = await fetch(INSTALLED_APPS_URL);
+    if (!res.ok) return [];
+    const data: unknown = await res.json();
+    return Array.isArray(data)
+      ? data.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch {
+    // Degrade to an empty list on any failure (older backend without the
+    // route, offline, etc.) rather than surfacing a query error — the UI falls
+    // back to captured-only behavior. Matches the original hook's swallow.
+    return [];
+  }
 }
 
 export function useInstalledApps(): { apps: string[]; isLoading: boolean } {
