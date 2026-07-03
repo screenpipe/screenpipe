@@ -650,6 +650,27 @@ if the input is sparse, just describe what little you have warmly. don't apologi
     return () => clearTimeout(timer);
   }, [state]);
 
+  // Escape hatch for users whose engine never reaches live-feed. The 15s
+  // live-feed timer above only arms once /health polling succeeds; in
+  // corp-VDI / DLP-intercepted WebView2 → localhost / firewalled-3030
+  // environments the poll never resolves and the user is stuck on the
+  // starting screen with no way out. Arm a 10s fallback in any non-terminal
+  // state so a manual skip is always reachable. On the happy path the state
+  // transitions to running well before 10s and this effect's cleanup cancels
+  // the timer before it fires.
+  useEffect(() => {
+    if (state === "running" || state === "live-feed") return;
+    const timer = setTimeout(() => setShowSkip(true), 10000);
+    return () => clearTimeout(timer);
+  }, [state]);
+
+  // If we already know spawn failed (permission denied, engine crash, etc.)
+  // reveal skip immediately — there's no reason to gate the escape hatch on
+  // a timer once the failure is confirmed.
+  useEffect(() => {
+    if (state === "stuck") setShowSkip(true);
+  }, [state]);
+
   // Timers for taking-longer and stuck.
   //
   // The stuck timer used to fire unconditionally after 15s. That was wrong
@@ -1079,6 +1100,23 @@ if the input is sparse, just describe what little you have warmly. don't apologi
                 {bootPhase?.message ?? "starting engine..."}
               </motion.p>
             )}
+        </AnimatePresence>
+
+        {/* Escape hatch during prolonged starting — see the setShowSkip
+            effects above. Corp-VDI / DLP-filtered WebView → localhost users
+            never reach live-feed, so the skip must be reachable here too. */}
+        <AnimatePresence>
+          {state === "starting" && showSkip && (
+            <motion.button
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={handleSkip}
+              className="font-mono text-[11px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase mt-4 underline underline-offset-4"
+            >
+              skip — continue without recording
+            </motion.button>
+          )}
         </AnimatePresence>
 
         {/* Stuck UI */}
