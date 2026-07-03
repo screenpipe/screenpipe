@@ -338,7 +338,9 @@ Make sure to understand the main branch is moving fast and breaking things, if y
 The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid. The source is available for personal, non-commercial use, so you can build and run it yourself (see [LICENSE.md](LICENSE.md)); commercial use of the source requires a license.
 
 **Does screenpipe send my data to the cloud?**
-No. All data is stored locally by default. You can use fully local AI models via Ollama for complete privacy.
+Your captured data (screen frames, audio, transcripts) is stored locally by default and never leaves your device unless you enable cloud sync. Use local AI models via Ollama to keep prompts local too.
+
+Telemetry: the desktop app ships with anonymous product analytics enabled by default (PostHog + Sentry). No screen content, audio, or transcripts are sent — only aggregate diagnostics (app version, OS, CPU/RAM, feature toggles, disk usage counters, crash reports). Opt out in **Settings → Privacy → Anonymous analytics**. The opt-out is respected on the next app start.
 
 **How much disk space does it use?**
 ~5–10 GB per month. Event-driven capture only stores frames when something changes, dramatically reducing storage compared to continuous recording.
