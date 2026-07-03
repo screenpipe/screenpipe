@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
-import { Archive, CheckSquare, FolderOpen, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Trash2, Undo2, X } from "lucide-react";
+import { Archive, CheckSquare, FolderOpen, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Timer, Trash2, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { isInjectedTitle } from "@/lib/chat-utils";
@@ -376,17 +376,30 @@ export function ChatHistoryView({
       >
         {/* Column 1: Icon (default) / Checkbox (hover or selected) */}
         <div className="h-5 w-5 flex items-center justify-center relative">
-          {/* Chat icon — hidden on hover (unless selected via selection mode) */}
-          <MessageSquare
-            className={cn(
-              "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
-              conv.hidden ? "text-muted-foreground/45" : "text-muted-foreground/70",
-              showCheckbox
-                ? "opacity-0 invisible"
-                : "opacity-100 visible group-hover:opacity-0 group-hover:invisible"
-            )}
-            aria-hidden
-          />
+          {/* Chat icon (or Timer for pipe sessions) — hidden on hover (unless selected via selection mode) */}
+          {conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? (
+            <Timer
+              className={cn(
+                "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
+                conv.hidden ? "text-muted-foreground/45" : "text-muted-foreground/70",
+                showCheckbox
+                  ? "opacity-0 invisible"
+                  : "opacity-100 visible group-hover:opacity-0 group-hover:invisible"
+              )}
+              aria-hidden
+            />
+          ) : (
+            <MessageSquare
+              className={cn(
+                "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
+                conv.hidden ? "text-muted-foreground/45" : "text-muted-foreground/70",
+                showCheckbox
+                  ? "opacity-0 invisible"
+                  : "opacity-100 visible group-hover:opacity-0 group-hover:invisible"
+              )}
+              aria-hidden
+            />
+          )}
           {/* Checkbox — visible on hover or when selected */}
           <div
             className={cn(
