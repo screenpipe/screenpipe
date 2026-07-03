@@ -417,8 +417,10 @@ function HomeContent() {
   // Net effect: the sidebar slammed shut every time the user tried to
   // open it during a meeting.
   const sidebarPrevCollapsedRef = useRef<boolean | null>(null);
+  // Assigned during render (not in an effect): read only from the meeting
+  // focus-mode handler below, never during render.
   const sidebarCollapsedRef = useRef(sidebarCollapsed);
-  useEffect(() => { sidebarCollapsedRef.current = sidebarCollapsed; }, [sidebarCollapsed]);
+  sidebarCollapsedRef.current = sidebarCollapsed;
   const handleMeetingFocusModeChange = useCallback(
     (focused: boolean) => {
       if (focused) {
