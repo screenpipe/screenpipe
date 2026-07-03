@@ -875,6 +875,66 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[]): GroupedBlock[] {
   return out;
 }
 
+/**
+ * Merge all tool/work groups into a single "Worked for Xs" rail at the top.
+ * Intermediate narration text between tool calls is dropped — only the
+ * final text block (the actual response after all tools finish) renders
+ * as visible prose. Connection-action blocks always render outside.
+ */
+function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
+  // Find the last work/tool group — everything up to that boundary is
+  // "work". Text after is the final response.
+  let lastWorkIdx = -1;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    if (groups[i].type === "work-group" || groups[i].type === "tool-group") {
+      lastWorkIdx = i;
+      break;
+    }
+  }
+
+  // No tool calls at all → nothing to merge, show text as-is.
+  if (lastWorkIdx === -1) return groups;
+
+  // Accumulate all tool calls and duration into one work group.
+  // Intermediate text (model narration between tools) is dropped.
+  const allToolCalls: ToolCall[] = [];
+  let totalDurationMs = 0;
+  let firstKey: number | null = null;
+  const finalBlocks: GroupedBlock[] = [];
+
+  for (let i = 0; i <= lastWorkIdx; i++) {
+    const g = groups[i];
+    if (g.type === "work-group") {
+      firstKey ??= g.key;
+      allToolCalls.push(...g.toolCalls);
+      totalDurationMs += g.durationMs;
+    } else if (g.type === "tool-group") {
+      firstKey ??= g.key;
+      allToolCalls.push(...g.toolCalls);
+    } else if (g.type === "connection-action") {
+      finalBlocks.push(g);
+    }
+    // text and thinking blocks before the boundary are dropped
+  }
+
+  // Build the merged work group
+  if (allToolCalls.length > 0) {
+    finalBlocks.unshift({
+      type: "work-group",
+      toolCalls: allToolCalls,
+      durationMs: totalDurationMs,
+      key: firstKey ?? 0,
+    });
+  }
+
+  // Everything after lastWorkIdx is the final response
+  for (let i = lastWorkIdx + 1; i < groups.length; i++) {
+    finalBlocks.push(groups[i]);
+  }
+
+  return finalBlocks;
+}
+
 function InlineConnectionActionCard({
   block,
   connected,
@@ -1356,13 +1416,8 @@ export function MessageContent({
   // Group consecutive tool blocks into collapsible containers
   if (message.contentBlocks && message.contentBlocks.length > 0) {
     const grouped = groupContentBlocks(message.contentBlocks);
-    const displayGroups = collapseHiddenWorkGroups(grouped);
-    // When the message has no rendered prose (no text block — common for
-    // pipe-run executions whose entire output is thinking + tool calls),
-    // expand thinking blocks by default. Otherwise the collapsed
-    // "thought for 0s" pill is the only visible thing on the message
-    // and the chat panel reads as empty even though there's real
-    // content to see.
+    const collapsed = collapseHiddenWorkGroups(grouped);
+    const displayGroups = mergeWorkAndIntermediateText(collapsed);
     const hasText = grouped.some((g) => g.type === "text");
     const stoppedSummary = message.stoppedByUser
       ? formatStoppedWorkDuration(message.workDurationMs)
