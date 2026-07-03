@@ -429,13 +429,10 @@ export function ChatMessageList({
           const blocks = lastAssistant?.contentBlocks;
           let loaderPhase: LoaderPhase = "analyzing";
           let toolName: string | undefined;
-          const thinkingSecs: number | undefined = undefined;
 
           if (blocks && blocks.length > 0) {
             const lastBlock = blocks[blocks.length - 1];
-            if (lastBlock.type === "thinking" && lastBlock.isThinking) {
-              loaderPhase = "thinking";
-            } else if (lastBlock.type === "tool" && lastBlock.toolCall.isRunning) {
+            if (lastBlock.type === "tool" && lastBlock.toolCall.isRunning) {
               loaderPhase = "tool";
               toolName = lastBlock.toolCall.toolName;
             } else if (lastBlock.type === "text" && lastBlock.text) {
@@ -459,7 +456,6 @@ export function ChatMessageList({
               <GridDissolveLoader
                 phase={loaderPhase}
                 toolName={toolName}
-                thinkingSecs={thinkingSecs}
               />
             </motion.div>
           );
