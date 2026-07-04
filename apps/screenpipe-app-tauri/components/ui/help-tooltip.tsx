@@ -5,22 +5,22 @@
 "use client";
 
 import { HelpCircle } from "lucide-react";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
 
 export function HelpTooltip({ text }: { text: string }) {
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLSpanElement>(null);
 
-	const close = useCallback(() => setOpen(false), []);
-
-	useEffect(() => {
-		if (!open) return;
-		const handler = (e: PointerEvent) => {
-			if (ref.current && !ref.current.contains(e.target as Node)) close();
-		};
-		document.addEventListener("pointerdown", handler, true);
-		return () => document.removeEventListener("pointerdown", handler, true);
-	}, [open, close]);
+	// Close on an outside pointerdown while open; null target when closed = detached.
+	useEventListener(
+		"pointerdown",
+		(e: PointerEvent) => {
+			if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+		},
+		open ? document : null,
+		true,
+	);
 
 	return (
 		<span ref={ref} className="relative inline-flex">
