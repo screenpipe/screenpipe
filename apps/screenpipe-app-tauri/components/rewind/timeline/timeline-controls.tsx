@@ -194,7 +194,6 @@ export function TimelineControls({
 							mode="single"
 							selected={currentDate}
 							fromMonth={startOfDay(startAndEndDates.start ?? fallbackStartDate(new Date()))} toMonth={new Date()} onSelect={(date) => {
-								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
 								if (date) {
 									onDateChange(date);
 									setCalendarOpen(false);
