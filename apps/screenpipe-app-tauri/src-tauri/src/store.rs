@@ -973,12 +973,6 @@ pub struct SettingsStore {
     #[serde(rename = "translucentSidebar", default)]
     pub translucent_sidebar: bool,
 
-    /// When true (default), hide model "thinking" reasoning blocks in the chat
-    /// transcript. The model still emits them server-side; we just don't
-    /// render the collapsible block in the UI.
-    #[serde(rename = "hideThinkingBlocks", default = "default_true")]
-    pub hide_thinking_blocks: bool,
-
     /// UI theme: "light", "dark", or "system".
     #[serde(rename = "uiTheme", default = "default_ui_theme")]
     pub ui_theme: String,
@@ -1403,7 +1397,6 @@ Rules:
             translucent_sidebar: true,
             #[cfg(not(target_os = "macos"))]
             translucent_sidebar: false,
-            hide_thinking_blocks: true,
             ui_theme: "system".to_string(),
             minimize_to_tray_on_close: false,
             extra: std::collections::HashMap::new(),

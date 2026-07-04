@@ -321,8 +321,6 @@ export type Settings = SettingsStore & {
 	localRetentionMode?: "media" | "lean" | "all";
 	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
 	translucentSidebar?: boolean;
-	/** Hide model "thinking" reasoning blocks in chat (default: true) */
-	hideThinkingBlocks?: boolean;
 	/** Show the chat suggestion chips above the input — the "follow up"
 	 *  questions and the connection-aware suggested prompts. The single inline
 	 *  X on the chips flips this to false; re-enable from Settings → Display.
