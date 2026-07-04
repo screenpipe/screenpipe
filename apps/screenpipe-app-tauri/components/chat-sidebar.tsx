@@ -31,6 +31,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import {
   Pin,
   Archive,
@@ -1989,11 +1990,7 @@ function RowRightSignal({
 
 function useMinuteTick(enabled = true): number {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!enabled) return;
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
-  }, [enabled]);
+  useInterval(() => setNow(Date.now()), enabled ? 60_000 : null);
   return now;
 }
 

@@ -4,6 +4,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { isInjectedTitle } from "@/lib/chat-utils";
@@ -11,11 +12,7 @@ import type { SessionRecord } from "@/lib/stores/chat-store";
 
 function useMinuteTick(enabled = true): number {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!enabled) return;
-    const id = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(id);
-  }, [enabled]);
+  useInterval(() => setNow(Date.now()), enabled ? 60_000 : null);
   return now;
 }
 
