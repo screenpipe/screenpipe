@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
 import { openPermissionSettingsWithFlow, requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 
 interface PermissionState {
   screenOk: boolean;
@@ -45,12 +45,9 @@ export function PermissionBanner() {
   }, [checkPermissions]);
 
   // Also listen for permission-lost events for instant response
-  useEffect(() => {
-    const unlisten = listen("permission-lost", () => {
-      checkPermissions();
-    });
-    return () => { unlisten.then(fn => fn()); };
-  }, [checkPermissions]);
+  useTauriEvent("permission-lost", () => {
+    checkPermissions();
+  });
 
   // Don't render on non-Mac or while loading
   if (!isMac || !permissions) return null;

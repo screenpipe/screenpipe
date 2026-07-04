@@ -134,7 +134,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { ToastAction } from "@/components/ui/toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { getMediaFile } from "@/lib/actions/video-actions";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
@@ -2141,20 +2141,15 @@ export function RecordingSettings() {
   ]);
 
   // Listen for data-dir-fallback event (custom dir unavailable, fell back to default)
-  useEffect(() => {
-    const unlisten = listen("data-dir-fallback", () => {
-      toast({
-        title: "custom data directory unavailable",
-        description:
-          "the configured data directory could not be accessed. recordings are using the default directory (~/.screenpipe).",
-        variant: "destructive",
-        duration: 10000,
-      });
+  useTauriEvent("data-dir-fallback", () => {
+    toast({
+      title: "custom data directory unavailable",
+      description:
+        "the configured data directory could not be accessed. recordings are using the default directory (~/.screenpipe).",
+      variant: "destructive",
+      duration: 10000,
     });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [toast]);
+  });
 
   useEffect(() => {
     const loadDevices = async () => {
