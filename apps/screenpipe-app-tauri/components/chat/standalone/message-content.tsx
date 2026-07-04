@@ -1383,6 +1383,28 @@ export function MessageContent({
     const grouped = groupContentBlocks(message.contentBlocks);
     const collapsed = collapseHiddenWorkGroups(grouped);
     const displayGroups = mergeWorkAndIntermediateText(collapsed);
+
+    // If all blocks were absorbed (e.g. thinking-only message with no tool
+    // calls), show a "Thought for Xs" header so the bubble isn't blank.
+    // Skip while still generating — the loader handles that state.
+    if (displayGroups.length === 0 && !isGenerating) {
+      const thinkingMs = grouped
+        .filter((g): g is Extract<GroupedBlock, { type: "thinking" }> => g.type === "thinking")
+        .reduce((sum, g) => sum + (g.durationMs ?? 0), 0);
+      const fallbackLabel = thinkingMs > 0
+        ? formatWorkDuration(thinkingMs)
+        : message.workDurationMs
+          ? formatWorkDuration(message.workDurationMs)
+          : "thought";
+      return (
+        <div className="space-y-2 min-w-0 w-full overflow-hidden">
+          <WorkStatusHeader label={fallbackLabel} />
+          {sourceFooter}
+          {retryCta}
+        </div>
+      );
+    }
+
     const hasText = grouped.some((g) => g.type === "text");
     const stoppedSummary = message.stoppedByUser
       ? formatStoppedWorkDuration(message.workDurationMs)
