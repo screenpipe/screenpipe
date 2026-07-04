@@ -1090,7 +1090,7 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
   const [claudeAppInstalled, setClaudeAppInstalled] = useState<boolean | null>(null);
 
   useEffect(() => {
-    getInstalledMcpVersion().then(v => { if (v) setState("connected"); }).catch(() => {});
+    getInstalledMcpVersion().then(v => { if (v) { setState("connected"); onConnected?.(); } }).catch(() => {});
     const os = platform();
     if (os === "windows") {
       // Check for MSIX package folder first, then fall back to traditional exe search
@@ -1196,7 +1196,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
   const [cursorAppInstalled, setCursorAppInstalled] = useState<boolean | null>(null);
 
   useEffect(() => {
-    isCursorMcpInstalled().then(ok => { if (ok) setState("installed"); }).catch(() => {});
+    isCursorMcpInstalled().then(ok => { if (ok) { setState("installed"); onConnected?.(); } }).catch(() => {});
 
     const os = platform();
     if (os === "windows") {
@@ -1273,7 +1273,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
 
 function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void }) {
   const [state, setState] = useState<"idle" | "installing" | "installed">("idle");
-  useEffect(() => { isCodexMcpInstalled().then(ok => { if (ok) setState("installed"); }); }, []);
+  useEffect(() => { isCodexMcpInstalled().then(ok => { if (ok) { setState("installed"); onConnected?.(); } }); }, []);
 
   const manualConfig = useMemo(() => buildCodexMcpToml({
     command: "npx",
@@ -1348,7 +1348,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
 
 function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void }) {
   const [state, setState] = useState<"idle" | "installing" | "installed">("idle");
-  useEffect(() => { isGrokMcpInstalled().then(ok => { if (ok) setState("installed"); }); }, []);
+  useEffect(() => { isGrokMcpInstalled().then(ok => { if (ok) { setState("installed"); onConnected?.(); } }); }, []);
 
   const manualConfig = useMemo(() => buildGrokMcpJson({
     command: "npx",
@@ -3865,7 +3865,6 @@ export function ConnectionsSection({
   const [mcpProviderConnected, setMcpProviderConnected] = useState<Record<string, boolean>>({});
   const [excalidrawConnected, setExcalidrawConnected] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
-
   const loadSkillsCount = useCallback(() => {
     commands
       .listImportedSkills()
@@ -4070,14 +4069,16 @@ export function ConnectionsSection({
         category: normalizeConnectionCategory(i.category),
         description: i.description || undefined,
       }));
-    // Update connected status from API for hardcoded tiles that also exist in API
+    // Merge backend API state for hardcoded tiles using OR so the file-based
+    // state (e.g. codexInstalled from ~/.codex/config.toml) is never
+    // overwritten to false by a backend entry that tracks a separate concern
+    // (e.g. the codex memory-sync integration returning connected: false).
     for (const h of hardcoded) {
       const api = integrations.find(i => i.id === h.id);
-      h.connected = isMcpOAuthProviderTileConnected(
-        h.id,
-        api ? api.connected : h.connected,
-        mcpProviderConnected,
-      );
+      const apiConnected = api
+        ? isMcpOAuthProviderTileConnected(h.id, api.connected, mcpProviderConnected)
+        : false;
+      h.connected = h.connected || apiConnected;
     }
     // Google OAuth dots are driven by direct oauthStatus (not the cached API), so they stay
     // in sync immediately after connect/disconnect without waiting for cache expiry.

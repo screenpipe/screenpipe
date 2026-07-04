@@ -73,8 +73,13 @@ export function hasEnabledCodexMcp(content: string): boolean {
 
 export async function isCodexMcpInstalled(): Promise<boolean> {
   try {
-    return hasEnabledCodexMcp(await readTextFile(await getCodexConfigPath()));
-  } catch { return false; }
+    const path = await getCodexConfigPath();
+    const content = await readTextFile(path);
+    return hasEnabledCodexMcp(content);
+  } catch (e) {
+    console.error("[isCodexMcpInstalled] failed:", e);
+    return false;
+  }
 }
 
 // Grok CLI (superagent-ai/grok-cli) keeps user settings in
