@@ -137,13 +137,51 @@ function formatRelativeTime(dateString: string): string {
   return `${diffDays}d ago`;
 }
 
-// Generate a cryptographically random sync password (64 hex chars = 256 bits)
-function generateRandomSyncPassword(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
+const AUTO_SYNC_PASSWORD_DOMAIN = "screenpipe-cloud-sync-v1";
+
+function decodeBase64Url(input: string): string | null {
+  try {
+    const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function jwtSubject(token?: string | null): string | null {
+  const payload = token?.split(".")[1];
+  if (!payload) return null;
+  const decoded = decodeBase64Url(payload);
+  if (!decoded) return null;
+  try {
+    const sub = JSON.parse(decoded)?.sub;
+    return typeof sub === "string" && sub.length > 0 ? sub : null;
+  } catch {
+    return null;
+  }
+}
+
+async function deriveAutoSyncPassword(accountId: string): Promise<string> {
+  const data = new TextEncoder().encode(accountId + AUTO_SYNC_PASSWORD_DOMAIN);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function syncAccountIds(
+  user:
+    | { clerk_id?: string | null; token?: string | null; id?: string | null }
+    | null
+    | undefined
+): string[] {
+  const ids = [user?.clerk_id, jwtSubject(user?.token), user?.id].filter(
+    (id): id is string => typeof id === "string" && id.length > 0
+  );
+  return Array.from(new Set(ids));
 }
 
 // Cloud animation component using Lottie
@@ -781,9 +819,7 @@ export function SyncSettings() {
         const serverData = await serverStatus.json();
         console.log("[sync] step 1 - server status:", serverData);
         if (serverData.enabled) {
-          const res = await commands.setSyncEnabled(true);
-          if (res.status === "error") throw new Error(res.error);
-          return true;
+          console.log("[sync] step 1 - server sync is running; initializing local manager too");
         }
       }
     } catch {
@@ -828,48 +864,34 @@ export function SyncSettings() {
       localStorage.removeItem("sync_password");
     }
 
-    const userId = settings.user?.id;
-    if (!userId) {
-      console.log("[sync] no userId, returning false");
+    const accountIds = syncAccountIds(settings.user);
+    if (accountIds.length === 0) {
+      console.log("[sync] no account id, returning false");
       return false;
     }
 
-    // 3. Migration: try old deterministic password for users who lost localStorage
-    // (old system derived password from userId, keeping as one-time migration fallback)
-    try {
-      const data = new TextEncoder().encode(userId + "screenpipe-cloud-sync-v1");
-      const hash = await crypto.subtle.digest("SHA-256", data);
-      const legacyDerived = Array.from(new Uint8Array(hash))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-      console.log("[sync] step 3 - trying legacy deterministic password migration");
-      const res = await commands.initSync(legacyDerived);
-      if (res.status === "error") throw new Error(res.error);
-      console.log("[sync] step 3 - legacy password worked, saving to store.bin");
-      const store = await getStore();
-      await store.set("sync_password", legacyDerived);
-      await saveAndEncrypt(store);
-      return true;
-    } catch (e) {
-      console.log("[sync] step 3 - legacy deterministic password failed:", e);
+    // 3. Use the stable per-account auto password. This covers both first
+    // setup and additional devices; older user.id-derived accounts remain a
+    // fallback because syncAccountIds includes user.id after Clerk ids.
+    for (const accountId of accountIds) {
+      try {
+        const autoPassword = await deriveAutoSyncPassword(accountId);
+        console.log("[sync] step 3 - trying account-derived sync password");
+        const res = await commands.initSync(autoPassword);
+        if (res.status === "error") throw new Error(res.error);
+        console.log("[sync] step 3 - account-derived password worked, saving to store.bin");
+        const store = await getStore();
+        await store.set("sync_password", autoPassword);
+        await saveAndEncrypt(store);
+        return true;
+      } catch (e) {
+        console.log("[sync] step 3 - account-derived password failed:", e);
+      }
     }
 
-    // 4. Generate a random password for truly new setup (first device, no existing keys)
-    console.log("[sync] step 4 - generating random password for new setup");
-    const randomPassword = generateRandomSyncPassword();
-    try {
-      const res = await commands.initSync(randomPassword);
-      if (res.status === "error") throw new Error(res.error);
-      console.log("[sync] step 4 - init_sync with random password succeeded");
-      const store = await getStore();
-      await store.set("sync_password", randomPassword);
-      await saveAndEncrypt(store);
-      return true;
-    } catch (e) {
-      console.log("[sync] step 4 - init_sync failed, showing password prompt:", e);
-      // Server has existing keys encrypted with a different password.
-      // User must enter their password from their other device.
-    }
+    // Existing cloud keys may have been created by a first device with an
+    // old local-only random password. That cannot be recovered automatically;
+    // ask for the encryption password instead of creating another bad key.
 
     console.log("[sync] tryAutoInitSync returning false");
     return false;

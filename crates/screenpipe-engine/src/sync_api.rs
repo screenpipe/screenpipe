@@ -9,6 +9,10 @@
 //! - Trigger sync and check status
 //! - Download and import data from other devices
 
+use base64::{
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use axum::{
     extract::{Json, State},
     http::StatusCode,
@@ -16,7 +20,8 @@ use axum::{
 };
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{
-    BlobType, SyncClientConfig, SyncManager, SyncService, SyncServiceConfig, SyncServiceHandle,
+    derive_auto_sync_password, BlobType, SyncClientConfig, SyncManager, SyncService,
+    SyncServiceConfig, SyncServiceHandle,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -184,10 +189,11 @@ async fn sync_init_inner(
 
     // Initialize with password
     let is_new_user = manager.initialize(&request.password).await.map_err(|e| {
-        error!("failed to initialize sync: {}", e);
+        let message = format_sync_init_error_message(&e.to_string());
+        error!("{}", message);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            JsonResponse(json!({"error": format!("failed to initialize sync: {}", e)})),
+            JsonResponse(json!({"error": message})),
         )
     })?;
 
@@ -474,15 +480,54 @@ async fn sync_init_inner(
 /// `/sync/init` path and the engine-driven [`ensure_sync_runtime`] path.
 const SYNC_MASTER_PASSWORD_KEY: &str = "sync.master_password";
 
-/// Generate a strong random password (256-bit, hex-encoded) used to derive the
-/// sync master key. Uses the sync crypto RNG so we add no new dependency.
-fn generate_sync_password() -> String {
-    let a = screenpipe_core::sync::generate_salt();
-    let b = screenpipe_core::sync::generate_salt();
-    a.iter()
-        .chain(b.iter())
-        .map(|byte| format!("{:02x}", byte))
-        .collect()
+/// Extract the Clerk account id from the unsigned JWT payload.
+///
+/// We only use this as a stable, non-secret account identifier for deriving the
+/// local auto-managed sync password. Cloud API requests still authenticate the
+/// token server-side.
+fn jwt_subject(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| URL_SAFE.decode(payload))
+        .ok()?;
+    let json: Value = serde_json::from_slice(&decoded).ok()?;
+    json.get("sub")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn auto_sync_password_from_token(token: &str) -> Option<String> {
+    jwt_subject(token).map(|subject| derive_auto_sync_password(&subject))
+}
+
+fn sync_init_error_text(err: &(StatusCode, JsonResponse<Value>)) -> Option<&str> {
+    err.1.0.get("error").and_then(Value::as_str)
+}
+
+const SYNC_PASSWORD_MISMATCH_MESSAGE: &str = concat!(
+    "failed to initialize sync: encryption password does not match this account's existing ",
+    "cloud sync key; enter the password from the device that created it or reset cloud sync ",
+    "from that device"
+);
+
+fn is_sync_password_decrypt_message(message: &str) -> bool {
+    message.contains("decryption failed (authentication error)")
+        || message.contains("aead::Error")
+        || message.contains("does not match this account's existing cloud sync key")
+}
+
+fn format_sync_init_error_message(message: &str) -> String {
+    if is_sync_password_decrypt_message(message) {
+        SYNC_PASSWORD_MISMATCH_MESSAGE.to_string()
+    } else {
+        format!("failed to initialize sync: {}", message)
+    }
+}
+
+fn is_sync_password_decrypt_error(err: &(StatusCode, JsonResponse<Value>)) -> bool {
+    sync_init_error_text(err).is_some_and(is_sync_password_decrypt_message)
 }
 
 /// Lazily initialize the sync runtime if it isn't already running.
@@ -547,45 +592,74 @@ pub async fn ensure_sync_runtime(
         Ok(Some(bytes)) => String::from_utf8(bytes).unwrap_or_default(),
         _ => String::new(),
     };
-    let password = if existing.is_empty() {
-        let generated = generate_sync_password();
-        if let Err(e) = secret_store
-            .set(SYNC_MASTER_PASSWORD_KEY, generated.as_bytes())
-            .await
-        {
-            error!("failed to persist sync master password: {}", e);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": "failed to persist sync password"})),
-            ));
+
+    let auto_password = auto_sync_password_from_token(&token);
+    if existing.is_empty() && auto_password.is_none() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            JsonResponse(json!({
+                "error": "cloud token is missing an account id; cannot initialize sync"
+            })),
+        ));
+    }
+
+    let mut candidates: Vec<(String, bool, &'static str)> = Vec::new();
+    if !existing.is_empty() {
+        candidates.push((existing.clone(), false, "stored sync password"));
+    }
+    if let Some(auto_password) = auto_password {
+        if existing != auto_password {
+            candidates.push((auto_password, true, "account-derived sync password"));
         }
-        generated
-    } else {
-        existing
-    };
+    }
 
     let machine_id = screenpipe_core::sync::get_or_create_machine_id();
-
-    let request = SyncInitRequest {
-        token,
-        password,
-        machine_id: Some(machine_id),
-        sync_interval_secs: Some(300),
-    };
+    let mut last_password_error: Option<(StatusCode, JsonResponse<Value>)> = None;
 
     // blob_upload = false: connection/credential sync only. Enabling credential
     // sync must never start uploading OCR/transcripts/accessibility to the
-    // cloud — that requires an explicit /sync/init (data-sync intent), which
+    // cloud - that requires an explicit /sync/init (data-sync intent), which
     // upgrades this runtime in place.
-    match sync_init_inner(state.clone(), request, false).await {
-        Ok(_) => {
-            info!("sync auto-initialized (lazy) for connection/memory sync");
-            Ok(())
+    for (password, persist_on_success, source) in candidates {
+        let request = SyncInitRequest {
+            token: token.clone(),
+            password: password.clone(),
+            machine_id: Some(machine_id.clone()),
+            sync_interval_secs: Some(300),
+        };
+
+        match sync_init_inner(state.clone(), request, false).await {
+            Ok(_) => {
+                if persist_on_success {
+                    if let Err(e) = secret_store
+                        .set(SYNC_MASTER_PASSWORD_KEY, password.as_bytes())
+                        .await
+                    {
+                        warn!("failed to persist account-derived sync password: {}", e);
+                    }
+                }
+                info!(
+                    "sync auto-initialized (lazy) for connection/memory sync via {}",
+                    source
+                );
+                return Ok(());
+            }
+            // A concurrent caller initialized first - fine.
+            Err((StatusCode::CONFLICT, _)) => return Ok(()),
+            Err(e) if is_sync_password_decrypt_error(&e) => {
+                warn!("sync lazy init: {} could not unlock cloud keys", source);
+                last_password_error = Some(e);
+            }
+            Err(e) => return Err(e),
         }
-        // A concurrent caller initialized first — fine.
-        Err((StatusCode::CONFLICT, _)) => Ok(()),
-        Err(e) => Err(e),
     }
+
+    Err(last_password_error.unwrap_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": "failed to initialize sync"})),
+        )
+    }))
 }
 
 /// Response for sync status.
@@ -1817,14 +1891,20 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_sync_password() {
-        let a = generate_sync_password();
-        let b = generate_sync_password();
-        // Two SALT_SIZE (32-byte) salts hex-encoded => 128 chars, all hex.
-        assert_eq!(a.len(), 128);
-        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-        // Random: two generations must not collide.
-        assert_ne!(a, b);
+    fn test_auto_sync_password_from_jwt_subject() {
+        let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyXzEyMyJ9.sig";
+
+        assert_eq!(jwt_subject(token).as_deref(), Some("user_123"));
+        assert_eq!(
+            auto_sync_password_from_token(token).as_deref(),
+            Some(derive_auto_sync_password("user_123").as_str())
+        );
+    }
+
+    #[test]
+    fn test_auto_sync_password_requires_jwt_subject() {
+        assert_eq!(jwt_subject("not-a-jwt"), None);
+        assert_eq!(auto_sync_password_from_token("not-a-jwt"), None);
     }
 
     #[test]

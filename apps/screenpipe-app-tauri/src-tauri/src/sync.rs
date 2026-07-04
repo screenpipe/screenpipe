@@ -5,10 +5,15 @@
 //! Tauri commands for cloud sync operations.
 
 use crate::recording::{local_api_context_from_app, LocalApiContext};
-use crate::store::{CloudArchiveSettingsStore, CloudSyncSettingsStore, SettingsStore};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use crate::store::{CloudArchiveSettingsStore, CloudSyncSettingsStore, SettingsStore, User};
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE, URL_SAFE_NO_PAD},
+    Engine,
+};
 use chrono::Utc;
-use screenpipe_core::sync::{get_or_create_machine_id, SyncClientConfig, SyncManager};
+use screenpipe_core::sync::{
+    derive_auto_sync_password, get_or_create_machine_id, SyncClientConfig, SyncError, SyncManager,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -20,6 +25,59 @@ fn apply_local_api_auth(
     request: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
     api.apply_auth(request)
+}
+
+fn jwt_subject(token: Option<&str>) -> Option<String> {
+    let payload = token?.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| URL_SAFE.decode(payload))
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    json.get("sub")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn push_unique_account_id(ids: &mut Vec<String>, id: Option<String>) {
+    if let Some(id) = id.filter(|id| !id.is_empty()) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+}
+
+fn sync_account_ids(user: &User, token: Option<&str>) -> Vec<String> {
+    let mut ids = Vec::new();
+    push_unique_account_id(&mut ids, user.clerk_id.clone());
+    push_unique_account_id(&mut ids, jwt_subject(user.token.as_deref()));
+    push_unique_account_id(&mut ids, jwt_subject(token));
+    push_unique_account_id(&mut ids, user.id.clone());
+    ids
+}
+
+const SYNC_PASSWORD_MISMATCH_MESSAGE: &str = concat!(
+    "failed to initialize sync: encryption password does not match this account's existing ",
+    "cloud sync key; enter the password from the device that created it or reset cloud sync ",
+    "from that device"
+);
+
+fn is_sync_password_decrypt_error(error: &SyncError) -> bool {
+    matches!(
+        error,
+        SyncError::Crypto(message)
+            if message.contains("decryption failed (authentication error)")
+                || message.contains("aead::Error")
+    )
+}
+
+fn format_sync_init_error(error: SyncError) -> String {
+    if is_sync_password_decrypt_error(&error) {
+        SYNC_PASSWORD_MISMATCH_MESSAGE.to_string()
+    } else {
+        format!("failed to initialize sync: {}", error)
+    }
 }
 
 /// Sync state managed by Tauri.
@@ -386,7 +444,7 @@ pub async fn init_sync(
     let is_new_user = manager
         .initialize(&password)
         .await
-        .map_err(|e| format!("failed to initialize sync: {}", e))?;
+        .map_err(format_sync_init_error)?;
 
     // Store the local manager
     *state.manager.write().await = Some(Arc::new(manager));
@@ -511,50 +569,6 @@ pub async fn auto_start_sync(app: &AppHandle, state: &SyncState) {
         return;
     }
 
-    // Resolve the master password. Prefer the encrypted SecretStore; fall back
-    // to the legacy base64 copy in store.bin and migrate it (one-time) so the
-    // password is no longer kept as base64 outside the keychain-encrypted store.
-    let password = match crate::auth_token::load_sync_password().await {
-        Some(p) => p,
-        None => {
-            if settings.encrypted_password.is_empty() {
-                info!("cloud sync: enabled but no saved password, skipping auto-start");
-                return;
-            }
-            let legacy = match BASE64
-                .decode(&settings.encrypted_password)
-                .ok()
-                .and_then(|b| String::from_utf8(b).ok())
-            {
-                Some(p) => p,
-                None => {
-                    warn!("cloud sync: saved password is not valid base64/UTF-8");
-                    return;
-                }
-            };
-            // Migrate into the encrypted SecretStore and drop the base64 copy.
-            // On failure, keep the legacy copy so the next launch can retry
-            // rather than losing the password entirely.
-            match crate::auth_token::store_sync_password(&legacy).await {
-                Ok(()) => {
-                    let cleaned = CloudSyncSettingsStore {
-                        enabled: true,
-                        encrypted_password: String::new(),
-                    };
-                    let _ = cleaned.save(app);
-                    info!("cloud sync: migrated saved password from store.bin to the encrypted secret store");
-                }
-                Err(e) => {
-                    warn!(
-                        "cloud sync: failed to migrate password to secret store: {}",
-                        e
-                    );
-                }
-            }
-            legacy
-        }
-    };
-
     let fresh_settings = match SettingsStore::get(app) {
         Ok(Some(s)) => s,
         _ => {
@@ -577,75 +591,150 @@ pub async fn auto_start_sync(app: &AppHandle, state: &SyncState) {
         }
     };
 
+    let mut password_candidates: Vec<(String, bool, &'static str)> = Vec::new();
+    match crate::auth_token::load_sync_password().await {
+        Some(password) => {
+            password_candidates.push((password, false, "stored sync password"));
+        }
+        None => {
+            if settings.encrypted_password.is_empty() {
+                info!(
+                    "cloud sync: enabled but no saved password; trying account-derived password"
+                );
+            } else {
+                match BASE64
+                    .decode(&settings.encrypted_password)
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+                {
+                    Some(password) => {
+                        password_candidates.push((password, true, "legacy store.bin password"));
+                    }
+                    None => {
+                        warn!("cloud sync: saved password is not valid base64/UTF-8");
+                    }
+                }
+            }
+        }
+    }
+
+    for account_id in sync_account_ids(&fresh_settings.user, Some(&token)) {
+        let password = derive_auto_sync_password(&account_id);
+        if !password_candidates
+            .iter()
+            .any(|(candidate, _, _)| candidate == &password)
+        {
+            password_candidates.push((password, true, "account-derived sync password"));
+        }
+    }
+
+    if password_candidates.is_empty() {
+        info!("cloud sync: no saved password or account id, skipping auto-start");
+        return;
+    }
+
     let device_name = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|_| "Unknown".to_string());
     let device_os = std::env::consts::OS.to_string();
+    let mut last_password_error: Option<String> = None;
 
-    let config = SyncClientConfig::new(
-        token.clone(),
-        state.machine_id.clone(),
-        device_name,
-        device_os,
-    );
+    for (password, persist_on_success, source) in password_candidates {
+        let config = SyncClientConfig::new(
+            token.clone(),
+            state.machine_id.clone(),
+            device_name.clone(),
+            device_os.clone(),
+        );
 
-    let manager = match SyncManager::new(config) {
-        Ok(m) => m,
-        Err(e) => {
-            warn!("cloud sync auto-start: failed to create manager: {}", e);
-            return;
-        }
-    };
+        let manager = match SyncManager::new(config) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("cloud sync auto-start: failed to create manager: {}", e);
+                return;
+            }
+        };
 
-    match manager.initialize(&password).await {
-        Ok(is_new) => {
-            info!(
-                "cloud sync auto-started for {} user",
-                if is_new { "new" } else { "existing" }
-            );
-        }
-        Err(e) => {
-            warn!("cloud sync auto-start: failed to initialize: {}", e);
-            return;
+        match manager.initialize(&password).await {
+            Ok(is_new) => {
+                info!(
+                    "cloud sync auto-started for {} user via {}",
+                    if is_new { "new" } else { "existing" },
+                    source
+                );
+
+                if persist_on_success {
+                    match crate::auth_token::store_sync_password(&password).await {
+                        Ok(()) => {
+                            let cleaned = CloudSyncSettingsStore {
+                                enabled: true,
+                                encrypted_password: String::new(),
+                            };
+                            let _ = cleaned.save(app);
+                        }
+                        Err(e) => {
+                            warn!("cloud sync: failed to persist sync password: {}", e);
+                        }
+                    }
+                }
+
+                *state.manager.write().await = Some(Arc::new(manager));
+                *state.enabled.write().await = true;
+                *state.last_error.write().await = None;
+
+                // Initialize the server's sync service.
+                let client = reqwest::Client::new();
+                let api = local_api_context_from_app(app);
+                let init_request = serde_json::json!({
+                    "token": token,
+                    "password": password,
+                    "machine_id": state.machine_id.clone(),
+                    "sync_interval_secs": 300
+                });
+
+                match apply_local_api_auth(&api, client.post(api.url("/sync/init")))
+                    .json(&init_request)
+                    .send()
+                    .await
+                {
+                    Ok(response) if response.status().is_success() => {
+                        info!("cloud sync auto-start: server sync service initialized");
+                    }
+                    Ok(response) if response.status().as_u16() == 409 => {
+                        info!("cloud sync auto-start: server sync already running");
+                    }
+                    Ok(response) => {
+                        let status = response.status();
+                        let body = response.text().await.unwrap_or_default();
+                        warn!(
+                            "cloud sync auto-start: server init failed ({}): {}",
+                            status, body
+                        );
+                    }
+                    Err(e) => {
+                        warn!("cloud sync auto-start: server not reachable: {}", e);
+                    }
+                }
+                return;
+            }
+            Err(e) if is_sync_password_decrypt_error(&e) => {
+                warn!("cloud sync auto-start: {} could not unlock cloud keys", source);
+                last_password_error = Some(format_sync_init_error(e));
+            }
+            Err(e) => {
+                let error = format_sync_init_error(e);
+                warn!("cloud sync auto-start: {}", error);
+                *state.last_error.write().await = Some(error);
+                return;
+            }
         }
     }
 
-    *state.manager.write().await = Some(Arc::new(manager));
-    *state.enabled.write().await = true;
-
-    // Initialize the server's sync service
-    let client = reqwest::Client::new();
-    let api = local_api_context_from_app(app);
-    let init_request = serde_json::json!({
-        "token": token,
-        "password": password,
-        "machine_id": state.machine_id.clone(),
-        "sync_interval_secs": 300
+    let error = last_password_error.unwrap_or_else(|| {
+        "failed to initialize sync: no password candidate could unlock cloud sync".to_string()
     });
-
-    match apply_local_api_auth(&api, client.post(api.url("/sync/init")))
-        .json(&init_request)
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {
-            info!("cloud sync auto-start: server sync service initialized");
-        }
-        Ok(response) if response.status().as_u16() == 409 => {
-            info!("cloud sync auto-start: server sync already running");
-        }
-        Ok(response) => {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!(
-                "cloud sync auto-start: server init failed ({}): {}",
-                status, body
-            );
-        }
-        Err(e) => {
-            warn!("cloud sync auto-start: server not reachable: {}", e);
-        }
-    }
+    warn!("cloud sync auto-start: {}", error);
+    *state.last_error.write().await = Some(error);
 }
 
 /// Auto-start cloud archive on app launch if previously enabled.
