@@ -9,19 +9,19 @@
 //! - Trigger sync and check status
 //! - Download and import data from other devices
 
-use base64::{
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
-    Engine as _,
-};
 use axum::{
     extract::{Json, State},
     http::StatusCode,
     response::Json as JsonResponse,
 };
+use base64::{
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{
-    derive_auto_sync_password, BlobType, SyncClientConfig, SyncManager, SyncService,
-    SyncServiceConfig, SyncServiceHandle,
+    BlobType, SyncClientConfig, SyncManager, SyncService, SyncServiceConfig, SyncServiceHandle,
+    derive_auto_sync_password,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -509,7 +509,7 @@ fn sync_init_error_text(err: &(StatusCode, JsonResponse<Value>)) -> Option<&str>
 const SYNC_PASSWORD_MISMATCH_MESSAGE: &str = concat!(
     "failed to initialize sync: encryption password does not match this account's existing ",
     "cloud sync key; enter the password from the device that created it or reset cloud sync ",
-    "from that device"
+    "from that device",
 );
 
 fn is_sync_password_decrypt_message(message: &str) -> bool {
