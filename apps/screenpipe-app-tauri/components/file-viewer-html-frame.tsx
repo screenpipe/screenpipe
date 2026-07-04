@@ -4,7 +4,8 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { wrapHtmlForSandbox } from "@/lib/utils/html-sandbox";
 
@@ -55,41 +56,36 @@ export function HtmlPreviewFrame({ html, onOpenExternal }: HtmlPreviewFrameProps
     [html, theme],
   );
 
-  useEffect(() => {
-    function onMessage(e: MessageEvent) {
-      const frame = ref.current;
-      // Only trust messages from the frame we mounted.
-      if (!frame || e.source !== frame.contentWindow) return;
-      const data = e.data as FrameMessage | null;
-      if (!data || data.source !== "screenpipe-viewer") return;
+  useEventListener("message", (e: MessageEvent) => {
+    const frame = ref.current;
+    // Only trust messages from the frame we mounted.
+    if (!frame || e.source !== frame.contentWindow) return;
+    const data = e.data as FrameMessage | null;
+    if (!data || data.source !== "screenpipe-viewer") return;
 
-      if (data.type === "resize" && typeof data.height === "number") {
-        // Clamp to keep a malformed/hostile height from wedging layout.
-        setHeight(Math.min(Math.max(Math.round(data.height), 80), 50000));
-        return;
-      }
-
-      if (data.type === "openLink" && typeof data.url === "string") {
-        const url = data.url;
-        // Internal viewer links (`screenpipe://…`) are routed by the host
-        // without a scary external-link prompt; only true external schemes
-        // get a confirm before leaving the sandbox.
-        const internal = /^screenpipe:/i.test(url);
-        if (
-          !internal &&
-          !(typeof window !== "undefined" &&
-            window.confirm(`open external link?\n\n${url}`))
-        ) {
-          return;
-        }
-        if (onOpenExternal) void onOpenExternal(url);
-        else void openUrl(url);
-      }
+    if (data.type === "resize" && typeof data.height === "number") {
+      // Clamp to keep a malformed/hostile height from wedging layout.
+      setHeight(Math.min(Math.max(Math.round(data.height), 80), 50000));
+      return;
     }
 
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [onOpenExternal]);
+    if (data.type === "openLink" && typeof data.url === "string") {
+      const url = data.url;
+      // Internal viewer links (`screenpipe://…`) are routed by the host
+      // without a scary external-link prompt; only true external schemes
+      // get a confirm before leaving the sandbox.
+      const internal = /^screenpipe:/i.test(url);
+      if (
+        !internal &&
+        !(typeof window !== "undefined" &&
+          window.confirm(`open external link?\n\n${url}`))
+      ) {
+        return;
+      }
+      if (onOpenExternal) void onOpenExternal(url);
+      else void openUrl(url);
+    }
+  });
 
   return (
     <div className="space-y-2">
