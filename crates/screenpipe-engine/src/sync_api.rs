@@ -20,8 +20,8 @@ use base64::{
 };
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{
-    BlobType, SyncClientConfig, SyncManager, SyncService, SyncServiceConfig, SyncServiceHandle,
-    derive_auto_sync_password,
+    derive_auto_sync_password, BlobType, SyncClientConfig, SyncManager, SyncService,
+    SyncServiceConfig, SyncServiceHandle,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -503,7 +503,7 @@ fn auto_sync_password_from_token(token: &str) -> Option<String> {
 }
 
 fn sync_init_error_text(err: &(StatusCode, JsonResponse<Value>)) -> Option<&str> {
-    err.1.0.get("error").and_then(Value::as_str)
+    err.1 .0.get("error").and_then(Value::as_str)
 }
 
 const SYNC_PASSWORD_MISMATCH_MESSAGE: &str = concat!(
