@@ -256,6 +256,29 @@ describe("chat-store: getOrCreateEmptyChatId (no spam on +new)", () => {
     expect(id).toBe("newEmpty");
     expect(isNew).toBe(false);
   });
+
+  it("repeated '+ new chat' (via the entry-point flow) never floods empty rows (#4719)", () => {
+    // Mirrors app/home/page.tsx startNewChat: get-or-create, upsert a draft
+    // only when new, then set current. Clicking "+ new chat" N times with no
+    // message sent must leave exactly ONE empty session, not N.
+    const clickNewChat = () => {
+      const store = useChatStore.getState();
+      const { id, isNew } = getOrCreateEmptyChatId();
+      if (isNew) {
+        store.actions.upsert(baseRecord({ id, messages: [], draft: true }));
+      }
+      store.actions.setCurrent(id);
+      return id;
+    };
+
+    const first = clickNewChat();
+    const second = clickNewChat();
+    const third = clickNewChat();
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(Object.keys(useChatStore.getState().sessions)).toEqual([first]);
+  });
 });
 
 describe("chat-store: setCurrent clears unread atomically", () => {

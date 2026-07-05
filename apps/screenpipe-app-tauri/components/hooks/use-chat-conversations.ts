@@ -1473,7 +1473,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // hitting "+ new chat" in the middle of a stream would silently
     // discard everything the user couldn't yet see, even though the
     // Pi process keeps running. Mirrors the snapshot in loadConversation.
-    const { useChatStore } = await import("@/lib/stores/chat-store");
+    const { useChatStore, getOrCreateEmptyChatId } = await import("@/lib/stores/chat-store");
     const store = useChatStore.getState();
     const outgoingSid = piSessionIdRef.current;
     if (outgoingSid && store.sessions[outgoingSid]) {
@@ -1519,7 +1519,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Pair with setCurrent so the router immediately knows the new id is
     // foreground (and won't accumulate writes for it). See the matching
     // pairing in loadConversation for the same reasoning.
-    const newSid = explicitId ?? crypto.randomUUID();
+    // Reuse an existing empty chat when the caller didn't pin an id (#4719),
+    // so a header "+ new chat" (or an agent-evicted / post-delete restart)
+    // doesn't mint a throwaway uuid when a blank chat is already available.
+    const newSid = explicitId ?? getOrCreateEmptyChatId().id;
     piSessionIdRef.current = newSid;
     piSessionSyncedRef.current = true;
     store.actions.setCurrent(newSid);
