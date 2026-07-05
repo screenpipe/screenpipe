@@ -119,17 +119,7 @@ async function emitUntargetedAutoSendPrefill(prompt: string): Promise<void> {
 // CI-hostile on every platform, not just Linux. Re-enable once the test seeds
 // the persisted conversation deterministically instead of depending on a live
 // model/streaming round-trip.
-// Quarantined again (#4719): this spec counts persisted chat FILES on disk, but
-// in e2e mode the data dir is the hidden `~/.screenpipe/.e2e/`, and the fs
-// capability scope (`$HOME/.screenpipe/**` in capabilities/main.json) does not
-// match the leading-dot `.e2e` segment — so `chat-storage.exists(chatsDir)` is
-// rejected ("forbidden path: .../.e2e/chats ... allow-exists") and the app can't
-// write chat files under e2e. That is an e2e-environment/fs-scope gap, NOT the
-// duplicate fix. Re-enable once the scope allows the hidden e2e chats dir (e.g.
-// add `$HOME/.screenpipe/.e2e/**` to the fs:scope allow-list) and it's verified
-// green in CI. The duplicate-prevention logic itself is covered by the unit
-// tests and the sibling chat-newchat-duplicate spec (which does not read disk).
-describe.skip("Chat prefill cross-window duplication", function () {
+describe("Chat prefill cross-window duplication", function () {
   this.timeout(180_000);
 
   before(async function () {
