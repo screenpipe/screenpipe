@@ -92,6 +92,13 @@ interface UseChatConversationsOpts {
 interface SaveConversationOptions {
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
+  /** Force the conversation id to write under, bypassing the
+   *  `conversationId`-first resolution below. The send path passes the id the
+   *  turn is actually dispatched under (`piSessionIdRef.current`) so the disk
+   *  file + its `chat-conversation-saved` emit match the live store session —
+   *  otherwise a lagging `conversationId` writes a second id and the sidebar
+   *  upserts a duplicate row (#4719, summary/todo card twin). */
+  idOverride?: string;
 }
 
 function newestUserMessageTimestamp(messages: Message[]): number | undefined {
@@ -488,7 +495,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // during startNewConversation (setConversationId(null) → … →
     // setConversationId(newSid)); without the fallback the save would mint
     // a fresh uuid and duplicate the conversation.
-    const convId = conversationId || piSessionIdRef.current || crypto.randomUUID();
+    // `idOverride` wins when the caller knows the exact target session (the
+    // send path — the id the message is dispatched/streamed under). Otherwise
+    // prefer `conversationId` per the mid-switch reasoning above.
+    const convId =
+      options.idOverride || conversationId || piSessionIdRef.current || crypto.randomUUID();
 
     // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");

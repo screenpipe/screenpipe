@@ -898,6 +898,7 @@ export function StandaloneChat({
     activePresetRef,
     attachedDocsRef,
     autoSendBypassRef,
+    setConversationId,
     buildProviderConfig,
     canChat,
     cancelStreamingMessageRender,
@@ -959,6 +960,14 @@ export function StandaloneChat({
     takeQueuedDisplayById,
     turnIntentLedgerRef,
   });
+
+  // E2E-only: expose the stop action so specs can end a turn and drive sends
+  // back-to-back without the Pi subprocess staying busy. Render assignment (the
+  // repo's preferred pattern over mirror effects); harmless no-op in production.
+  // `handleStop` closes over stable refs, so no cleanup is needed.
+  if (typeof window !== "undefined") {
+    (window as any).__e2eStopChat = handleStop;
+  }
 
   const openInlineConnectionCard = useCallback((connectionId: string) => {
     if (connectionId === "connections") {
