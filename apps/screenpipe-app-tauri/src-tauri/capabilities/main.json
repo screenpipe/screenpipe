@@ -156,6 +156,10 @@
           "requireLiteralLeadingDot": false
         },
         {
+          "path": "$HOME/.screenpipe/.e2e/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
           "path": "$RESOURCE/.screenpipe/**",
           "requireLiteralLeadingDot": false
         },
