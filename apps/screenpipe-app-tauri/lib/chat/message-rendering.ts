@@ -208,14 +208,22 @@ export function buildCollapsedSteerRenderItems(
 
 export function collapsedSteerWorkDuration(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): string {
   // Steering sets piActiveStopRequestedRef internally, so intermediate
-  // assistants always end up with stoppedByUser=true. The collapsed steer
-  // row represents the overall steering workflow — always show "Worked".
+  // assistants always end up with stoppedByUser=true. Only treat the
+  // segment as user-stopped when the last *steered* assistant was stopped —
+  // that means the user explicitly hit stop on the steering workflow.
+  // The parent (non-steered) assistant also gets stoppedByUser from the
+  // internal stop so we must only check steered assistants.
+  const steeredAssistants = item.segmentMessages.filter(
+    (m) => m.role === "assistant" && (m.intent === "steer" || m.steeredResponse === true)
+  );
+  const lastSteered = steeredAssistants[steeredAssistants.length - 1];
+  const userStopped = Boolean(lastSteered?.stoppedByUser);
   const timestamps = item.segmentMessages
     .map((message) => message.timestamp)
     .filter((timestamp) => Number.isFinite(timestamp));
-  if (timestamps.length < 2) return "Worked";
+  if (timestamps.length < 2) return userStopped ? "You stopped" : "Worked";
   const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
-  return formatWorkDuration(durationMs);
+  return userStopped ? formatStoppedWorkDuration(durationMs) : formatWorkDuration(durationMs);
 }
 
 export function collapsedSteerFailedCount(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): number {

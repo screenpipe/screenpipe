@@ -307,19 +307,34 @@ describe("message rendering helpers", () => {
     expect(items.some((i) => i.type === "collapsed-steer-work")).toBe(false);
   });
 
-  it("always shows 'Worked' in collapsed steer row even when stoppedByUser is set", () => {
+  it("shows 'Worked' when only the parent (non-steered) assistant has stoppedByUser", () => {
     const [item] = buildCollapsedSteerRenderItems(
       [
         message({ id: "u1", role: "user", content: "root", timestamp: 0 }),
         message({ id: "a1", role: "assistant", content: "draft", stoppedByUser: true, timestamp: 10_000 }),
         message({ id: "u2", role: "user", content: "steer", intent: "steer", turnIntentId: "t1", timestamp: 20_000 }),
-        message({ id: "a2", role: "assistant", content: "final", turnIntentId: "t1", timestamp: 30_000 }),
+        message({ id: "a2", role: "assistant", content: "final", turnIntentId: "t1", steeredResponse: true, timestamp: 30_000 }),
       ],
       { canCollapseSteerWork: true }
     ).filter((renderItem) => renderItem.type === "collapsed-steer-work");
 
-    // Should say "Worked" not "You stopped" — steering uses stop internally
+    // Parent was stopped internally by steering — steered assistant is fine
     expect(collapsedSteerWorkDuration(item)).toBe("Worked for 30s");
+  });
+
+  it("shows 'You stopped' when the last steered assistant was stopped by user", () => {
+    const [item] = buildCollapsedSteerRenderItems(
+      [
+        message({ id: "u1", role: "user", content: "root", timestamp: 0 }),
+        message({ id: "a1", role: "assistant", content: "draft", stoppedByUser: true, timestamp: 10_000 }),
+        message({ id: "u2", role: "user", content: "steer", intent: "steer", turnIntentId: "t1", timestamp: 20_000 }),
+        message({ id: "a2", role: "assistant", content: "partial", turnIntentId: "t1", steeredResponse: true, stoppedByUser: true, timestamp: 30_000 }),
+      ],
+      { canCollapseSteerWork: true }
+    ).filter((renderItem) => renderItem.type === "collapsed-steer-work");
+
+    // Last steered assistant stopped — user explicitly stopped the workflow
+    expect(collapsedSteerWorkDuration(item)).toBe("You stopped after 30s");
   });
 
   it("counts failed tool calls across segment messages", () => {
