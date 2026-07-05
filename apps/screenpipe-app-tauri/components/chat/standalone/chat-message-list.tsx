@@ -18,6 +18,7 @@ import {
   buildCollapsedSteerRenderItems,
   hasAssistantTextBody,
   getMessageIntentLabel,
+  isNormalUserMessage,
   isSteeredAssistantMessage,
   hasRenderableAssistantBody,
 } from "@/lib/chat/message-rendering";
@@ -193,6 +194,23 @@ export function ChatMessageList({
               isSteeredAssistantMessage(nextAssistant) &&
               !message.content &&
               !message.contentBlocks?.length
+            );
+            // Hide retry/branch on any assistant that has a steered assistant
+            // after it *within the same turn segment*.  A normal (non-steer) user
+            // message starts a new segment, so stop searching there.
+            let nextSameSegmentAssistant: Message | undefined;
+            if (message.role === "assistant") {
+              const tail = visibleMessages.slice(messageIndex + 1);
+              for (const candidate of tail) {
+                if (isNormalUserMessage(candidate)) break; // new turn
+                if (candidate.role === "assistant") {
+                  nextSameSegmentAssistant = candidate;
+                  break;
+                }
+              }
+            }
+            const hasFollowingSteeredAssistant = Boolean(
+              nextSameSegmentAssistant && isSteeredAssistantMessage(nextSameSegmentAssistant)
             );
             const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
 
@@ -373,7 +391,7 @@ export function ChatMessageList({
                               <Pencil className="h-3 w-3" />
                             </button>
                           )}
-                          {message.role === "assistant" && !isLoading && (
+                          {message.role === "assistant" && !isLoading && !hasFollowingSteeredAssistant && (
                             <button
                               onClick={() => onRetryAssistantMessage(message.id)}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
@@ -382,7 +400,7 @@ export function ChatMessageList({
                               <RefreshCw className="h-3 w-3" />
                             </button>
                           )}
-                          {message.role === "assistant" && (
+                          {message.role === "assistant" && !hasFollowingSteeredAssistant && (
                             <Popover
                               open={openMessageMenuId === message.id}
                               onOpenChange={(open) => onMessageMenuOpenChange(message.id, open)}
