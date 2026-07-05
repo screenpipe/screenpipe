@@ -346,4 +346,32 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
     expect(saveCalls).toHaveLength(1);
     expect(saveCalls[0].presetId).toBe("argus");
   });
+
+  it("writes exactly ONE file for a single first turn — no twin (#4719)", async () => {
+    // A single first user turn, with the panel id in lockstep across
+    // conversationId / piSessionIdRef / store.currentId (the single-source-of-
+    // truth invariant this PR enforces), must persist exactly one conversation
+    // file under one id — never a second twin row.
+    useChatStore.setState({ currentId: "turn-1", panelSessionId: "turn-1" });
+    const firstTurn = [
+      { id: "u1", role: "user" as const, content: "hello", timestamp: 1 },
+      { id: "a1", role: "assistant" as const, content: "hi", timestamp: 2 },
+    ];
+
+    const { result } = renderHook(() =>
+      useHarness({
+        initialMessages: firstTurn,
+        initialConversationId: "turn-1",
+        initialPiSessionId: "turn-1",
+      }),
+    );
+
+    await act(async () => {
+      await result.current.hook.saveConversation(firstTurn);
+    });
+
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].id).toBe("turn-1");
+    expect(new Set(saveCalls.map((c) => c.id)).size).toBe(1);
+  });
 });

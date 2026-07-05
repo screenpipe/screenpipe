@@ -119,7 +119,7 @@ async function emitUntargetedAutoSendPrefill(prompt: string): Promise<void> {
 // CI-hostile on every platform, not just Linux. Re-enable once the test seeds
 // the persisted conversation deterministically instead of depending on a live
 // model/streaming round-trip.
-describe.skip("Chat prefill cross-window duplication", function () {
+describe("Chat prefill cross-window duplication", function () {
   this.timeout(180_000);
 
   before(async function () {
