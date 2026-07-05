@@ -86,19 +86,65 @@ describe("message rendering helpers", () => {
     expect(
       hasAssistantTextBody(
         message({
+          id: "a2b",
+          role: "assistant",
+          contentBlocks: [
+            { type: "text", text: "hidden draft" },
+            {
+              type: "connection_action",
+              connectionId: "notion",
+              connectionName: "Notion",
+            },
+          ],
+        })
+      )
+    ).toBe(true);
+    expect(
+      hasAssistantTextBody(
+        message({
           id: "a2",
           role: "assistant",
-          contentBlocks: [{ type: "thinking", text: "ponder", isThinking: false }],
+          contentBlocks: [
+            { type: "text", text: "hidden draft" },
+            {
+              type: "tool",
+              toolCall: {
+                id: "t-hidden",
+                toolName: "read",
+                args: {},
+                isRunning: false,
+              },
+            },
+          ],
         })
       )
     ).toBe(false);
     expect(
       hasAssistantTextBody(
         message({
+          id: "a2c",
+          role: "assistant",
+          contentBlocks: [
+            {
+              type: "tool",
+              toolCall: {
+                id: "t-visible",
+                toolName: "read",
+                args: {},
+                isRunning: false,
+              },
+            },
+            { type: "text", text: "final answer" },
+          ],
+        })
+      )
+    ).toBe(true);
+    expect(
+      hasAssistantTextBody(
+        message({
           id: "a3",
           role: "assistant",
-          content: "",
-          contentBlocks: [],
+          contentBlocks: [{ type: "thinking", text: "ponder", isThinking: false }],
         })
       )
     ).toBe(false);

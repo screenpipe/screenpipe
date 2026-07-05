@@ -54,9 +54,19 @@ export function hasRenderableAssistantBody(message: Message): boolean {
 export function hasAssistantTextBody(message: Message): boolean {
   if (message.role !== "assistant") return false;
   if (message.contentBlocks?.length) {
-    const lastBlock = message.contentBlocks[message.contentBlocks.length - 1];
-    if (!lastBlock || lastBlock.type !== "text") return false;
-    return Boolean(lastBlock.text.trim());
+    // Only count prose that survives rendering.
+    // Intermediate narration before the last tool call is hidden, but text
+    // after the final tool call (including text followed by connection cards)
+    // stays visible and should keep the toolbar available.
+    let lastToolIndex = -1;
+    for (let i = 0; i < message.contentBlocks.length; i += 1) {
+      if (message.contentBlocks[i].type === "tool") {
+        lastToolIndex = i;
+      }
+    }
+    return message.contentBlocks
+      .slice(lastToolIndex + 1)
+      .some((block) => block.type === "text" && Boolean(block.text.trim()));
   }
   return Boolean(message.content && message.content !== "Processing...");
 }
