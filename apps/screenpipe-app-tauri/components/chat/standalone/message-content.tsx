@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
-import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantToolWorkBody, isSteeredAssistantMessage } from "@/lib/chat/message-rendering";
+import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantToolWorkBody } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
   endpointFamily,
