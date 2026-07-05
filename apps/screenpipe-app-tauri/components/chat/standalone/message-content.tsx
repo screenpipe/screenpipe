@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
-import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration } from "@/lib/chat/message-rendering";
+import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantToolWorkBody } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
   endpointFamily,
@@ -1082,17 +1082,6 @@ function WorkSummaryText({
   );
 }
 
-function WorkStatusHeader({ label }: { label: string }) {
-  return (
-    <div className="w-full min-w-0">
-      <div className="py-1 text-xs font-mono text-foreground/50">
-        {label}
-      </div>
-      <div className="w-full min-w-full border-t border-border/50" />
-    </div>
-  );
-}
-
 function ToolCallGroup({
   toolCalls,
   defaultExpanded = false,
@@ -1384,35 +1373,20 @@ export function MessageContent({
     const collapsed = collapseHiddenWorkGroups(grouped);
     const displayGroups = mergeWorkAndIntermediateText(collapsed);
 
-    // If all blocks were absorbed (e.g. thinking-only message with no tool
-    // calls), show a "Thought for Xs" header so the bubble isn't blank.
-    // Skip while still generating — the loader handles that state.
-    if (displayGroups.length === 0 && !isGenerating) {
-      const thinkingMs = grouped
-        .filter((g): g is Extract<GroupedBlock, { type: "thinking" }> => g.type === "thinking")
-        .reduce((sum, g) => sum + (g.durationMs ?? 0), 0);
-      const fallbackLabel = thinkingMs > 0
-        ? formatWorkDuration(thinkingMs)
-        : message.workDurationMs
-          ? formatWorkDuration(message.workDurationMs)
-          : "thought";
-      return (
-        <div className="space-y-2 min-w-0 w-full overflow-hidden">
-          <WorkStatusHeader label={fallbackLabel} />
-          {sourceFooter}
-          {retryCta}
-        </div>
-      );
+    // If all blocks were absorbed (for example, thinking-only output with no
+    // visible text or tool work), render nothing. The loader covers the active
+    // case and an empty stopped turn should not invent a finished state.
+    if (displayGroups.length === 0 && !isGenerating && !sourceFooter && !retryCta) {
+      return null;
     }
 
-    const hasText = grouped.some((g) => g.type === "text");
-    const stoppedSummary = message.stoppedByUser
+    const hasFinalText = displayGroups.some((g) => g.type === "text");
+    const hasToolWorkGroup = hasAssistantToolWorkBody(message);
+    const stoppedSummary = message.stoppedByUser && hasToolWorkGroup
       ? formatStoppedWorkDuration(message.workDurationMs)
       : undefined;
-    const hasWorkStatusGroup = displayGroups.some((g) => g.type === "tool-group" || g.type === "work-group");
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
-        {stoppedSummary && !hasWorkStatusGroup ? <WorkStatusHeader label={stoppedSummary} /> : null}
         {displayGroups.map((group) => {
           if (group.type === "text") {
             return (
@@ -1462,7 +1436,7 @@ export function MessageContent({
               <ToolCallGroup
                 key={`tools-${group.key}`}
                 toolCalls={group.toolCalls}
-                defaultExpanded={!hasText}
+                defaultExpanded={!hasFinalText}
                 isGenerating={isGenerating && !message.workDurationMs}
                 preferSummaryOverride={Boolean(stoppedSummary)}
                 summaryOverride={stoppedSummary || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
@@ -1480,7 +1454,7 @@ export function MessageContent({
               <ToolCallGroup
                 key={`work-${group.key}`}
                 toolCalls={group.toolCalls}
-                defaultExpanded={!hasText}
+                defaultExpanded={!hasFinalText}
                 isGenerating={isGenerating && !message.workDurationMs}
                 preferSummaryOverride={Boolean(stoppedSummary)}
                 summaryOverride={stoppedSummary || formatWorkDuration(durationMs)}
@@ -1503,14 +1477,15 @@ export function MessageContent({
   const displayText = !isUser && message.content.startsWith("Error: ")
     ? message.content.slice("Error: ".length)
     : message.content;
-  const stoppedSummary = !isUser && message.stoppedByUser
-    ? formatStoppedWorkDuration(message.workDurationMs)
-    : undefined;
+  const hasMeaningfulText = Boolean(displayText && displayText !== "Processing...");
+
+  if (!isUser && !hasMeaningfulText && !attachmentsRow && !sourceFooter && !retryCta) {
+    return null;
+  }
 
   return (
     <div className="space-y-2 min-w-0 w-full">
       {attachmentsRow}
-      {stoppedSummary ? <WorkStatusHeader label={stoppedSummary} /> : null}
       {displayText ? (
         <MarkdownBlock
           text={displayText}

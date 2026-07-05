@@ -10,6 +10,8 @@ import {
   formatDurationParts,
   formatStoppedWorkDuration,
   formatWorkDuration,
+  hasAssistantTextBody,
+  hasAssistantToolWorkBody,
   getMessageIntentLabel,
   hasRenderableAssistantBody,
   isPlaceholderConversationTitle,
@@ -48,7 +50,7 @@ describe("message rendering helpers", () => {
 
   it("treats assistant content blocks as renderable body", () => {
     expect(hasRenderableAssistantBody(message({ id: "a1", role: "assistant", content: "Processing..." }))).toBe(false);
-    expect(hasRenderableAssistantBody(message({ id: "a-stopped", role: "assistant", stoppedByUser: true }))).toBe(true);
+    expect(hasRenderableAssistantBody(message({ id: "a-stopped", role: "assistant", stoppedByUser: true }))).toBe(false);
     expect(
       hasRenderableAssistantBody(
         message({
@@ -56,6 +58,88 @@ describe("message rendering helpers", () => {
           role: "assistant",
           content: "",
           contentBlocks: [{ type: "text", text: "done" }],
+        })
+      )
+    ).toBe(true);
+    expect(
+      hasRenderableAssistantBody(
+        message({
+          id: "a3",
+          role: "assistant",
+          content: "",
+          contentBlocks: [{ type: "thinking", text: "ponder", isThinking: false }],
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("only treats assistant rows with final text as actionable", () => {
+    expect(
+      hasAssistantTextBody(
+        message({
+          id: "a1",
+          role: "assistant",
+          contentBlocks: [{ type: "text", text: "done" }],
+        })
+      )
+    ).toBe(true);
+    expect(
+      hasAssistantTextBody(
+        message({
+          id: "a2",
+          role: "assistant",
+          contentBlocks: [{ type: "thinking", text: "ponder", isThinking: false }],
+        })
+      )
+    ).toBe(false);
+    expect(
+      hasAssistantTextBody(
+        message({
+          id: "a3",
+          role: "assistant",
+          content: "",
+          contentBlocks: [],
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("only treats assistant rows with tool blocks as work", () => {
+    expect(
+      hasAssistantToolWorkBody(
+        message({
+          id: "a1",
+          role: "assistant",
+          contentBlocks: [{ type: "text", text: "done" }],
+        })
+      )
+    ).toBe(false);
+    expect(
+      hasAssistantToolWorkBody(
+        message({
+          id: "a2",
+          role: "assistant",
+          contentBlocks: [{ type: "thinking", text: "ponder", isThinking: false }],
+        })
+      )
+    ).toBe(false);
+    expect(
+      hasAssistantToolWorkBody(
+        message({
+          id: "a3",
+          role: "assistant",
+          contentBlocks: [
+            { type: "thinking", text: "ponder", isThinking: false },
+            {
+              type: "tool",
+              toolCall: {
+                id: "t1",
+                toolName: "read",
+                args: {},
+                isRunning: false,
+              },
+            },
+          ],
         })
       )
     ).toBe(true);

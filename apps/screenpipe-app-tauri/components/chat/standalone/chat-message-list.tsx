@@ -16,8 +16,10 @@ import {
 } from "@/components/chat/standalone/message-content";
 import {
   buildCollapsedSteerRenderItems,
+  hasAssistantTextBody,
   getMessageIntentLabel,
   isSteeredAssistantMessage,
+  hasRenderableAssistantBody,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
 import type { ContentBlock, Message } from "@/lib/chat/types";
@@ -106,8 +108,7 @@ export function ChatMessageList({
         {(() => {
           const visibleMessages = messages.filter((m) => {
             if (m.role !== "assistant") return true;
-            if (m.content === "Processing..." && !m.contentBlocks?.length && !m.stoppedByUser) return false;
-            if (!m.content && !m.contentBlocks?.length && !isSteeredAssistantMessage(m) && !m.stoppedByUser) return false;
+            if (!hasRenderableAssistantBody(m) && !isSteeredAssistantMessage(m)) return false;
             return true;
           });
 
@@ -160,8 +161,9 @@ export function ChatMessageList({
               message.role === "assistant" &&
               (isLoading || isStreaming) &&
               message.id === activeAssistantMessageId;
+            const shouldShowAssistantActions = message.role !== "assistant" || hasAssistantTextBody(message);
             const shouldShowMessageActionBar =
-              canShowMessageActions && !isActiveStreamingAssistantMessage;
+              canShowMessageActions && !isActiveStreamingAssistantMessage && shouldShowAssistantActions;
             const nextAssistant = visibleMessages
               .slice(messageIndex + 1)
               .find((candidate) => candidate.role === "assistant");

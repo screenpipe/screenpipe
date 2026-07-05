@@ -44,9 +44,26 @@ export function isSteeredAssistantMessage(message: Message): boolean {
 
 export function hasRenderableAssistantBody(message: Message): boolean {
   if (message.role !== "assistant") return false;
-  if (message.stoppedByUser) return true;
   if (message.content && message.content !== "Processing...") return true;
-  return Boolean(message.contentBlocks?.length);
+  if (message.contentBlocks?.length) {
+    return message.contentBlocks.some((block) => block.type !== "thinking");
+  }
+  return false;
+}
+
+export function hasAssistantTextBody(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  if (message.contentBlocks?.length) {
+    const lastBlock = message.contentBlocks[message.contentBlocks.length - 1];
+    if (!lastBlock || lastBlock.type !== "text") return false;
+    return Boolean(lastBlock.text.trim());
+  }
+  return Boolean(message.content && message.content !== "Processing...");
+}
+
+export function hasAssistantToolWorkBody(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  return Boolean(message.contentBlocks?.some((block) => block.type === "tool"));
 }
 
 export function isNormalUserMessage(message: Message): boolean {
