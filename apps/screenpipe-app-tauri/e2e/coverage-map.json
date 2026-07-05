@@ -363,6 +363,16 @@
       "notes": "Clicks through Home, Pipes, Timeline, Help, and Settings."
     },
     {
+      "spec": "pi-extensions.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "settings"],
+      "features": ["connections", "pi-extensions", "agent-extensions"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens Home -> Connections, opens Pi extensions, verifies catalog and warning copy, filters package search, and captures a screenshot. Read-only smoke: does not install packages."
+    },
+    {
       "spec": "macos-ui-performance.spec.ts",
       "platforms": ["macos"],
       "layers": ["performance", "real-ui-e2e"],

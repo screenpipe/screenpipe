@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 61
-- Declared test blocks: 198
-- Weighted coverage points: 153.7
+- Mapped specs: 62
+- Declared test blocks: 200
+- Weighted coverage points: 155.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 52 | 185 | 148.7 | 15 | 57 | 92% |
-| macos | 58 | 164 | 126.3 | 17 | 59 | 89% |
-| linux | 44 | 149 | 120.7 | 13 | 54 | 86% |
+| windows | 53 | 187 | 150.4 | 15 | 59 | 92% |
+| macos | 59 | 166 | 128.0 | 17 | 61 | 89% |
+| linux | 45 | 151 | 122.4 | 13 | 56 | 86% |
 
 ## Runtime Results
 
@@ -35,7 +35,7 @@ pass/fail/skip counts.
 | --- | --- | --- | --- |
 | audio-device | 2 specs / 26 tests / 19.4 pts | 2 specs / 2 tests / 1.3 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
-| billing | 4 specs / 4 tests / 3.7 pts | 4 specs / 4 tests / 3.7 pts | 4 specs / 4 tests / 3.7 pts |
+| billing | 4 specs / 5 tests / 4.7 pts | 4 specs / 5 tests / 4.7 pts | 4 specs / 5 tests / 4.7 pts |
 | capture-ocr | 2 specs / 14 tests / 5.6 pts | 2 specs / 4 tests / 1.6 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 11 specs / 19 tests / 12.4 pts | 14 specs / 23 tests / 13.8 pts | 10 specs / 18 tests / 11.9 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
@@ -45,8 +45,8 @@ pass/fail/skip counts.
 | os-integration | 4 specs / 16 tests / 15.1 pts | 4 specs / 3 tests / 0.9 pts | - |
 | performance | 2 specs / 43 tests / 43.0 pts | 4 specs / 33 tests / 29.5 pts | 1 specs / 28 tests / 28.0 pts |
 | pipes | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts | 2 specs / 11 tests / 11.0 pts |
-| real-ui-e2e | 31 specs / 105 tests / 84.5 pts | 32 specs / 92 tests / 74.0 pts | 28 specs / 86 tests / 72.1 pts |
-| settings | 12 specs / 29 tests / 26.9 pts | 13 specs / 23 tests / 20.2 pts | 11 specs / 21 tests / 18.9 pts |
+| real-ui-e2e | 32 specs / 107 tests / 86.2 pts | 33 specs / 94 tests / 75.7 pts | 29 specs / 88 tests / 73.8 pts |
+| settings | 13 specs / 31 tests / 28.6 pts | 14 specs / 25 tests / 21.9 pts | 12 specs / 23 tests / 20.6 pts |
 | storage-privacy | 6 specs / 20 tests / 19.1 pts | 5 specs / 12 tests / 11.1 pts | 4 specs / 12 tests / 11.1 pts |
 | tauri-command | 8 specs / 17 tests / 10.3 pts | 9 specs / 19 tests / 10.8 pts | 8 specs / 17 tests / 10.3 pts |
 | window-lifecycle | 17 specs / 60 tests / 51.2 pts | 17 specs / 41 tests / 29.6 pts | 12 specs / 36 tests / 28.1 pts |
@@ -128,6 +128,7 @@ pass/fail/skip counts.
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 3 | Opt-in no-onboarding seed verifies onboarding redirect. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
 | permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for missing TCC permissions. |
+| pi-extensions.spec.ts | windows, macos, linux | real-ui-e2e, settings | connections, pi-extensions, agent-extensions | medium | strong | real-user-flow | 1 | Opens Home -> Connections, opens Pi extensions, verifies catalog and warning copy, filters package search, and captures a screenshot. Read-only smoke: does not install packages. |
 | pipes-mcp-connections.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes, connections | high | strong | real-user-flow | 3 | Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies the mcp:<id> allowlist persists. |
 | pipes.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes | high | strong | real-user-flow | 8 | Pipes discover, install failure, connection modal, install, list, play, and stop. |
 | privacy-api-auth-enforcement.spec.ts | windows, macos, linux | settings, local-api, storage-privacy | settings-privacy-api-auth, local-api-auth, restart-flow | high | conditional | mixed | 1 | Opt-in restart smoke toggles API auth and verifies backend behavior. |
@@ -146,7 +147,7 @@ pass/fail/skip counts.
 | windows-user-journey.spec.ts | windows | real-ui-e2e, settings, notifications, storage-privacy, window-lifecycle | home-search, timeline, settings-recording, meeting-notes, shortcut-reminder, notifications, storage-retention, settings-privacy-api-auth | high | strong | real-user-flow | 8 | Windows-first real UX journey across search, timeline, settings, meetings, notifications, storage, and privacy. |
 | zz-account-basic-upgrade-billing.spec.ts | windows, macos, linux | real-ui-e2e, settings, billing | account-upgrade, billing-proration, checkout-duplication | high | strong | real-user-flow | 1 | Basic paid user clicking Account upgrade opens account billing for subscription changes/proration and does not call the fresh subscription checkout endpoint. |
 | zz-account-stale-subscription.spec.ts | windows, macos, linux | real-ui-e2e, settings, billing | account-card, billing-gate | medium | strong | real-user-flow | 1 | Account 'active' plan card is gated on the session token (token AND cloud_subscribed) like the header, so a tokenless-but-subscribed stale shell (post-#3943 secret-store token desync) renders 'not logged in' with the active card gone. Mocks /api/user across all windows and clears set_cloud_token to reproduce the desync deterministically. |
-| zz-app-entitlement-gate.spec.ts | windows, macos, linux | settings, billing, real-ui-e2e | app-entitlement-gate, billing-gate | high | strong | real-user-flow | 1 | Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared. |
+| zz-app-entitlement-gate.spec.ts | windows, macos, linux | settings, billing, real-ui-e2e | app-entitlement-gate, billing-gate | high | strong | real-user-flow | 2 | Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared. |
 | zz-audio-fallback-reverify.spec.ts | macos | auth, entitlement, audio-device, settings | cloud-entitlement-reverify, audio-engine-fallback, settings-recording | high | strong | real-user-flow | 1 | AuthGuard re-verifies cloud entitlement on window focus so a freshly-subscribed user gets cloud transcription without restart (#4339). |
 | zz-enterprise-license-prompt.spec.ts | windows, macos, linux | settings, billing, real-ui-e2e | app-entitlement-gate, billing-gate | high | strong | real-user-flow | 1 | Enterprise license prompt handles invalid keys, full-seat errors, and retry success after seats are added without staying stuck in validating state. |
 | zz-logout-resurrect.spec.ts | windows, macos, linux | real-ui-e2e, settings | account-logout, auth-session | high | strong | synthetic | 1 | Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx. |
