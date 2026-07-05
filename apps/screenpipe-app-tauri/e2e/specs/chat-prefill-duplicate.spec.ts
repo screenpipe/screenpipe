@@ -119,7 +119,21 @@ async function emitUntargetedAutoSendPrefill(prompt: string): Promise<void> {
 // CI-hostile on every platform, not just Linux. Re-enable once the test seeds
 // the persisted conversation deterministically instead of depending on a live
 // model/streaming round-trip.
-describe("Chat prefill cross-window duplication", function () {
+// Kept quarantined (#4719). Two independent reasons this spec is not CI-safe,
+// neither of which reflects the duplicate fix (which is proven by the unit tests
+// and the sibling chat-newchat-duplicate spec):
+//   1. Wrong dir under e2e. `CHATS_DIR` above reads ~/.screenpipe/chats, but the
+//      e2e harness runs with SCREENPIPE_DATA_DIR = ~/.screenpipe/.e2e
+//      (app-launcher.ts E2E_DATA_DIR), so the app persists to
+//      ~/.screenpipe/.e2e/chats. The counter never sees the file. (Also needs the
+//      fs:scope to allow the hidden .e2e path — add $HOME/.screenpipe/.e2e/**.)
+//   2. Inherent raciness (#4610): it depends on a live model streaming round-trip
+//      + the 1.5s debounced auto-save to land a file, which times out
+//      "no conversation persisted" ~100% on Linux and ~33% on macOS even when the
+//      logic is correct. Un-skip only after seeding the persisted conversation
+//      deterministically (no live-model dependency) AND pointing CHATS_DIR at the
+//      e2e data dir.
+describe.skip("Chat prefill cross-window duplication", function () {
   this.timeout(180_000);
 
   before(async function () {
