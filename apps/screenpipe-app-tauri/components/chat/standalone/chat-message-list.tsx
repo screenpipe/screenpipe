@@ -132,6 +132,26 @@ export function ChatMessageList({
             activeSourceFooterMessageId ??
             (lastVisibleAssistantId === lastAssistantId ? lastVisibleAssistantId : undefined);
 
+          // Find parent assistant IDs whose steered child is currently streaming.
+          // Walk backwards from the active streaming assistant to find the
+          // preceding non-steered assistant in the same turn — that's the parent
+          // whose ToolCallGroup should also show "Working".
+          const steerChildActiveParentIds = new Set<string>();
+          if ((isLoading || isStreaming) && activeAssistantMessageId) {
+            const activeIdx = visibleMessages.findIndex((m) => m.id === activeAssistantMessageId);
+            const activeMsg = activeIdx >= 0 ? visibleMessages[activeIdx] : undefined;
+            if (activeMsg && isSteeredAssistantMessage(activeMsg)) {
+              for (let j = activeIdx - 1; j >= 0; j -= 1) {
+                const prev = visibleMessages[j];
+                if (prev.role === "user" && prev.intent !== "steer") break;
+                if (prev.role === "assistant" && !isSteeredAssistantMessage(prev)) {
+                  steerChildActiveParentIds.add(prev.id);
+                  break;
+                }
+              }
+            }
+          }
+
           return renderItems.map((item) => {
             if (item.type === "collapsed-steer-work") {
               const expanded = expandedSteerWorkIds.has(item.id);
@@ -157,10 +177,11 @@ export function ChatMessageList({
             const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
             const canShowMessageActions = !item.showActionsWhenExpandedBy ||
               expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
+            const hasActiveSteerChild = steerChildActiveParentIds.has(message.id);
             const isActiveStreamingAssistantMessage =
               message.role === "assistant" &&
               (isLoading || isStreaming) &&
-              message.id === activeAssistantMessageId;
+              (message.id === activeAssistantMessageId || hasActiveSteerChild);
             const shouldShowAssistantActions = message.role !== "assistant" || hasAssistantTextBody(message);
             const shouldShowMessageActionBar =
               canShowMessageActions && !isActiveStreamingAssistantMessage && shouldShowAssistantActions;
@@ -299,6 +320,12 @@ export function ChatMessageList({
                             suppressSourceFooters ||
                             citationPlan.deferredMessageIds.has(message.id) ||
                             message.id === activeSourceFooterMessageId
+                          }
+                          hideToolSummary={item.hideToolSummary || isSteeredAssistantMessage(message)}
+                          forceCollapseTools={
+                            item.collapseToolsWithSteerWork
+                              ? !expandedSteerWorkIds.has(item.collapseToolsWithSteerWork)
+                              : false
                           }
                           onImageClick={onOpenImageViewer}
                           onRetry={(prompt) => sendMessage(prompt)}

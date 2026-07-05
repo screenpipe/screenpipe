@@ -87,6 +87,8 @@ export type ChatRenderItem =
       hideWhenCollapsedBy?: string;
       hideIntentLabelWhenCollapsedBy?: string;
       showActionsWhenExpandedBy?: string;
+      hideToolSummary?: boolean;
+      collapseToolsWithSteerWork?: string;
     }
   | {
       type: "collapsed-steer-work";
@@ -116,7 +118,11 @@ export function buildCollapsedSteerRenderItems(
 
     const segment = messages.slice(i, end);
     const steerUsers = segment.filter((message) => message.role === "user" && message.intent === "steer");
-    if (steerUsers.length === 0 || !options.canCollapseSteerWork) {
+    // Only disable collapsing for the currently-active segment (the last one
+    // that extends to the end of the message list). Completed segments from
+    // earlier turns should always stay collapsed.
+    const isActiveSegment = end >= messages.length;
+    if (steerUsers.length === 0 || (!options.canCollapseSteerWork && isActiveSegment)) {
       items.push(...segment.map((message) => ({ type: "message" as const, message })));
       i = end - 1;
       continue;
@@ -173,6 +179,8 @@ export function buildCollapsedSteerRenderItems(
           type: "message",
           message,
           hideWhenCollapsedBy: collapsedWorkId,
+          hideToolSummary: message.role === "assistant",
+          collapseToolsWithSteerWork: message.role === "assistant" ? collapsedWorkId : undefined,
         });
         continue;
       }
@@ -186,6 +194,8 @@ export function buildCollapsedSteerRenderItems(
         showActionsWhenExpandedBy: message.role === "user" && message.intent === "steer" && hiddenAssistants.length > 0
           ? collapsedWorkId
           : undefined,
+        hideToolSummary: message.role === "assistant",
+        collapseToolsWithSteerWork: message.role === "assistant" ? collapsedWorkId : undefined,
       });
     }
     pushCollapsedWork();
@@ -197,10 +207,27 @@ export function buildCollapsedSteerRenderItems(
 }
 
 export function collapsedSteerWorkDuration(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): string {
+  // Steering sets piActiveStopRequestedRef internally, so intermediate
+  // assistants always end up with stoppedByUser=true. The collapsed steer
+  // row represents the overall steering workflow — always show "Worked".
   const timestamps = item.segmentMessages
     .map((message) => message.timestamp)
     .filter((timestamp) => Number.isFinite(timestamp));
   if (timestamps.length < 2) return "Worked";
   const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
   return formatWorkDuration(durationMs);
+}
+
+export function collapsedSteerFailedCount(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): number {
+  let count = 0;
+  for (const message of item.segmentMessages) {
+    if (message.contentBlocks) {
+      for (const block of message.contentBlocks) {
+        if (block.type === "tool" && block.toolCall.isError) {
+          count += 1;
+        }
+      }
+    }
+  }
+  return count;
 }

@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
-import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantToolWorkBody } from "@/lib/chat/message-rendering";
+import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantToolWorkBody, isSteeredAssistantMessage } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
   endpointFamily,
@@ -1089,6 +1089,8 @@ function ToolCallGroup({
   preferSummaryOverride = false,
   summaryOverride,
   workStartedAtMs,
+  hideSummary = false,
+  forceCollapsed = false,
 }: {
   toolCalls: ToolCall[];
   defaultExpanded?: boolean;
@@ -1096,6 +1098,8 @@ function ToolCallGroup({
   preferSummaryOverride?: boolean;
   summaryOverride?: string;
   workStartedAtMs?: number;
+  hideSummary?: boolean;
+  forceCollapsed?: boolean;
 }) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
   const [runningSummary, setRunningSummary] = useState("Working");
@@ -1150,40 +1154,46 @@ function ToolCallGroup({
   // When done → auto-collapse (user can re-expand). `defaultExpanded`
   // keeps it open even when done for messages whose entire output is
   // tool calls (typical pipe-runs without a final prose response).
-  const isExpanded = isWorking
-    ? true
-    : manualExpand !== null ? manualExpand : defaultExpanded;
+  const isExpanded = forceCollapsed
+    ? false
+    : hideSummary
+      ? true
+      : isWorking
+        ? true
+        : manualExpand !== null ? manualExpand : defaultExpanded;
 
   return (
     <div className="w-full min-w-0 self-stretch">
-      <div className="mb-2 w-full min-w-full">
-        {/* Header — plain text while working, clickable with chevron when done */}
-        {isWorking ? (
-          <div className="w-full flex items-center gap-1.5 py-1 text-left min-w-0">
-            <span className="truncate text-xs font-mono text-foreground/50">
-              <WorkSummaryText text={runningSummary} animateRunningDuration />
-            </span>
-          </div>
-        ) : (
-          <button
-            onClick={() => setManualExpand(isExpanded ? false : true)}
-            className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer"
-          >
-            <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
-              <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
-              {hasError && (
-                <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+      {!hideSummary && (
+        <div className="mb-2 w-full min-w-full">
+          {/* Header — plain text while working, clickable with chevron when done */}
+          {isWorking ? (
+            <div className="w-full flex items-center gap-1.5 py-1 text-left min-w-0">
+              <span className="truncate text-xs font-mono text-foreground/50">
+                <WorkSummaryText text={runningSummary} animateRunningDuration />
+              </span>
+            </div>
+          ) : (
+            <button
+              onClick={() => setManualExpand(isExpanded ? false : true)}
+              className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer"
+            >
+              <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
+                <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
+                {hasError && (
+                  <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+                )}
+              </span>
+              {isExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
               )}
-            </span>
-            {isExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-            )}
-          </button>
-        )}
-        <div className="w-full min-w-full border-t border-border/50" />
-      </div>
+            </button>
+          )}
+          <div className="w-full min-w-full border-t border-border/50" />
+        </div>
+      )}
 
       {/* Expanded rail view */}
       <AnimatePresence>
@@ -1222,6 +1232,8 @@ export function MessageContent({
   message,
   isGenerating = false,
   deferSourceFooter = false,
+  hideToolSummary = false,
+  forceCollapseTools = false,
   connectionItems = [],
   onImageClick,
   onRetry,
@@ -1234,6 +1246,8 @@ export function MessageContent({
   message: Message;
   isGenerating?: boolean;
   deferSourceFooter?: boolean;
+  hideToolSummary?: boolean;
+  forceCollapseTools?: boolean;
   connectionItems?: ConnectionListItem[];
   onImageClick?: (images: string[], index: number) => void;
   onRetry?: (prompt: string) => void;
@@ -1441,6 +1455,8 @@ export function MessageContent({
                 preferSummaryOverride={Boolean(stoppedSummary)}
                 summaryOverride={stoppedSummary || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
                 workStartedAtMs={message.timestamp}
+                hideSummary={hideToolSummary}
+                forceCollapsed={forceCollapseTools}
               />
             );
           }
@@ -1459,6 +1475,8 @@ export function MessageContent({
                 preferSummaryOverride={Boolean(stoppedSummary)}
                 summaryOverride={stoppedSummary || formatWorkDuration(durationMs)}
                 workStartedAtMs={message.timestamp}
+                hideSummary={hideToolSummary}
+                forceCollapsed={forceCollapseTools}
               />
             );
           }
