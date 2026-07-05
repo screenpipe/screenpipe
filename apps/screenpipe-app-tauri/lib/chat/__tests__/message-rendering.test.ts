@@ -236,7 +236,7 @@ describe("message rendering helpers", () => {
         message({ id: "u1", role: "user", content: "root", timestamp: 0 }),
         message({ id: "a1", role: "assistant", content: "draft", timestamp: 20_000 }),
         message({ id: "u2", role: "user", content: "steer", intent: "steer", turnIntentId: "t1", timestamp: 40_000 }),
-        message({ id: "a2", role: "assistant", content: "final", turnIntentId: "t1", timestamp: 75_000 }),
+        message({ id: "a2", role: "assistant", content: "final", turnIntentId: "t1", steeredResponse: true, timestamp: 75_000 }),
       ],
       { canCollapseSteerWork: true }
     ).filter((renderItem) => renderItem.type === "collapsed-steer-work");
