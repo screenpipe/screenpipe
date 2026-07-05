@@ -43,7 +43,7 @@ export function MarkdownBlock({
   return (
     <MemoizedReactMarkdown
       className={cn(
-        "prose prose-sm max-w-full break-words overflow-hidden [word-break:break-word]",
+        "prose prose-sm max-w-full break-words overflow-hidden [word-break:break-word] flex flex-col items-start",
         isUser ? "text-foreground dark:prose-invert" : "dark:prose-invert",
       )}
       remarkPlugins={[remarkGfm]}

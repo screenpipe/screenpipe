@@ -324,6 +324,13 @@
     background-color: rgba(59, 130, 246, 0.35) !important;
   }
 
+  /* Keep code blocks, details, hr, and tables full-width inside flex prose */
+  .prose > .not-prose,
+  .prose > hr,
+  .prose > table {
+    align-self: stretch;
+  }
+
   .prose a,
   .prose a * {
     cursor: pointer !important;
