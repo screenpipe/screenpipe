@@ -44,9 +44,36 @@ export function isSteeredAssistantMessage(message: Message): boolean {
 
 export function hasRenderableAssistantBody(message: Message): boolean {
   if (message.role !== "assistant") return false;
-  if (message.stoppedByUser) return true;
   if (message.content && message.content !== "Processing...") return true;
-  return Boolean(message.contentBlocks?.length);
+  if (message.contentBlocks?.length) {
+    return message.contentBlocks.some((block) => block.type !== "thinking");
+  }
+  return false;
+}
+
+export function hasAssistantTextBody(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  if (message.contentBlocks?.length) {
+    // Only count prose that survives rendering.
+    // Intermediate narration before the last tool call is hidden, but text
+    // after the final tool call (including text followed by connection cards)
+    // stays visible and should keep the toolbar available.
+    let lastToolIndex = -1;
+    for (let i = 0; i < message.contentBlocks.length; i += 1) {
+      if (message.contentBlocks[i].type === "tool") {
+        lastToolIndex = i;
+      }
+    }
+    return message.contentBlocks
+      .slice(lastToolIndex + 1)
+      .some((block) => block.type === "text" && Boolean(block.text.trim()));
+  }
+  return Boolean(message.content && message.content !== "Processing...");
+}
+
+export function hasAssistantToolWorkBody(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  return Boolean(message.contentBlocks?.some((block) => block.type === "tool"));
 }
 
 export function isNormalUserMessage(message: Message): boolean {
@@ -60,6 +87,8 @@ export type ChatRenderItem =
       hideWhenCollapsedBy?: string;
       hideIntentLabelWhenCollapsedBy?: string;
       showActionsWhenExpandedBy?: string;
+      hideToolSummary?: boolean;
+      collapseToolsWithSteerWork?: string;
     }
   | {
       type: "collapsed-steer-work";
@@ -89,7 +118,11 @@ export function buildCollapsedSteerRenderItems(
 
     const segment = messages.slice(i, end);
     const steerUsers = segment.filter((message) => message.role === "user" && message.intent === "steer");
-    if (steerUsers.length === 0 || !options.canCollapseSteerWork) {
+    // Only disable collapsing for the currently-active segment (the last one
+    // that extends to the end of the message list). Completed segments from
+    // earlier turns should always stay collapsed.
+    const isActiveSegment = end >= messages.length;
+    if (steerUsers.length === 0 || (!options.canCollapseSteerWork && isActiveSegment)) {
       items.push(...segment.map((message) => ({ type: "message" as const, message })));
       i = end - 1;
       continue;
@@ -146,6 +179,8 @@ export function buildCollapsedSteerRenderItems(
           type: "message",
           message,
           hideWhenCollapsedBy: collapsedWorkId,
+          hideToolSummary: message.role === "assistant",
+          collapseToolsWithSteerWork: message.role === "assistant" ? collapsedWorkId : undefined,
         });
         continue;
       }
@@ -159,6 +194,8 @@ export function buildCollapsedSteerRenderItems(
         showActionsWhenExpandedBy: message.role === "user" && message.intent === "steer" && hiddenAssistants.length > 0
           ? collapsedWorkId
           : undefined,
+        hideToolSummary: message.role === "assistant",
+        collapseToolsWithSteerWork: message.role === "assistant" ? collapsedWorkId : undefined,
       });
     }
     pushCollapsedWork();
@@ -170,10 +207,35 @@ export function buildCollapsedSteerRenderItems(
 }
 
 export function collapsedSteerWorkDuration(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): string {
+  // Steering sets piActiveStopRequestedRef internally, so intermediate
+  // assistants always end up with stoppedByUser=true. Only treat the
+  // segment as user-stopped when the last *steered* assistant was stopped —
+  // that means the user explicitly hit stop on the steering workflow.
+  // The parent (non-steered) assistant also gets stoppedByUser from the
+  // internal stop so we must only check steered assistants.
+  const steeredAssistants = item.segmentMessages.filter(
+    (m) => m.role === "assistant" && (m.intent === "steer" || m.steeredResponse === true)
+  );
+  const lastSteered = steeredAssistants[steeredAssistants.length - 1];
+  const userStopped = Boolean(lastSteered?.stoppedByUser);
   const timestamps = item.segmentMessages
     .map((message) => message.timestamp)
     .filter((timestamp) => Number.isFinite(timestamp));
-  if (timestamps.length < 2) return "Worked";
+  if (timestamps.length < 2) return userStopped ? "You stopped" : "Worked";
   const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
-  return formatWorkDuration(durationMs);
+  return userStopped ? formatStoppedWorkDuration(durationMs) : formatWorkDuration(durationMs);
+}
+
+export function collapsedSteerFailedCount(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): number {
+  let count = 0;
+  for (const message of item.segmentMessages) {
+    if (message.contentBlocks) {
+      for (const block of message.contentBlocks) {
+        if (block.type === "tool" && block.toolCall.isError) {
+          count += 1;
+        }
+      }
+    }
+  }
+  return count;
 }

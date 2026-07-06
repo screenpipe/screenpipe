@@ -914,7 +914,12 @@ if the input is sparse, just describe what little you have warmly. don't apologi
           </h2>
 
           {/* Streaming prose — sans-serif body, soft and readable */}
-          <div className="w-full min-h-[140px] flex items-start">
+          <div
+            className="w-full min-h-[140px] flex items-start"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             {noActivityYet ? (
               <motion.p
                 className="font-sans text-sm text-muted-foreground/70 leading-relaxed text-center w-full"

@@ -176,6 +176,7 @@ tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.19"
 tracing-oslog = "0.3.0"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
@@ -317,7 +318,7 @@ ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync", "
 # of a raw pointer so stale AppKit items keep their Rust click data alive.
 # Pinned by commit (not branch) for reproducible builds; drop once
 # upstream tauri-apps/muda#361 merges and ships in a released muda.
-muda = { git = "https://github.com/divanshu-go/muda", rev = "9dc5de53e84040a63c9a5423b669ec892de8a671" }
+muda = { git = "https://github.com/divanshu-go/muda", rev = "327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d" }
 
 [profile.release]
 codegen-units = 1

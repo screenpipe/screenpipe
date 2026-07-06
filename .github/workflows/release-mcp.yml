@@ -6,6 +6,11 @@ on:
       - "mcp-v*"
   workflow_dispatch:
 
+concurrency:
+  # Serialize releases — aborting a release mid-flight is worse than waiting.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write # OIDC auth for the MCP Registry (io.github.screenpipe namespace)

@@ -495,11 +495,21 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // during startNewConversation (setConversationId(null) → … →
     // setConversationId(newSid)); without the fallback the save would mint
     // a fresh uuid and duplicate the conversation.
+    //
     // `idOverride` wins when the caller knows the exact target session (the
     // send path — the id the message is dispatched/streamed under). Otherwise
-    // prefer `conversationId` per the mid-switch reasoning above.
+    // prefer `conversationId` per the mid-switch reasoning above, then the ref,
+    // then the store's `currentId` (the last stable id the panel published).
+    // Never mint a fresh id here (issue #4719): if none of those exist, SKIP
+    // the save rather than invent one — a `crypto.randomUUID()` fallback would
+    // persist a phantom twin file for what is really one conversation.
+    const { useChatStore } = await import("@/lib/stores/chat-store");
     const convId =
-      options.idOverride || conversationId || piSessionIdRef.current || crypto.randomUUID();
+      options.idOverride ||
+      conversationId ||
+      piSessionIdRef.current ||
+      useChatStore.getState().currentId;
+    if (!convId) return;
 
     // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");

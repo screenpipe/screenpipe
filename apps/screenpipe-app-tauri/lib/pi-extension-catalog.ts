@@ -19,6 +19,41 @@ export interface PiExtensionCatalogItem {
   tags: string[];
 }
 
+interface NpmSearchPackage {
+  name?: string;
+  description?: string;
+  keywords?: string[];
+  links?: {
+    npm?: string;
+    repository?: string;
+    homepage?: string;
+  };
+}
+
+interface NpmSearchObject {
+  package?: NpmSearchPackage;
+}
+
+interface NpmSearchResponse {
+  total?: number;
+  objects?: NpmSearchObject[];
+}
+
+export interface PiExtensionRegistrySearchResult {
+  total: number;
+  items: PiExtensionCatalogItem[];
+}
+
+const NPM_SEARCH_ENDPOINT = "https://registry.npmjs.org/-/v1/search";
+const NPM_SEARCH_SIZE = 80;
+const DEFAULT_PI_REGISTRY_QUERY = "keywords:pi-package";
+const PI_PACKAGE_KEYWORDS = new Set([
+  "pi-package",
+  "pi-extension",
+  "pi-coding-agent",
+  "pi-agent",
+]);
+
 export const PI_EXTENSION_CATALOG: PiExtensionCatalogItem[] = [
   {
     id: "pi-subagents",
@@ -115,4 +150,99 @@ export function filterPiExtensionCatalog(query: string): PiExtensionCatalogItem[
     ].join(" ").toLowerCase();
     return haystack.includes(q);
   });
+}
+
+export function registryQueryForPiExtensions(query: string): string {
+  const q = query.trim();
+  return q ? `${q} ${DEFAULT_PI_REGISTRY_QUERY}` : DEFAULT_PI_REGISTRY_QUERY;
+}
+
+function packageNameToTitle(name: string): string {
+  const bareName = name.split("/").pop() ?? name;
+  const withoutPiPrefix = bareName.replace(/^pi[-_]/i, "");
+  const words = withoutPiPrefix
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+  return words.join(" ") || name;
+}
+
+function packageTags(pkg: NpmSearchPackage): string[] {
+  const keywords = Array.isArray(pkg.keywords) ? pkg.keywords : [];
+  return keywords
+    .filter((keyword) => typeof keyword === "string")
+    .map((keyword) => keyword.toLowerCase())
+    .slice(0, 8);
+}
+
+function looksLikePiPackage(pkg: NpmSearchPackage): boolean {
+  const name = (pkg.name ?? "").toLowerCase();
+  const description = (pkg.description ?? "").toLowerCase();
+  const keywords = packageTags(pkg);
+
+  return (
+    keywords.some((keyword) => PI_PACKAGE_KEYWORDS.has(keyword)) ||
+    /^(@[^/]+\/)?pi[-_]/.test(name) ||
+    description.includes("pi agent extension") ||
+    description.includes("pi package") ||
+    description.includes("pi coding agent")
+  );
+}
+
+function registryPackageToCatalogItem(pkg: NpmSearchPackage): PiExtensionCatalogItem | null {
+  const name = pkg.name?.trim();
+  if (!name || !looksLikePiPackage(pkg)) return null;
+
+  const description = pkg.description?.trim() || "Community Pi package from npm.";
+  const tags = packageTags(pkg);
+  const source = `npm:${name}`;
+
+  return {
+    id: `npm-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
+    name: packageNameToTitle(name),
+    source,
+    summary: description,
+    details: "Community package from npm. Review the package, source, and behavior before enabling it.",
+    modelFit: "strong-model",
+    modelFitLabel: "Community package",
+    modelFitCopy: "Model fit depends on the package. Prefer stronger models for tools that browse, spawn agents, or change files.",
+    risk: "Third-party npm package. It can run local code inside Pi after install.",
+    npmUrl: pkg.links?.npm || `https://www.npmjs.com/package/${name}`,
+    sourceUrl: pkg.links?.repository || pkg.links?.homepage,
+    tags,
+  };
+}
+
+export async function searchPiExtensionRegistry(
+  query: string,
+  signal?: AbortSignal,
+): Promise<PiExtensionRegistrySearchResult> {
+  const url = new URL(NPM_SEARCH_ENDPOINT);
+  url.searchParams.set("text", registryQueryForPiExtensions(query));
+  url.searchParams.set("size", String(NPM_SEARCH_SIZE));
+
+  const response = await fetch(url.toString(), {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`npm search failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as NpmSearchResponse;
+  const seen = new Set<string>();
+  const items = (data.objects ?? [])
+    .map((entry) => (entry.package ? registryPackageToCatalogItem(entry.package) : null))
+    .filter((item): item is PiExtensionCatalogItem => {
+      if (!item) return false;
+      const normalized = normalizePiPackageSource(item.source);
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+
+  return {
+    total: data.total ?? items.length,
+    items,
+  };
 }

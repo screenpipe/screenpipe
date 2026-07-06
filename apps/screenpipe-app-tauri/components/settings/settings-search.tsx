@@ -494,7 +494,10 @@ export function SettingsSearchPopover<T extends SearchableNavItem>({
     >
       {results.length === 0 ? (
         <div className="px-3 py-3 text-xs text-muted-foreground text-center">
-          No settings found
+          <p>No settings found</p>
+          <p className="text-[10px] mt-1 opacity-70">
+            try different keywords
+          </p>
         </div>
       ) : (
         <div className="max-h-[60vh] overflow-y-auto py-1">

@@ -16,8 +16,11 @@ import {
 } from "@/components/chat/standalone/message-content";
 import {
   buildCollapsedSteerRenderItems,
+  hasAssistantTextBody,
   getMessageIntentLabel,
+  isNormalUserMessage,
   isSteeredAssistantMessage,
+  hasRenderableAssistantBody,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
 import type { ContentBlock, Message } from "@/lib/chat/types";
@@ -106,8 +109,7 @@ export function ChatMessageList({
         {(() => {
           const visibleMessages = messages.filter((m) => {
             if (m.role !== "assistant") return true;
-            if (m.content === "Processing..." && !m.contentBlocks?.length && !m.stoppedByUser) return false;
-            if (!m.content && !m.contentBlocks?.length && !isSteeredAssistantMessage(m) && !m.stoppedByUser) return false;
+            if (!hasRenderableAssistantBody(m) && !isSteeredAssistantMessage(m)) return false;
             return true;
           });
 
@@ -130,6 +132,26 @@ export function ChatMessageList({
           const activeAssistantMessageId =
             activeSourceFooterMessageId ??
             (lastVisibleAssistantId === lastAssistantId ? lastVisibleAssistantId : undefined);
+
+          // Find parent assistant IDs whose steered child is currently streaming.
+          // Walk backwards from the active streaming assistant to find the
+          // preceding non-steered assistant in the same turn — that's the parent
+          // whose ToolCallGroup should also show "Working".
+          const steerChildActiveParentIds = new Set<string>();
+          if ((isLoading || isStreaming) && activeAssistantMessageId) {
+            const activeIdx = visibleMessages.findIndex((m) => m.id === activeAssistantMessageId);
+            const activeMsg = activeIdx >= 0 ? visibleMessages[activeIdx] : undefined;
+            if (activeMsg && isSteeredAssistantMessage(activeMsg)) {
+              for (let j = activeIdx - 1; j >= 0; j -= 1) {
+                const prev = visibleMessages[j];
+                if (prev.role === "user" && prev.intent !== "steer") break;
+                if (prev.role === "assistant" && !isSteeredAssistantMessage(prev)) {
+                  steerChildActiveParentIds.add(prev.id);
+                  break;
+                }
+              }
+            }
+          }
 
           return renderItems.map((item) => {
             if (item.type === "collapsed-steer-work") {
@@ -156,12 +178,14 @@ export function ChatMessageList({
             const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
             const canShowMessageActions = !item.showActionsWhenExpandedBy ||
               expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
+            const hasActiveSteerChild = steerChildActiveParentIds.has(message.id);
             const isActiveStreamingAssistantMessage =
               message.role === "assistant" &&
               (isLoading || isStreaming) &&
-              message.id === activeAssistantMessageId;
+              (message.id === activeAssistantMessageId || hasActiveSteerChild);
+            const shouldShowAssistantActions = message.role !== "assistant" || hasAssistantTextBody(message);
             const shouldShowMessageActionBar =
-              canShowMessageActions && !isActiveStreamingAssistantMessage;
+              canShowMessageActions && !isActiveStreamingAssistantMessage && shouldShowAssistantActions;
             const nextAssistant = visibleMessages
               .slice(messageIndex + 1)
               .find((candidate) => candidate.role === "assistant");
@@ -170,6 +194,23 @@ export function ChatMessageList({
               isSteeredAssistantMessage(nextAssistant) &&
               !message.content &&
               !message.contentBlocks?.length
+            );
+            // Hide retry/branch on any assistant that has a steered assistant
+            // after it *within the same turn segment*.  A normal (non-steer) user
+            // message starts a new segment, so stop searching there.
+            let nextSameSegmentAssistant: Message | undefined;
+            if (message.role === "assistant") {
+              const tail = visibleMessages.slice(messageIndex + 1);
+              for (const candidate of tail) {
+                if (isNormalUserMessage(candidate)) break; // new turn
+                if (candidate.role === "assistant") {
+                  nextSameSegmentAssistant = candidate;
+                  break;
+                }
+              }
+            }
+            const hasFollowingSteeredAssistant = Boolean(
+              nextSameSegmentAssistant && isSteeredAssistantMessage(nextSameSegmentAssistant)
             );
             const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
 
@@ -298,6 +339,12 @@ export function ChatMessageList({
                             citationPlan.deferredMessageIds.has(message.id) ||
                             message.id === activeSourceFooterMessageId
                           }
+                          hideToolSummary={item.hideToolSummary || isSteeredAssistantMessage(message)}
+                          forceCollapseTools={
+                            item.collapseToolsWithSteerWork
+                              ? !expandedSteerWorkIds.has(item.collapseToolsWithSteerWork)
+                              : false
+                          }
                           onImageClick={onOpenImageViewer}
                           onRetry={(prompt) => sendMessage(prompt)}
                           onOpenViewerPath={openFilePreview}
@@ -344,7 +391,7 @@ export function ChatMessageList({
                               <Pencil className="h-3 w-3" />
                             </button>
                           )}
-                          {message.role === "assistant" && !isLoading && (
+                          {message.role === "assistant" && !isLoading && !hasFollowingSteeredAssistant && (
                             <button
                               onClick={() => onRetryAssistantMessage(message.id)}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
@@ -353,7 +400,7 @@ export function ChatMessageList({
                               <RefreshCw className="h-3 w-3" />
                             </button>
                           )}
-                          {message.role === "assistant" && (
+                          {message.role === "assistant" && !hasFollowingSteeredAssistant && (
                             <Popover
                               open={openMessageMenuId === message.id}
                               onOpenChange={(open) => onMessageMenuOpenChange(message.id, open)}

@@ -20,6 +20,11 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  # Prevent overlapping cleanup runs (schedule + dispatch + post-release).
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 env:
   GIT_LFS_SKIP_SMUDGE: 1
 

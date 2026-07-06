@@ -91,6 +91,8 @@ mod store;
 mod suggestions;
 mod sync;
 mod tray;
+#[cfg(target_os = "macos")]
+mod tray_monitor_preview;
 mod updates;
 mod voice_training;
 mod window;

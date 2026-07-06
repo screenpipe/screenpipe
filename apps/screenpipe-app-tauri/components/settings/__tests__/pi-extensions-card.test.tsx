@@ -30,8 +30,17 @@ const packageList = (...sources: string[]): PiExtensionPackage[] =>
     installed: true,
   }));
 
+const emptyRegistrySearch = () => ({
+  ok: true,
+  json: async () => ({
+    total: 0,
+    objects: [],
+  }),
+});
+
 describe("PiExtensionsCard", () => {
   beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(emptyRegistrySearch()));
     commandMocks.piListExtensionPackages.mockResolvedValue({
       status: "ok",
       data: packageList("npm:pi-subagents"),
@@ -49,6 +58,7 @@ describe("PiExtensionsCard", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("loads configured packages and marks the matching catalog item enabled", async () => {
@@ -98,6 +108,40 @@ describe("PiExtensionsCard", () => {
       ),
     );
     expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows installable Pi packages from npm registry search", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        total: 4894,
+        objects: [
+          {
+            package: {
+              name: "@piotr-oles/pi-reflag",
+              description: "Pi Agent extension: transparently rewrite grep commands to rg.",
+              keywords: ["pi-package"],
+              links: {
+                npm: "https://www.npmjs.com/package/@piotr-oles/pi-reflag",
+                repository: "https://github.com/piotr-oles/pi-reflag",
+              },
+            },
+          },
+        ],
+      }),
+    } as Response);
+    render(<PiExtensionsCard />);
+
+    expect(await screen.findByText("From npm")).toBeInTheDocument();
+    expect(await screen.findByText("Reflag")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Enable Reflag" }));
+
+    await waitFor(() =>
+      expect(commandMocks.piInstallExtensionPackage).toHaveBeenCalledWith(
+        "npm:@piotr-oles/pi-reflag",
+      ),
+    );
   });
 
   it("locks other extension toggles while a package change is in flight", async () => {

@@ -225,6 +225,51 @@ describe("saveConversation race (PR #3600 / issue #3636 candidate)", () => {
     expect(saveCalls[0].id).toBe("fresh-sid");
   });
 
+  it("NO PHANTOM ID: falls back to store.currentId when conversationId and ref are both empty (#4719)", async () => {
+    // Deepest null-id window: conversationId is null AND the ref hasn't been
+    // reseeded yet. The save must adopt the last stable id the panel
+    // published to the store — NOT mint a fresh uuid twin.
+    useChatStore.setState({ currentId: "store-current-id" });
+    const messages = [{ id: "u1", role: "user" as const, content: "hi", timestamp: 1 }];
+
+    const { result } = renderHook(() =>
+      useHarness({
+        initialMessages: messages,
+        initialConversationId: null,
+        initialPiSessionId: "", // ref transiently empty
+      }),
+    );
+
+    await act(async () => {
+      await result.current.hook.saveConversation(messages);
+    });
+
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].id).toBe("store-current-id");
+  });
+
+  it("NO PHANTOM ID: skips the save entirely when no stable id exists (#4719)", async () => {
+    // conversationId null, ref empty, store.currentId null → there is no
+    // stable id to write under. Pre-fix this minted crypto.randomUUID() and
+    // wrote a phantom twin file. Now it must write NOTHING.
+    useChatStore.setState({ currentId: null });
+    const messages = [{ id: "u1", role: "user" as const, content: "hi", timestamp: 1 }];
+
+    const { result } = renderHook(() =>
+      useHarness({
+        initialMessages: messages,
+        initialConversationId: null,
+        initialPiSessionId: "",
+      }),
+    );
+
+    await act(async () => {
+      await result.current.hook.saveConversation(messages);
+    });
+
+    expect(saveCalls).toHaveLength(0);
+  });
+
   it("preserves browserState from the shadow cache when the disk file does not exist yet", async () => {
     const messages = [{ id: "u1", role: "user" as const, content: "hello", timestamp: 1 }];
     setCachedBrowserState("fresh-sid", {

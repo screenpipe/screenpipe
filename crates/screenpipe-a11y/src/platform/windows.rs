@@ -11,19 +11,21 @@ use crate::config::{ExtractionThreadPriority, UiCaptureConfig};
 use crate::events::{ElementContext, EventData, UiEvent, WindowTreeSnapshot};
 use anyhow::Result;
 use chrono::Utc;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, warn};
 
 use super::windows_uia::{self, ClickElementRequest};
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY,
     THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_IDLE, THREAD_PRIORITY_LOWEST,
@@ -31,8 +33,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
-    VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    GetKeyState, GetLastInputInfo, LASTINPUTINFO, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_LMENU,
+    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetMessageW,
@@ -210,30 +212,58 @@ impl UiRecorder {
         // 0 = no input observed yet.
         let last_input_at_ms = Arc::new(AtomicU64::new(0));
 
-        // Thread 1: Native Windows hooks for input events
-        let tx1 = tx.clone();
+        // Raw input hand-off: LL hook callbacks enqueue (never blocking), the
+        // input worker consumes. Unbounded so the hook thread can never stall
+        // on a full channel — a bounded hand-off would recreate the input
+        // inversion one step downstream. A soft cap in `enqueue_raw` bounds
+        // memory if the worker wedges.
+        let (raw_tx, raw_rx) = unbounded::<RawInput>();
+
+        // Thread 1: Native Windows hooks — minimal callbacks that snapshot and
+        // enqueue. These callbacks are the system-wide synchronous input path;
+        // all per-event processing lives on the input worker (thread 1b).
         let stop1 = stop.clone();
         let config1 = self.config.clone();
-        let app1 = current_app.clone();
-        let window1 = current_window.clone();
         let feed1 = activity_feed.clone();
-        let click_queue1 = click_queue.clone();
-        let focused_element1 = focused_element.clone();
         let last_input_at_ms1 = last_input_at_ms.clone();
-        threads.push(thread::spawn(move || {
-            run_native_hooks(
-                tx1,
-                stop1,
-                start_time,
-                config1,
-                app1,
-                window1,
-                feed1,
-                click_queue1,
-                focused_element1,
-                last_input_at_ms1,
-            );
-        }));
+        threads.push(
+            thread::Builder::new()
+                .name("a11y-hooks".into())
+                .spawn(move || {
+                    run_native_hooks(raw_tx, stop1, start_time, config1, feed1, last_input_at_ms1);
+                })
+                .expect("failed to spawn a11y-hooks thread"),
+        );
+
+        // Thread 1b: Input worker — consumes raw input and owns app/window
+        // attribution, exclusion filters, text/scroll aggregation, clipboard
+        // reads, and PII removal (all formerly on the hook thread, where they
+        // stalled every keystroke and mouse event system-wide under load).
+        let tx_w = tx.clone();
+        let stop_w = stop.clone();
+        let config_w = self.config.clone();
+        let app_w = current_app.clone();
+        let window_w = current_window.clone();
+        let click_queue_w = click_queue.clone();
+        let focused_element_w = focused_element.clone();
+        threads.push(
+            thread::Builder::new()
+                .name("a11y-input-worker".into())
+                .spawn(move || {
+                    run_input_worker(
+                        raw_rx,
+                        tx_w,
+                        stop_w,
+                        start_time,
+                        config_w,
+                        app_w,
+                        window_w,
+                        click_queue_w,
+                        focused_element_w,
+                    );
+                })
+                .expect("failed to spawn a11y-input-worker thread"),
+        );
 
         // Thread 2: App/window observer
         let tx2 = tx.clone();
@@ -318,17 +348,88 @@ impl UiRecorder {
 }
 
 // ============================================================================
-// Thread-local state for hook callbacks
+// Raw input hand-off: LL hook callbacks → input worker
 // ============================================================================
 
-/// A deferred clipboard read request, queued from the LL hook and processed
-/// in the message loop where blocking is safe.
-struct PendingClipboard {
-    operation: char,
-    timestamp: chrono::DateTime<Utc>,
-    relative_ms: u64,
-    app_name: Option<String>,
-    window_title: Option<String>,
+/// Soft cap on the raw-input queue between the LL hook callbacks and the
+/// input worker. The channel itself is unbounded so the hook thread can never
+/// block on a full channel (a bounded hand-off would recreate the input-stall
+/// inversion one step downstream); the cap only bounds memory if the worker
+/// wedges (e.g. a clipboard owner that never responds). Beyond it, events are
+/// dropped and counted in [`HOOK_QUEUE_DROPPED`].
+const RAW_INPUT_QUEUE_SOFT_CAP: usize = 4096;
+
+/// Timer interval for the hook thread's message loop. The timer exists only so
+/// the loop wakes to check the stop flag and run the hook watchdog — it does
+/// no flush work (that all lives on the input worker).
+const HOOK_LOOP_TIMER_MS: u32 = 500;
+
+/// Total raw input events dropped because the queue was over
+/// [`RAW_INPUT_QUEUE_SOFT_CAP`]. Read via [`hook_queue_dropped_total`].
+static HOOK_QUEUE_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Total watchdog-triggered LL hook reinstalls. Read via
+/// [`hook_reinstalls_total`].
+static HOOK_REINSTALL_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Number of raw input events dropped at the hook callback because the worker
+/// queue was over its soft cap. Monotonic, process-wide; for health metrics.
+pub fn hook_queue_dropped_total() -> u64 {
+    HOOK_QUEUE_DROPPED.load(Ordering::Relaxed)
+}
+
+/// Number of watchdog-triggered LL hook reinstalls. Nonzero means Windows
+/// silently removed our hooks at least once (LowLevelHooksTimeout exceeded);
+/// before the watchdog, input capture died silently when this happened.
+/// Monotonic, process-wide; for health metrics.
+pub fn hook_reinstalls_total() -> u64 {
+    HOOK_REINSTALL_COUNT.load(Ordering::Relaxed)
+}
+
+/// Minimal record captured inside a LL hook callback and queued to the input
+/// worker. Carries only what must be snapshotted at event time (timestamps,
+/// modifier state, clipboard sequence number); everything that can be resolved
+/// a moment later (app/window attribution, exclusion filters, text
+/// aggregation, clipboard content, PII regex) happens on the worker.
+enum RawInput {
+    /// Key-down. Key-ups only feed the activity feed and are not queued.
+    KeyDown {
+        vk_code: u16,
+        /// Modifier snapshot at event time (0x01 shift, 0x02 ctrl, 0x04 alt, 0x08 win).
+        mods: u8,
+        /// CapsLock toggle state at event time. Snapshotted here because
+        /// `GetKeyState` reads the calling thread's input-synchronized key
+        /// state — read from the worker thread it would be permanently stale.
+        caps_on: bool,
+        /// `GetClipboardSequenceNumber()` at key-down when this is a potential
+        /// clipboard combo (Ctrl+C/X/V); lets the worker wait for the copy to
+        /// actually land before reading the clipboard content.
+        clip_seq: Option<u32>,
+        timestamp: chrono::DateTime<Utc>,
+        relative_ms: u64,
+    },
+    ButtonDown {
+        x: i32,
+        y: i32,
+        /// 0=left, 1=right, 2=middle (matches `EventData::Click`).
+        button: u8,
+        mods: u8,
+        timestamp: chrono::DateTime<Utc>,
+        relative_ms: u64,
+    },
+    Wheel {
+        x: i32,
+        y: i32,
+        delta: i32,
+        timestamp: chrono::DateTime<Utc>,
+        relative_ms: u64,
+    },
+    Move {
+        x: i32,
+        y: i32,
+        timestamp: chrono::DateTime<Utc>,
+        relative_ms: u64,
+    },
 }
 
 /// Consecutive `WM_MOUSEWHEEL` ticks within this window are coalesced into a
@@ -338,8 +439,6 @@ struct PendingClipboard {
 /// Coalescing preserves total scroll distance while cutting row count ~86x
 /// (measured: 1121 → 13 events in a 2-min session).
 const SCROLL_AGGREGATION_WINDOW_MS: u128 = 500;
-const HOOK_ACTIVE_FLUSH_TIMER_MS: u32 = 100;
-const HOOK_IDLE_FLUSH_TIMER_MS: u32 = 500;
 
 /// In-flight scroll aggregation state (None when not currently scrolling).
 struct ScrollAggregator {
@@ -352,29 +451,36 @@ struct ScrollAggregator {
     start_relative_ms: u64,
 }
 
-struct HookState {
-    tx: Sender<UiEvent>,
+/// State available to the LL hook callbacks. Deliberately tiny: these
+/// callbacks are the system-wide synchronous input path — every keystroke and
+/// mouse event in every application waits on them — so they only snapshot and
+/// enqueue. No mutexes, no regex, no clipboard, no string allocation.
+struct CallbackState {
+    raw_tx: Sender<RawInput>,
     start: Instant,
-    config: UiCaptureConfig,
     last_mouse_pos: (i32, i32),
-    text_buf: String,
-    last_text_time: Option<Instant>,
-    current_app: Arc<Mutex<Option<String>>>,
-    current_window: Arc<Mutex<Option<String>>>,
     activity_feed: Option<ActivityFeed>,
-    click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
-    focused_element: Arc<Mutex<Option<ElementContext>>>,
-    /// Clipboard operations deferred from the LL hook to the message loop.
-    pending_clipboard: Vec<PendingClipboard>,
     /// Shared timestamp (ms since start) of the most recent input event.
-    /// Updated unconditionally at the top of mouse_hook_proc / keyboard_hook_proc so the UIA
-    /// worker can defer tree captures while the user is actively typing/clicking/scrolling.
+    /// Read by the UIA worker to defer tree captures during active input and
+    /// by the hook watchdog as its liveness signal.
     last_input_at_ms: Arc<AtomicU64>,
-    /// In-flight scroll aggregator (None = not currently scrolling).
-    scroll_aggregator: Option<ScrollAggregator>,
-    /// Thread timer used to wake the hook message loop for deferred flush work.
-    flush_timer_id: Option<usize>,
-    flush_timer_interval_ms: Option<u32>,
+    // Capture gates copied out of UiCaptureConfig (plain bool reads).
+    enqueue_moves: bool,
+    enqueue_scroll: bool,
+    enqueue_clicks: bool,
+    enqueue_keys: bool,
+    detect_clipboard: bool,
+}
+
+/// Non-blocking enqueue from a hook callback. Never blocks: the channel is
+/// unbounded, and the soft cap drops (and counts) events instead of stalling
+/// the system input queue when the worker is wedged.
+fn enqueue_raw(state: &CallbackState, raw: RawInput) {
+    if state.raw_tx.len() >= RAW_INPUT_QUEUE_SOFT_CAP {
+        HOOK_QUEUE_DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let _ = state.raw_tx.send(raw);
 }
 
 /// Emit the accumulated scroll as a single `Scroll` event. `delta_y` is summed
@@ -404,7 +510,7 @@ fn emit_aggregated_scroll(tx: &Sender<UiEvent>, agg: ScrollAggregator) {
 
 // Thread-local storage for hook state
 thread_local! {
-    static HOOK_STATE: std::cell::RefCell<Option<Box<HookState>>> = const { std::cell::RefCell::new(None) };
+    static HOOK_STATE: std::cell::RefCell<Option<Box<CallbackState>>> = const { std::cell::RefCell::new(None) };
     static KEYBOARD_HOOK: std::cell::RefCell<Option<HHOOK>> = const { std::cell::RefCell::new(None) };
     static MOUSE_HOOK: std::cell::RefCell<Option<HHOOK>> = const { std::cell::RefCell::new(None) };
 }
@@ -414,142 +520,62 @@ thread_local! {
 // ============================================================================
 
 fn run_native_hooks(
-    tx: Sender<UiEvent>,
+    raw_tx: Sender<RawInput>,
     stop: Arc<AtomicBool>,
     start: Instant,
     config: UiCaptureConfig,
-    current_app: Arc<Mutex<Option<String>>>,
-    current_window: Arc<Mutex<Option<String>>>,
     activity_feed: Option<ActivityFeed>,
-    click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
-    focused_element: Arc<Mutex<Option<ElementContext>>>,
     last_input_at_ms: Arc<AtomicU64>,
 ) {
     debug!("Starting native Windows hooks");
 
-    // Initialize thread-local state
+    // Initialize thread-local state for the hook callbacks.
     HOOK_STATE.with(|state| {
-        *state.borrow_mut() = Some(Box::new(HookState {
-            tx,
+        *state.borrow_mut() = Some(Box::new(CallbackState {
+            raw_tx,
             start,
-            config: config.clone(),
             last_mouse_pos: (0, 0),
-            text_buf: String::new(),
-            last_text_time: None,
-            current_app,
-            current_window,
             activity_feed,
-            click_queue,
-            focused_element,
-            pending_clipboard: Vec::new(),
-            last_input_at_ms,
-            scroll_aggregator: None,
-            flush_timer_id: None,
-            flush_timer_interval_ms: None,
+            last_input_at_ms: last_input_at_ms.clone(),
+            enqueue_moves: config.capture_mouse_move,
+            enqueue_scroll: config.capture_scroll,
+            enqueue_clicks: config.capture_clicks,
+            enqueue_keys: config.capture_text
+                || config.capture_keystrokes
+                || config.capture_clipboard,
+            detect_clipboard: config.capture_clipboard,
         }));
     });
 
     unsafe {
         let h_instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
+        install_ll_hooks(h_instance);
 
-        // Install keyboard hook
-        let kb_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), h_instance, 0);
-
-        if let Ok(hook) = kb_hook {
-            KEYBOARD_HOOK.with(|h| *h.borrow_mut() = Some(hook));
-            debug!("Keyboard hook installed");
-        } else {
-            error!("Failed to install keyboard hook");
+        // Wake the loop periodically to check the stop flag and run the hook
+        // watchdog. All flush/processing work lives on the input worker.
+        let loop_timer = SetTimer(HWND::default(), 0, HOOK_LOOP_TIMER_MS, None);
+        if loop_timer == 0 {
+            warn!("failed to install hook loop timer — watchdog disabled, stop latency degraded");
         }
 
-        // Install mouse hook
-        let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), h_instance, 0);
+        let mut last_reinstall: Option<Instant> = None;
 
-        if let Ok(hook) = mouse_hook {
-            MOUSE_HOOK.with(|h| *h.borrow_mut() = Some(hook));
-            debug!("Mouse hook installed");
-        } else {
-            error!("Failed to install mouse hook");
-        }
-
-        HOOK_STATE.with(|state| {
-            if let Some(ref mut s) = *state.borrow_mut() {
-                set_hook_timer_interval(s, HOOK_IDLE_FLUSH_TIMER_MS);
-            }
-        });
-
-        // Message loop (required for hooks to receive events)
+        // Message loop (required for LL hooks to be dispatched). This loop
+        // must stay free of real work: whenever this thread is not inside
+        // GetMessageW, every keystroke and mouse event system-wide waits.
         let mut msg = MSG::default();
         while !stop.load(Ordering::Relaxed) {
             if GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
+                if msg.message == WM_TIMER {
+                    watchdog_tick(h_instance, start, &last_input_at_ms, &mut last_reinstall);
+                }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+        }
 
-            // Check for text buffer flush (runs on timer tick and after every message)
-            HOOK_STATE.with(|state| {
-                // Use try_borrow_mut to avoid panic — LL hook callbacks can
-                // fire synchronously during DispatchMessageW above
-                if let Ok(mut guard) = state.try_borrow_mut() {
-                    if let Some(ref mut s) = *guard {
-                        if let Some(last_time) = s.last_text_time {
-                            if last_time.elapsed().as_millis() as u64 >= s.config.text_timeout_ms {
-                                flush_text_buffer(s);
-                            }
-                        }
-
-                        // Idle-flush: emit any in-flight scroll aggregation once
-                        // SCROLL_AGGREGATION_WINDOW_MS has elapsed without a new wheel
-                        // tick. The active flush timer bounds worst-case latency to ~600ms.
-                        let needs_idle_flush = s.scroll_aggregator.as_ref().is_some_and(|agg| {
-                            agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS
-                        });
-                        if needs_idle_flush {
-                            if let Some(agg) = s.scroll_aggregator.take() {
-                                emit_aggregated_scroll(&s.tx, agg);
-                            }
-                        }
-
-                        // Process deferred clipboard operations — safe to block here
-                        // since we're in the message loop, not a LL hook callback.
-                        if !s.pending_clipboard.is_empty() {
-                            let pending = std::mem::take(&mut s.pending_clipboard);
-                            let capture_content = s.config.capture_clipboard_content;
-                            let apply_pii = s.config.apply_pii_removal;
-                            for p in pending {
-                                let content = if capture_content {
-                                    get_clipboard_text().map(|c| {
-                                        if apply_pii {
-                                            remove_pii(&c)
-                                        } else {
-                                            c
-                                        }
-                                    })
-                                } else {
-                                    None
-                                };
-                                let event = UiEvent {
-                                    id: None,
-                                    timestamp: p.timestamp,
-                                    relative_ms: p.relative_ms,
-                                    data: EventData::Clipboard {
-                                        operation: p.operation,
-                                        content,
-                                    },
-                                    app_name: p.app_name,
-                                    window_title: p.window_title,
-                                    browser_url: None,
-                                    element: None,
-                                    frame_id: None,
-                                };
-                                let _ = s.tx.try_send(event);
-                            }
-                        }
-
-                        sync_hook_timer_interval(s);
-                    }
-                }
-            });
+        if loop_timer != 0 {
+            let _ = KillTimer(HWND::default(), loop_timer);
         }
 
         // Cleanup hooks
@@ -564,78 +590,136 @@ fn run_native_hooks(
                 let _ = UnhookWindowsHookEx(hook);
             }
         });
-
-        // Final flush on shutdown: text buffer + any in-flight scroll aggregation,
-        // so input buffered when recording stops isn't dropped.
-        HOOK_STATE.with(|state| {
-            if let Some(ref mut s) = *state.borrow_mut() {
-                stop_hook_timer(s);
-                flush_text_buffer(s);
-                if let Some(agg) = s.scroll_aggregator.take() {
-                    emit_aggregated_scroll(&s.tx, agg);
-                }
-            }
-        });
     }
+
+    // Drop callback state so the raw-input sender disconnects and the worker
+    // drains + exits even before it notices the stop flag.
+    HOOK_STATE.with(|state| {
+        *state.borrow_mut() = None;
+    });
 
     debug!("Native Windows hooks stopped");
 }
 
-fn hook_needs_active_flush_timer(state: &HookState) -> bool {
-    state.last_text_time.is_some()
-        || state.scroll_aggregator.is_some()
-        || !state.pending_clipboard.is_empty()
-}
-
-unsafe fn set_hook_timer_interval(state: &mut HookState, interval_ms: u32) {
-    if state.flush_timer_interval_ms == Some(interval_ms) {
-        return;
+/// Install (or re-install) both LL hooks on the current thread. LL hook
+/// callbacks are dispatched to the installing thread's message loop, so the
+/// watchdog must call this from the hook thread itself.
+unsafe fn install_ll_hooks(h_instance: HINSTANCE) {
+    match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), h_instance, 0) {
+        Ok(hook) => {
+            KEYBOARD_HOOK.with(|h| *h.borrow_mut() = Some(hook));
+            debug!("Keyboard hook installed");
+        }
+        Err(e) => error!("Failed to install keyboard hook: {:?}", e),
     }
 
-    stop_hook_timer(state);
-    let timer_id = SetTimer(HWND::default(), 0, interval_ms, None);
-    if timer_id == 0 {
-        warn!(
-            "failed to install Windows hook flush timer at {}ms",
-            interval_ms
-        );
-        return;
+    match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), h_instance, 0) {
+        Ok(hook) => {
+            MOUSE_HOOK.with(|h| *h.borrow_mut() = Some(hook));
+            debug!("Mouse hook installed");
+        }
+        Err(e) => error!("Failed to install mouse hook: {:?}", e),
     }
-
-    state.flush_timer_id = Some(timer_id);
-    state.flush_timer_interval_ms = Some(interval_ms);
 }
 
-unsafe fn sync_hook_timer_interval(state: &mut HookState) {
-    let interval_ms = if hook_needs_active_flush_timer(state) {
-        HOOK_ACTIVE_FLUSH_TIMER_MS
-    } else {
-        HOOK_IDLE_FLUSH_TIMER_MS
+// ============================================================================
+// Hook watchdog
+// ============================================================================
+//
+// Windows silently removes a low-level hook whose callbacks exceed the
+// registry LowLevelHooksTimeout — which could historically happen when this
+// process was starved under CPU load. There was no telemetry and no recovery:
+// input capture just went dead until the next recording restart. The watchdog
+// compares system-wide input recency (GetLastInputInfo) against the time of
+// our last hook callback: system input flowing while our hooks stay silent
+// means the hooks are gone, so it reinstalls them and counts the event.
+//
+// Known blind spots (accepted): input on the secure desktop (UAC, lock
+// screen) updates GetLastInputInfo but is never delivered to LL hooks, so a
+// long-lived secure desktop can trigger a spurious (harmless, logged,
+// backoff-limited) reinstall. Conversely, if only one of the two hooks dies
+// and the user only produces input of the other kind, detection waits until
+// the dead hook's input kind occurs.
+
+/// System input younger than this counts as "input is flowing".
+const WATCHDOG_SYSTEM_INPUT_RECENT_MS: u64 = 2_000;
+/// Our hooks silent at least this long (while input flows) → presumed dead.
+const WATCHDOG_HOOK_SILENT_MS: u64 = 5_000;
+/// Minimum spacing between reinstall attempts.
+const WATCHDOG_REINSTALL_BACKOFF_MS: u64 = 30_000;
+
+/// Pure decision: should the watchdog reinstall the hooks?
+fn watchdog_should_reinstall(
+    system_input_age_ms: u64,
+    hook_silent_ms: u64,
+    since_last_reinstall_ms: Option<u64>,
+) -> bool {
+    let backoff_ok = match since_last_reinstall_ms {
+        Some(ms) => ms >= WATCHDOG_REINSTALL_BACKOFF_MS,
+        None => true,
     };
-    set_hook_timer_interval(state, interval_ms);
+    system_input_age_ms <= WATCHDOG_SYSTEM_INPUT_RECENT_MS
+        && hook_silent_ms >= WATCHDOG_HOOK_SILENT_MS
+        && backoff_ok
 }
 
-unsafe fn stop_hook_timer(state: &mut HookState) {
-    if let Some(timer_id) = state.flush_timer_id.take() {
-        let _ = KillTimer(HWND::default(), timer_id);
+/// Runs on the hook thread's timer tick (~every [`HOOK_LOOP_TIMER_MS`]).
+/// Cost when healthy: one GetLastInputInfo + GetTickCount + an atomic load.
+unsafe fn watchdog_tick(
+    h_instance: HINSTANCE,
+    start: Instant,
+    last_input_at_ms: &AtomicU64,
+    last_reinstall: &mut Option<Instant>,
+) {
+    let mut lli = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    if !GetLastInputInfo(&mut lli).as_bool() {
+        return;
     }
-    state.flush_timer_interval_ms = None;
-}
+    // dwTime is in the GetTickCount domain; wrapping_sub handles the 49-day
+    // tick rollover.
+    let system_input_age_ms = GetTickCount().wrapping_sub(lli.dwTime) as u64;
+    let now_rel_ms = start.elapsed().as_millis() as u64;
+    let hook_silent_ms = now_rel_ms.saturating_sub(last_input_at_ms.load(Ordering::Relaxed));
+    let since_last_reinstall_ms = last_reinstall.map(|t| t.elapsed().as_millis() as u64);
 
-fn flush_text_buffer(state: &mut HookState) {
-    if !state.text_buf.is_empty() {
-        let content = std::mem::take(&mut state.text_buf);
-        let text = if state.config.apply_pii_removal {
-            remove_pii(&content)
-        } else {
-            content
-        };
-        let event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
-        let _ = state.tx.try_send(event);
-        state.last_text_time = None;
+    if !watchdog_should_reinstall(system_input_age_ms, hook_silent_ms, since_last_reinstall_ms) {
+        return;
     }
+
+    KEYBOARD_HOOK.with(|h| {
+        if let Some(hook) = h.borrow_mut().take() {
+            let _ = UnhookWindowsHookEx(hook);
+        }
+    });
+    MOUSE_HOOK.with(|h| {
+        if let Some(hook) = h.borrow_mut().take() {
+            let _ = UnhookWindowsHookEx(hook);
+        }
+    });
+    install_ll_hooks(h_instance);
+
+    // Reset the liveness clock so "silent since" is measured per install.
+    last_input_at_ms.store(now_rel_ms, Ordering::Relaxed);
+    *last_reinstall = Some(Instant::now());
+
+    let total = HOOK_REINSTALL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    warn!(
+        total_reinstalls = total,
+        system_input_age_ms,
+        hook_silent_ms,
+        "a11y: LL input hooks reinstalled by watchdog — system input active but hook callbacks \
+         silent (hooks likely removed by Windows LowLevelHooksTimeout)"
+    );
 }
 
+/// LL keyboard hook callback. This runs on the system-wide synchronous input
+/// path — every keystroke in every application waits for it to return, and
+/// Windows silently removes the hook if it exceeds LowLevelHooksTimeout. It
+/// therefore does nothing but snapshot event-time state (timestamp, modifiers,
+/// clipboard sequence) and enqueue; all processing happens on the input worker.
 unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let kb_struct = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
@@ -644,20 +728,22 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
         let is_key_up = wparam.0 as u32 == WM_KEYUP || wparam.0 as u32 == WM_SYSKEYUP;
 
         HOOK_STATE.with(|state| {
-            // Use try_borrow_mut to avoid panic if the RefCell is already borrowed
-            // (e.g., during text buffer flush in the message loop)
+            // try_borrow_mut defensively: never panic (or wait) on this path.
             let Ok(mut guard) = state.try_borrow_mut() else {
                 return;
             };
             if let Some(ref mut s) = *guard {
-                // Record latest input timestamp unconditionally so the UIA worker can defer
-                // extraction while the user is typing. Cheap (one atomic store).
+                // Latest-input timestamp: read by the UIA worker to defer tree
+                // captures while the user types, and by the hook watchdog as
+                // its liveness signal. One atomic store.
                 if is_key_down || is_key_up {
                     s.last_input_at_ms
                         .store(s.start.elapsed().as_millis() as u64, Ordering::Relaxed);
                 }
 
-                // Record activity
+                // Activity feed is lock-free atomics — safe here, and keeping
+                // it in the callback means adaptive FPS stays real-time even
+                // if the worker queue saturates and drops events.
                 if let Some(ref feed) = s.activity_feed {
                     if is_key_down {
                         feed.record(ActivityKind::KeyPress);
@@ -666,129 +752,39 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                     }
                 }
 
-                // Only process key down events for UI events
-                if !is_key_down {
+                // Key-ups only matter for the activity feed.
+                if !is_key_down || !s.enqueue_keys {
                     return;
                 }
 
-                let timestamp = Utc::now();
-                let t = s.start.elapsed().as_millis() as u64;
                 let mods = get_modifier_state();
-
-                // try_lock when prioritize_input_latency is set, mirroring mouse_hook_proc:
-                // avoid stalling the OS message queue if these locks are contended.
-                let (app_name, window_title) = if s.config.prioritize_input_latency {
-                    (
-                        s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None),
-                        s.current_window
-                            .try_lock()
-                            .map(|g| g.clone())
-                            .unwrap_or(None),
-                    )
+                // CapsLock toggle state must be read on this thread (it is
+                // thread-queue synchronized); on the worker it would be stale.
+                let caps_on = GetKeyState(VK_CAPITAL.0 as i32) & 1 != 0;
+                // For potential clipboard combos, snapshot the clipboard
+                // sequence number so the worker can wait for the copy to land
+                // before reading content. Plain counter read; does not open
+                // the clipboard.
+                let clip_seq = if s.detect_clipboard
+                    && mods & 0x02 != 0
+                    && matches!(vk_code, 0x43 | 0x58 | 0x56)
+                {
+                    Some(GetClipboardSequenceNumber())
                 } else {
-                    (
-                        s.current_app.lock().clone(),
-                        s.current_window.lock().clone(),
-                    )
+                    None
                 };
 
-                // Check exclusions
-                if !s.config.should_capture_target(
-                    app_name.as_deref().unwrap_or_default(),
-                    window_title.as_deref(),
-                ) {
-                    return;
-                }
-
-                // Check for clipboard operations (Ctrl+C, Ctrl+X, Ctrl+V)
-                // IMPORTANT: Do NOT read clipboard or apply PII regex here — this is
-                // a low-level hook callback that must return in <10ms or it stalls the
-                // entire system input queue. Instead, defer to the message loop.
-                if mods & 0x02 != 0 && s.config.capture_clipboard {
-                    // Ctrl is pressed
-                    let op = match vk_code {
-                        0x43 => Some('c'), // C
-                        0x58 => Some('x'), // X
-                        0x56 => Some('v'), // V
-                        _ => None,
-                    };
-                    if let Some(operation) = op {
-                        s.pending_clipboard.push(PendingClipboard {
-                            operation,
-                            timestamp,
-                            relative_ms: t,
-                            app_name: app_name.clone(),
-                            window_title: window_title.clone(),
-                        });
-                        return;
-                    }
-                }
-
-                // Record key events for shortcuts (with modifiers)
-                if mods & 0x0A != 0 {
-                    // Ctrl or Win pressed
-                    if s.config.capture_keystrokes {
-                        let event = UiEvent {
-                            id: None,
-                            timestamp,
-                            relative_ms: t,
-                            data: EventData::Key {
-                                key_code: vk_code,
-                                modifiers: mods,
-                            },
-                            app_name,
-                            window_title,
-                            browser_url: None,
-                            element: None,
-                            frame_id: None,
-                        };
-                        let _ = s.tx.try_send(event);
-                    }
-                } else if s.config.capture_text {
-                    // Aggregate text input
-                    if let Some(c) = vk_to_char(vk_code, mods) {
-                        if c == '\x08' {
-                            // Backspace
-                            s.text_buf.pop();
-                        } else {
-                            s.text_buf.push(c);
-                        }
-                        s.last_text_time = Some(Instant::now());
-                    } else if s.config.capture_keystrokes {
-                        // Unknown key, record as key event
-                        let event = UiEvent {
-                            id: None,
-                            timestamp,
-                            relative_ms: t,
-                            data: EventData::Key {
-                                key_code: vk_code,
-                                modifiers: mods,
-                            },
-                            app_name,
-                            window_title,
-                            browser_url: None,
-                            element: None,
-                            frame_id: None,
-                        };
-                        let _ = s.tx.try_send(event);
-                    }
-                } else if s.config.capture_keystrokes {
-                    let event = UiEvent {
-                        id: None,
-                        timestamp,
-                        relative_ms: t,
-                        data: EventData::Key {
-                            key_code: vk_code,
-                            modifiers: mods,
-                        },
-                        app_name,
-                        window_title,
-                        browser_url: None,
-                        element: None,
-                        frame_id: None,
-                    };
-                    let _ = s.tx.try_send(event);
-                }
+                enqueue_raw(
+                    s,
+                    RawInput::KeyDown {
+                        vk_code,
+                        mods,
+                        caps_on,
+                        clip_seq,
+                        timestamp: Utc::now(),
+                        relative_ms: s.start.elapsed().as_millis() as u64,
+                    },
+                );
             }
         });
     }
@@ -800,6 +796,10 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
     })
 }
 
+/// LL mouse hook callback. Same contract as [`keyboard_hook_proc`]: snapshot
+/// and enqueue only — never lock a mutex, allocate strings, or run filters
+/// here. Especially critical for WM_MOUSEMOVE, which fires at input-device
+/// rate and directly gates cursor rendering (incl. RDP).
 unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let mouse_struct = &*(lparam.0 as *const MSLLHOOKSTRUCT);
@@ -808,158 +808,63 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         let msg = wparam.0 as u32;
 
         HOOK_STATE.with(|state| {
-            // Use try_borrow_mut to avoid panic if the RefCell is already borrowed
-            // (e.g., during text buffer flush in the message loop)
+            // try_borrow_mut defensively: never panic (or wait) on this path.
             let Ok(mut guard) = state.try_borrow_mut() else {
                 return;
             };
             if let Some(ref mut s) = *guard {
-                // Record latest input timestamp unconditionally for all mouse messages
-                // (move/click/wheel). Cheap atomic store, lets the UIA worker know the user
-                // is actively driving the UI so it can defer captures.
+                // Latest-input timestamp for all mouse messages (move/click/
+                // wheel): UIA-defer signal + watchdog liveness. One atomic store.
                 s.last_input_at_ms
                     .store(s.start.elapsed().as_millis() as u64, Ordering::Relaxed);
 
-                // Fast path for WM_MOUSEMOVE — no mutex locks to avoid blocking
-                // the system-wide mouse input pipeline (critical for RDP cursor rendering)
-                if msg == WM_MOUSEMOVE {
-                    let (last_x, last_y) = s.last_mouse_pos;
-                    let dx = (x - last_x).abs();
-                    let dy = (y - last_y).abs();
-                    let moved = dx > 10 || dy > 10;
-
-                    if moved {
-                        if let Some(ref feed) = s.activity_feed {
-                            feed.record(ActivityKind::MouseMove);
-                        }
-                        s.last_mouse_pos = (x, y);
-
-                        if s.config.capture_mouse_move {
-                            let timestamp = Utc::now();
-                            let t = s.start.elapsed().as_millis() as u64;
-                            // Use try_lock to avoid blocking — skip if contended
-                            let app_name =
-                                s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None);
-                            let window_title = s
-                                .current_window
-                                .try_lock()
-                                .map(|g| g.clone())
-                                .unwrap_or(None);
-                            if !s.config.should_capture_target(
-                                app_name.as_deref().unwrap_or_default(),
-                                window_title.as_deref(),
-                            ) {
-                                return;
-                            }
-                            let event = UiEvent {
-                                id: None,
-                                timestamp,
-                                relative_ms: t,
-                                data: EventData::Move { x, y },
-                                app_name,
-                                window_title,
-                                browser_url: None,
-                                element: None,
-                                frame_id: None,
-                            };
-                            let _ = s.tx.try_send(event);
-                        }
-                    }
-                    return;
-                }
-
-                // Slow path for clicks/scroll — these are infrequent, mutex locks OK.
-                // When prioritize_input_latency is set, switch the blocking locks to try_lock.
-                // Falls back to None if contended so the hook returns fast and Windows can
-                // dispatch the next mouse event without delay.
-                let timestamp = Utc::now();
-                let t = s.start.elapsed().as_millis() as u64;
-
-                let (app_name, window_title) = if s.config.prioritize_input_latency {
-                    (
-                        s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None),
-                        s.current_window
-                            .try_lock()
-                            .map(|g| g.clone())
-                            .unwrap_or(None),
-                    )
-                } else {
-                    (
-                        s.current_app.lock().clone(),
-                        s.current_window.lock().clone(),
-                    )
-                };
-
-                // Check exclusions
-                if !s.config.should_capture_target(
-                    app_name.as_deref().unwrap_or_default(),
-                    window_title.as_deref(),
-                ) {
-                    return;
-                }
-
-                // Flush any in-flight scroll aggregation when a non-scroll mouse
-                // event arrives (e.g. a click right after scrolling), so the
-                // buffered scroll doesn't sit until the next wheel tick or timeout.
-                if msg != WM_MOUSEWHEEL {
-                    if let Some(agg) = s.scroll_aggregator.take() {
-                        emit_aggregated_scroll(&s.tx, agg);
-                    }
-                }
-
                 match msg {
+                    WM_MOUSEMOVE => {
+                        let (last_x, last_y) = s.last_mouse_pos;
+                        let moved = (x - last_x).abs() > 10 || (y - last_y).abs() > 10;
+                        if moved {
+                            if let Some(ref feed) = s.activity_feed {
+                                feed.record(ActivityKind::MouseMove);
+                            }
+                            s.last_mouse_pos = (x, y);
+
+                            if s.enqueue_moves {
+                                enqueue_raw(
+                                    s,
+                                    RawInput::Move {
+                                        x,
+                                        y,
+                                        timestamp: Utc::now(),
+                                        relative_ms: s.start.elapsed().as_millis() as u64,
+                                    },
+                                );
+                            }
+                        }
+                    }
+
                     WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
-                        // Record activity
                         if let Some(ref feed) = s.activity_feed {
                             feed.record(ActivityKind::MouseClick);
                         }
 
-                        if !s.config.capture_clicks {
-                            return;
-                        }
-
-                        let button = match msg {
-                            WM_LBUTTONDOWN => 0,
-                            WM_RBUTTONDOWN => 1,
-                            WM_MBUTTONDOWN => 2,
-                            _ => 0,
-                        };
-
-                        // Attach focused element context (approximate, fast).
-                        // try_lock when prioritize_input_latency is set.
-                        let element = if s.config.capture_context {
-                            if s.config.prioritize_input_latency {
-                                s.focused_element
-                                    .try_lock()
-                                    .map(|g| g.clone())
-                                    .unwrap_or(None)
-                            } else {
-                                s.focused_element.lock().clone()
-                            }
-                        } else {
-                            None
-                        };
-
-                        let mut event =
-                            UiEvent::click(timestamp, t, x, y, button, 1, get_modifier_state());
-                        event.app_name = app_name.clone();
-                        event.window_title = window_title.clone();
-                        event.element = element;
-                        let _ = s.tx.try_send(event);
-
-                        // Queue ElementFromPoint request for precise element context
-                        if s.config.capture_context {
-                            // try_lock when prioritize_input_latency is set. If contended,
-                            // skip queueing — better than stalling the hook.
-                            if s.config.prioritize_input_latency {
-                                if let Some(mut q) = s.click_queue.try_lock() {
-                                    q.push(ClickElementRequest { x, y, timestamp });
-                                }
-                            } else {
-                                s.click_queue
-                                    .lock()
-                                    .push(ClickElementRequest { x, y, timestamp });
-                            }
+                        if s.enqueue_clicks {
+                            let button = match msg {
+                                WM_LBUTTONDOWN => 0,
+                                WM_RBUTTONDOWN => 1,
+                                WM_MBUTTONDOWN => 2,
+                                _ => 0,
+                            };
+                            enqueue_raw(
+                                s,
+                                RawInput::ButtonDown {
+                                    x,
+                                    y,
+                                    button,
+                                    mods: get_modifier_state(),
+                                    timestamp: Utc::now(),
+                                    relative_ms: s.start.elapsed().as_millis() as u64,
+                                },
+                            );
                         }
                     }
 
@@ -969,40 +874,19 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                             feed.record(ActivityKind::Scroll);
                         }
 
-                        if s.config.capture_scroll {
-                            // High word of mouseData contains wheel delta
+                        if s.enqueue_scroll {
+                            // High word of mouseData contains the wheel delta
                             let delta = (mouse_struct.mouseData >> 16) as i16 as i32;
-                            let now = Instant::now();
-
-                            // Coalesce consecutive ticks within the aggregation window
-                            // into one event; otherwise flush the previous run and
-                            // start a fresh one seeded with this tick.
-                            let within_window = matches!(
-                                &s.scroll_aggregator,
-                                Some(agg) if now.duration_since(agg.last_scroll).as_millis() < SCROLL_AGGREGATION_WINDOW_MS
+                            enqueue_raw(
+                                s,
+                                RawInput::Wheel {
+                                    x,
+                                    y,
+                                    delta,
+                                    timestamp: Utc::now(),
+                                    relative_ms: s.start.elapsed().as_millis() as u64,
+                                },
                             );
-
-                            if within_window {
-                                if let Some(agg) = s.scroll_aggregator.as_mut() {
-                                    agg.accumulated_delta =
-                                        agg.accumulated_delta.saturating_add(delta);
-                                    agg.last_scroll = now;
-                                    agg.coords = (x, y);
-                                }
-                            } else {
-                                if let Some(agg) = s.scroll_aggregator.take() {
-                                    emit_aggregated_scroll(&s.tx, agg);
-                                }
-                                s.scroll_aggregator = Some(ScrollAggregator {
-                                    last_scroll: now,
-                                    accumulated_delta: delta,
-                                    coords: (x, y),
-                                    app_name,
-                                    window_title,
-                                    start_timestamp: timestamp,
-                                    start_relative_ms: t,
-                                });
-                            }
                         }
                     }
 
@@ -1017,6 +901,528 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         let hook = h.borrow();
         CallNextHookEx(hook.unwrap_or_default(), code, wparam, lparam)
     })
+}
+
+// ============================================================================
+// Input worker: consumes raw input, owns all per-event processing
+// ============================================================================
+
+/// Idle receive timeout: bounds stop-flag latency and drives periodic flushes.
+const WORKER_IDLE_RECV_TIMEOUT_MS: u64 = 200;
+/// Poll interval while clipboard reads are pending.
+const CLIPBOARD_POLL_INTERVAL_MS: u64 = 20;
+/// How long a copy/cut gets to publish new clipboard content (sequence number
+/// change) before the worker reads whatever is there. Mirrors the legacy
+/// behavior of reading on a later message-loop tick, but gated on the copy
+/// actually landing instead of a fixed delay.
+const CLIPBOARD_SETTLE_DEADLINE_MS: u64 = 500;
+/// Rate limit for queue-drop warnings.
+const DROP_LOG_INTERVAL_MS: u64 = 5_000;
+
+/// A clipboard operation awaiting its content read on the worker.
+struct PendingClipboard {
+    operation: char,
+    timestamp: chrono::DateTime<Utc>,
+    relative_ms: u64,
+    app_name: Option<String>,
+    window_title: Option<String>,
+    /// Clipboard sequence number at key-down; for copy/cut the worker waits
+    /// for it to change (the copy landing) before reading content.
+    seq_at_keydown: Option<u32>,
+    queued_at: Instant,
+}
+
+/// Pure decision: is this pending clipboard operation ready to read?
+/// Paste reads immediately (its content pre-exists the keystroke); copy/cut
+/// wait for the clipboard sequence number to move or the settle deadline.
+fn clipboard_read_due(
+    operation: char,
+    seq_at_keydown: Option<u32>,
+    current_seq: u32,
+    waited_ms: u64,
+) -> bool {
+    if operation == 'v' {
+        return true;
+    }
+    match seq_at_keydown {
+        Some(seq) => seq != current_seq || waited_ms >= CLIPBOARD_SETTLE_DEADLINE_MS,
+        None => true,
+    }
+}
+
+fn clipboard_sequence_number() -> u32 {
+    unsafe { GetClipboardSequenceNumber() }
+}
+
+/// All state owned by the input worker thread. Everything here may block or
+/// allocate freely — this thread is off the system input path.
+struct InputWorker {
+    tx: Sender<UiEvent>,
+    start: Instant,
+    config: UiCaptureConfig,
+    current_app: Arc<Mutex<Option<String>>>,
+    current_window: Arc<Mutex<Option<String>>>,
+    click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
+    focused_element: Arc<Mutex<Option<ElementContext>>>,
+    text_buf: String,
+    last_text_time: Option<Instant>,
+    scroll_aggregator: Option<ScrollAggregator>,
+    pending_clipboard: Vec<PendingClipboard>,
+    last_drops_seen: u64,
+    last_drop_log: Option<Instant>,
+}
+
+impl InputWorker {
+    /// Blocking locks are fine here — the app observer holds these only briefly
+    /// and this thread does not gate input dispatch.
+    fn resolve_app_window(&self) -> (Option<String>, Option<String>) {
+        (
+            self.current_app.lock().clone(),
+            self.current_window.lock().clone(),
+        )
+    }
+
+    fn emit_key_event(
+        &self,
+        vk_code: u16,
+        mods: u8,
+        timestamp: chrono::DateTime<Utc>,
+        relative_ms: u64,
+        app_name: Option<String>,
+        window_title: Option<String>,
+    ) {
+        let event = UiEvent {
+            id: None,
+            timestamp,
+            relative_ms,
+            data: EventData::Key {
+                key_code: vk_code,
+                modifiers: mods,
+            },
+            app_name,
+            window_title,
+            browser_url: None,
+            element: None,
+            frame_id: None,
+        };
+        let _ = self.tx.try_send(event);
+    }
+
+    fn process_raw(&mut self, raw: RawInput) {
+        match raw {
+            RawInput::KeyDown {
+                vk_code,
+                mods,
+                caps_on,
+                clip_seq,
+                timestamp,
+                relative_ms,
+            } => {
+                let (app_name, window_title) = self.resolve_app_window();
+                if !self.config.should_capture_target(
+                    app_name.as_deref().unwrap_or_default(),
+                    window_title.as_deref(),
+                ) {
+                    return;
+                }
+
+                // Clipboard combos (Ctrl+C/X/V): queue a deferred read. The
+                // content is fetched once the copy lands — see clipboard_read_due.
+                if mods & 0x02 != 0 && self.config.capture_clipboard {
+                    let op = match vk_code {
+                        0x43 => Some('c'), // C
+                        0x58 => Some('x'), // X
+                        0x56 => Some('v'), // V
+                        _ => None,
+                    };
+                    if let Some(operation) = op {
+                        self.pending_clipboard.push(PendingClipboard {
+                            operation,
+                            timestamp,
+                            relative_ms,
+                            app_name,
+                            window_title,
+                            seq_at_keydown: clip_seq,
+                            queued_at: Instant::now(),
+                        });
+                        return;
+                    }
+                }
+
+                // Key events for shortcuts (Ctrl or Win held)
+                if mods & 0x0A != 0 {
+                    if self.config.capture_keystrokes {
+                        self.emit_key_event(
+                            vk_code,
+                            mods,
+                            timestamp,
+                            relative_ms,
+                            app_name,
+                            window_title,
+                        );
+                    }
+                } else if self.config.capture_text {
+                    // Aggregate text input
+                    if let Some(c) = vk_to_char(vk_code, mods, caps_on) {
+                        if c == '\x08' {
+                            // Backspace
+                            self.text_buf.pop();
+                        } else {
+                            self.text_buf.push(c);
+                        }
+                        self.last_text_time = Some(Instant::now());
+                    } else if self.config.capture_keystrokes {
+                        // Unknown key, record as key event
+                        self.emit_key_event(
+                            vk_code,
+                            mods,
+                            timestamp,
+                            relative_ms,
+                            app_name,
+                            window_title,
+                        );
+                    }
+                } else if self.config.capture_keystrokes {
+                    self.emit_key_event(
+                        vk_code,
+                        mods,
+                        timestamp,
+                        relative_ms,
+                        app_name,
+                        window_title,
+                    );
+                }
+            }
+
+            RawInput::ButtonDown {
+                x,
+                y,
+                button,
+                mods,
+                timestamp,
+                relative_ms,
+            } => {
+                let (app_name, window_title) = self.resolve_app_window();
+                if !self.config.should_capture_target(
+                    app_name.as_deref().unwrap_or_default(),
+                    window_title.as_deref(),
+                ) {
+                    return;
+                }
+
+                // A click interrupts any in-flight scroll run — flush it first
+                // so emitted event order matches user action order.
+                if let Some(agg) = self.scroll_aggregator.take() {
+                    emit_aggregated_scroll(&self.tx, agg);
+                }
+
+                if !self.config.capture_clicks {
+                    return;
+                }
+
+                // Attach focused element context (approximate, fast).
+                let element = if self.config.capture_context {
+                    self.focused_element.lock().clone()
+                } else {
+                    None
+                };
+
+                let mut event = UiEvent::click(timestamp, relative_ms, x, y, button, 1, mods);
+                event.app_name = app_name;
+                event.window_title = window_title;
+                event.element = element;
+                let _ = self.tx.try_send(event);
+
+                // Queue ElementFromPoint request for precise element context
+                if self.config.capture_context {
+                    self.click_queue
+                        .lock()
+                        .push(ClickElementRequest { x, y, timestamp });
+                }
+            }
+
+            RawInput::Wheel {
+                x,
+                y,
+                delta,
+                timestamp,
+                relative_ms,
+            } => {
+                if !self.config.capture_scroll {
+                    return;
+                }
+                let (app_name, window_title) = self.resolve_app_window();
+                if !self.config.should_capture_target(
+                    app_name.as_deref().unwrap_or_default(),
+                    window_title.as_deref(),
+                ) {
+                    return;
+                }
+
+                let now = Instant::now();
+                // Coalesce consecutive ticks within the aggregation window
+                // into one event; otherwise flush the previous run and start
+                // a fresh one seeded with this tick.
+                let within_window = matches!(
+                    &self.scroll_aggregator,
+                    Some(agg) if now.duration_since(agg.last_scroll).as_millis() < SCROLL_AGGREGATION_WINDOW_MS
+                );
+
+                if within_window {
+                    if let Some(agg) = self.scroll_aggregator.as_mut() {
+                        agg.accumulated_delta = agg.accumulated_delta.saturating_add(delta);
+                        agg.last_scroll = now;
+                        agg.coords = (x, y);
+                    }
+                } else {
+                    if let Some(agg) = self.scroll_aggregator.take() {
+                        emit_aggregated_scroll(&self.tx, agg);
+                    }
+                    self.scroll_aggregator = Some(ScrollAggregator {
+                        last_scroll: now,
+                        accumulated_delta: delta,
+                        coords: (x, y),
+                        app_name,
+                        window_title,
+                        start_timestamp: timestamp,
+                        start_relative_ms: relative_ms,
+                    });
+                }
+            }
+
+            RawInput::Move {
+                x,
+                y,
+                timestamp,
+                relative_ms,
+            } => {
+                if !self.config.capture_mouse_move {
+                    return;
+                }
+                let (app_name, window_title) = self.resolve_app_window();
+                if !self.config.should_capture_target(
+                    app_name.as_deref().unwrap_or_default(),
+                    window_title.as_deref(),
+                ) {
+                    return;
+                }
+                let event = UiEvent {
+                    id: None,
+                    timestamp,
+                    relative_ms,
+                    data: EventData::Move { x, y },
+                    app_name,
+                    window_title,
+                    browser_url: None,
+                    element: None,
+                    frame_id: None,
+                };
+                let _ = self.tx.try_send(event);
+            }
+        }
+    }
+
+    /// How long the worker may sleep before some deferred work comes due.
+    fn next_wake_timeout(&self) -> Duration {
+        let mut timeout = Duration::from_millis(WORKER_IDLE_RECV_TIMEOUT_MS);
+        if let Some(last) = self.last_text_time {
+            let deadline =
+                Duration::from_millis(self.config.text_timeout_ms).saturating_sub(last.elapsed());
+            timeout = timeout.min(deadline);
+        }
+        if let Some(ref agg) = self.scroll_aggregator {
+            let deadline = Duration::from_millis(SCROLL_AGGREGATION_WINDOW_MS as u64)
+                .saturating_sub(agg.last_scroll.elapsed());
+            timeout = timeout.min(deadline);
+        }
+        if !self.pending_clipboard.is_empty() {
+            timeout = timeout.min(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+        }
+        timeout
+    }
+
+    /// Emit any buffered work whose deadline has passed.
+    fn flush_due(&mut self) {
+        if let Some(last) = self.last_text_time {
+            if last.elapsed().as_millis() as u64 >= self.config.text_timeout_ms {
+                flush_text_buffer(self);
+            }
+        }
+
+        let scroll_due = self
+            .scroll_aggregator
+            .as_ref()
+            .is_some_and(|agg| agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS);
+        if scroll_due {
+            if let Some(agg) = self.scroll_aggregator.take() {
+                emit_aggregated_scroll(&self.tx, agg);
+            }
+        }
+
+        self.process_pending_clipboard(false);
+        self.maybe_log_queue_drops();
+    }
+
+    /// Read + emit pending clipboard operations that are due (or all of them
+    /// when `force` is set, e.g. on shutdown).
+    fn process_pending_clipboard(&mut self, force: bool) {
+        if self.pending_clipboard.is_empty() {
+            return;
+        }
+        let current_seq = clipboard_sequence_number();
+        let mut i = 0;
+        while i < self.pending_clipboard.len() {
+            let due = force || {
+                let p = &self.pending_clipboard[i];
+                clipboard_read_due(
+                    p.operation,
+                    p.seq_at_keydown,
+                    current_seq,
+                    p.queued_at.elapsed().as_millis() as u64,
+                )
+            };
+            if due {
+                let p = self.pending_clipboard.remove(i);
+                self.emit_clipboard_event(p);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn emit_clipboard_event(&self, p: PendingClipboard) {
+        let content = if self.config.capture_clipboard_content {
+            get_clipboard_text().map(|c| {
+                if self.config.apply_pii_removal {
+                    remove_pii(&c)
+                } else {
+                    c
+                }
+            })
+        } else {
+            None
+        };
+        let event = UiEvent {
+            id: None,
+            timestamp: p.timestamp,
+            relative_ms: p.relative_ms,
+            data: EventData::Clipboard {
+                operation: p.operation,
+                content,
+            },
+            app_name: p.app_name,
+            window_title: p.window_title,
+            browser_url: None,
+            element: None,
+            frame_id: None,
+        };
+        let _ = self.tx.try_send(event);
+    }
+
+    /// Surface hook-callback queue drops (rate-limited). Drops mean the worker
+    /// fell behind the soft cap — input capture lost events, but system input
+    /// latency was protected.
+    fn maybe_log_queue_drops(&mut self) {
+        let dropped = HOOK_QUEUE_DROPPED.load(Ordering::Relaxed);
+        if dropped == self.last_drops_seen {
+            return;
+        }
+        let due = match self.last_drop_log {
+            Some(t) => t.elapsed().as_millis() as u64 >= DROP_LOG_INTERVAL_MS,
+            None => true,
+        };
+        if due {
+            warn!(
+                dropped_total = dropped,
+                dropped_since_last_log = dropped - self.last_drops_seen,
+                "a11y: raw input queue over soft cap — input events dropped (worker falling behind)"
+            );
+            self.last_drops_seen = dropped;
+            self.last_drop_log = Some(Instant::now());
+        }
+    }
+
+    /// Shutdown: emit everything still buffered so input typed/scrolled right
+    /// before stop isn't lost.
+    fn final_flush(&mut self) {
+        flush_text_buffer(self);
+        if let Some(agg) = self.scroll_aggregator.take() {
+            emit_aggregated_scroll(&self.tx, agg);
+        }
+        self.process_pending_clipboard(true);
+    }
+}
+
+fn flush_text_buffer(state: &mut InputWorker) {
+    if !state.text_buf.is_empty() {
+        let content = std::mem::take(&mut state.text_buf);
+        let text = if state.config.apply_pii_removal {
+            remove_pii(&content)
+        } else {
+            content
+        };
+        let event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
+        let _ = state.tx.try_send(event);
+        state.last_text_time = None;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_input_worker(
+    raw_rx: Receiver<RawInput>,
+    tx: Sender<UiEvent>,
+    stop: Arc<AtomicBool>,
+    start: Instant,
+    config: UiCaptureConfig,
+    current_app: Arc<Mutex<Option<String>>>,
+    current_window: Arc<Mutex<Option<String>>>,
+    click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
+    focused_element: Arc<Mutex<Option<ElementContext>>>,
+) {
+    debug!("a11y input worker started");
+
+    let mut worker = InputWorker {
+        tx,
+        start,
+        config,
+        current_app,
+        current_window,
+        click_queue,
+        focused_element,
+        text_buf: String::new(),
+        last_text_time: None,
+        scroll_aggregator: None,
+        pending_clipboard: Vec::new(),
+        last_drops_seen: 0,
+        last_drop_log: None,
+    };
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match raw_rx.recv_timeout(worker.next_wake_timeout()) {
+            Ok(raw) => {
+                worker.process_raw(raw);
+                // Drain any burst in one pass before doing deferred work.
+                while let Ok(more) = raw_rx.try_recv() {
+                    worker.process_raw(more);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+        worker.flush_due();
+    }
+
+    // Hook thread exited (or stop signaled): drain the queue, then flush all
+    // buffered work.
+    while let Ok(raw) = raw_rx.try_recv() {
+        worker.process_raw(raw);
+    }
+    worker.final_flush();
+
+    debug!("a11y input worker stopped");
 }
 
 // ============================================================================
@@ -1159,8 +1565,11 @@ fn get_modifier_state() -> u8 {
     }
 }
 
-fn vk_to_char(vk: u16, mods: u8) -> Option<char> {
-    let shift = mods & 0x01 != 0 || unsafe { GetKeyState(VK_CAPITAL.0 as i32) & 1 != 0 };
+/// Map a virtual-key code to a character. Pure function: `caps_on` is the
+/// CapsLock toggle state snapshotted in the hook callback (`GetKeyState` is
+/// thread-queue synchronized, so reading it on the worker would be stale).
+fn vk_to_char(vk: u16, mods: u8, caps_on: bool) -> Option<char> {
+    let shift = mods & 0x01 != 0 || caps_on;
 
     let c = match vk {
         // Letters (A-Z are 0x41-0x5A)
@@ -1845,11 +2254,12 @@ mod tests {
 
     #[test]
     fn test_vk_to_char() {
-        assert_eq!(vk_to_char(0x41, 0), Some('a')); // A key, no shift
-        assert_eq!(vk_to_char(0x41, 1), Some('A')); // A key, with shift
-        assert_eq!(vk_to_char(0x20, 0), Some(' ')); // Space
-        assert_eq!(vk_to_char(0x31, 0), Some('1')); // 1 key
-        assert_eq!(vk_to_char(0x31, 1), Some('!')); // 1 key with shift
+        assert_eq!(vk_to_char(0x41, 0, false), Some('a')); // A key, no shift
+        assert_eq!(vk_to_char(0x41, 1, false), Some('A')); // A key, with shift
+        assert_eq!(vk_to_char(0x41, 0, true), Some('A')); // A key, CapsLock on
+        assert_eq!(vk_to_char(0x20, 0, false), Some(' ')); // Space
+        assert_eq!(vk_to_char(0x31, 0, false), Some('1')); // 1 key
+        assert_eq!(vk_to_char(0x31, 1, false), Some('!')); // 1 key with shift
     }
 
     #[test]
@@ -1861,40 +2271,48 @@ mod tests {
         assert_eq!(0x08, 8); // Win
     }
 
-    fn make_test_state(tx: crossbeam_channel::Sender<UiEvent>, text: &str) -> HookState {
-        HookState {
+    fn make_test_worker(tx: crossbeam_channel::Sender<UiEvent>, text: &str) -> InputWorker {
+        InputWorker {
             tx,
             start: std::time::Instant::now(),
             config: crate::config::UiCaptureConfig::default(),
-            last_mouse_pos: (0, 0),
+            current_app: Arc::new(parking_lot::Mutex::new(Some("test".into()))),
+            current_window: Arc::new(parking_lot::Mutex::new(Some("test window".into()))),
+            click_queue: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            focused_element: Arc::new(parking_lot::Mutex::new(None)),
             text_buf: text.to_string(),
             last_text_time: if text.is_empty() {
                 None
             } else {
                 Some(std::time::Instant::now())
             },
-            current_app: Arc::new(parking_lot::Mutex::new(Some("test".into()))),
-            current_window: Arc::new(parking_lot::Mutex::new(Some("test window".into()))),
-            activity_feed: None,
-            click_queue: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            focused_element: Arc::new(parking_lot::Mutex::new(None)),
-            pending_clipboard: Vec::new(),
-            last_input_at_ms: Arc::new(AtomicU64::new(0)),
             scroll_aggregator: None,
-            flush_timer_id: None,
-            flush_timer_interval_ms: None,
+            pending_clipboard: Vec::new(),
+            last_drops_seen: 0,
+            last_drop_log: None,
+        }
+    }
+
+    fn key_down(vk_code: u16, mods: u8) -> RawInput {
+        RawInput::KeyDown {
+            vk_code,
+            mods,
+            caps_on: false,
+            clip_seq: None,
+            timestamp: Utc::now(),
+            relative_ms: 0,
         }
     }
 
     #[test]
     fn test_flush_text_buffer() {
         let (tx, rx) = crossbeam_channel::bounded(64);
-        let mut state = make_test_state(tx, "hello world");
+        let mut worker = make_test_worker(tx, "hello world");
 
         // Buffer has content — flush should send a Text event
-        flush_text_buffer(&mut state);
-        assert!(state.text_buf.is_empty());
-        assert!(state.last_text_time.is_none());
+        flush_text_buffer(&mut worker);
+        assert!(worker.text_buf.is_empty());
+        assert!(worker.last_text_time.is_none());
 
         let event = rx.try_recv().unwrap();
         match event.data {
@@ -1908,45 +2326,217 @@ mod tests {
     #[test]
     fn test_flush_empty_buffer_is_noop() {
         let (tx, rx) = crossbeam_channel::bounded(64);
-        let mut state = make_test_state(tx, "");
+        let mut worker = make_test_worker(tx, "");
 
-        flush_text_buffer(&mut state);
+        flush_text_buffer(&mut worker);
         assert!(rx.try_recv().is_err()); // No event sent
     }
 
     #[test]
-    fn test_hook_needs_active_flush_timer_for_pending_text() {
-        let (tx, _rx) = crossbeam_channel::bounded(64);
-        let mut state = make_test_state(tx, "hello");
+    fn test_process_keydown_aggregates_text() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
 
-        assert!(hook_needs_active_flush_timer(&state));
-        flush_text_buffer(&mut state);
-        assert!(!hook_needs_active_flush_timer(&state));
+        worker.process_raw(key_down(0x48, 0)); // h
+        worker.process_raw(key_down(0x49, 0)); // i
+        assert_eq!(worker.text_buf, "hi");
+        assert!(worker.last_text_time.is_some());
+        assert!(rx.try_recv().is_err()); // buffered, not emitted yet
+
+        worker.process_raw(key_down(0x08, 0)); // backspace
+        assert_eq!(worker.text_buf, "h");
+
+        flush_text_buffer(&mut worker);
+        let event = rx.try_recv().unwrap();
+        match event.data {
+            EventData::Text { ref content, .. } => assert_eq!(content, "h"),
+            _ => panic!("expected Text event, got {:?}", event.data),
+        }
     }
 
     #[test]
-    fn test_hook_needs_active_flush_timer_for_pending_clipboard() {
-        let (tx, _rx) = crossbeam_channel::bounded(64);
-        let mut state = make_test_state(tx, "");
+    fn test_keydown_in_excluded_app_is_dropped() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
+        *worker.current_app.lock() = Some("1Password".into());
 
-        assert!(!hook_needs_active_flush_timer(&state));
-        state.pending_clipboard.push(PendingClipboard {
-            operation: 'c',
+        worker.process_raw(key_down(0x48, 0));
+        assert!(worker.text_buf.is_empty());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_clipboard_combo_queues_pending_read() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
+
+        worker.process_raw(RawInput::KeyDown {
+            vk_code: 0x43, // C
+            mods: 0x02,    // Ctrl
+            caps_on: false,
+            clip_seq: Some(41),
+            timestamp: Utc::now(),
+            relative_ms: 5,
+        });
+
+        assert_eq!(worker.pending_clipboard.len(), 1);
+        assert_eq!(worker.pending_clipboard[0].operation, 'c');
+        assert_eq!(worker.pending_clipboard[0].seq_at_keydown, Some(41));
+        // No immediate event — the content read is deferred until the copy
+        // lands (sequence number change) or the settle deadline.
+        assert!(rx.try_recv().is_err());
+        // And the combo is not treated as text input.
+        assert!(worker.text_buf.is_empty());
+    }
+
+    #[test]
+    fn test_clipboard_read_due_decision() {
+        // Paste: content pre-exists the keystroke — read immediately.
+        assert!(clipboard_read_due('v', Some(10), 10, 0));
+        // Copy: wait for the sequence number to move…
+        assert!(!clipboard_read_due('c', Some(10), 10, 0));
+        assert!(clipboard_read_due('c', Some(10), 11, 0));
+        // …or the settle deadline to pass (legacy read-anyway behavior).
+        assert!(clipboard_read_due(
+            'c',
+            Some(10),
+            10,
+            CLIPBOARD_SETTLE_DEADLINE_MS
+        ));
+        // Cut behaves like copy.
+        assert!(!clipboard_read_due('x', Some(10), 10, 100));
+        // No sequence snapshot → read immediately (defensive).
+        assert!(clipboard_read_due('c', None, 10, 0));
+    }
+
+    #[test]
+    fn test_shortcut_emits_key_event_when_keystrokes_enabled() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
+        worker.config.capture_keystrokes = true;
+
+        worker.process_raw(key_down(0x4B, 0x02)); // Ctrl+K (not a clipboard combo)
+        let event = rx.try_recv().unwrap();
+        match event.data {
+            EventData::Key {
+                key_code,
+                modifiers,
+            } => {
+                assert_eq!(key_code, 0x4B);
+                assert_eq!(modifiers, 0x02);
+            }
+            _ => panic!("expected Key event, got {:?}", event.data),
+        }
+    }
+
+    #[test]
+    fn test_button_emits_click_and_element_request() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
+
+        worker.process_raw(RawInput::ButtonDown {
+            x: 100,
+            y: 200,
+            button: 1,
+            mods: 0x01,
+            timestamp: Utc::now(),
+            relative_ms: 7,
+        });
+
+        let event = rx.try_recv().unwrap();
+        match event.data {
+            EventData::Click {
+                x,
+                y,
+                button,
+                click_count,
+                modifiers,
+            } => {
+                assert_eq!((x, y), (100, 200));
+                assert_eq!(button, 1);
+                assert_eq!(click_count, 1);
+                assert_eq!(modifiers, 0x01);
+            }
+            _ => panic!("expected Click event, got {:?}", event.data),
+        }
+        assert_eq!(event.app_name.as_deref(), Some("test"));
+        // capture_context is on by default: element request queued for UIA.
+        assert_eq!(worker.click_queue.lock().len(), 1);
+    }
+
+    #[test]
+    fn test_wheel_aggregates_and_click_flushes() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
+
+        worker.process_raw(RawInput::Wheel {
+            x: 1,
+            y: 2,
+            delta: 120,
             timestamp: Utc::now(),
             relative_ms: 0,
-            app_name: None,
-            window_title: None,
         });
-        assert!(hook_needs_active_flush_timer(&state));
+        worker.process_raw(RawInput::Wheel {
+            x: 3,
+            y: 4,
+            delta: 120,
+            timestamp: Utc::now(),
+            relative_ms: 1,
+        });
+        assert!(rx.try_recv().is_err()); // still aggregating
+        assert_eq!(
+            worker.scroll_aggregator.as_ref().unwrap().accumulated_delta,
+            240
+        );
+
+        // A click flushes the in-flight scroll run before the click event.
+        worker.process_raw(RawInput::ButtonDown {
+            x: 5,
+            y: 6,
+            button: 0,
+            mods: 0,
+            timestamp: Utc::now(),
+            relative_ms: 2,
+        });
+        let first = rx.try_recv().unwrap();
+        match first.data {
+            EventData::Scroll { delta_y, .. } => assert_eq!(delta_y, 240),
+            _ => panic!("expected Scroll first, got {:?}", first.data),
+        }
+        let second = rx.try_recv().unwrap();
+        assert!(matches!(second.data, EventData::Click { .. }));
     }
 
     #[test]
-    fn test_hook_needs_active_flush_timer_for_pending_scroll() {
-        let (tx, _rx) = crossbeam_channel::bounded(64);
-        let mut state = make_test_state(tx, "");
+    fn test_move_respects_capture_flag() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
 
-        assert!(!hook_needs_active_flush_timer(&state));
-        state.scroll_aggregator = Some(ScrollAggregator {
+        // Default: capture_mouse_move off → dropped.
+        worker.process_raw(RawInput::Move {
+            x: 10,
+            y: 20,
+            timestamp: Utc::now(),
+            relative_ms: 0,
+        });
+        assert!(rx.try_recv().is_err());
+
+        worker.config.capture_mouse_move = true;
+        worker.process_raw(RawInput::Move {
+            x: 10,
+            y: 20,
+            timestamp: Utc::now(),
+            relative_ms: 0,
+        });
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event.data, EventData::Move { x: 10, y: 20 }));
+    }
+
+    #[test]
+    fn test_final_flush_emits_buffered_state() {
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "tail");
+        worker.scroll_aggregator = Some(ScrollAggregator {
             last_scroll: Instant::now(),
             accumulated_delta: 120,
             coords: (10, 20),
@@ -1955,26 +2545,123 @@ mod tests {
             start_timestamp: Utc::now(),
             start_relative_ms: 0,
         });
-        assert!(hook_needs_active_flush_timer(&state));
+
+        worker.final_flush();
+
+        let first = rx.try_recv().unwrap();
+        match first.data {
+            EventData::Text { ref content, .. } => assert_eq!(content, "tail"),
+            _ => panic!("expected Text event, got {:?}", first.data),
+        }
+        let second = rx.try_recv().unwrap();
+        assert!(matches!(second.data, EventData::Scroll { .. }));
+    }
+
+    #[test]
+    fn test_next_wake_timeout_tracks_pending_work() {
+        let (tx, _rx) = crossbeam_channel::bounded(64);
+        let mut worker = make_test_worker(tx, "");
+        assert_eq!(
+            worker.next_wake_timeout(),
+            Duration::from_millis(WORKER_IDLE_RECV_TIMEOUT_MS)
+        );
+
+        worker.pending_clipboard.push(PendingClipboard {
+            operation: 'c',
+            timestamp: Utc::now(),
+            relative_ms: 0,
+            app_name: None,
+            window_title: None,
+            seq_at_keydown: Some(1),
+            queued_at: Instant::now(),
+        });
+        assert!(worker.next_wake_timeout() <= Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+
+        worker.pending_clipboard.clear();
+        worker.text_buf.push('a');
+        worker.last_text_time = Some(Instant::now());
+        assert!(worker.next_wake_timeout() <= Duration::from_millis(worker.config.text_timeout_ms));
+    }
+
+    #[test]
+    fn test_watchdog_should_reinstall_decision() {
+        // Healthy: hooks fired recently.
+        assert!(!watchdog_should_reinstall(100, 100, None));
+        // Dead: system input flowing but hooks silent.
+        assert!(watchdog_should_reinstall(100, WATCHDOG_HOOK_SILENT_MS, None));
+        // Idle system: hooks silent but no input either — not dead.
+        assert!(!watchdog_should_reinstall(60_000, 60_000, None));
+        // Backoff: too soon after the previous reinstall.
+        assert!(!watchdog_should_reinstall(100, 60_000, Some(1_000)));
+        assert!(watchdog_should_reinstall(
+            100,
+            60_000,
+            Some(WATCHDOG_REINSTALL_BACKOFF_MS)
+        ));
+    }
+
+    #[test]
+    fn test_enqueue_raw_soft_cap_drops_and_counts() {
+        let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
+        let state = CallbackState {
+            raw_tx,
+            start: Instant::now(),
+            last_mouse_pos: (0, 0),
+            activity_feed: None,
+            last_input_at_ms: Arc::new(AtomicU64::new(0)),
+            enqueue_moves: true,
+            enqueue_scroll: true,
+            enqueue_clicks: true,
+            enqueue_keys: true,
+            detect_clipboard: true,
+        };
+
+        let dropped_before = hook_queue_dropped_total();
+        for _ in 0..RAW_INPUT_QUEUE_SOFT_CAP {
+            enqueue_raw(
+                &state,
+                RawInput::Move {
+                    x: 0,
+                    y: 0,
+                    timestamp: Utc::now(),
+                    relative_ms: 0,
+                },
+            );
+        }
+        assert_eq!(raw_rx.len(), RAW_INPUT_QUEUE_SOFT_CAP);
+        assert_eq!(hook_queue_dropped_total(), dropped_before);
+
+        // Over the cap: dropped + counted, channel does not grow.
+        enqueue_raw(
+            &state,
+            RawInput::Move {
+                x: 0,
+                y: 0,
+                timestamp: Utc::now(),
+                relative_ms: 0,
+            },
+        );
+        assert_eq!(raw_rx.len(), RAW_INPUT_QUEUE_SOFT_CAP);
+        assert_eq!(hook_queue_dropped_total(), dropped_before + 1);
     }
 
     #[test]
     fn test_vk_to_char_punctuation() {
-        assert_eq!(vk_to_char(0xBA, 0), Some(';'));
-        assert_eq!(vk_to_char(0xBA, 1), Some(':'));
-        assert_eq!(vk_to_char(0xBE, 0), Some('.'));
-        assert_eq!(vk_to_char(0xBF, 0), Some('/'));
-        assert_eq!(vk_to_char(0xBF, 1), Some('?'));
-        assert_eq!(vk_to_char(0x0D, 0), Some('\n')); // Enter
-        assert_eq!(vk_to_char(0x08, 0), Some('\x08')); // Backspace
+        assert_eq!(vk_to_char(0xBA, 0, false), Some(';'));
+        assert_eq!(vk_to_char(0xBA, 1, false), Some(':'));
+        assert_eq!(vk_to_char(0xBE, 0, false), Some('.'));
+        assert_eq!(vk_to_char(0xBF, 0, false), Some('/'));
+        assert_eq!(vk_to_char(0xBF, 1, false), Some('?'));
+        assert_eq!(vk_to_char(0x0D, 0, false), Some('\n')); // Enter
+        assert_eq!(vk_to_char(0x08, 0, false), Some('\x08')); // Backspace
     }
 
     #[test]
     fn test_vk_to_char_unknown_returns_none() {
         // F1-F12 and other non-printable keys should return None
-        assert_eq!(vk_to_char(0x70, 0), None); // F1
-        assert_eq!(vk_to_char(0x7B, 0), None); // F12
-        assert_eq!(vk_to_char(0x2E, 0), None); // Delete
-        assert_eq!(vk_to_char(0x25, 0), None); // Left arrow
+        assert_eq!(vk_to_char(0x70, 0, false), None); // F1
+        assert_eq!(vk_to_char(0x7B, 0, false), None); // F12
+        assert_eq!(vk_to_char(0x2E, 0, false), None); // Delete
+        assert_eq!(vk_to_char(0x25, 0, false), None); // Left arrow
     }
 }

@@ -75,4 +75,29 @@ screenpipe provides these MCP tools to Gemini:
 - Gemini CLI installed
 - Node.js >= 18.0.0
 
+## troubleshooting
+
+**MCP server not connecting?**
+
+1. **verify screenpipe is running:**
+   ```bash
+   curl http://localhost:3030/health
+   ```
+   you should see `{"status":"healthy"}`. if this fails, start screenpipe first.
+
+2. **check the settings file path:**
+   the config should be in `~/.gemini/settings.json`. verify the file exists and contains valid JSON:
+   ```bash
+   cat ~/.gemini/settings.json | jq .
+   ```
+
+3. **restart Gemini CLI:**
+   after adding or modifying the config, fully restart Gemini CLI. if it was running in a terminal, exit and reopen it.
+
+**queries returning empty?**
+
+- make sure screenpipe has recorded data: `curl "http://localhost:3030/search?limit=1"`
+- if empty, let screenpipe run for a minute and try again
+- check screen recording is enabled (macOS: System Settings > Privacy & Security > Screen Recording)
+
 need help? [join our discord](https://discord.gg/screenpipe).

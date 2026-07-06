@@ -24,6 +24,7 @@ import {
   installedPiPackageSourceSet,
   normalizePiPackageSource,
   PI_EXTENSION_CATALOG,
+  searchPiExtensionRegistry,
   type PiExtensionCatalogItem,
   type PiExtensionModelFit,
 } from "@/lib/pi-extension-catalog";
@@ -124,6 +125,10 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
   const [packages, setPackages] = useState<PiExtensionPackage[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
+  const [registryItems, setRegistryItems] = useState<PiExtensionCatalogItem[]>([]);
+  const [registryTotal, setRegistryTotal] = useState<number | null>(null);
+  const [registryLoading, setRegistryLoading] = useState(false);
+  const [registryError, setRegistryError] = useState<string | null>(null);
   const [busySource, setBusySource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -148,6 +153,33 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setRegistryLoading(true);
+      setRegistryError(null);
+      searchPiExtensionRegistry(query, controller.signal)
+        .then((result) => {
+          setRegistryItems(result.items);
+          setRegistryTotal(result.total);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          setRegistryItems([]);
+          setRegistryTotal(null);
+          setRegistryError(packageErrorMessage(err));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setRegistryLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [query]);
+
   const configuredSources = useMemo(
     () => installedPiPackageSourceSet(packages.map((pkg) => pkg.source)),
     [packages],
@@ -164,13 +196,24 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
 
   const visibleItems = useMemo(() => filterPiExtensionCatalog(query), [query]);
   const changingPackage = busySource !== null;
+  const visibleSources = useMemo(
+    () => installedPiPackageSourceSet(visibleItems.map((item) => item.source)),
+    [visibleItems],
+  );
+  const visibleRegistryItems = useMemo(
+    () =>
+      registryItems.filter(
+        (item) => !visibleSources.has(normalizePiPackageSource(item.source)),
+      ),
+    [registryItems, visibleSources],
+  );
 
   const unknownPackages = useMemo(() => {
     const catalogSources = installedPiPackageSourceSet(
-      PI_EXTENSION_CATALOG.map((item) => item.source),
+      [...PI_EXTENSION_CATALOG, ...registryItems].map((item) => item.source),
     );
     return packages.filter((pkg) => !catalogSources.has(normalizePiPackageSource(pkg.source)));
-  }, [packages]);
+  }, [packages, registryItems]);
 
   const togglePackage = useCallback(
     async (item: PiExtensionCatalogItem, checked: boolean) => {
@@ -308,24 +351,76 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
           loading Pi extensions...
         </div>
       ) : (
-        <div className="space-y-2">
-          {visibleItems.map((item) => {
-            const normalized = normalizePiPackageSource(item.source);
-            return (
-              <PiExtensionRow
-                key={item.id}
-                item={item}
-                enabled={configuredSources.has(normalized)}
-                stale={missingSources.has(normalized)}
-                busy={busySource === item.source}
-                disabled={changingPackage && busySource !== item.source}
-                onToggle={(checked) => togglePackage(item, checked)}
-              />
-            );
-          })}
-          {visibleItems.length === 0 && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-xs font-medium text-muted-foreground">Curated</h4>
+            {visibleItems.map((item) => {
+              const normalized = normalizePiPackageSource(item.source);
+              return (
+                <PiExtensionRow
+                  key={item.id}
+                  item={item}
+                  enabled={configuredSources.has(normalized)}
+                  stale={missingSources.has(normalized)}
+                  busy={busySource === item.source}
+                  disabled={changingPackage && busySource !== item.source}
+                  onToggle={(checked) => togglePackage(item, checked)}
+                />
+              );
+            })}
+            {visibleItems.length === 0 && (
+              <div className="rounded-md border border-border bg-muted/25 p-3 text-xs text-muted-foreground">
+                No matching curated Pi extensions.
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-xs font-medium text-muted-foreground">From npm</h4>
+              <span className="text-[11px] text-muted-foreground">
+                {registryLoading
+                  ? "searching..."
+                  : registryTotal === null
+                    ? "registry"
+                    : `${visibleRegistryItems.length} shown / ${registryTotal.toLocaleString()} matches`}
+              </span>
+            </div>
+            {registryError && (
+              <div className="rounded-md border border-border bg-muted/25 p-3 text-xs text-muted-foreground">
+                Could not search npm right now. Curated packages are still available.
+              </div>
+            )}
+            {visibleRegistryItems.map((item) => {
+              const normalized = normalizePiPackageSource(item.source);
+              return (
+                <PiExtensionRow
+                  key={item.id}
+                  item={item}
+                  enabled={configuredSources.has(normalized)}
+                  stale={missingSources.has(normalized)}
+                  busy={busySource === item.source}
+                  disabled={changingPackage && busySource !== item.source}
+                  onToggle={(checked) => togglePackage(item, checked)}
+                />
+              );
+            })}
+            {!registryLoading && !registryError && visibleRegistryItems.length === 0 && (
+              <div className="rounded-md border border-border bg-muted/25 p-3 text-xs text-muted-foreground">
+                No npm Pi packages matched this search.
+              </div>
+            )}
+            {registryLoading && visibleRegistryItems.length === 0 && (
+              <div className="flex items-center gap-2 rounded-md border border-border bg-muted/25 p-3 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                searching npm packages...
+              </div>
+            )}
+          </div>
+
+          {visibleItems.length === 0 && visibleRegistryItems.length === 0 && registryError && (
             <div className="rounded-md border border-border bg-muted/25 p-3 text-xs text-muted-foreground">
-              No matching Pi extensions in the curated list.
+              Try another search or refresh the catalog.
             </div>
           )}
         </div>

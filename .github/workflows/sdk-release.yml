@@ -28,6 +28,11 @@ on:
         required: true
         default: "dry-run"
 
+concurrency:
+  # Serialize releases — aborting a release mid-flight is worse than waiting.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write

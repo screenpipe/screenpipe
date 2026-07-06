@@ -515,6 +515,14 @@ pub fn start_analytics(
     tokio::spawn({
         let analytics_manager = analytics_manager.clone();
         async move {
+            // Respect the user's telemetry opt-out for network beacons too. The
+            // `send_event` path already gates on `enabled`, but `fetch_attribution`
+            // and `send_alias` used to fire an outbound request to
+            // screenpipe.com regardless — so an opt-out user still leaked their
+            // IP + install-launch timing to the website every boot.
+            if !should_enable_analytics {
+                return;
+            }
             // Try to fetch UTM attribution from website (IP-matched, 2hr window)
             // This must happen before app_started so the first event carries attribution
             analytics_manager.fetch_attribution().await;

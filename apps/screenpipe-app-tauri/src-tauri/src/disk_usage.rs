@@ -40,6 +40,7 @@ pub struct DiskUsedByMedia {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiskUsedByOther {
     pub database_size: String,
+    pub database_size_bytes: u64,
     pub logs_size: String,
     pub pipes_size: String,
     pub other_size: String,
@@ -401,6 +402,7 @@ pub async fn disk_usage(
         },
         other: DiskUsedByOther {
             database_size: readable(database_size),
+            database_size_bytes: database_size,
             logs_size: readable(logs_size),
             pipes_size: readable(pipes_size),
             other_size: readable(other_size),
