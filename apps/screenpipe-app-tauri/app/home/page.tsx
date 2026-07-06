@@ -202,75 +202,63 @@ function HomeContent() {
   // Overlay-side foreground sessions don't pass through this window's
   // background router path. Mirror lightweight activity (status + preview)
   // so the home sidebar stays live without mirroring full message bodies.
-  useEffect(() => {
-    let cancelled = false;
-    let unlistenFn: (() => void) | undefined;
-    (async () => {
-      const unlisten = await listen<{
-        id: string;
-        status?: SessionStatus;
-        preview?: string;
-        title?: string;
-        updatedAt: number;
-        lastError?: string;
-        unreadHint?: boolean;
-      }>("chat-session-activity", (event) => {
-        if (cancelled) return;
-        const { id, status, preview, title, updatedAt, lastError, unreadHint } = event.payload ?? {};
-        if (!id || !updatedAt) return;
-        const store = useChatStore.getState();
-        const existing = store.sessions[id];
-        if (!existing) {
-          store.actions.upsert({
-            id,
-            title: title?.trim() || "untitled",
-            preview: preview ?? "",
-            status: status ?? "idle",
-            lastError,
-            messageCount: 0,
-            createdAt: updatedAt,
-            updatedAt,
-            pinned: false,
-            hidden: false,
-            unread: false,
-          });
-        } else {
-          if (existing.updatedAt > updatedAt) return;
-          const nextTitle = title?.trim() || existing.title;
-          const nextPreview = preview ?? existing.preview;
-          const nextStatus = status ?? existing.status;
-          const nextLastError =
-            lastError !== undefined
-              ? lastError || undefined
-              : nextStatus === "error"
-                ? existing.lastError
-                : undefined;
-          if (
-            existing.title === nextTitle &&
-            existing.preview === nextPreview &&
-            existing.status === nextStatus &&
-            existing.lastError === nextLastError &&
-            existing.updatedAt === updatedAt
-          ) return;
-          store.actions.patch(id, {
-            title: nextTitle,
-            preview: nextPreview,
-            status: nextStatus,
-            lastError: nextLastError,
-            updatedAt,
-          });
-        }
-        if (unreadHint && !isSessionForeground(store, id)) {
-          store.actions.patch(id, { lastContentAt: Date.now() });
-        }
+  useTauriEvent<{
+    id: string;
+    status?: SessionStatus;
+    preview?: string;
+    title?: string;
+    updatedAt: number;
+    lastError?: string;
+    unreadHint?: boolean;
+  }>("chat-session-activity", (event) => {
+    const { id, status, preview, title, updatedAt, lastError, unreadHint } = event.payload ?? {};
+    if (!id || !updatedAt) return;
+    const store = useChatStore.getState();
+    const existing = store.sessions[id];
+    if (!existing) {
+      store.actions.upsert({
+        id,
+        title: title?.trim() || "untitled",
+        preview: preview ?? "",
+        status: status ?? "idle",
+        lastError,
+        messageCount: 0,
+        createdAt: updatedAt,
+        updatedAt,
+        pinned: false,
+        hidden: false,
+        unread: false,
       });
-      unlistenFn = unlisten;
-    })();
-    return () => {
-      cancelled = true;
-      unlistenFn?.();
-    };
-  }, []);
+    } else {
+      if (existing.updatedAt > updatedAt) return;
+      const nextTitle = title?.trim() || existing.title;
+      const nextPreview = preview ?? existing.preview;
+      const nextStatus = status ?? existing.status;
+      const nextLastError =
+        lastError !== undefined
+          ? lastError || undefined
+          : nextStatus === "error"
+            ? existing.lastError
+            : undefined;
+      if (
+        existing.title === nextTitle &&
+        existing.preview === nextPreview &&
+        existing.status === nextStatus &&
+        existing.lastError === nextLastError &&
+        existing.updatedAt === updatedAt
+      ) return;
+      store.actions.patch(id, {
+        title: nextTitle,
+        preview: nextPreview,
+        status: nextStatus,
+        lastError: nextLastError,
+        updatedAt,
+      });
+    }
+    if (unreadHint && !isSessionForeground(store, id)) {
+      store.actions.patch(id, { lastContentAt: Date.now() });
+    }
+  });
 
   // Saved-title correction path. Activity updates are best-effort during
   // streaming; this event is emitted after canonical on-disk save, so use it
@@ -351,23 +339,10 @@ function HomeContent() {
   // but the user is still looking at a different view. They'd have to
   // also click "New chat" or similar to see the result. Hooking the
   // listener at the page level fixes the cross-view UX.
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      const u = await listen<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
-        if (cancelled) return;
-        if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
-        setActiveSection("home");
-      });
-      unlistenFn = u;
-    })();
-    return () => {
-      cancelled = true;
-      unlistenFn?.();
-    };
-  }, [setActiveSection]);
+  useTauriEvent<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
+    if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
+    setActiveSection("home");
+  });
 
   // Clear the sidebar's "current" highlight when leaving the chat
   // view. The chat panel stays mounted (display:none) and keeps streaming.
@@ -759,38 +734,34 @@ function HomeContent() {
   // Native overlay already toggles the meeting in Rust. Refresh local state
   // here instead of toggling again, otherwise one click can create or stop
   // two meetings depending on which UI surfaces are mounted.
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<MeetingStatusResponse>("native-shortcut-toggle-meeting", (event) => {
-      const payload = event.payload;
-      if (typeof payload?.active === "boolean") {
-        if (payload.active) {
-          manualMeetingStartedAt.current = Date.now();
-        } else {
-          manualMeetingStartedAt.current = 0;
-        }
-        setMeetingState({
-          active: payload.active,
-          manualActive: payload.manualActive ?? false,
-          activeMeetingId: payload.activeMeetingId ?? null,
-          stoppableMeetingId: payload.stoppableMeetingId ?? payload.activeMeetingId ?? null,
-          meetingApp: payload.meetingApp ?? null,
-          detectionSource: payload.detectionSource ?? null,
-        });
-        return;
+  useTauriEvent<MeetingStatusResponse>("native-shortcut-toggle-meeting", (event) => {
+    const payload = event.payload;
+    if (typeof payload?.active === "boolean") {
+      if (payload.active) {
+        manualMeetingStartedAt.current = Date.now();
+      } else {
+        manualMeetingStartedAt.current = 0;
       }
-      void (async () => {
-        try {
-          const res = await localFetch("/meetings/status");
-          const status = res.ok ? await res.json() as MeetingStatusResponse : null;
-          setMeetingState(computeMeetingActive(status, manualMeetingStartedAt.current));
-        } catch {
-          // ignore sync failures; websocket remains source of truth
-        }
-      })();
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, []);
+      setMeetingState({
+        active: payload.active,
+        manualActive: payload.manualActive ?? false,
+        activeMeetingId: payload.activeMeetingId ?? null,
+        stoppableMeetingId: payload.stoppableMeetingId ?? payload.activeMeetingId ?? null,
+        meetingApp: payload.meetingApp ?? null,
+        detectionSource: payload.detectionSource ?? null,
+      });
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await localFetch("/meetings/status");
+        const status = res.ok ? await res.json() as MeetingStatusResponse : null;
+        setMeetingState(computeMeetingActive(status, manualMeetingStartedAt.current));
+      } catch {
+        // ignore sync failures; websocket remains source of truth
+      }
+    })();
+  });
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
   useTauriEvent<{ pipeName: string; executionId: number }>("watch_pipe", () => {
