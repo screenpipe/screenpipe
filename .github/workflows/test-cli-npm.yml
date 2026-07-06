@@ -3,6 +3,11 @@ name: Test CLI npm (blank slate)
 on:
   workflow_dispatch:
 
+concurrency:
+  # Only one manual test run at a time.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   test-macos-arm64:
     runs-on: macos-latest  # Apple Silicon (M1)

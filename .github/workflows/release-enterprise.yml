@@ -13,6 +13,11 @@ name: Release Enterprise
 on:
   workflow_dispatch:
 
+concurrency:
+  # Serialize releases — aborting a release mid-flight is worse than waiting.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 env:
   GIT_LFS_SKIP_SMUDGE: 1
 

@@ -5,6 +5,11 @@ on:
     - cron: "17 9 * * *"
   workflow_dispatch:
 
+concurrency:
+  # Only one cleanup sweep at a time.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   issues: write
