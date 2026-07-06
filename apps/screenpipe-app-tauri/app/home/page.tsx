@@ -21,10 +21,10 @@ import {
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
-  isSessionForeground,
+  applyChatSessionActivity,
   sessionRecordFromMeta,
   useChatStore,
-  type SessionStatus,
+  type ChatSessionActivityPayload,
 } from "@/lib/stores/chat-store";
 import {
   conversationMetaFromJson,
@@ -202,62 +202,8 @@ function HomeContent() {
   // Overlay-side foreground sessions don't pass through this window's
   // background router path. Mirror lightweight activity (status + preview)
   // so the home sidebar stays live without mirroring full message bodies.
-  useTauriEvent<{
-    id: string;
-    status?: SessionStatus;
-    preview?: string;
-    title?: string;
-    updatedAt: number;
-    lastError?: string;
-    unreadHint?: boolean;
-  }>("chat-session-activity", (event) => {
-    const { id, status, preview, title, updatedAt, lastError, unreadHint } = event.payload ?? {};
-    if (!id || !updatedAt) return;
-    const store = useChatStore.getState();
-    const existing = store.sessions[id];
-    if (!existing) {
-      store.actions.upsert({
-        id,
-        title: title?.trim() || "untitled",
-        preview: preview ?? "",
-        status: status ?? "idle",
-        lastError,
-        messageCount: 0,
-        createdAt: updatedAt,
-        updatedAt,
-        pinned: false,
-        hidden: false,
-        unread: false,
-      });
-    } else {
-      if (existing.updatedAt > updatedAt) return;
-      const nextTitle = title?.trim() || existing.title;
-      const nextPreview = preview ?? existing.preview;
-      const nextStatus = status ?? existing.status;
-      const nextLastError =
-        lastError !== undefined
-          ? lastError || undefined
-          : nextStatus === "error"
-            ? existing.lastError
-            : undefined;
-      if (
-        existing.title === nextTitle &&
-        existing.preview === nextPreview &&
-        existing.status === nextStatus &&
-        existing.lastError === nextLastError &&
-        existing.updatedAt === updatedAt
-      ) return;
-      store.actions.patch(id, {
-        title: nextTitle,
-        preview: nextPreview,
-        status: nextStatus,
-        lastError: nextLastError,
-        updatedAt,
-      });
-    }
-    if (unreadHint && !isSessionForeground(store, id)) {
-      store.actions.patch(id, { lastContentAt: Date.now() });
-    }
+  useTauriEvent<ChatSessionActivityPayload>("chat-session-activity", (event) => {
+    applyChatSessionActivity(useChatStore.getState(), event.payload);
   });
 
   // Saved-title correction path. Activity updates are best-effort during
