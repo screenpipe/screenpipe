@@ -61,6 +61,7 @@ import {
 } from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -585,13 +586,9 @@ function HomeContent() {
     return () => { clearInterval(interval); };
   }, [refreshRecordingDevices]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen("audio-device-status-changed", () => {
-      void refreshRecordingDevices();
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [refreshRecordingDevices]);
+  useTauriEvent("audio-device-status-changed", () => {
+    void refreshRecordingDevices();
+  });
 
   const pauseRecording = useCallback(async () => {
     await emit("shortcut-stop-recording", {});
