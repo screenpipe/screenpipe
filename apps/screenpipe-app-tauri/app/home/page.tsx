@@ -793,13 +793,9 @@ function HomeContent() {
   }, []);
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<{ pipeName: string; executionId: number }>("watch_pipe", () => {
-      setActiveSection("home");
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [setActiveSection]);
+  useTauriEvent<{ pipeName: string; executionId: number }>("watch_pipe", () => {
+    setActiveSection("home");
+  });
 
   const openSettings = useCallback((section: string = "general") => {
     const chatId = activeSection === "home" ? useChatStore.getState().currentId : null;
@@ -926,22 +922,19 @@ function HomeContent() {
     .filter((s) => !(s.id === "timeline" && (settings.disableTimeline ?? false)));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
-  useEffect(() => {
-    const unlisten = listen<{ url: string }>("navigate", (event) => {
-      const url = new URL(event.payload.url, window.location.origin);
-      const section = url.searchParams.get("section");
-      if (!section) return;
-      if (SETTINGS_SECTIONS.has(section)) {
-        const mapped = section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync"
-          ? "storage" : section;
-        router.push(`/settings?section=${mapped}`);
-      } else {
-        const mapped = section === "feedback" ? "help" : section;
-        if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [setActiveSection, router]);
+  useTauriEvent<{ url: string }>("navigate", (event) => {
+    const url = new URL(event.payload.url, window.location.origin);
+    const section = url.searchParams.get("section");
+    if (!section) return;
+    if (SETTINGS_SECTIONS.has(section)) {
+      const mapped = section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync"
+        ? "storage" : section;
+      router.push(`/settings?section=${mapped}`);
+    } else {
+      const mapped = section === "feedback" ? "help" : section;
+      if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
+    }
+  });
 
   const isFullHeight =
     activeSection === "home" ||
