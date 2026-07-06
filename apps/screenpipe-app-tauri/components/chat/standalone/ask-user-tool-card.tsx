@@ -329,6 +329,7 @@ export function AskUserToolCard({
           <div className="relative">
             <select
               aria-label={`Answer ${activeQuestion.label}`}
+              data-testid={`ask-user-answer-${activeQuestion.id}`}
               value={activeAnswer.values[0] ?? ""}
               onChange={(event) => {
                 updateAnswer(activeQuestion.id, {
@@ -349,7 +350,10 @@ export function AskUserToolCard({
         ) : null}
 
         {selectedOption?.description || selectedOption?.preview ? (
-          <div className="rounded-md border border-border/60 bg-background px-3 py-2 text-xs text-muted-foreground">
+          <div
+            className="rounded-md border border-border/60 bg-background px-3 py-2 text-xs text-muted-foreground"
+            data-testid="ask-user-selected-option"
+          >
             {selectedOption.description ? <div>{selectedOption.description}</div> : null}
             {selectedOption.preview ? (
               <div className={selectedOption.description ? "mt-1 whitespace-pre-wrap" : "whitespace-pre-wrap"}>
@@ -377,6 +381,7 @@ export function AskUserToolCard({
         </div>
         <button
           type="submit"
+          data-testid="ask-user-reply"
           disabled={!canSubmit}
           className={cn(
             "h-8 shrink-0 rounded-md px-3 text-xs font-medium transition-colors",

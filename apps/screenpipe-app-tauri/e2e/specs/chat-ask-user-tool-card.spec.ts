@@ -17,8 +17,11 @@ import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 const SESSION_ID = randomUUID();
 const USER_SEED = "seed ask_user e2e session";
 const PROMPT = "Which Pi extension should I configure first?";
-const OPTION_LABEL = "Subagents";
+const OPTION_VALUE = "subagents";
 const USER_REPLY_LABEL = "Answered Ask user: Subagents";
+const ANSWER_SELECTOR = '[data-testid="ask-user-answer-extension"]';
+const SELECTED_OPTION_SELECTOR = '[data-testid="ask-user-selected-option"]';
+const REPLY_SELECTOR = '[data-testid="ask-user-reply"]';
 
 async function waitForChatSeedHooks(): Promise<void> {
   await browser.waitUntil(
@@ -100,6 +103,48 @@ async function seedAskUserToolCall(): Promise<void> {
   );
 }
 
+async function chooseAskUserOption(value: string): Promise<void> {
+  await browser.execute(
+    (selector: string, optionValue: string) => {
+      const select = document.querySelector(selector) as HTMLSelectElement | null;
+      if (!select) throw new Error(`missing ask_user select: ${selector}`);
+      select.value = optionValue;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    ANSWER_SELECTOR,
+    value,
+  );
+
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute((selector: string) => {
+        const select = document.querySelector(selector) as HTMLSelectElement | null;
+        return select?.value;
+      }, ANSWER_SELECTOR)) === value,
+    {
+      timeout: t(5_000),
+      interval: 150,
+      timeoutMsg: "ask_user select value never changed",
+    },
+  );
+}
+
+async function waitForAskUserReplyEnabled(): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute((selector: string) => {
+        const button = document.querySelector(selector) as HTMLButtonElement | null;
+        return Boolean(button && !button.disabled);
+      }, REPLY_SELECTOR)) as boolean,
+    {
+      timeout: t(5_000),
+      interval: 150,
+      timeoutMsg: "ask_user reply button never enabled",
+    },
+  );
+}
+
 describe("Chat ask_user tool card", function () {
   this.timeout(90_000);
 
@@ -120,17 +165,24 @@ describe("Chat ask_user tool card", function () {
       timeoutMsg: "ask_user prompt never appeared",
     });
 
-    const select = await card.$("select");
-    await select.selectByVisibleText(OPTION_LABEL);
-    await browser.waitUntil(async () => (await card.getText()).includes("Delegate work"), {
-      timeout: t(5_000),
-      interval: 150,
-      timeoutMsg: "selected option preview never appeared",
-    });
+    await chooseAskUserOption(OPTION_VALUE);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute((selector: string) =>
+          (document.querySelector(selector)?.textContent ?? "").includes("Delegate work"),
+        SELECTED_OPTION_SELECTOR)) as boolean,
+      {
+        timeout: t(5_000),
+        interval: 150,
+        timeoutMsg: "selected option preview never appeared",
+      },
+    );
 
-    const replyButton = await card.$("button=Reply");
-    await replyButton.waitForEnabled({ timeout: t(5_000) });
-    await replyButton.click();
+    await waitForAskUserReplyEnabled();
+    await browser.execute((selector: string) => {
+      const button = document.querySelector(selector) as HTMLButtonElement | null;
+      button?.click();
+    }, REPLY_SELECTOR);
 
     await browser.waitUntil(
       async () =>
