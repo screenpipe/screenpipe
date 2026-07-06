@@ -494,3 +494,18 @@ thank you for contributing to screen pipe! 🎉
 testing is one of the toughtest challenge, we love any help improving the testing pipeline before going into production
 
 see [TESTING.md](TESTING.md) for more details on the testing process.
+
+### testing paid-plan code paths locally
+
+if you want to exercise paid-plan features (search filters, cloud sync, etc.) without a subscription, you can use the following environment variables during local development:
+
+| to test... | set this environment variable |
+| :--- | :--- |
+| **all paid features unlocked** (treats user as entitled) | `NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS=true` |
+| **the paywall/lock screen** (forces entitlement check) | `NEXT_PUBLIC_SCREENPIPE_FORCE_BILLING_GATE=true` |
+| **e2e test bypass** | `NEXT_PUBLIC_SCREENPIPE_E2E=true` |
+| **dev-build bypass** | `TAURI_ENV_DEBUG=true` |
+| **skip interactive onboarding** | `SCREENPIPE_SKIP_ONBOARDING=1` (or `true` / `yes`) |
+| **seed e2e tests (e.g. onboarding)** | `SCREENPIPE_E2E_SEED=onboarding` |
+
+You can also force the billing gate in a bypassed dev environment by setting the `screenpipe_e2e_force_billing_gate` key in `localStorage` to `"1"`.
