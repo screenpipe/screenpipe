@@ -9,6 +9,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, Plug, RefreshCw } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
+import { AskUserToolCard, isAskUserToolCall } from "@/components/chat/standalone/ask-user-tool-card";
 import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
 import { IntegrationIcon } from "@/components/settings/connections-section";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
@@ -179,6 +180,7 @@ function extractWebTargetFromToolCall(toolCall: ToolCall): WebTargetPresentation
 // Human-friendly label for a tool call (no JSON, no raw paths)
 function friendlyToolLabel(toolCall: ToolCall): string {
   const fileName = (p: string) => p.split("/").pop() || p;
+  if (isAskUserToolCall(toolCall)) return "Asked for input";
   switch (toolCall.toolName) {
     case "bash": {
       const cmd = String(toolCall.args.command ?? "");
@@ -434,12 +436,21 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
 }
 
 // Single tool call row in the progress rail
-function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: boolean }) {
+function ToolCallRailItem({
+  toolCall,
+  isLast,
+  onAskUserReply,
+}: {
+  toolCall: ToolCall;
+  isLast: boolean;
+  onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
+}) {
   const [expanded, setExpanded] = useState(false);
   const label = friendlyToolLabel(toolCall);
   const appName = extractAppFromToolCall(toolCall);
   const connectionIconName = extractConnectionIconFromToolCall(toolCall);
   const webTarget = extractWebTargetFromToolCall(toolCall);
+  const isAskUser = isAskUserToolCall(toolCall);
 
   return (
     <div className="relative flex min-w-0">
@@ -477,24 +488,28 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
 
       {/* Content */}
       <div className="flex-1 min-w-0 pb-2">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center gap-1.5 text-left min-w-0 group py-0.5"
-        >
-          {webTarget ? (
-            <WebTargetIcon target={webTarget} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />
-          ) : appName && !connectionIconName && (
-            <AppIcon name={appName} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />
-          )}
-          <span className="truncate flex-1 text-xs font-mono text-foreground/70 group-hover:text-foreground transition-colors duration-150">
-            {label}
-          </span>
-          <span className="text-foreground/30 flex-shrink-0 text-[10px] font-mono group-hover:text-foreground/60 transition-colors duration-150">
-            {expanded ? "−" : "+"}
-          </span>
-        </button>
+        {isAskUser ? (
+          <AskUserToolCard toolCall={toolCall} onSubmit={onAskUserReply} />
+        ) : (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="w-full flex items-center gap-1.5 text-left min-w-0 group py-0.5"
+          >
+            {webTarget ? (
+              <WebTargetIcon target={webTarget} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />
+            ) : appName && !connectionIconName && (
+              <AppIcon name={appName} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />
+            )}
+            <span className="truncate flex-1 text-xs font-mono text-foreground/70 group-hover:text-foreground transition-colors duration-150">
+              {label}
+            </span>
+            <span className="text-foreground/30 flex-shrink-0 text-[10px] font-mono group-hover:text-foreground/60 transition-colors duration-150">
+              {expanded ? "−" : "+"}
+            </span>
+          </button>
+        )}
         <AnimatePresence>
-          {expanded && (
+          {!isAskUser && expanded && (
             <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
@@ -1091,6 +1106,7 @@ function ToolCallGroup({
   workStartedAtMs,
   hideSummary = false,
   forceCollapsed = false,
+  onAskUserReply,
 }: {
   toolCalls: ToolCall[];
   defaultExpanded?: boolean;
@@ -1100,6 +1116,7 @@ function ToolCallGroup({
   workStartedAtMs?: number;
   hideSummary?: boolean;
   forceCollapsed?: boolean;
+  onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
   const [runningSummary, setRunningSummary] = useState("Working");
@@ -1216,6 +1233,7 @@ function ToolCallGroup({
                   <ToolCallRailItem
                     toolCall={tc}
                     isLast={i === toolCalls.length - 1}
+                    onAskUserReply={onAskUserReply}
                   />
                 </motion.div>
               ))}
@@ -1242,6 +1260,7 @@ export function MessageContent({
   onConnectConnectionAction,
   onContinueConnectionAction,
   onDismissConnectionAction,
+  onAskUserReply,
 }: {
   message: Message;
   isGenerating?: boolean;
@@ -1256,6 +1275,7 @@ export function MessageContent({
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
+  onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const isUser = message.role === "user";
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
@@ -1457,6 +1477,7 @@ export function MessageContent({
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
+                onAskUserReply={onAskUserReply}
               />
             );
           }
@@ -1477,6 +1498,7 @@ export function MessageContent({
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
+                onAskUserReply={onAskUserReply}
               />
             );
           }

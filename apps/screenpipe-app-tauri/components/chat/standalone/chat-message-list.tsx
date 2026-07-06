@@ -63,6 +63,7 @@ export interface ChatMessageListProps {
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
+  onAskUserReply?: (reply: string, displayLabel: string) => Promise<void> | void;
   suppressSourceFooters?: boolean;
 }
 
@@ -101,6 +102,7 @@ export function ChatMessageList({
   onConnectConnectionAction,
   onContinueConnectionAction,
   onDismissConnectionAction,
+  onAskUserReply,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
   return (
@@ -353,6 +355,7 @@ export function ChatMessageList({
                           onConnectConnectionAction={onConnectConnectionAction}
                           onContinueConnectionAction={onContinueConnectionAction}
                           onDismissConnectionAction={onDismissConnectionAction}
+                          onAskUserReply={onAskUserReply}
                         />
                       )}
                     </div>
